@@ -61,7 +61,7 @@ These features are specific to this fork and live in `main`:
 | `/session idle 2h` | Override idle timeout for this session |
 | `/session max-age 6h` | Override max-age for this session |
 
-## Build & Update Workflow
+## Build & Update Workflow (manual)
 
 ```powershell
 # In the fork directory
@@ -72,7 +72,6 @@ pnpm build
 
 # Restart the Windows service
 Stop-Service OpenClaw
-# Update service binary path to: node dist/cli.js  (first time only)
 Start-Service OpenClaw
 ```
 
@@ -162,4 +161,84 @@ git remote add upstream https://github.com/openclaw/openclaw.git  # once
 git fetch upstream main
 git merge --no-edit upstream/main
 git push origin main
+```
+
+## Local Deploy Automation
+
+A self-hosted GitHub Actions runner on the Windows machine picks up every push
+to `main` — including daily upstream sync merges — and automatically stops the
+service, pulls the latest, rebuilds, and restarts. No manual steps required.
+
+### One-time setup
+
+1. **Generate a runner registration token** (expires in 1 hour — do this right before step 2):
+   GitHub repo → **Settings → Actions → Runners → New self-hosted runner**
+
+2. **Run as Administrator** in PowerShell from the openclaw install directory:
+
+   ```powershell
+   .\scripts\setup-local-runner.ps1 `
+     -RepoUrl     'https://github.com/rhinoroo/openclaw' `
+     -Token       'AXXXXXXXXXXXXXXXXXX' `
+     -OpenclawDir 'C:\path\to\openclaw'
+   ```
+
+3. In **Services.msc**, find the runner service
+   (`actions.runner.rhinoroo-openclaw.openclaw-windows`) and change the
+   **Log On** account to your admin account (so it has permission to stop/start OpenClaw).
+
+4. Done. Every subsequent push to `main` will deploy automatically.
+
+### What happens on every push to main
+
+| Step | Action |
+|---|---|
+| 1 | GitHub notifies the runner |
+| 2 | Runner calls `scripts\deploy-local.ps1` |
+| 3 | OpenClaw service is stopped |
+| 4 | `git fetch` + `git reset --hard origin/main` |
+| 5 | `pnpm install --frozen-lockfile` |
+| 6 | `pnpm build` |
+| 7 | OpenClaw service is restarted |
+| 8 | Result logged to `logs\deploy.log` |
+
+If the build fails, the service restarts using the previous `dist/` artifacts.
+
+### OpenClaw service failure recovery
+
+The setup script configures the service to auto-restart on crash:
+- Restart after 5 s on first failure
+- Restart after 15 s on second failure
+- Restart after 60 s on subsequent failures
+- Failure count resets after 24 h
+
+To apply manually:
+```powershell
+sc.exe failure OpenClaw reset=86400 actions=restart/5000/restart/15000/restart/60000
+sc.exe failureflag OpenClaw 1
+```
+
+### Manual deploy trigger
+
+**Actions → Deploy to Local Windows → Run workflow**
+
+Use **Skip build** to restart the service without pulling or rebuilding (useful after config-only changes).
+
+### Deploy log
+
+```powershell
+Get-Content "$env:OPENCLAW_DIR\logs\deploy.log" -Tail 50
+```
+
+### Runner management
+
+```powershell
+# Check status
+Get-Service 'actions.runner.*'
+
+# Restart the runner itself (not openclaw)
+Restart-Service 'actions.runner.rhinoroo-openclaw.openclaw-windows'
+
+# View runner logs
+Get-EventLog -LogName Application -Source 'actions.runner.*' -Newest 20
 ```

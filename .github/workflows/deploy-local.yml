@@ -1,0 +1,46 @@
+name: Deploy to Local Windows
+
+# Runs on the self-hosted runner installed on your Windows machine.
+# Fires automatically on every push to main — including upstream sync merges.
+# Can also be triggered manually with an optional skip-build flag.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: 'Skip pnpm install + build — restart the service only'
+        type: boolean
+        default: false
+
+concurrency:
+  group: local-deploy
+  cancel-in-progress: false   # queue deploys; never interrupt one in flight
+
+jobs:
+  deploy:
+    name: Update & restart OpenClaw service
+    runs-on: [self-hosted, Windows, openclaw-local]
+    timeout-minutes: 15
+
+    steps:
+      - name: Verify OPENCLAW_DIR is configured
+        shell: pwsh
+        run: |
+          if (-not $env:OPENCLAW_DIR) {
+            Write-Error @"
+          OPENCLAW_DIR is not set on this runner.
+          Run scripts/setup-local-runner.ps1 to configure it.
+          "@
+            exit 1
+          }
+          Write-Host "OPENCLAW_DIR: $env:OPENCLAW_DIR"
+
+      - name: Deploy
+        shell: pwsh
+        env:
+          SKIP_BUILD: ${{ inputs.skip_build || 'false' }}
+        run: |
+          $script = Join-Path $env:OPENCLAW_DIR 'scripts\deploy-local.ps1'
+          & $script -SkipBuild:($env:SKIP_BUILD -eq 'true')
