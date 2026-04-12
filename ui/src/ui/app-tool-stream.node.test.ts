@@ -1,5 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./app-tool-stream.ts";
+import {
+  flushToolStreamSync,
+  handleAgentEvent,
+  type FallbackStatus,
+  type ToolStreamEntry,
+} from "./app-tool-stream.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type MutableHost = ToolStreamHost & {
@@ -308,6 +313,68 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("emits failed tool timeline metadata for streamed tool messages", () => {
+    vi.useFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-tool-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "start",
+        toolCallId: "tool-1",
+        name: "browser.open",
+        args: { url: "https://example.com" },
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-tool-1",
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "update",
+        toolCallId: "tool-1",
+        name: "browser.open",
+        partialResult: { text: "Resolving page title" },
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-tool-1",
+      seq: 3,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        toolCallId: "tool-1",
+        name: "browser.open",
+        isError: true,
+        result: { text: "Permission denied" },
+      },
+    });
+
+    flushToolStreamSync(host);
+
+    expect(host.chatToolMessages).toHaveLength(1);
+    const message = host.chatToolMessages[0] as {
+      toolStatus?: unknown;
+      toolTimeline?: Array<{ kind?: unknown; label?: unknown }>;
+    };
+    expect(message.toolStatus).toBe("failed");
+    expect(message.toolTimeline).toEqual([
+      expect.objectContaining({ kind: "start", label: "Started" }),
+      expect.objectContaining({ kind: "update", label: "Resolving page title" }),
+      expect.objectContaining({ kind: "failed", label: "Permission denied" }),
+    ]);
 
     vi.useRealTimers();
   });

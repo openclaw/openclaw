@@ -146,6 +146,14 @@ export class OpenClawApp extends LitElement {
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
+  @state() hasConnectedOnce = false;
+  @state() connectionPhase: "idle" | "connecting" | "connected" | "reconnecting" | "disconnected" =
+    "idle";
+  @state() connectionBanner: {
+    tone: "info" | "success" | "danger";
+    title: string;
+    detail?: string;
+  } | null = null;
   @state() theme: ThemeName = this.settings.theme ?? "claw";
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
@@ -157,6 +165,7 @@ export class OpenClawApp extends LitElement {
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
+  connectionBannerTimer: number | null = null;
 
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;

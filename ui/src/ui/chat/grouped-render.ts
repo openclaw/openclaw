@@ -15,7 +15,7 @@ import type {
   ToolCard,
 } from "../types/chat-types.ts";
 import { agentLogoUrl } from "../views/agents-utils.ts";
-import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
+import { renderCopyAsMarkdownButton, renderCopyButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
   extractThinkingCached,
@@ -149,8 +149,12 @@ export function renderMessageGroup(
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean;
     onToggleToolMessageExpanded?: (messageId: string) => void;
+    onSetToolMessageExpanded?: (messageId: string, expanded: boolean) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
+    onSetToolExpanded?: (toolCardId: string, expanded: boolean) => void;
+    onQuoteMessage?: (text: string) => void;
+    onRetryMessage?: (text: string) => void;
     onRequestUpdate?: () => void;
     assistantName?: string;
     assistantAvatar?: string | null;
@@ -213,8 +217,12 @@ export function renderMessageGroup(
               autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
               isToolMessageExpanded: opts.isToolMessageExpanded,
               onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
+              onSetToolMessageExpanded: opts.onSetToolMessageExpanded,
               isToolExpanded: opts.isToolExpanded,
               onToggleToolExpanded: opts.onToggleToolExpanded,
+              onSetToolExpanded: opts.onSetToolExpanded,
+              onQuoteMessage: opts.onQuoteMessage,
+              onRetryMessage: opts.onRetryMessage,
               onRequestUpdate: opts.onRequestUpdate,
               canvasHostUrl: opts.canvasHostUrl,
               basePath: opts.basePath,
@@ -1019,11 +1027,33 @@ function renderExpandButton(markdown: string, onOpenSidebar: (content: SidebarCo
     <button
       class="btn btn--xs chat-expand-btn"
       type="button"
-      title="Open in canvas"
-      aria-label="Open in canvas"
-      @click=${() => onOpenSidebar({ kind: "markdown", content: markdown })}
+      title="Open as artifact"
+      aria-label="Open as artifact"
+      @click=${() => onOpenSidebar({ kind: "markdown", content: markdown, title: "Artifact" })}
     >
       <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
+    </button>
+  `;
+}
+
+function renderBubbleActionButton(params: {
+  icon: unknown;
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+}) {
+  return html`
+    <button
+      class="btn btn--xs chat-bubble-action-btn ${params.active ? "chat-bubble-action-btn--active" : ""}"
+      type="button"
+      title=${params.label}
+      aria-label=${params.label}
+      @click=${(event: Event) => {
+        event.stopPropagation();
+        params.onClick();
+      }}
+    >
+      <span class="chat-bubble-action-btn__icon" aria-hidden="true">${params.icon}</span>
     </button>
   `;
 }
@@ -1038,8 +1068,12 @@ function renderGroupedMessage(
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean;
     onToggleToolMessageExpanded?: (messageId: string) => void;
+    onSetToolMessageExpanded?: (messageId: string, expanded: boolean) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
+    onSetToolExpanded?: (toolCardId: string, expanded: boolean) => void;
+    onQuoteMessage?: (text: string) => void;
+    onRetryMessage?: (text: string) => void;
     onRequestUpdate?: () => void;
     canvasHostUrl?: string | null;
     basePath?: string;
@@ -1087,8 +1121,11 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
-  const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
+  const copyLabel = normalizedRole === "assistant" ? "Copy as markdown" : "Copy message";
+  const canCopyMarkdown = Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const canQuote = Boolean(markdown?.trim() && opts.onQuoteMessage);
+  const canRetry = Boolean(normalizedRole === "user" && markdown?.trim() && opts.onRetryMessage);
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -1127,8 +1164,17 @@ function renderGroupedMessage(
         ? "Tool output"
         : "Tool call"
       : "Tool output";
+  const toolCardDisclosureIds = toolCards.map((_, index) => `${messageKey}:toolcard:${index}`);
+  const anyExpandedToolCards = toolCardDisclosureIds.some(
+    (toolCardId) => opts.isToolExpanded?.(toolCardId) ?? false,
+  );
+  const canToggleTools = Boolean(
+    (isToolMessage && opts.onSetToolMessageExpanded) ||
+      (toolCardDisclosureIds.length > 0 && opts.onSetToolExpanded),
+  );
+  const toolsExpanded = isToolMessage ? toolMessageExpanded : anyExpandedToolCards;
 
-  const hasActions = canCopyMarkdown || canExpand;
+  const hasActions = canCopyMarkdown || canExpand || canQuote || canRetry || canToggleTools;
 
   return html`
     <div class="${bubbleClasses}">
@@ -1136,7 +1182,41 @@ function renderGroupedMessage(
       ${hasActions
         ? html`<div class="chat-bubble-actions">
             ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
-            ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
+            ${canCopyMarkdown
+              ? normalizedRole === "assistant"
+                ? renderCopyAsMarkdownButton(markdown!)
+                : renderCopyButton(markdown!, copyLabel)
+              : nothing}
+            ${canQuote
+              ? renderBubbleActionButton({
+                  icon: icons.messageSquare,
+                  label: "Quote in composer",
+                  onClick: () => opts.onQuoteMessage?.(markdown!),
+                })
+              : nothing}
+            ${canRetry
+              ? renderBubbleActionButton({
+                  icon: icons.refresh,
+                  label: "Retry this prompt",
+                  onClick: () => opts.onRetryMessage?.(markdown!),
+                })
+              : nothing}
+            ${canToggleTools
+              ? renderBubbleActionButton({
+                  icon: icons.zap,
+                  label: toolsExpanded ? "Hide tool details" : "Show tool details",
+                  active: toolsExpanded,
+                  onClick: () => {
+                    if (isToolMessage) {
+                      opts.onSetToolMessageExpanded?.(toolMessageDisclosureId, !toolMessageExpanded);
+                      return;
+                    }
+                    for (const toolCardId of toolCardDisclosureIds) {
+                      opts.onSetToolExpanded?.(toolCardId, !anyExpandedToolCards);
+                    }
+                  },
+                })
+              : nothing}
           </div>`
         : nothing}
       ${isToolMessage

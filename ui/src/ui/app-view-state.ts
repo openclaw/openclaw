@@ -54,6 +54,13 @@ export type AppViewState = {
   onboarding: boolean;
   basePath: string;
   connected: boolean;
+  hasConnectedOnce?: boolean;
+  connectionPhase?: "idle" | "connecting" | "connected" | "reconnecting" | "disconnected";
+  connectionBanner?: {
+    tone: "info" | "success" | "danger";
+    title: string;
+    detail?: string;
+  } | null;
   theme: ThemeName;
   themeMode: ThemeMode;
   themeResolved: ResolvedTheme;

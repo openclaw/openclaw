@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { renderChatSessionSelect } from "../app-render.helpers.ts";
+import { renderChatMobileToggle, renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   createModelCatalog,
@@ -13,6 +13,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../chat-model.test-helpers.ts";
 import { resetAssistantAttachmentAvailabilityCacheForTest } from "../chat/grouped-render.ts";
+import { resetChatSpacesForTest } from "../chat-spaces.ts";
 import { normalizeMessage } from "../chat/message-normalizer.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
@@ -249,6 +250,10 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     ...overrides,
   };
 }
+
+afterEach(() => {
+  resetChatSpacesForTest();
+});
 
 describe("chat view", () => {
   it("renders BTW side results outside transcript history", () => {
@@ -1304,6 +1309,76 @@ describe("chat view", () => {
     expect(labels).toContain("Coding (beta) / main");
   });
 
+  it("groups chat sessions by space when session metadata provides one", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:alpha:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:alpha:main",
+          kind: "direct",
+          updatedAt: null,
+          space: "Research",
+        },
+        {
+          key: "agent:beta:main",
+          kind: "direct",
+          updatedAt: null,
+          space: "Ops",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const groupLabels = Array.from(container.querySelectorAll("optgroup")).map((group) =>
+      group.getAttribute("label"),
+    );
+
+    expect(groupLabels).toContain("Space: Research");
+    expect(groupLabels).toContain("Space: Ops");
+  });
+
+  it("shows the project space control in mobile chat settings", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "main";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          space: "Research",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+
+    const input = container.querySelector<HTMLInputElement>('input[placeholder="Project / space"]');
+    expect(input).not.toBeNull();
+    expect(input?.value).toBe("Research");
+  });
+
   it("keeps tool cards collapsed by default and expands them inline on demand", async () => {
     const container = document.createElement("div");
     const props = createProps({
@@ -1351,6 +1426,188 @@ describe("chat view", () => {
 
     container
       .querySelector<HTMLElement>(".chat-tool-msg-summary")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).not.toContain("Tool input");
+    expect(container.textContent).not.toContain("Opened page");
+  });
+
+  it("quotes a message into the composer from the action bar", async () => {
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              id: "assistant-quote",
+              role: "assistant",
+              content: [{ type: "text", text: "Line one\nLine two" }],
+              timestamp: Date.now(),
+            },
+          ],
+          onDraftChange,
+          onRequestUpdate: () => undefined,
+        }),
+      ),
+      container,
+    );
+
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Quote in composer"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(onDraftChange).toHaveBeenCalledWith("> Line one\n> Line two\n\n");
+  });
+
+  it("retries a user prompt from the action bar", async () => {
+    const container = document.createElement("div");
+    const onRetryMessage = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              id: "user-retry",
+              role: "user",
+              content: "Try again with stricter validation.",
+              timestamp: Date.now(),
+            },
+          ],
+          onRetryMessage,
+        }),
+      ),
+      container,
+    );
+
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Retry this prompt"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onRetryMessage).toHaveBeenCalledWith("Try again with stricter validation.");
+  });
+
+  it("renders a context rail for turn attachments and session scope", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          attachments: [
+            {
+              id: "att-1",
+              dataUrl: "data:image/png;base64,AAAA",
+              mimeType: "image/png",
+            },
+          ],
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 4096 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                label: "Research",
+                space: "Deep Work",
+                updatedAt: null,
+                totalTokens: 2048,
+                contextTokens: 4096,
+                model: "gpt-5",
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("This turn");
+    expect(container.textContent).toContain("Image 1");
+    expect(container.textContent).toContain("This session");
+    expect(container.textContent).toContain("Session Research");
+    expect(container.textContent).toContain("Space Deep Work");
+    expect(container.textContent).toContain("Model gpt-5");
+    expect(container.textContent).toContain("Context 50%");
+  });
+
+  it("opens pending attachment previews in the sidebar from the context rail", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          attachments: [
+            {
+              id: "att-2",
+              dataUrl: "data:image/png;base64,BBBB",
+              mimeType: "image/png",
+            },
+          ],
+          onOpenSidebar,
+        }),
+      ),
+      container,
+    );
+
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Preview Image 1"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "markdown",
+        content: expect.stringContaining("data:image/png;base64,BBBB"),
+      }),
+    );
+  });
+
+  it("toggles tool details from the message action bar", async () => {
+    const container = document.createElement("div");
+    const props = createProps({
+      messages: [
+        {
+          id: "assistant-tools-action",
+          role: "assistant",
+          toolCallId: "call-tools-action",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-tools-action",
+              name: "browser.open",
+              arguments: { url: "https://example.com" },
+            },
+            {
+              type: "toolresult",
+              id: "call-tools-action",
+              name: "browser.open",
+              text: "Opened page",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    const rerender = () => {
+      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
+    };
+    rerender();
+
+    expect(container.textContent).not.toContain("Tool input");
+
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Show tool details"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain("Opened page");
+
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Hide tool details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await flushTasks();
 
@@ -1837,6 +2094,64 @@ describe("chat view", () => {
     expect(container.textContent).toContain("canvas_render");
     expect(container.textContent).toContain("Inline canvas result.");
     expect(container.textContent).toContain("Inline demo");
+  });
+
+  it("auto-opens the latest lifted canvas artifact in the sidebar once per session", async () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    const props = createProps({
+      sessionKey: "artifact-auto-open",
+      onOpenSidebar,
+      showToolCalls: true,
+      messages: [
+        {
+          id: "assistant-canvas-auto-open",
+          role: "assistant",
+          content: [{ type: "text", text: "Artifact ready." }],
+          timestamp: Date.now(),
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-artifact-auto-open",
+          role: "tool",
+          toolCallId: "call-artifact-auto-open",
+          toolName: "canvas_render",
+          content: JSON.stringify({
+            kind: "canvas",
+            view: {
+              backend: "canvas",
+              id: "cv_auto_open",
+              url: "/__openclaw__/canvas/documents/cv_auto_open/index.html",
+              title: "Auto-open demo",
+              preferred_height: 360,
+            },
+            presentation: {
+              target: "assistant_message",
+            },
+          }),
+          timestamp: Date.now() + 1,
+        },
+      ],
+    });
+
+    render(renderChat(props), container);
+    await flushTasks();
+
+    expect(onOpenSidebar).toHaveBeenCalledTimes(1);
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "canvas",
+        docId: "cv_auto_open",
+        entryUrl: "/__openclaw__/canvas/documents/cv_auto_open/index.html",
+        title: "Auto-open demo",
+      }),
+    );
+
+    render(renderChat(props), container);
+    await flushTasks();
+
+    expect(onOpenSidebar).toHaveBeenCalledTimes(1);
   });
 
   it("keeps lifted canvas previews attached to the nearest assistant turn", () => {

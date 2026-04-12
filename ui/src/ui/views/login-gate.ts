@@ -9,6 +9,12 @@ import { renderConnectCommand } from "./connect-command.ts";
 export function renderLoginGate(state: AppViewState) {
   const basePath = normalizeBasePath(state.basePath ?? "");
   const faviconSrc = agentLogoUrl(basePath);
+  const connectLabel =
+    state.connectionPhase === "reconnecting"
+      ? "Reconnecting…"
+      : state.connectionPhase === "connecting"
+        ? "Connecting…"
+        : t("common.connect");
 
   return html`
     <div class="login-gate">
@@ -97,7 +103,7 @@ export function renderLoginGate(state: AppViewState) {
             </div>
           </label>
           <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
-            ${t("common.connect")}
+            ${connectLabel}
           </button>
         </div>
         ${state.lastError

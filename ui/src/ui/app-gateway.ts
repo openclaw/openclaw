@@ -43,6 +43,7 @@ import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadSessions, subscribeSessions, type SessionsState } from "./controllers/sessions.ts";
 import {
+  isNonRecoverableAuthError,
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
   type GatewayHelloOk,
@@ -68,6 +69,13 @@ type GatewayHost = {
   clientInstanceId: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  hasConnectedOnce?: boolean;
+  connectionPhase?: "idle" | "connecting" | "connected" | "reconnecting" | "disconnected";
+  connectionBanner?: {
+    tone: "info" | "success" | "danger";
+    title: string;
+    detail?: string;
+  } | null;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -90,6 +98,8 @@ type GatewayHost = {
   assistantAgentId: string | null;
   serverVersion: string | null;
   sessionKey: string;
+  chatMessage?: string;
+  chatAttachments?: Array<unknown>;
   chatRunId: string | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
@@ -107,6 +117,7 @@ type SessionDefaultsSnapshot = {
 type GatewayHostWithShutdownMessage = GatewayHost & {
   pendingShutdownMessage?: string | null;
   resumeChatQueueAfterReconnect?: boolean;
+  connectionBannerTimer?: number | null;
 };
 
 type GatewayHostWithSideResults = GatewayHost & {
@@ -123,6 +134,48 @@ function isTerminalChatState(
 type ConnectGatewayOptions = {
   reason?: "initial" | "seq-gap";
 };
+
+function clearConnectionBannerTimer(host: GatewayHostWithShutdownMessage) {
+  if (typeof host.connectionBannerTimer === "number") {
+    window.clearTimeout(host.connectionBannerTimer);
+    host.connectionBannerTimer = null;
+  }
+}
+
+function setConnectionBanner(
+  host: GatewayHostWithShutdownMessage,
+  banner: GatewayHost["connectionBanner"],
+  opts?: { timeoutMs?: number },
+) {
+  clearConnectionBannerTimer(host);
+  host.connectionBanner = banner ?? null;
+  if (banner && typeof opts?.timeoutMs === "number" && opts.timeoutMs > 0) {
+    host.connectionBannerTimer = window.setTimeout(() => {
+      host.connectionBanner = null;
+      host.connectionBannerTimer = null;
+    }, opts.timeoutMs);
+  }
+}
+
+function hasDraftState(host: GatewayHost): boolean {
+  return Boolean(host.chatMessage?.trim() || (host.chatAttachments?.length ?? 0) > 0);
+}
+
+function buildReconnectDetail(host: GatewayHost): string {
+  return hasDraftState(host)
+    ? "Your draft is still here while the gateway reconnects."
+    : "The current session will stay visible while OpenClaw restores it.";
+}
+
+function buildReconnectSuccessDetail(host: GatewayHost): string {
+  return hasDraftState(host)
+    ? "Your draft was preserved and the current session is ready again."
+    : "Your last session is ready again.";
+}
+
+function isRecoverableDisconnect(code: number, error?: { code: string; message: string; details?: unknown }) {
+  return code === 1012 || !isNonRecoverableAuthError(error);
+}
 
 export function resolveControlUiClientVersion(params: {
   gatewayUrl: string;
@@ -206,12 +259,29 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
+  const reconnecting = reconnectReason === "seq-gap" || host.hasConnectedOnce === true;
   shutdownHost.pendingShutdownMessage = null;
   shutdownHost.resumeChatQueueAfterReconnect = false;
+  host.connectionPhase = reconnecting ? "reconnecting" : "connecting";
   host.lastError = null;
   host.lastErrorCode = null;
   host.hello = null;
   host.connected = false;
+  if (reconnecting) {
+    setConnectionBanner(
+      shutdownHost,
+      {
+        tone: "info",
+        title:
+          reconnectReason === "seq-gap"
+            ? "Re-syncing session state."
+            : "Reconnecting to the gateway.",
+        detail: buildReconnectDetail(host),
+      },
+    );
+  } else {
+    setConnectionBanner(shutdownHost, null);
+  }
   if (reconnectReason === "seq-gap") {
     host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
     clearPendingQueueItemsForRun(
@@ -241,11 +311,30 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (host.client !== client) {
         return;
       }
+      const hadConnectedBefore = host.hasConnectedOnce === true;
+      const wasReconnecting =
+        reconnectReason === "seq-gap" || hadConnectedBefore || host.connectionPhase === "reconnecting";
+      const priorShutdownMessage = shutdownHost.pendingShutdownMessage;
       shutdownHost.pendingShutdownMessage = null;
       host.connected = true;
+      host.hasConnectedOnce = true;
+      host.connectionPhase = "connected";
       host.lastError = null;
       host.lastErrorCode = null;
       host.hello = hello;
+      if (wasReconnecting) {
+        setConnectionBanner(
+          shutdownHost,
+          {
+            tone: "success",
+            title: priorShutdownMessage ? "Reconnected after gateway restart." : "Reconnected.",
+            detail: buildReconnectSuccessDetail(host),
+          },
+          { timeoutMs: 6000 },
+        );
+      } else {
+        setConnectionBanner(shutdownHost, null);
+      }
       applySnapshot(host, hello);
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
@@ -274,11 +363,29 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (host.client !== client) {
         return;
       }
+      const recoverable = isRecoverableDisconnect(code, error);
+      const hadConnectedBefore = host.hasConnectedOnce === true;
+      const priorShutdownMessage = shutdownHost.pendingShutdownMessage;
       host.connected = false;
+      host.connectionPhase = recoverable && hadConnectedBefore ? "reconnecting" : "disconnected";
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
         (typeof error?.code === "string" ? error.code : null);
+      if (recoverable && hadConnectedBefore) {
+        host.lastError = null;
+        host.lastErrorCode = null;
+        setConnectionBanner(
+          shutdownHost,
+          {
+            tone: "info",
+            title: priorShutdownMessage ? "Gateway restarting." : "Connection lost. Reconnecting…",
+            detail: buildReconnectDetail(host),
+          },
+        );
+        return;
+      }
+      setConnectionBanner(shutdownHost, null);
       if (code !== 1012) {
         if (error?.message) {
           host.lastError =
@@ -292,9 +399,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           return;
         }
         host.lastError =
-          shutdownHost.pendingShutdownMessage ?? `disconnected (${code}): ${reason || "no reason"}`;
+          priorShutdownMessage ?? `disconnected (${code}): ${reason || "no reason"}`;
       } else {
-        host.lastError = shutdownHost.pendingShutdownMessage ?? null;
+        host.lastError = priorShutdownMessage ?? null;
         host.lastErrorCode = null;
       }
     },
@@ -308,8 +415,14 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); reconnecting`;
+      host.lastError = null;
       host.lastErrorCode = null;
+      host.connectionPhase = "reconnecting";
+      setConnectionBanner(shutdownHost, {
+        tone: "info",
+        title: "Re-syncing after an event gap.",
+        detail: `Expected event ${expected} but received ${received}. Refreshing live session state now.`,
+      });
       connectGateway(host, { reason: "seq-gap" });
     },
   });
@@ -450,7 +563,15 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         ? `Restarting: ${reason}`
         : `Disconnected: ${reason}`;
     (host as GatewayHostWithShutdownMessage).pendingShutdownMessage = shutdownMessage;
-    host.lastError = shutdownMessage;
+    setConnectionBanner(host as GatewayHostWithShutdownMessage, {
+      tone: "info",
+      title:
+        typeof payload?.restartExpectedMs === "number"
+          ? "Gateway restart in progress."
+          : "Gateway shutdown in progress.",
+      detail: buildReconnectDetail(host),
+    });
+    host.lastError = null;
     host.lastErrorCode = null;
     return;
   }

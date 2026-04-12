@@ -122,6 +122,10 @@ function createHost(): TestGatewayHost {
     clientInstanceId: "instance-test",
     client: null,
     connected: false,
+    hasConnectedOnce: false,
+    connectionPhase: "idle",
+    connectionBanner: null,
+    connectionBannerTimer: null,
     hello: null,
     lastError: null,
     lastErrorCode: null,
@@ -141,6 +145,8 @@ function createHost(): TestGatewayHost {
     localMediaPreviewRoots: [],
     serverVersion: null,
     sessionKey: "main",
+    chatMessage: "",
+    chatAttachments: [],
     chatMessages: [],
     chatQueue: [],
     chatToolMessages: [],
@@ -306,6 +312,52 @@ describe("connectGateway", () => {
     expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
   });
 
+  it("keeps the dashboard in reconnecting state after a recoverable close", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitHello();
+    host.chatMessage = "finish the draft";
+
+    client.emitClose({ code: 1006 });
+
+    expect(host.connected).toBe(false);
+    expect(host.hasConnectedOnce).toBe(true);
+    expect(host.connectionPhase).toBe("reconnecting");
+    expect(host.lastError).toBeNull();
+    expect(host.connectionBanner).toMatchObject({
+      tone: "info",
+      title: "Connection lost. Reconnecting…",
+    });
+    expect(host.connectionBanner?.detail).toContain("draft");
+  });
+
+  it("shows a restored-session banner after reconnect hello", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitHello();
+    host.chatMessage = "resume this later";
+    client.emitClose({ code: 1006 });
+
+    client.emitHello();
+
+    expect(host.connected).toBe(true);
+    expect(host.connectionPhase).toBe("connected");
+    expect(host.lastError).toBeNull();
+    expect(host.connectionBanner).toMatchObject({
+      tone: "success",
+      title: "Reconnected.",
+    });
+    expect(host.connectionBanner?.detail).toContain("preserved");
+  });
+
   it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {
     const host = createHost();
 
@@ -439,6 +491,7 @@ describe("connectGateway", () => {
     connectGateway(host);
     const client = gatewayClientInstances[0];
     expect(client).toBeDefined();
+    client.emitHello();
 
     client.emitEvent({
       event: "shutdown",
@@ -449,10 +502,13 @@ describe("connectGateway", () => {
     });
     client.emitClose({ code: 1006 });
 
-    expect(host.lastError).toBe(
-      "Restarting: config change requires gateway restart (plugins.installs)",
-    );
+    expect(host.lastError).toBeNull();
     expect(host.lastErrorCode).toBeNull();
+    expect(host.connectionPhase).toBe("reconnecting");
+    expect(host.connectionBanner).toMatchObject({
+      tone: "info",
+      title: "Gateway restarting.",
+    });
   });
 
   it("clears pending shutdown messages on successful hello after reconnect", () => {
@@ -461,6 +517,7 @@ describe("connectGateway", () => {
     connectGateway(host);
     const client = gatewayClientInstances[0];
     expect(client).toBeDefined();
+    client.emitHello();
 
     client.emitEvent({
       event: "shutdown",
@@ -469,15 +526,19 @@ describe("connectGateway", () => {
         restartExpectedMs: 1500,
       },
     });
+    expect(host.connectionBanner).toMatchObject({
+      tone: "info",
+      title: "Gateway restart in progress.",
+    });
     client.emitClose({ code: 1006 });
-
-    expect(host.lastError).toBe("Restarting: config change");
+    expect(host.connectionPhase).toBe("reconnecting");
 
     client.emitHello();
     expect(host.lastError).toBeNull();
-
-    client.emitClose({ code: 1006 });
-    expect(host.lastError).toBe("disconnected (1006): no reason");
+    expect(host.connectionBanner).toMatchObject({
+      tone: "success",
+      title: "Reconnected after gateway restart.",
+    });
   });
 
   it("keeps shutdown restart reasons on service restart closes", () => {
@@ -486,6 +547,7 @@ describe("connectGateway", () => {
     connectGateway(host);
     const client = gatewayClientInstances[0];
     expect(client).toBeDefined();
+    client.emitHello();
 
     client.emitEvent({
       event: "shutdown",
@@ -496,8 +558,13 @@ describe("connectGateway", () => {
     });
     client.emitClose({ code: 1012, reason: "service restart" });
 
-    expect(host.lastError).toBe("Restarting: gateway restarting");
+    expect(host.lastError).toBeNull();
     expect(host.lastErrorCode).toBeNull();
+    expect(host.connectionPhase).toBe("reconnecting");
+    expect(host.connectionBanner).toMatchObject({
+      tone: "info",
+      title: "Gateway restarting.",
+    });
   });
 
   it("prefers shutdown restart reasons over non-1012 close reasons", () => {
@@ -506,6 +573,7 @@ describe("connectGateway", () => {
     connectGateway(host);
     const client = gatewayClientInstances[0];
     expect(client).toBeDefined();
+    client.emitHello();
 
     client.emitEvent({
       event: "shutdown",
@@ -516,8 +584,13 @@ describe("connectGateway", () => {
     });
     client.emitClose({ code: 1001, reason: "going away" });
 
-    expect(host.lastError).toBe("Restarting: gateway restarting");
+    expect(host.lastError).toBeNull();
     expect(host.lastErrorCode).toBeNull();
+    expect(host.connectionPhase).toBe("reconnecting");
+    expect(host.connectionBanner).toMatchObject({
+      tone: "info",
+      title: "Gateway restarting.",
+    });
   });
 
   it("does not reload chat history for each live tool result event", () => {

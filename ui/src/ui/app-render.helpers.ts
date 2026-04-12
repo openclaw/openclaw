@@ -9,6 +9,7 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "./chat-model-select-state.ts";
+import { listKnownChatSpaces, resolveChatSpace, setChatSpace } from "./chat-spaces.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
@@ -170,6 +171,54 @@ function renderCronFilterIcon(hiddenCount: number) {
   `;
 }
 
+function requestChatUiRefresh(state: AppViewState) {
+  const host = state as AppViewState & { requestUpdate?: () => void };
+  host.requestUpdate?.();
+}
+
+function renderChatSpaceField(
+  state: AppViewState,
+  opts?: { suggestionsId?: string; compact?: boolean },
+) {
+  const activeSession = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  const currentSpace = resolveChatSpace(state.sessionKey, activeSession?.space) ?? "";
+  const knownSpaces = listKnownChatSpaces(state.sessionsResult?.sessions ?? []);
+  const suggestionsId = opts?.suggestionsId?.trim() || "chat-space-suggestions";
+  const className = opts?.compact
+    ? "field chat-controls__session chat-controls__space chat-controls__space--compact"
+    : "field chat-controls__session chat-controls__space";
+  return html`
+    <label class=${className}>
+      <input
+        type="text"
+        list=${suggestionsId}
+        .value=${currentSpace}
+        placeholder="Project / space"
+        title=${currentSpace ? `Space: ${currentSpace}` : "Assign this chat to a space"}
+        @change=${(event: Event) => {
+          const next = (event.target as HTMLInputElement).value;
+          setChatSpace(state.sessionKey, next);
+          requestChatUiRefresh(state);
+        }}
+        @keydown=${(event: KeyboardEvent) => {
+          if (event.key !== "Enter") {
+            return;
+          }
+          event.preventDefault();
+          (event.currentTarget as HTMLInputElement).blur();
+        }}
+      />
+      <datalist id=${suggestionsId}>
+        ${repeat(
+          knownSpaces,
+          (space) => space,
+          (space) => html`<option value=${space}></option>`,
+        )}
+      </datalist>
+    </label>
+  `;
+}
+
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const modelSelect = renderChatModelSelect(state);
@@ -207,6 +256,7 @@ export function renderChatSessionSelect(state: AppViewState) {
           )}
         </select>
       </label>
+      ${renderChatSpaceField(state, { suggestionsId: "chat-space-suggestions-desktop" })}
       ${modelSelect} ${thinkingSelect}
     </div>
   `;
@@ -481,6 +531,10 @@ export function renderChatMobileToggle(state: AppViewState) {
               )}
             </select>
           </label>
+          ${renderChatSpaceField(state, {
+            suggestionsId: "chat-space-suggestions-mobile",
+            compact: true,
+          })}
           ${renderChatThinkingSelect(state)}
           <div class="chat-controls__thinking">
             <button
@@ -968,13 +1022,20 @@ export function resolveSessionOptionGroups(
     seenKeys.add(key);
     const row = byKey.get(key);
     const parsed = parseAgentSessionKey(key);
-    const group = parsed
-      ? ensureGroup(
-          `agent:${normalizeLowercaseStringOrEmpty(parsed.agentId)}`,
-          resolveAgentGroupLabel(state, parsed.agentId),
-        )
-      : ensureGroup("other", "Other Sessions");
-    const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
+    const spaceLabel = resolveChatSpace(key, row?.space);
+    const group = spaceLabel
+      ? ensureGroup(`space:${normalizeLowercaseStringOrEmpty(spaceLabel)}`, `Space: ${spaceLabel}`)
+      : parsed
+        ? ensureGroup(
+            `agent:${normalizeLowercaseStringOrEmpty(parsed.agentId)}`,
+            resolveAgentGroupLabel(state, parsed.agentId),
+          )
+        : ensureGroup("other", "Other Sessions");
+    const baseScopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
+    const scopeLabel =
+      spaceLabel && parsed
+        ? `${resolveAgentGroupLabel(state, parsed.agentId)} / ${baseScopeLabel}`
+        : baseScopeLabel;
     const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
     group.options.push({
       key,
@@ -1160,10 +1221,19 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
 }
 
 export function renderSidebarConnectionStatus(state: AppViewState) {
-  const label = state.connected ? t("common.online") : t("common.offline");
-  const toneClass = state.connected
-    ? "sidebar-connection-status--online"
-    : "sidebar-connection-status--offline";
+  const phase = state.connectionPhase ?? (state.connected ? "connected" : "disconnected");
+  const label =
+    phase === "reconnecting"
+      ? "Reconnecting"
+      : state.connected
+        ? t("common.online")
+        : t("common.offline");
+  const toneClass =
+    phase === "reconnecting"
+      ? "sidebar-connection-status--reconnecting"
+      : state.connected
+        ? "sidebar-connection-status--online"
+        : "sidebar-connection-status--offline";
 
   return html`
     <span
