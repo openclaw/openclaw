@@ -7,6 +7,36 @@ export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
 const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 
+/** Hosts that are always bypassed by the proxy for CDP / browser connections. */
+const LOCALHOST_NO_PROXY_ENTRIES = "localhost,127.0.0.1";
+
+/**
+ * Builds a noProxy string that includes localhost + 127.0.0.1, preserving any
+ * user-configured NO_PROXY entries from env or opts.noProxy.
+ *
+ * EnvHttpProxyAgent routes every request through the configured HTTP(S) proxy
+ * unless the target host appears in NO_PROXY.  CDP polls chrome at
+ * `localhost:<port>` – those requests must never go through the proxy, otherwise
+ * the connection fails and chrome is killed.
+ */
+function buildNoProxyOption(optsNoProxy?: string): string {
+  const envNoProxy = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
+  // opts.noProxy overrides the env var; merge both so user-supplied entries are
+  // preserved and localhost/127.0.0.1 are always added.
+  const existing = optsNoProxy ?? envNoProxy;
+  // Deduplicate while preserving order.
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const entry of [...LOCALHOST_NO_PROXY_ENTRIES.split(","), ...existing.split(/[,\s]/)]) {
+    const trimmed = entry.trim().toLowerCase();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      merged.push(trimmed);
+    }
+  }
+  return merged.join(",");
+}
+
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrap = false;
 
@@ -101,7 +131,7 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
     return;
   }
   try {
-    setGlobalDispatcher(new EnvHttpProxyAgent());
+    setGlobalDispatcher(new EnvHttpProxyAgent({ noProxy: buildNoProxyOption() }));
     lastAppliedProxyBootstrap = true;
   } catch {
     // Best-effort bootstrap only.
@@ -131,6 +161,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
       const proxyOptions = {
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
+        noProxy: buildNoProxyOption(),
         ...(connect ? { connect } : {}),
       } as ConstructorParameters<typeof EnvHttpProxyAgent>[0];
       setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));

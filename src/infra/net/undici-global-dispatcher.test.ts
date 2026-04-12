@@ -171,6 +171,20 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       autoSelectFamilyAttemptTimeout: 300,
     });
   });
+
+  it("sets noProxy to always include localhost and 127.0.0.1 when kind is env-proxy", () => {
+    getDefaultAutoSelectFamily.mockReturnValue(false);
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    const noProxy = next.options?.noProxy as string;
+    expect(noProxy).toContain("localhost");
+    expect(noProxy).toContain("127.0.0.1");
+  });
 });
 
 describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
@@ -233,6 +247,35 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("sets noProxy to always include localhost and 127.0.0.1", () => {
+    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    const noProxy = next.options?.noProxy as string;
+    expect(noProxy).toContain("localhost");
+    expect(noProxy).toContain("127.0.0.1");
+  });
+
+  it("preserves user-configured NO_PROXY entries alongside localhost bypass", () => {
+    const originalNoProxy = process.env.NO_PROXY;
+    process.env.NO_PROXY = "example.com,api.internal";
+    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    const noProxy = next.options?.noProxy as string;
+    expect(noProxy).toContain("localhost");
+    expect(noProxy).toContain("127.0.0.1");
+    expect(noProxy).toContain("example.com");
+    expect(noProxy).toContain("api.internal");
+
+    process.env.NO_PROXY = originalNoProxy ?? "";
   });
 });
 
