@@ -89,7 +89,6 @@ export function ensurePluginRegistryLoaded(options?: {
     : scope === "configured-channels"
       ? resolveConfiguredChannelPluginIds({
           config: context.config,
-          activationSourceConfig: context.activationSourceConfig,
           workspaceDir: context.workspaceDir,
           env: context.env,
         })

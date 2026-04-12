@@ -21,6 +21,7 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
 import {
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
+  resolveScopedChannelPluginIds,
 } from "./channel-plugin-ids.js";
 
 function createManifestRegistryFixture() {
@@ -467,7 +468,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
 
   it("does not treat auto-enabled non-bundled channel owners as explicitly trusted", () => {
     expect(
-      resolveConfiguredChannelPluginIds({
+      resolveScopedChannelPluginIds({
         config: createStartupConfig({
           channelIds: ["global-activation-channel"],
           enabledPluginIds: ["global-activation-channel-plugin"],
@@ -475,6 +476,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         activationSourceConfig: createStartupConfig({
           channelIds: ["global-activation-channel"],
         }),
+        channelIds: ["global-activation-channel"],
         workspaceDir: "/tmp",
         env: process.env,
       }),
