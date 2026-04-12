@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { mergePluginTextTransforms } from "../agents/plugin-text-transforms.js";
 import type { PluginTextTransforms } from "./types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 
 type PluginRuntimeModule = Pick<typeof import("./runtime.js"), "getActivePluginRegistry">;
 
@@ -25,7 +26,7 @@ function loadPluginRuntime(): PluginRuntimeModule | null {
 }
 
 export function resolveRuntimeTextTransforms(): PluginTextTransforms | undefined {
-  const registry = loadPluginRuntime()?.getActivePluginRegistry();
+  const registry = getActivePluginRegistry() ?? loadPluginRuntime()?.getActivePluginRegistry();
   const pluginTextTransforms = Array.isArray(registry?.textTransforms)
     ? registry.textTransforms.map((entry) => entry.transforms)
     : [];
