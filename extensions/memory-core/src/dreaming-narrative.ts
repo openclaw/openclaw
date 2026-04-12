@@ -1,7 +1,12 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadConfig, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import {
+  loadConfig,
+  loadSessionStore,
+  resolveStorePath,
+  updateSessionStore,
+} from "openclaw/plugin-sdk/config-runtime";
 import {
   extractErrorCode,
   formatErrorMessage,
@@ -636,6 +641,26 @@ async function safePathExists(pathname: string): Promise<boolean> {
   }
 }
 
+function normalizeComparablePath(pathname: string): string {
+  return process.platform === "win32" ? pathname.toLowerCase() : pathname;
+}
+
+async function normalizeSessionFileForComparison(params: {
+  sessionsDir: string;
+  sessionFile: string;
+}): Promise<string | null> {
+  const trimmed = params.sessionFile.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(params.sessionsDir, trimmed);
+  try {
+    return normalizeComparablePath(await fs.realpath(resolved));
+  } catch {
+    return normalizeComparablePath(path.resolve(resolved));
+  }
+}
+
 async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   const cfg = loadConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
@@ -658,33 +683,51 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
     const sessionsDir = path.dirname(storePath);
     let store: Record<string, { sessionFile?: string } | undefined>;
     try {
-      store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { sessionFile?: string } | undefined
-      >;
+      store = loadSessionStore(storePath) as Record<string, { sessionFile?: string } | undefined>;
     } catch {
       continue;
     }
 
     const referencedSessionFiles = new Set<string>();
-    let storeChanged = false;
+    let needsStoreUpdate = false;
     for (const [key, entry] of Object.entries(store)) {
       const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
-      if (sessionFile) {
-        referencedSessionFiles.add(sessionFile);
+      const normalizedSessionFile = sessionFile
+        ? await normalizeSessionFileForComparison({ sessionsDir, sessionFile })
+        : null;
+      if (normalizedSessionFile) {
+        referencedSessionFiles.add(normalizedSessionFile);
       }
       if (!key.includes(DREAMING_SESSION_KEY_PREFIX)) {
         continue;
       }
-      if (!sessionFile || !(await safePathExists(sessionFile))) {
-        delete store[key];
-        storeChanged = true;
-        prunedEntries += 1;
+      if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
+        needsStoreUpdate = true;
       }
     }
 
-    if (storeChanged) {
-      await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+    if (needsStoreUpdate) {
+      referencedSessionFiles.clear();
+      prunedEntries += await updateSessionStore(storePath, async (lockedStore) => {
+        let prunedForAgent = 0;
+        for (const [key, entry] of Object.entries(lockedStore)) {
+          const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
+          const normalizedSessionFile = sessionFile
+            ? await normalizeSessionFileForComparison({ sessionsDir, sessionFile })
+            : null;
+          if (normalizedSessionFile) {
+            referencedSessionFiles.add(normalizedSessionFile);
+          }
+          if (!key.includes(DREAMING_SESSION_KEY_PREFIX)) {
+            continue;
+          }
+          if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
+            delete lockedStore[key];
+            prunedForAgent += 1;
+          }
+        }
+        return prunedForAgent;
+      });
     }
 
     let sessionFiles: Dirent[] = [];
@@ -698,13 +741,18 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (!fileEntry.isFile() || !fileEntry.name.endsWith(".jsonl")) {
         continue;
       }
-      const filePath = path.join(sessionsDir, fileEntry.name);
-      if (referencedSessionFiles.has(filePath)) {
+      const transcriptPath = path.join(sessionsDir, fileEntry.name);
+      const normalizedTranscriptPath =
+        (await normalizeSessionFileForComparison({
+          sessionsDir,
+          sessionFile: fileEntry.name,
+        })) ?? normalizeComparablePath(transcriptPath);
+      if (referencedSessionFiles.has(normalizedTranscriptPath)) {
         continue;
       }
       let stat;
       try {
-        stat = await fs.stat(filePath);
+        stat = await fs.stat(transcriptPath);
       } catch {
         continue;
       }
@@ -713,16 +761,16 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       }
       let content = "";
       try {
-        content = await fs.readFile(filePath, "utf-8");
+        content = await fs.readFile(transcriptPath, "utf-8");
       } catch {
         continue;
       }
       if (!content.includes(DREAMING_TRANSCRIPT_RUN_MARKER)) {
         continue;
       }
-      const archivedPath = `${filePath}.deleted.${Date.now()}`;
+      const archivedPath = `${transcriptPath}.deleted.${Date.now()}`;
       try {
-        await fs.rename(filePath, archivedPath);
+        await fs.rename(transcriptPath, archivedPath);
         archivedOrphans += 1;
       } catch {
         // best-effort scrubber

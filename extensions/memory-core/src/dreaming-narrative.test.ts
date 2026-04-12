@@ -797,18 +797,24 @@ describe("generateAndAppendDreamNarrative", () => {
     await fs.mkdir(sessionsDir, { recursive: true });
     const storePath = path.join(sessionsDir, "sessions.json");
     const orphanPath = path.join(sessionsDir, "orphan.jsonl");
+    const livePath = path.join(sessionsDir, "still-live.jsonl");
     await fs.writeFile(
       storePath,
       `${JSON.stringify({
         "agent:main:dreaming-narrative-light-1": {
-          sessionFile: path.join(sessionsDir, "missing.jsonl"),
+          sessionFile: "missing.jsonl",
+        },
+        "agent:main:kept-session": {
+          sessionFile: "still-live.jsonl",
         },
       })}\n`,
       "utf-8",
     );
     await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
+    await fs.writeFile(livePath, '{"runId":"dreaming-narrative-light-keep"}\n', "utf-8");
     const oldDate = new Date(Date.now() - 600_000);
     await fs.utimes(orphanPath, oldDate, oldDate);
+    await fs.utimes(livePath, oldDate, oldDate);
 
     vi.spyOn(configRuntimeModule, "loadConfig").mockReturnValue({ session: {} } as never);
     vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(((
@@ -837,6 +843,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
     const sessionFiles = await fs.readdir(sessionsDir);
     expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
+    expect(sessionFiles).toContain("still-live.jsonl");
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
   });
 });
