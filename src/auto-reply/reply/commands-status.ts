@@ -21,7 +21,6 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
-import { importRuntimeModule } from "../../shared/runtime-import.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
@@ -48,40 +47,19 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "openai-codex",
 ]);
 
-type StatusRuntimeModule = {
-  buildStatusMessage: (args: Record<string, unknown>) => string;
-};
-type CommandsStatusSubagentsModule = {
-  buildSubagentsStatusLine: (params: {
-    runs: Array<{ childSessionKey: string; endedAt?: number | null }>;
-    verboseEnabled: boolean;
-    pendingDescendantsForRun: (entry: { childSessionKey: string }) => number;
-  }) => string | undefined;
-  countPendingDescendantRuns: (rootSessionKey: string) => number;
-  listControlledSubagentRuns: (
-    controllerSessionKey: string,
-  ) => Array<{ childSessionKey: string; endedAt?: number | null }>;
-};
-
-const STATUS_RUNTIME_SPEC = ["../status.runtime", ".js"] as const;
-const COMMANDS_STATUS_DEPS_RUNTIME_SPEC = ["./commands-status-deps.runtime", ".js"] as const;
+type StatusRuntimeModule = typeof import("./status.runtime.js");
+type CommandsStatusSubagentsModule = typeof import("./commands-status-deps.runtime.js");
 
 let statusRuntimePromise: Promise<StatusRuntimeModule> | null = null;
 let commandsStatusDepsRuntimePromise: Promise<CommandsStatusSubagentsModule> | null = null;
 
 function loadStatusRuntime(): Promise<StatusRuntimeModule> {
-  statusRuntimePromise ??= importRuntimeModule<StatusRuntimeModule>(
-    import.meta.url,
-    STATUS_RUNTIME_SPEC,
-  );
+  statusRuntimePromise ??= import("./status.runtime.js");
   return statusRuntimePromise;
 }
 
 function loadCommandsStatusDepsRuntime(): Promise<CommandsStatusSubagentsModule> {
-  commandsStatusDepsRuntimePromise ??= importRuntimeModule<CommandsStatusSubagentsModule>(
-    import.meta.url,
-    COMMANDS_STATUS_DEPS_RUNTIME_SPEC,
-  );
+  commandsStatusDepsRuntimePromise ??= import("./commands-status-deps.runtime.js");
   return commandsStatusDepsRuntimePromise;
 }
 
