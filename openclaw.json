@@ -17,6 +17,9 @@
         "cdpUrl": "http://172.20.0.10:9222",
         "color": "#00AA00"
       }
+    },
+    "ssrfPolicy": {
+      "dangerouslyAllowPrivateNetwork": true
     }
   },
   "auth": {
