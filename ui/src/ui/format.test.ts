@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatRelativeTimestamp, formatUnknownText, stripThinkingTags } from "./format.ts";
+import {
+  describeCronExpression,
+  formatRelativeTimestamp,
+  formatUnknownText,
+  stripThinkingTags,
+} from "./format.ts";
 
 describe("formatAgo", () => {
   it("returns 'in <1m' for timestamps less than 60s in the future", () => {
@@ -97,6 +102,65 @@ describe("stripThinkingTags", () => {
   it("hides unfinished <relevant-memories> block tails", () => {
     const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
     expect(stripThinkingTags(input)).toBe("Hello\n");
+  });
+});
+
+describe("describeCronExpression", () => {
+  it("describes every-N-minutes patterns", () => {
+    expect(describeCronExpression("*/5 * * * *")).toBe("Every 5 minutes");
+    expect(describeCronExpression("*/15 * * * *")).toBe("Every 15 minutes");
+  });
+
+  it("describes every-minute pattern", () => {
+    expect(describeCronExpression("* * * * *")).toBe("Every minute");
+    expect(describeCronExpression("*/1 * * * *")).toBe("Every minute");
+  });
+
+  it("describes every-N-hours patterns", () => {
+    expect(describeCronExpression("0 */6 * * *")).toBe("Every 6 hours");
+    expect(describeCronExpression("0 */2 * * *")).toBe("Every 2 hours");
+    expect(describeCronExpression("0 */1 * * *")).toBe("Every hour");
+  });
+
+  it("describes every-hour-at-minute patterns", () => {
+    expect(describeCronExpression("30 * * * *")).toBe("Every hour at :30");
+  });
+
+  it("describes daily-at-time patterns", () => {
+    expect(describeCronExpression("0 3 * * *")).toBe("Daily at 3:00 AM");
+    expect(describeCronExpression("0 15 * * *")).toBe("Daily at 3:00 PM");
+    expect(describeCronExpression("30 0 * * *")).toBe("Daily at 12:30 AM");
+    expect(describeCronExpression("0 12 * * *")).toBe("Daily at 12:00 PM");
+  });
+
+  it("describes weekly patterns", () => {
+    expect(describeCronExpression("0 5 * * 0")).toBe("Weekly Sun at 5:00 AM");
+    expect(describeCronExpression("0 9 * * 1")).toBe("Weekly Mon at 9:00 AM");
+    expect(describeCronExpression("30 14 * * 5")).toBe("Weekly Fri at 2:30 PM");
+  });
+
+  it("treats day-of-week 7 as Sunday", () => {
+    expect(describeCronExpression("0 5 * * 7")).toBe("Weekly Sun at 5:00 AM");
+  });
+
+  it("falls back for step-zero expressions", () => {
+    expect(describeCronExpression("*/0 * * * *")).toBe("*/0 * * * *");
+    expect(describeCronExpression("0 */0 * * *")).toBe("0 */0 * * *");
+  });
+
+  it("falls back to raw expression for complex patterns", () => {
+    expect(describeCronExpression("0 0 1 * *")).toBe("0 0 1 * *");
+    expect(describeCronExpression("0 0 * * 1-5")).toBe("0 0 * * 1-5");
+    expect(describeCronExpression("*/5 */2 * * *")).toBe("*/5 */2 * * *");
+  });
+
+  it("returns raw string for non-standard field counts", () => {
+    expect(describeCronExpression("0 0 * *")).toBe("0 0 * *");
+    expect(describeCronExpression("0 0 * * * *")).toBe("0 0 * * * *");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(describeCronExpression("")).toBe("");
   });
 });
 

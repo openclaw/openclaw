@@ -114,3 +114,83 @@ export function formatTokens(tokens: number | null | undefined, fallback = "0"):
   const m = tokens / 1_000_000;
   return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
 }
+
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/**
+ * Convert a 5-field cron expression to a short human-readable description.
+ * Handles common patterns; falls back to the raw expression for anything exotic.
+ */
+export function describeCronExpression(expr: string): string {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return expr;
+  }
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+
+  // Every N minutes: *\/N * * * *
+  if (hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    const stepMatch = minute.match(/^\*\/(\d+)$/);
+    if (stepMatch) {
+      const n = Number(stepMatch[1]);
+      if (n === 0) {
+        return expr;
+      }
+      return n === 1 ? "Every minute" : `Every ${n} minutes`;
+    }
+    if (minute === "*") {
+      return "Every minute";
+    }
+  }
+
+  // Every N hours: 0 *\/N * * *  (minute must be a plain number, not a step)
+  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    const hourStep = hour.match(/^\*\/(\d+)$/);
+    if (hourStep && /^\d+$/.test(minute)) {
+      const n = Number(hourStep[1]);
+      if (n === 0) {
+        return expr;
+      }
+      return n === 1 ? "Every hour" : `Every ${n} hours`;
+    }
+    if (hour === "*" && /^\d+$/.test(minute)) {
+      // minute is fixed, hour is *, e.g. "30 * * * *"
+      return `Every hour at :${minute.padStart(2, "0")}`;
+    }
+  }
+
+  // Daily at H:MM — M H * * *
+  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    const h = Number(hour);
+    const m = Number(minute);
+    if (Number.isInteger(h) && Number.isInteger(m) && h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+      const period = h >= 12 ? "PM" : "AM";
+      const displayHour = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      return `Daily at ${displayHour}:${String(m).padStart(2, "0")} ${period}`;
+    }
+  }
+
+  // Weekly on DAY at H:MM — M H * * D
+  if (dayOfMonth === "*" && month === "*") {
+    const h = Number(hour);
+    const m = Number(minute);
+    const d = Number(dayOfWeek);
+    if (
+      Number.isInteger(h) &&
+      Number.isInteger(m) &&
+      Number.isInteger(d) &&
+      h >= 0 &&
+      h <= 23 &&
+      m >= 0 &&
+      m <= 59 &&
+      d >= 0 &&
+      d <= 7
+    ) {
+      const period = h >= 12 ? "PM" : "AM";
+      const displayHour = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      return `Weekly ${WEEKDAY_NAMES[d % 7]} at ${displayHour}:${String(m).padStart(2, "0")} ${period}`;
+    }
+  }
+
+  return expr;
+}

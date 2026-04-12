@@ -4,6 +4,7 @@ import {
   formatDurationHuman,
   formatMs,
   formatUnknownText,
+  describeCronExpression,
 } from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
@@ -65,7 +66,9 @@ export function formatCronSchedule(job: CronJob) {
   if (s.kind === "every") {
     return `Every ${formatDurationHuman(s.everyMs)}`;
   }
-  return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
+  const description = describeCronExpression(s.expr);
+  const tz = s.tz ? ` (${s.tz})` : "";
+  return description !== s.expr ? `${description}${tz}` : `Cron ${s.expr}${tz}`;
 }
 
 export function formatCronPayload(job: CronJob) {

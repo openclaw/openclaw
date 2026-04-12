@@ -5,6 +5,7 @@ import type {
   WikiImportInsights,
   WikiMemoryPalace,
 } from "../controllers/dreaming.ts";
+import { describeCronExpression } from "../format.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -362,12 +363,19 @@ function flattenDiaryBody(body: string): string[] {
   );
 }
 
-function formatPhaseNextRun(nextRunAtMs?: number): string {
-  if (!nextRunAtMs) {
+function formatPhaseSchedule(cron?: string, nextRunAtMs?: number): string {
+  if (!cron) {
     return "—";
   }
-  const d = new Date(nextRunAtMs);
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const description = describeCronExpression(cron);
+  if (!nextRunAtMs) {
+    return description;
+  }
+  const nextTime = new Date(nextRunAtMs).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${description} · next ${nextTime}`;
 }
 
 function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
@@ -436,9 +444,9 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
             const phase = props.phases?.[phaseId];
             const hasPhaseStatus = phase !== undefined;
             const enabled = phase?.enabled === true;
-            const nextRun = formatPhaseNextRun(phase?.nextRunAtMs);
+            const schedule = formatPhaseSchedule(phase?.cron, phase?.nextRunAtMs);
             const label = t(DREAM_PHASE_LABEL_KEYS[phaseId]);
-            const status = !hasPhaseStatus ? "—" : enabled ? nextRun : t("dreaming.phase.off");
+            const status = !hasPhaseStatus ? "—" : enabled ? schedule : t("dreaming.phase.off");
             return html`
               <div class="dreams__phase ${hasPhaseStatus && !enabled ? "dreams__phase--off" : ""}">
                 <div class="dreams__phase-dot ${enabled ? "dreams__phase-dot--on" : ""}"></div>
