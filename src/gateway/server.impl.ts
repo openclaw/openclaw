@@ -56,7 +56,10 @@ import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
-import { startGatewayRuntimeServices } from "./server-runtime-services.js";
+import {
+  activateGatewayScheduledServices,
+  startGatewayRuntimeServices,
+} from "./server-runtime-services.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
@@ -608,8 +611,6 @@ export async function startGatewayServer(
         minimalTestGateway,
         cfgAtStart,
         channelManager,
-        cron: runtimeState.cronState.cron,
-        logCron,
         log,
       }),
     );
@@ -754,6 +755,19 @@ export async function startGatewayServer(
       logChannels,
       unavailableGatewayMethods,
     }));
+
+    // Activate cron scheduler, heartbeat runner, and pending delivery
+    // recovery now that sidecars are ready and chat.history is available.
+    // Previously these ran before sidecars finished, causing a race.
+    // See #65322.
+    const activated = activateGatewayScheduledServices({
+      minimalTestGateway,
+      cfgAtStart,
+      cron: runtimeState.cronState.cron,
+      logCron,
+      log,
+    });
+    runtimeState.heartbeatRunner = activated.heartbeatRunner;
 
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
