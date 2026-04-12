@@ -524,6 +524,27 @@
   color: var(--muted);
 }
 
+.agent-chat__stt-interim,
+.agent-chat__stt-error {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.agent-chat__stt-interim {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.agent-chat__stt-error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 24%, transparent);
+}
+
 .agent-chat__toolbar {
   display: flex;
   align-items: center;

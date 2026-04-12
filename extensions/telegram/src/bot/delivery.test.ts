@@ -166,6 +166,68 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
   });
 
+  it("extracts assistant text from structured JSON reply payloads", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 41, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+    const rawStructuredReply = JSON.stringify({
+      response: {
+        output_text: "Clean final answer",
+        parameters: { temperature: 0.2, topP: 0.9 },
+      },
+    });
+
+    await deliverWith({
+      replies: [{ text: rawStructuredReply }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("Clean final answer");
+    expect(sendMessage.mock.calls[0]?.[1]).not.toContain("temperature");
+    expect(sendMessage.mock.calls[0]?.[1]).not.toContain("{");
+  });
+
+  it("sends fallback text when internal reply markers are present", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 42, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "[[replyReturn_current]] malformed chunk" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("Response error, retrying");
+    expect(sendMessage.mock.calls[0]?.[1]).not.toContain("replyReturn_current");
+  });
+
+  it("uses a readable fallback when JSON has no assistant text field", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 43, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+    const rawStructuredReply = JSON.stringify({
+      temperature: 0.2,
+      model: "openai-codex/gpt-5.4",
+      parameters: { topP: 0.9, maxTokens: 4096 },
+    });
+
+    await deliverWith({
+      replies: [{ text: rawStructuredReply }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toContain(
+      "Response received, but no assistant message text was found.",
+    );
+    expect(sendMessage.mock.calls[0]?.[1]).not.toContain("temperature");
+  });
+
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",

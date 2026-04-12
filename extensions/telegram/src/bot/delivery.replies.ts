@@ -55,6 +55,155 @@ type TelegramReplyChannelData = {
   pin?: boolean;
 };
 
+const TELEGRAM_RESPONSE_ERROR_FALLBACK = "⚠️ Response error, retrying...";
+const INTERNAL_REPLY_MARKER_RE = /\[\[\s*replyReturn_current/i;
+const JSON_LOOKING_TEXT_RE = /^\s*[{[]/;
+
+function safeJsonString(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function firstNonEmpty(items: Array<string | undefined>): string | undefined {
+  for (const item of items) {
+    if (typeof item === "string" && item.trim().length > 0) {
+      return item;
+    }
+  }
+  return undefined;
+}
+
+function normalizeCandidateText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? value : undefined;
+  }
+  if (Array.isArray(value)) {
+    const joined = value
+      .map((entry) => normalizeCandidateText(entry))
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      .join("\n")
+      .trim();
+    return joined.length > 0 ? joined : undefined;
+  }
+  const rec = asRecord(value);
+  if (!rec) {
+    return undefined;
+  }
+  return firstNonEmpty([
+    normalizeCandidateText(rec.text),
+    normalizeCandidateText(rec.output_text),
+    normalizeCandidateText(rec.content),
+    normalizeCandidateText(rec.value),
+  ]);
+}
+
+function readPath(root: unknown, path: Array<string | number>): unknown {
+  let current: unknown = root;
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) {
+        return undefined;
+      }
+      const index = segment < 0 ? current.length + segment : segment;
+      current = current[index];
+      continue;
+    }
+    const rec = asRecord(current);
+    if (!rec) {
+      return undefined;
+    }
+    current = rec[segment];
+  }
+  return current;
+}
+
+function extractTelegramReplyTextFromStructuredResponse(root: unknown): string | undefined {
+  const candidatePaths: Array<Array<string | number>> = [
+    ["response", "output_text"],
+    ["output_text"],
+    ["response", "output", 0, "content", 0, "text"],
+    ["output", 0, "content", 0, "text"],
+    ["response", "output", "text"],
+    ["output", "text"],
+    ["response", "messages", -1, "content"],
+    ["messages", -1, "content"],
+  ];
+  for (const path of candidatePaths) {
+    const candidate = normalizeCandidateText(readPath(root, path));
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function buildReadableFallbackFromStructuredResponse(root: unknown): string | undefined {
+  const candidate = firstNonEmpty([
+    normalizeCandidateText(readPath(root, ["error", "message"])),
+    normalizeCandidateText(readPath(root, ["message"])),
+  ]);
+  if (candidate) {
+    return `Response received: ${candidate}`;
+  }
+  const status = normalizeCandidateText(readPath(root, ["status"]));
+  if (status) {
+    return `Response received (${status}), but no assistant message text was found.`;
+  }
+  return "Response received, but no assistant message text was found.";
+}
+
+function sanitizeTelegramReplyText(params: {
+  runtime: RuntimeEnv;
+  reply: ReplyPayload;
+}): string | undefined {
+  const rawText = params.reply.text;
+  params.runtime.log?.(`telegram reply raw: ${safeJsonString(params.reply)}`);
+  if (typeof rawText !== "string" || rawText.length === 0) {
+    params.runtime.log?.("telegram reply extracted text: <empty>");
+    return rawText;
+  }
+  if (INTERNAL_REPLY_MARKER_RE.test(rawText)) {
+    params.runtime.error?.(danger("telegram reply contained internal marker; sending fallback"));
+    params.runtime.log?.(`telegram reply extracted text: ${TELEGRAM_RESPONSE_ERROR_FALLBACK}`);
+    return TELEGRAM_RESPONSE_ERROR_FALLBACK;
+  }
+  if (!JSON_LOOKING_TEXT_RE.test(rawText)) {
+    params.runtime.log?.(`telegram reply extracted text: ${rawText}`);
+    return rawText;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    params.runtime.error?.(danger("telegram reply looked like JSON but failed to parse"));
+    params.runtime.log?.(`telegram reply extracted text: ${TELEGRAM_RESPONSE_ERROR_FALLBACK}`);
+    return TELEGRAM_RESPONSE_ERROR_FALLBACK;
+  }
+  const extractedText = extractTelegramReplyTextFromStructuredResponse(parsed);
+  if (extractedText && !INTERNAL_REPLY_MARKER_RE.test(extractedText)) {
+    params.runtime.log?.(`telegram reply extracted text: ${extractedText}`);
+    return extractedText;
+  }
+  if (extractedText && INTERNAL_REPLY_MARKER_RE.test(extractedText)) {
+    params.runtime.error?.(danger("telegram extracted text contained internal marker; fallback"));
+    params.runtime.log?.(`telegram reply extracted text: ${TELEGRAM_RESPONSE_ERROR_FALLBACK}`);
+    return TELEGRAM_RESPONSE_ERROR_FALLBACK;
+  }
+  const fallbackText = buildReadableFallbackFromStructuredResponse(parsed);
+  params.runtime.log?.(`telegram reply extracted text: ${fallbackText}`);
+  return fallbackText;
+}
+
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
 
 function buildChunkTextResolver(params: {
@@ -661,6 +810,14 @@ export async function deliverReplies(params: {
       if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
         reply = { ...reply, text: hookResult.content };
       }
+    }
+
+    const sanitizedText = sanitizeTelegramReplyText({
+      runtime: params.runtime,
+      reply,
+    });
+    if (sanitizedText !== reply.text) {
+      reply = { ...reply, text: sanitizedText };
     }
 
     const contentForSentHook = reply.text || "";

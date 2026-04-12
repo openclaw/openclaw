@@ -48,14 +48,72 @@ export type SttCallbacks = {
 
 let activeRecognition: SpeechRecognitionInstance | null = null;
 
-export function startStt(callbacks: SttCallbacks): boolean {
+function isLocalhostHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
+function isVoiceInputSecureContext(): boolean {
+  if (globalThis.isSecureContext) {
+    return true;
+  }
+  const hostname = globalThis.location?.hostname;
+  return typeof hostname === "string" && isLocalhostHostname(hostname);
+}
+
+function normalizeSttError(error: unknown): string {
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const named = error as { name?: unknown; message?: unknown; error?: unknown };
+    if (typeof named.error === "string" && named.error.trim()) {
+      return named.error;
+    }
+    if (typeof named.name === "string" && named.name.trim()) {
+      return named.name;
+    }
+    if (typeof named.message === "string" && named.message.trim()) {
+      return named.message;
+    }
+  }
+  return "unknown";
+}
+
+async function requestMicrophonePermission(): Promise<string | null> {
+  const mediaDevices = navigator.mediaDevices;
+  if (!mediaDevices?.getUserMedia) {
+    return null;
+  }
+  try {
+    const stream = await mediaDevices.getUserMedia({ audio: true });
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+    return null;
+  } catch (error) {
+    return normalizeSttError(error);
+  }
+}
+
+export async function startStt(callbacks: SttCallbacks): Promise<boolean> {
   const Ctor = getSpeechRecognitionCtor();
   if (!Ctor) {
     callbacks.onError?.("Speech recognition is not supported in this browser");
     return false;
   }
 
+  if (!isVoiceInputSecureContext()) {
+    callbacks.onError?.("Voice input requires HTTPS or localhost");
+    return false;
+  }
+
   stopStt();
+
+  const permissionError = await requestMicrophonePermission();
+  if (permissionError) {
+    callbacks.onError?.(permissionError);
+    return false;
+  }
 
   const recognition = new Ctor();
   recognition.continuous = true;
@@ -91,7 +149,7 @@ export function startStt(callbacks: SttCallbacks): boolean {
 
   recognition.addEventListener("error", (event) => {
     const speechEvent = event as unknown as SpeechRecognitionErrorEvent;
-    if (speechEvent.error === "aborted" || speechEvent.error === "no-speech") {
+    if (speechEvent.error === "aborted") {
       return;
     }
     callbacks.onError?.(speechEvent.error);
@@ -105,7 +163,15 @@ export function startStt(callbacks: SttCallbacks): boolean {
   });
 
   activeRecognition = recognition;
-  recognition.start();
+  try {
+    recognition.start();
+  } catch (error) {
+    if (activeRecognition === recognition) {
+      activeRecognition = null;
+    }
+    callbacks.onError?.(normalizeSttError(error));
+    return false;
+  }
   return true;
 }
 

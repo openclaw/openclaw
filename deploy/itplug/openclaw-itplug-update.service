@@ -1,0 +1,8 @@
+[Unit]
+Description=OpenClaw itplug git update and redeploy
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/openclaw-itplug-update

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check OpenClaw itplug git updates every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=openclaw-itplug-update.service
+
+[Install]
+WantedBy=timers.target

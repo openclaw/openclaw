@@ -285,6 +285,7 @@ function findNearestAssistantMessageIndex(
 
 interface ChatEphemeralState {
   sttRecording: boolean;
+  sttError: string | null;
   sttInterimText: string;
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -300,6 +301,7 @@ interface ChatEphemeralState {
 function createChatEphemeralState(): ChatEphemeralState {
   return {
     sttRecording: false,
+    sttError: null,
     sttInterimText: "",
     slashMenuOpen: false,
     slashMenuItems: [],
@@ -311,6 +313,29 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchQuery: "",
     pinnedExpanded: false,
   };
+}
+
+function formatSttErrorMessage(error: string): string {
+  switch (error) {
+    case "Speech recognition is not supported in this browser":
+      return "Voice input is not supported in this browser. Chrome or Edge over HTTPS work best.";
+    case "Voice input requires HTTPS or localhost":
+      return "Voice input needs HTTPS or localhost.";
+    case "NotAllowedError":
+    case "service-not-allowed":
+    case "not-allowed":
+    case "Permission denied":
+      return "Microphone access was blocked. Allow mic access for this site and try again.";
+    case "NotFoundError":
+    case "audio-capture":
+      return "No microphone was found. Check your mic and browser input device.";
+    case "network":
+      return "Browser speech recognition is temporarily unavailable. Try again in a moment.";
+    case "no-speech":
+      return "No speech was detected. Try again and speak right after the mic turns on.";
+    default:
+      return `Voice input failed: ${error}`;
+  }
 }
 
 const vs = createChatEphemeralState();
@@ -1539,6 +1564,7 @@ export function renderChat(props: ChatProps) {
         ${vs.sttRecording && vs.sttInterimText
           ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
           : nothing}
+        ${vs.sttError ? html`<div class="agent-chat__stt-error" role="alert">${vs.sttError}</div>` : nothing}
 
         <textarea
           ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
@@ -1572,14 +1598,17 @@ export function renderChat(props: ChatProps) {
                     class="agent-chat__input-btn ${vs.sttRecording
                       ? "agent-chat__input-btn--recording"
                       : ""}"
-                    @click=${() => {
+                    @click=${async () => {
                       if (vs.sttRecording) {
                         stopStt();
                         vs.sttRecording = false;
+                        vs.sttError = null;
                         vs.sttInterimText = "";
                         requestUpdate();
                       } else {
-                        const started = startStt({
+                        vs.sttError = null;
+                        requestUpdate();
+                        const started = await startStt({
                           onTranscript: (text, isFinal) => {
                             if (isFinal) {
                               const current = getDraft();
@@ -1593,16 +1622,19 @@ export function renderChat(props: ChatProps) {
                           },
                           onStart: () => {
                             vs.sttRecording = true;
+                            vs.sttError = null;
                             requestUpdate();
                           },
                           onEnd: () => {
                             vs.sttRecording = false;
                             vs.sttInterimText = "";
+                            vs.sttError = null;
                             requestUpdate();
                           },
-                          onError: () => {
+                          onError: (error) => {
                             vs.sttRecording = false;
                             vs.sttInterimText = "";
+                            vs.sttError = formatSttErrorMessage(error);
                             requestUpdate();
                           },
                         });
