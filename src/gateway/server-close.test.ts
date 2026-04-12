@@ -59,7 +59,7 @@ describe("createGatewayCloseHandler", () => {
       transcriptUnsub: null,
       lifecycleUnsub,
       chatRunState: { clear: vi.fn() },
-      clients: new Set(),
+      clients: new Set<{ socket: { close: (code: number, reason: string) => void } }>(),
       configReloader: { stop: vi.fn(async () => undefined) },
       wss: { close: (cb: () => void) => cb() } as never,
       httpServer: {
@@ -104,7 +104,7 @@ describe("createGatewayCloseHandler", () => {
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: { clear: vi.fn() },
-      clients: new Set(),
+      clients: new Set<{ socket: { close: (code: number, reason: string) => void } }>(),
       configReloader: { stop: vi.fn(async () => undefined) },
       wss: {
         clients: new Set([{ terminate }]),
@@ -155,10 +155,10 @@ describe("createGatewayCloseHandler", () => {
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: { clear: vi.fn() },
-      clients: new Set(),
+      clients: new Set<{ socket: { close: (code: number, reason: string) => void } }>(),
       configReloader: { stop: vi.fn(async () => undefined) },
       wss: {
-        clients: new Set(),
+        clients: new Set<{ socket: { close: (code: number, reason: string) => void } }>(),
         close: () => undefined,
       } as never,
       httpServer: {
