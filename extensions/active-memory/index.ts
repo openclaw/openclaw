@@ -334,10 +334,26 @@ function resolveRecallRunChannelContext(params: {
   const explicitProvider = normalizeOptionalString(params.messageProvider);
   const trustedExplicitChannel =
     explicitChannel && explicitChannel !== explicitProvider ? explicitChannel : undefined;
-  const resolveReturnValue = (resolvedChannel?: string) => ({
-    messageChannel: trustedExplicitChannel ?? resolvedChannel ?? explicitChannel,
-    messageProvider: trustedExplicitChannel ?? resolvedChannel ?? explicitProvider,
-  });
+  const resolveReturnValue = (params: {
+    resolvedChannel?: string;
+    resolvedChannelStrength?: "strong" | "weak";
+  }) => {
+    const trustedResolvedChannel =
+      params.resolvedChannelStrength === "strong" ? params.resolvedChannel : undefined;
+    return {
+      messageChannel:
+        trustedExplicitChannel ??
+        trustedResolvedChannel ??
+        explicitChannel ??
+        params.resolvedChannel,
+      messageProvider:
+        trustedExplicitChannel ??
+        trustedResolvedChannel ??
+        explicitProvider ??
+        explicitChannel ??
+        params.resolvedChannel,
+    };
+  };
   const resolvedSessionKey =
     normalizeOptionalString(params.sessionKey) ??
     resolveCanonicalSessionKeyFromSessionId({
@@ -346,7 +362,7 @@ function resolveRecallRunChannelContext(params: {
       sessionId: params.sessionId,
     });
   if (!resolvedSessionKey) {
-    return resolveReturnValue();
+    return resolveReturnValue({});
   }
 
   try {
@@ -361,13 +377,20 @@ function resolveRecallRunChannelContext(params: {
       store,
       sessionKey: resolvedSessionKey,
     }).existing;
-    const entryChannel =
+    const strongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
-      normalizeOptionalString(sessionEntry?.channel) ??
-      normalizeOptionalString(sessionEntry?.origin?.provider);
-    return resolveReturnValue(entryChannel);
+      normalizeOptionalString(sessionEntry?.channel);
+    const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
+    return resolveReturnValue({
+      resolvedChannel: strongEntryChannel ?? weakEntryChannel,
+      resolvedChannelStrength: strongEntryChannel
+        ? "strong"
+        : weakEntryChannel
+          ? "weak"
+          : undefined,
+    });
   } catch {
-    return resolveReturnValue();
+    return resolveReturnValue({});
   }
 }
 
