@@ -74,21 +74,36 @@ const MAX_FETCH_PAGES = 20;
 /** Maximum pages fetched from listConvos per poll cycle (30 convos/page → up to 300 conversations). */
 const MAX_LIST_PAGES = 10;
 
+type FetchNewMessagesResult = {
+  messages: InboundMessage[];
+  /** The oldest rev we examined (newest-first traversal), set as watermark when page cap hit. */
+  oldestRevSeen: string | undefined;
+  /** True when MAX_FETCH_PAGES was reached while the API still had more pages to return. */
+  hitPageCap: boolean;
+};
+
 /**
  * Fetch all messages in a conversation that are newer than the tracked rev.
  *
  * Paginates `getMessages` (newest-first) until it encounters a message at or
- * before the watermark or exhausts all pages, then returns results in
- * chronological order (oldest first) for in-order dispatch.
+ * before the watermark, exhausts API pages, or reaches MAX_FETCH_PAGES.
+ * Returns results in chronological order (oldest first) for in-order dispatch.
+ *
+ * When `hitPageCap` is true there are unseen messages older than those
+ * returned; callers should advance the watermark to `oldestRevSeen` rather
+ * than the convo's latest rev so the next poll cycle picks up the remainder.
  */
 async function fetchNewMessages(
   agent: BskyAgent,
   convoId: string,
   selfDid: string,
   lastRev: string,
-): Promise<InboundMessage[]> {
+): Promise<FetchNewMessagesResult> {
   const results: InboundMessage[] = [];
   let cursor: string | undefined;
+  let reachedOld = false;
+  let exhaustedApi = false;
+  let oldestRevSeen: string | undefined;
 
   for (let page = 0; page < MAX_FETCH_PAGES; page++) {
     const data = await chatApiGet<GetMessagesResponse>(agent, LXM_GET_MESSAGES, {
@@ -97,7 +112,6 @@ async function fetchNewMessages(
       ...(cursor ? { cursor } : {}),
     });
 
-    let reachedOld = false;
     for (const msg of data.messages) {
       if (!isMessageView(msg)) {
         continue;
@@ -108,6 +122,8 @@ async function fetchNewMessages(
         reachedOld = true;
         break;
       }
+      // Track the oldest rev examined (all messages, including our own outbound).
+      oldestRevSeen = msg.rev;
       // Skip our own outbound messages
       if (msg.sender.did === selfDid) {
         continue;
@@ -121,14 +137,24 @@ async function fetchNewMessages(
       });
     }
 
-    if (reachedOld || !data.cursor) {
+    if (reachedOld) {
+      break;
+    }
+    if (!data.cursor) {
+      exhaustedApi = true;
       break;
     }
     cursor = data.cursor;
   }
 
-  // Reverse to chronological order (oldest first) for in-order dispatch
-  return results.toReversed();
+  return {
+    // Reverse to chronological order (oldest first) for in-order dispatch
+    messages: results.toReversed(),
+    oldestRevSeen,
+    // Page cap: stopped because we ran out of allowed pages, not because we
+    // reached the watermark or ran out of API pages.
+    hitPageCap: !reachedOld && !exhaustedApi,
+  };
 }
 
 /**
@@ -266,15 +292,22 @@ export async function runBlueSkyPollLoop(params: {
           }
 
           // New activity detected — fetch full messages to find exactly what's new
-          const newMessages = await fetchNewMessages(agent, convo.id, selfDid, prev ?? "");
+          const {
+            messages: newMessages,
+            oldestRevSeen,
+            hitPageCap,
+          } = await fetchNewMessages(agent, convo.id, selfDid, prev ?? "");
 
           if (newMessages.length > 0) {
             hadActivity = true;
-            // Use the lastMessage rev from listConvos as the new watermark
-            lastRev.set(convo.id, msg.rev);
+            // When we hit the page cap there are older unseen messages; advance
+            // the watermark only to the oldest rev we examined so the next poll
+            // cycle fetches the remainder rather than skipping it permanently.
+            const newWatermark = hitPageCap && oldestRevSeen ? oldestRevSeen : msg.rev;
+            lastRev.set(convo.id, newWatermark);
 
             logVerbose(
-              `Bluesky: ${newMessages.length} new message(s) in convo ${convo.id} (watermark=${msg.rev})`,
+              `Bluesky: ${newMessages.length} new message(s) in convo ${convo.id} (watermark=${newWatermark}${hitPageCap ? ", page-cap hit" : ""})`,
             );
 
             for (const inbound of newMessages) {
