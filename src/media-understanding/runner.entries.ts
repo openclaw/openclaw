@@ -460,8 +460,10 @@ export function findDecisionReason(
   decision: MediaUnderstandingDecision,
   outcome?: MediaUnderstandingAttemptOutcome,
 ): string | undefined {
-  for (const attachment of decision.attachments) {
-    for (const attempt of attachment.attempts) {
+  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
+  for (const attachment of attachments) {
+    const attempts = Array.isArray(attachment?.attempts) ? attachment.attempts : [];
+    for (const attempt of attempts) {
       if (outcome && attempt.outcome !== outcome) {
         continue;
       }
