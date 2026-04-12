@@ -15,11 +15,15 @@ export function resolveDefaultAgentWorkspaceDir(
   homedir: () => string = os.homedir,
 ): string {
   const home = resolveRequiredHomeDir(env, homedir);
+  // Allow OPENCLAW_STATE_DIR to override the base directory so multiple
+  // instances can run on the same machine with isolated state.
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const base = stateDir || path.join(home, ".openclaw");
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (profile && normalizeOptionalLowercaseString(profile) !== "default") {
-    return path.join(home, ".openclaw", `workspace-${profile}`);
+    return path.join(base, `workspace-${profile}`);
   }
-  return path.join(home, ".openclaw", "workspace");
+  return path.join(base, "workspace");
 }
 
 export const DEFAULT_AGENT_WORKSPACE_DIR = resolveDefaultAgentWorkspaceDir();
