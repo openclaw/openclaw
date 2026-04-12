@@ -3519,10 +3519,12 @@ def validate_landing_zone_name(name):
         errors.append(f"Name must be lowercase (use '{name.lower()}')")
     if not re.match(r'^[a-z0-9][a-z0-9\-]*[a-z0-9]$', name):
         errors.append("Name must start/end with a letter or number and use only lowercase letters, numbers, and hyphens")
-    if '..' in name:
-        errors.append("Name cannot contain consecutive dots")
     if '--' in name:
         errors.append("Name cannot contain consecutive hyphens")
+    if '-.' in name or '.-' in name:
+        errors.append("Name cannot place hyphens adjacent to dots")
+    if '..' in name:
+        errors.append("Name cannot contain consecutive dots")
     if name.startswith('xn--'):
         errors.append("Name cannot start with 'xn--'")
     if name.startswith('sthree-'):
