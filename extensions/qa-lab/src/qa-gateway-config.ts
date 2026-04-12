@@ -83,6 +83,9 @@ export function buildQaGatewayConfig(params: {
     baseUrl: mockProviderBaseUrl,
     apiKey: "test",
     api: "openai-responses",
+    request: {
+      allowPrivateNetwork: true,
+    },
     models: [
       {
         id: "gpt-5.4",
@@ -139,6 +142,9 @@ export function buildQaGatewayConfig(params: {
     baseUrl: mockAnthropicBaseUrl,
     apiKey: "test",
     api: "anthropic-messages",
+    request: {
+      allowPrivateNetwork: true,
+    },
     models: [
       {
         id: "claude-opus-4-6",
