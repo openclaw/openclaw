@@ -13,6 +13,7 @@ import {
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { createListTool } from "./pi-tools.list.js";
 import {
   createExecTool,
   createProcessTool,
@@ -492,6 +493,10 @@ export function createOpenClawCodingTools(options?: {
         : []
       : []),
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
+    createListTool({
+      cwd: sandboxRoot ?? workspaceRoot,
+      workspaceOnly,
+    }) as unknown as AnyAgentTool,
     execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     // Channel docking: include channel-defined agent tools (login, etc.).

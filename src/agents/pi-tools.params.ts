@@ -74,6 +74,7 @@ function hasValidEditReplacements(record: Record<string, unknown>): boolean {
 
 export const REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path"], label: "path" }],
+  list: [{ keys: ["path"], label: "path" }],
   write: [
     { keys: ["path"], label: "path" },
     { keys: ["content"], label: "content" },
