@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   listGroupsLive: vi.fn(),
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
+  getActivePluginChannelRegistry: vi.fn(() => null),
+  getActivePluginRegistry: vi.fn(() => null),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
@@ -23,6 +25,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginChannelRegistry: () => mocks.getActivePluginChannelRegistry(),
+  getActivePluginRegistry: () => mocks.getActivePluginRegistry(),
   getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
 }));
 
@@ -38,6 +42,10 @@ beforeEach(() => {
   mocks.listGroupsLive.mockReset();
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
+  mocks.getActivePluginChannelRegistry.mockReset();
+  mocks.getActivePluginChannelRegistry.mockReturnValue(null);
+  mocks.getActivePluginRegistry.mockReset();
+  mocks.getActivePluginRegistry.mockReturnValue(null);
   mocks.getActivePluginChannelRegistryVersion.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
   resetDirectoryCache();
