@@ -604,6 +604,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/gateway-restart: {}
+
   extensions/github-copilot:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -656,6 +658,8 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+
+  extensions/inference-guard: {}
 
   extensions/irc:
     devDependencies:
