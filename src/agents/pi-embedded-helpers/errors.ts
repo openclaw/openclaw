@@ -424,51 +424,32 @@ export function sanitizeUserFacingText(text: string): string {
     return stripped;
   }
 
-  if (/incorrect role information|roles must alternate/i.test(trimmed)) {
-    return (
-      "*Message ordering conflict, please try again. " +
-      "If this persists, use /new to start a fresh session.*"
-    );
-  }
-
-  if (isContextOverflowError(trimmed)) {
-    return (
-      "*Context overflow: prompt too large for the model. " +
-      "Try again with less input or a larger-context model.*"
-    );
-  }
-
-  if (isBillingErrorMessage(trimmed)) {
-    return BILLING_ERROR_USER_MESSAGE;
-  }
-
-  // Check for overloaded/rate-limit before raw payload detection so
-  // that "API Error: 529 {overloaded JSON}" gets a user-friendly
-  // message instead of the technical parsed-JSON form.
-  if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-    return "*The AI service is temporarily overloaded. Please try again in a moment.*";
-  }
-
-  if (isAuthErrorMessage(trimmed)) {
-    return "*Authentication expired. Please re-authenticate and try again.*";
-  }
-
-  if (isTimeoutErrorMessage(trimmed)) {
-    return "*LLM request timed out.*";
-  }
-
-  // NOTE: We deliberately do NOT content-match for system errors
-  // (EACCES, "permission denied", stack traces, etc.) here. This
-  // function runs on normal assistant text, and Claw can legitimately
-  // discuss those phrases in a reply (debugging help, explanations).
-  // System-error detection lives in `formatAssistantErrorText`, which
-  // only runs when the message is already known to be an error.
-
-  if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-    return `*${formatRawAssistantErrorForUi(trimmed)}*`;
-  }
-
-  if (ERROR_PREFIX_RE.test(trimmed)) {
+  // IMPORTANT: this function runs on every normal assistant reply in
+  // the reply pipeline (normalize-reply.ts, agent-runner-execution.ts,
+  // sessions-helpers.ts, pi-embedded-utils.ts). It MUST NOT content-
+  // match the body of a reply for error keywords — otherwise a
+  // legitimate reply that mentions "expired", "unauthorized", "401",
+  // "permission denied", "timeout", "rate limit", "incorrect role
+  // information", etc. gets clobbered with a canned error message
+  // (e.g. Claw explaining why a token expired gets replaced with
+  // "Authentication expired. Please re-authenticate and try again.").
+  //
+  // All error classification for error-tagged messages lives in
+  // `formatAssistantErrorText`, which only runs when the assistant
+  // message has `stopReason === "error"` or `errorMessage` set. Those
+  // checks (isAuthErrorMessage, isRateLimitErrorMessage, etc.) are
+  // safe to content-match there because the text is already known to
+  // be an error.
+  //
+  // The one exception we keep here is `isRawApiErrorPayload`, which is
+  // a *structural* check — it requires the text to be a JSON object
+  // with `"type":"error"` / `"request_id"` / `{"error": {...}}` fields.
+  // Natural language essentially never matches this shape, so it's
+  // safe to classify as an error when it does. This catches the case
+  // where an upstream caller explicitly passes a raw API error payload
+  // into the sanitizer (e.g. pi-embedded-subscribe.ts:419 which only
+  // calls sanitize after its own `isRawApiErrorPayload(chunk)` check).
+  if (isRawApiErrorPayload(trimmed)) {
     return `*${formatRawAssistantErrorForUi(trimmed)}*`;
   }
 
