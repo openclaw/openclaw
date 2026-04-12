@@ -343,10 +343,14 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
+  const visionFilteredTools = filterToolsForVisionInputs(allTools, {
+    modelHasVision,
+    hasInboundImages: (params.images?.length ?? 0) > 0,
+  });
   const filteredTools =
     params.toolsAllow && params.toolsAllow.length > 0
-      ? allTools.filter((tool) => params.toolsAllow?.includes(tool.name))
-      : allTools;
+      ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
+      : visionFilteredTools;
   return normalizeProviderToolSchemas({
     tools: filteredTools,
     provider: params.provider,
@@ -357,6 +361,19 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function filterToolsForVisionInputs<T extends { name?: string }>(
+  tools: T[],
+  params: {
+    modelHasVision: boolean;
+    hasInboundImages: boolean;
+  },
+): T[] {
+  if (!params.modelHasVision || !params.hasInboundImages) {
+    return tools;
+  }
+  return tools.filter((tool) => tool.name !== "image");
 }
 
 async function withCodexStartupTimeout<T>(params: {
@@ -473,6 +490,7 @@ function handleApprovalRequest(params: {
 }
 
 export const __testing = {
+  filterToolsForVisionInputs,
   setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
     clientFactory = factory;
   },
