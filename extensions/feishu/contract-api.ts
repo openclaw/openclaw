@@ -12,5 +12,6 @@ export {
   parseFeishuDirectConversationId,
   parseFeishuTargetId,
 } from "./src/conversation-id.js";
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/doctor.js";
 
 export const feishuSessionBindingAdapterChannels = ["feishu"] as const;
