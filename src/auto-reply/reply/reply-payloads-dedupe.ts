@@ -117,7 +117,8 @@ function targetsMatchForSuppression(params: {
   targetKey: string;
   targetThreadId?: string;
 }): boolean {
-  const pluginMatch = getChannelPlugin(params.provider)?.outbound?.targetsMatchForReplySuppression;
+  const channelPlugin = getChannelPlugin(params.provider);
+  const pluginMatch = channelPlugin?.outbound?.targetsMatchForReplySuppression;
   if (pluginMatch) {
     return pluginMatch({
       originTarget: params.originTarget,
@@ -127,6 +128,10 @@ function targetsMatchForSuppression(params: {
   }
   const originThreadId = normalizeThreadIdForComparison(params.originThreadId);
   const targetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
+  const supportsThreading = Boolean(channelPlugin?.threading);
+  if (!originThreadId && targetThreadId && !supportsThreading) {
+    return params.targetKey === params.originTarget;
+  }
   if (originThreadId || targetThreadId) {
     return params.targetKey === params.originTarget && originThreadId === targetThreadId;
   }

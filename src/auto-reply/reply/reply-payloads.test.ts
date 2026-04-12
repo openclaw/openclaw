@@ -277,4 +277,21 @@ describe("shouldSuppressMessagingToolReplies", () => {
       }),
     ).toBe(true);
   });
+
+  it("ignores untrusted target-only thread ids for unthreaded providers", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "custom-channel",
+        originatingTo: "room-1",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "custom-channel",
+            to: "room-1",
+            threadId: "attacker-controlled",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
 });
