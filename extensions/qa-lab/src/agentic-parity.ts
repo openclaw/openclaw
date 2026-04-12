@@ -51,6 +51,11 @@ export const QA_AGENTIC_PARITY_SCENARIOS = [
     title: "Config restart capability flip",
     countsTowardValidToolCallRate: true,
   },
+  {
+    id: "instruction-followthrough-repo-contract",
+    title: "Instruction followthrough repo contract",
+    countsTowardValidToolCallRate: true,
+  },
 ] as const;
 
 export const QA_AGENTIC_PARITY_SCENARIO_IDS = QA_AGENTIC_PARITY_SCENARIOS.map(({ id }) => id);

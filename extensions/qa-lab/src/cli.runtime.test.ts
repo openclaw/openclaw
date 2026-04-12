@@ -340,6 +340,7 @@ describe("qa cli runtime", () => {
           "memory-recall",
           "thread-memory-isolation",
           "config-restart-capability-flip",
+          "instruction-followthrough-repo-contract",
         ],
       }),
     );
