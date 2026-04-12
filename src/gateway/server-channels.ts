@@ -1,3 +1,4 @@
+import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -8,7 +9,6 @@ import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -125,7 +125,7 @@ type ChannelManagerOptions = {
    * @since Plugin SDK 2026.2.19
    * @see {@link ChannelGatewayContext.channelRuntime}
    */
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   /**
    * Lazily resolves optional channel runtime helpers for external channel plugins.
    *
@@ -134,7 +134,7 @@ type ChannelManagerOptions = {
    * a channel account actually starts. The resolved value must be a real
    * `createPluginRuntime().channel` surface.
    */
-  resolveChannelRuntime?: () => PluginRuntime["channel"];
+  resolveChannelRuntime?: () => ChannelRuntimeSurface;
 };
 
 type StartChannelOptions = {
@@ -252,7 +252,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return next;
   };
 
-  const getChannelRuntime = (): PluginRuntime["channel"] | undefined => {
+  const getChannelRuntime = (): ChannelRuntimeSurface | undefined => {
     return channelRuntime ?? resolveChannelRuntime?.();
   };
 
@@ -299,7 +299,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         let handedOffTask = false;
         const log = channelLogs[channelId];
         let scopedChannelRuntime: ReturnType<typeof createTaskScopedChannelRuntime> | null = null;
-        let channelRuntimeForTask: PluginRuntime["channel"] | undefined;
+        let channelRuntimeForTask: ChannelRuntimeSurface | undefined;
         let stopApprovalBootstrap: () => Promise<void> = async () => {};
         const stopTaskScopedApprovalRuntime = async () => {
           const scopedRuntime = scopedChannelRuntime;

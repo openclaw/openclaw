@@ -8,8 +8,9 @@ import {
   type TextContent,
 } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,

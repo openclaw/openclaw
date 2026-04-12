@@ -1,6 +1,8 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
@@ -207,10 +209,12 @@ export function stripMentions(
 ): string {
   let result = text;
   const providerId =
-    (ctx.Provider ? normalizeChannelId(ctx.Provider) : null) ??
+    (ctx.Provider ? normalizeAnyChannelId(ctx.Provider) : null) ??
     (normalizeOptionalLowercaseString(ctx.Provider) as ChannelId | undefined) ??
     null;
-  const providerMentions = providerId ? getChannelPlugin(providerId)?.mentions : undefined;
+  const providerMentions = providerId
+    ? (getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined)?.mentions
+    : undefined;
   const configRegexes = compileMentionPatternsCached({
     patterns: normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId)),
     flags: "gi",

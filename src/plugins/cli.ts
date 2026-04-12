@@ -44,11 +44,16 @@ export async function registerPluginCliCommands(
   options?: RegisterPluginCliOptions,
 ) {
   const mode = options?.mode ?? "eager";
-  const primary = options?.primary ?? null;
+  const primary = options?.primary ?? undefined;
 
   await registerPluginCliCommandGroups(
     program,
-    await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, loaderOptions }),
+    await loadPluginCliRegistrationEntriesWithDefaults({
+      cfg,
+      env,
+      loaderOptions,
+      primaryCommand: primary,
+    }),
     {
       mode,
       primary,
