@@ -156,8 +156,10 @@ function emitSessionsChanged(
     return;
   }
   const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
+  const isTeardown =
+    payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
 
-  if (payload.reason === "reset" || payload.reason === "deleted" || payload.reason === "delete" || payload.reason === "new") {
+  if (isTeardown) {
     if (payload.sessionKey) {
       context.broadcastToConnIds(
         "socket.drain",
@@ -230,14 +232,7 @@ function emitSessionsChanged(
         : {}),
     },
     connIds,
-    {
-      dropIfSlow: !(
-        payload.reason === "reset" ||
-        payload.reason === "deleted" ||
-        payload.reason === "delete" ||
-        payload.reason === "new"
-      ),
-    },
+    { dropIfSlow: !isTeardown },
   );
 }
 

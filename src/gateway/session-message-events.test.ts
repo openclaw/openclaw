@@ -674,7 +674,12 @@ describe("session.message websocket events", () => {
     const ws = await harness.openWs();
     try {
       await connectOk(ws, { scopes: ["operator.read", "operator.admin"] });
-      await rpcReq(ws, "sessions.messages.subscribe", { key: "agent:main:main" });
+      const subRes = await rpcReq(ws, "sessions.messages.subscribe", { key: "agent:main:main" });
+      expect(subRes.ok, JSON.stringify(subRes)).toBe(true);
+      expect(subRes.payload).toMatchObject({
+        subscribed: true,
+        key: "agent:main:main",
+      });
 
       const socketDrainPromise = onceMessage(
         ws,
