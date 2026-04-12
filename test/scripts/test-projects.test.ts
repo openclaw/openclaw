@@ -4,6 +4,7 @@ import {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
+  shouldAcquireLocalHeavyCheckLock,
   resolveChangedTargetArgs,
 } from "../../scripts/test-projects.test-support.mjs";
 
@@ -192,6 +193,79 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+});
+
+describe("scripts/test-projects local heavy-check lock", () => {
+  it("skips the lock for a single scoped serial tooling run", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.tooling.config.ts",
+            includePatterns: ["test/scripts/committer.test.ts"],
+            watchMode: false,
+          },
+        ],
+        {
+          ...process.env,
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the lock for non-tooling or non-serial runs", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.tooling.config.ts",
+            includePatterns: ["test/scripts/committer.test.ts"],
+            watchMode: false,
+          },
+        ],
+        {
+          ...process.env,
+          OPENCLAW_TEST_PROJECTS_SERIAL: "0",
+        },
+      ),
+    ).toBe(true);
+
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.unit.config.ts",
+            includePatterns: ["src/infra/vitest-config.test.ts"],
+            watchMode: false,
+          },
+        ],
+        {
+          ...process.env,
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("allows forcing the lock back on", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.tooling.config.ts",
+            includePatterns: ["test/scripts/committer.test.ts"],
+            watchMode: false,
+          },
+        ],
+        {
+          ...process.env,
+          OPENCLAW_TEST_PROJECTS_FORCE_LOCK: "1",
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+        },
+      ),
+    ).toBe(true);
   });
 });
 

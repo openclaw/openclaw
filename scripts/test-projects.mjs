@@ -16,6 +16,7 @@ import {
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
   resolveChangedTargetArgs,
+  shouldAcquireLocalHeavyCheckLock,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 import {
@@ -26,11 +27,7 @@ import {
 
 // Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
 // cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
-const releaseLock = acquireLocalHeavyCheckLockSync({
-  cwd: process.cwd(),
-  env: process.env,
-  toolName: "test",
-});
+let releaseLock = () => {};
 let lockReleased = false;
 
 const FULL_SUITE_CONFIG_WEIGHT = new Map([
@@ -242,6 +239,14 @@ async function main() {
           baseEnv: process.env,
           cwd: process.cwd(),
         });
+
+  releaseLock = shouldAcquireLocalHeavyCheckLock(runSpecs, process.env)
+    ? acquireLocalHeavyCheckLockSync({
+        cwd: process.cwd(),
+        env: process.env,
+        toolName: "test",
+      })
+    : () => {};
 
   const isFullSuiteRun =
     targetArgs.length === 0 &&
