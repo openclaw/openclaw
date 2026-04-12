@@ -3,10 +3,6 @@ import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type {
-  BundledChannelEntryContract,
-  BundledChannelSetupEntryContract,
-} from "../../plugin-sdk/channel-entry-contract.js";
 import {
   listBundledChannelPluginMetadata,
   resolveBundledChannelGeneratedPath,
@@ -18,10 +14,27 @@ import { isJavaScriptModulePath, loadChannelPluginModule } from "./module-loader
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
+type BundledChannelEntryRuntimeContract = {
+  kind: "bundled-channel-entry";
+  id: string;
+  name: string;
+  description: string;
+  register: (api: unknown) => void;
+  loadChannelPlugin: () => ChannelPlugin;
+  loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+};
+
+type BundledChannelSetupEntryRuntimeContract = {
+  kind: "bundled-channel-setup-entry";
+  loadSetupPlugin: () => ChannelPlugin;
+  loadSetupSecrets?: () => ChannelPlugin["secrets"] | undefined;
+};
+
 type GeneratedBundledChannelEntry = {
   id: string;
-  entry: BundledChannelEntryContract;
-  setupEntry?: BundledChannelSetupEntryContract;
+  entry: BundledChannelEntryRuntimeContract;
+  setupEntry?: BundledChannelSetupEntryRuntimeContract;
 };
 
 const log = createSubsystemLogger("channels");
@@ -37,12 +50,12 @@ const OPENCLAW_PACKAGE_ROOT =
 
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,
-): BundledChannelEntryContract | null {
+): BundledChannelEntryRuntimeContract | null {
   const resolved = unwrapDefaultModuleExport(moduleExport);
   if (!resolved || typeof resolved !== "object") {
     return null;
   }
-  const record = resolved as Partial<BundledChannelEntryContract>;
+  const record = resolved as Partial<BundledChannelEntryRuntimeContract>;
   if (record.kind !== "bundled-channel-entry") {
     return null;
   }
@@ -55,24 +68,24 @@ function resolveChannelPluginModuleEntry(
   ) {
     return null;
   }
-  return record as BundledChannelEntryContract;
+  return record as BundledChannelEntryRuntimeContract;
 }
 
 function resolveChannelSetupModuleEntry(
   moduleExport: unknown,
-): BundledChannelSetupEntryContract | null {
+): BundledChannelSetupEntryRuntimeContract | null {
   const resolved = unwrapDefaultModuleExport(moduleExport);
   if (!resolved || typeof resolved !== "object") {
     return null;
   }
-  const record = resolved as Partial<BundledChannelSetupEntryContract>;
+  const record = resolved as Partial<BundledChannelSetupEntryRuntimeContract>;
   if (record.kind !== "bundled-channel-setup-entry") {
     return null;
   }
   if (typeof record.loadSetupPlugin !== "function") {
     return null;
   }
-  return record as BundledChannelSetupEntryContract;
+  return record as BundledChannelSetupEntryRuntimeContract;
 }
 
 function resolveBundledChannelBoundaryRoot(params: {

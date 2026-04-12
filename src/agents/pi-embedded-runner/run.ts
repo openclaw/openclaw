@@ -68,7 +68,7 @@ import {
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
-import { runPostCompactionSideEffects } from "./compact.js";
+import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -717,6 +717,7 @@ export async function runEmbeddedPiAgent(
 
           const {
             aborted,
+            externalAbort,
             promptError,
             promptErrorSource,
             preflightRecovery,
@@ -1275,6 +1276,7 @@ export async function runEmbeddedPiAgent(
             let promptFailoverDecision = resolveRunFailoverDecision({
               stage: "prompt",
               aborted,
+              externalAbort,
               fallbackConfigured,
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
@@ -1296,6 +1298,7 @@ export async function runEmbeddedPiAgent(
               promptFailoverDecision = resolveRunFailoverDecision({
                 stage: "prompt",
                 aborted,
+                externalAbort,
                 fallbackConfigured,
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
@@ -1415,6 +1418,7 @@ export async function runEmbeddedPiAgent(
           const assistantFailoverDecision = resolveRunFailoverDecision({
             stage: "assistant",
             aborted,
+            externalAbort,
             fallbackConfigured,
             failoverFailure,
             failoverReason: assistantFailoverReason,
@@ -1425,6 +1429,7 @@ export async function runEmbeddedPiAgent(
           const assistantFailoverOutcome = await handleAssistantFailover({
             initialDecision: assistantFailoverDecision,
             aborted,
+            externalAbort,
             fallbackConfigured,
             failoverFailure,
             failoverReason: assistantFailoverReason,
