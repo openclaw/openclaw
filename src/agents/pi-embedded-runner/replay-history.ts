@@ -424,6 +424,10 @@ export async function sanitizeSessionHistory(params: {
   const droppedThinking = policy.dropThinkingBlocks
     ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
+  const isOpenAIResponsesApi =
+    params.modelApi === "openai-responses" ||
+    params.modelApi === "openai-codex-responses" ||
+    params.modelApi === "azure-openai-responses";
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
@@ -433,6 +437,7 @@ export async function sanitizeSessionHistory(params: {
       ? sanitizeToolCallIdsForCloudCodeAssist(sanitizedToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+          preserveOpenAIFunctionCallPairings: isOpenAIResponsesApi,
           allowedToolNames: params.allowedToolNames,
         })
       : sanitizedToolCalls;
@@ -446,10 +451,6 @@ export async function sanitizeSessionHistory(params: {
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
   );
 
-  const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-codex-responses" ||
-    params.modelApi === "azure-openai-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
   const modelChanged = priorSnapshot
