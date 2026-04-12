@@ -8,6 +8,7 @@ import {
   type PluginLoadOptions,
 } from "./loader.js";
 import {
+  resolveActivatableProviderOwnerPluginIds,
   resolveDiscoverableProviderOwnerPluginIds,
   resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
@@ -115,16 +116,12 @@ function resolvePluginProviderLoadBase(params: {
     ...providerOwnedPluginIds,
     ...modelOwnedPluginIds,
   ]);
-  const runtimeConfig = withActivatedPluginIds({
-    config: params.config,
-    pluginIds: explicitOwnerPluginIds,
-  });
   return {
     env,
     workspaceDir,
     requestedPluginIds,
     explicitOwnerPluginIds,
-    runtimeConfig,
+    rawConfig: params.config,
   };
 }
 
@@ -150,13 +147,14 @@ function resolveSetupProviderPluginLoadState(
   if (setupPluginIds.length === 0) {
     return undefined;
   }
+  const setupConfig = withActivatedPluginIds({
+    config: base.rawConfig,
+    pluginIds: setupPluginIds,
+  });
   const loadOptions = buildPluginRuntimeLoadOptionsFromValues(
     {
-      config: withActivatedPluginIds({
-        config: base.runtimeConfig,
-        pluginIds: setupPluginIds,
-      }),
-      activationSourceConfig: base.runtimeConfig,
+      config: setupConfig,
+      activationSourceConfig: setupConfig,
       autoEnabledReasons: {},
       workspaceDir: base.workspaceDir,
       env: base.env,
@@ -176,11 +174,26 @@ function resolveRuntimeProviderPluginLoadState(
   params: Parameters<typeof resolvePluginProviders>[0],
   base: ReturnType<typeof resolvePluginProviderLoadBase>,
 ) {
+  const explicitOwnerPluginIds = resolveActivatableProviderOwnerPluginIds({
+    pluginIds: base.explicitOwnerPluginIds,
+    config: base.rawConfig,
+    workspaceDir: base.workspaceDir,
+    env: base.env,
+    includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
+  });
+  const runtimeRequestedPluginIds =
+    params.onlyPluginIds?.length || explicitOwnerPluginIds.length > 0
+      ? dedupeSortedPluginIds([...(params.onlyPluginIds ?? []), ...explicitOwnerPluginIds])
+      : undefined;
+  const requestConfig = withActivatedPluginIds({
+    config: base.rawConfig,
+    pluginIds: explicitOwnerPluginIds,
+  });
   const activation = resolveBundledPluginCompatibleActivationInputs({
-    rawConfig: base.runtimeConfig,
+    rawConfig: requestConfig,
     env: base.env,
     workspaceDir: base.workspaceDir,
-    onlyPluginIds: base.requestedPluginIds,
+    onlyPluginIds: runtimeRequestedPluginIds,
     applyAutoEnable: true,
     compatMode: {
       allowlist: params.bundledProviderAllowlistCompat,
@@ -201,9 +214,9 @@ function resolveRuntimeProviderPluginLoadState(
       config,
       workspaceDir: base.workspaceDir,
       env: base.env,
-      onlyPluginIds: base.requestedPluginIds,
+      onlyPluginIds: runtimeRequestedPluginIds,
     }),
-    base.explicitOwnerPluginIds,
+    explicitOwnerPluginIds,
   );
   const loadOptions = buildPluginRuntimeLoadOptionsFromValues(
     {

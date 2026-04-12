@@ -160,7 +160,67 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function isProviderPluginEligibleForRuntimeOwnerActivation(params: {
+  plugin: PluginManifestRecord;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig?: PluginLoadOptions["config"];
+  includeUntrustedWorkspacePlugins?: boolean;
+}): boolean {
+  if (!params.normalizedConfig.enabled) {
+    return false;
+  }
+  if (params.normalizedConfig.deny.includes(params.plugin.id)) {
+    return false;
+  }
+  if (params.normalizedConfig.entries[params.plugin.id]?.enabled === false) {
+    return false;
+  }
+  if (params.includeUntrustedWorkspacePlugins === false && params.plugin.origin === "workspace") {
+    return resolveEffectivePluginActivationState({
+      id: params.plugin.id,
+      origin: params.plugin.origin,
+      config: params.normalizedConfig,
+      rootConfig: params.rootConfig,
+      enabledByDefault: params.plugin.enabledByDefault,
+    }).activated;
+  }
+  return true;
+}
+
+export function resolveActivatableProviderOwnerPluginIds(params: {
+  pluginIds: readonly string[];
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  includeUntrustedWorkspacePlugins?: boolean;
+}): string[] {
+  if (params.pluginIds.length === 0) {
+    return [];
+  }
+  const pluginIdSet = new Set(params.pluginIds);
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        pluginIdSet.has(plugin.id) &&
+        isProviderPluginEligibleForRuntimeOwnerActivation({
+          plugin,
+          normalizedConfig,
+          rootConfig: params.config,
+          includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
+        }),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export const __testing = {
+  resolveActivatableProviderOwnerPluginIds,
   resolveEnabledProviderPluginIds,
   resolveDiscoveredProviderPluginIds,
   resolveDiscoverableProviderOwnerPluginIds,

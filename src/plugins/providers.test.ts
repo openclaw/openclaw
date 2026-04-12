@@ -21,6 +21,7 @@ const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
+let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
@@ -285,6 +286,7 @@ describe("resolvePluginProviders", () => {
         loadPluginManifestRegistryMock(...args),
     }));
     ({
+      resolveActivatableProviderOwnerPluginIds,
       resolveOwningPluginIdsForProvider,
       resolveOwningPluginIdsForModelRef,
       resolveEnabledProviderPluginIds,
@@ -749,6 +751,54 @@ describe("resolvePluginProviders", () => {
     );
   });
 
+  it("does not activate explicit runtime owners when plugins are globally disabled", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "activation-owned-provider",
+        providerIds: [],
+        activation: {
+          onProviders: ["activation-owned"],
+        },
+      }),
+    ]);
+
+    expect(
+      resolveActivatableProviderOwnerPluginIds({
+        pluginIds: ["activation-owned-provider"],
+        config: {
+          plugins: {
+            enabled: false,
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not activate explicit runtime owners disabled in config", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "activation-owned-provider",
+        providerIds: [],
+        activation: {
+          onProviders: ["activation-owned"],
+        },
+      }),
+    ]);
+
+    expect(
+      resolveActivatableProviderOwnerPluginIds({
+        pluginIds: ["activation-owned-provider"],
+        config: {
+          plugins: {
+            entries: {
+              "activation-owned-provider": { enabled: false },
+            },
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("uses setup.providers to keep explicit provider owners on the setup path", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
@@ -807,6 +857,35 @@ describe("resolvePluginProviders", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("does not auto-activate untrusted workspace runtime owners when requested", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "workspace-activation-owner",
+        providerIds: [],
+        origin: "workspace",
+        activation: {
+          onProviders: ["workspace-activation"],
+        },
+      }),
+    ]);
+    resolveRuntimePluginRegistryMock.mockReturnValue(createEmptyPluginRegistry());
+
+    const providers = resolvePluginProviders({
+      config: {},
+      providerRefs: ["workspace-activation"],
+      activate: true,
+      includeUntrustedWorkspacePlugins: false,
+    });
+
+    expect(providers).toEqual([]);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        onlyPluginIds: [],
+      }),
+    );
+  });
+
   it("keeps explicitly trusted disabled workspace setup owners discoverable", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
@@ -834,6 +913,34 @@ describe("resolvePluginProviders", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual(["workspace-activation-owner"]);
+  });
+
+  it("does not auto-activate explicitly disabled trusted workspace runtime owners", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "workspace-activation-owner",
+        providerIds: [],
+        origin: "workspace",
+        activation: {
+          onProviders: ["workspace-activation"],
+        },
+      }),
+    ]);
+
+    expect(
+      resolveActivatableProviderOwnerPluginIds({
+        pluginIds: ["workspace-activation-owner"],
+        config: {
+          plugins: {
+            allow: ["workspace-activation-owner"],
+            entries: {
+              "workspace-activation-owner": { enabled: false },
+            },
+          },
+        },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([]);
   });
 
   it("keeps legacy CLI backend ownership as the explicit provider fallback", () => {
