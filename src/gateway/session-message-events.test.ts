@@ -652,11 +652,12 @@ describe("session.message websocket events", () => {
   });
 
   test("broadcasts socket.drain event when a session is reset", async () => {
+    vi.useRealTimers();
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
       entries: {
         main: {
-          sessionId: "sess-main",
+          sessionId: "sess-reset-1",
           updatedAt: Date.now(),
         },
       },
@@ -666,18 +667,27 @@ describe("session.message websocket events", () => {
     await withOperatorSessionSubscriber(harness, async (ws) => {
       const socketDrainPromise = onceMessage(
         ws,
-        (message) =>
-          message.type === "event" &&
-          message.event === "socket.drain" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:main",
-        20000,
+        (message) => {
+          if (message.type === "event" || message.type === "res") {
+             console.log("TEST_SOCK_LOG:", JSON.stringify(message));
+          }
+          return message.type === "event" &&
+            message.event === "socket.drain" &&
+            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+              "agent:main:main";
+        },
+        15_000,
       );
 
-      const resetRes = await rpcReq(ws, "sessions.reset", { key: "agent:main:main" }, 20000);
-      expect(resetRes.ok).toBe(true);
+      const reqId = "req-test-reset-1";
+      ws.send(JSON.stringify({ type: "req", id: reqId, method: "sessions.reset", params: { key: "agent:main:main" } }));
+      
+      const resetResPromise = onceMessage(ws, (msg: any) => msg.type === "res" && msg.id === reqId, 25_000);
+      
+      const [drainEvent, resetRes] = await Promise.all([socketDrainPromise, resetResPromise]);
+      expect((resetRes as any).ok).toBe(true);
 
-      const drainEvent = await socketDrainPromise;
+      console.log("TEST_SOCK_LOG_DRAIN:", JSON.stringify(drainEvent));
       expect(drainEvent.payload).toMatchObject({
         sessionKey: "agent:main:main",
         reason: "reset",
@@ -691,7 +701,7 @@ describe("session.message websocket events", () => {
     await writeSessionStore({
       entries: {
         main: {
-          sessionId: "sess-main",
+          sessionId: "sess-reset-2",
           updatedAt: Date.now(),
         },
       },
@@ -728,7 +738,7 @@ describe("session.message websocket events", () => {
     await writeSessionStore({
       entries: {
         main: {
-          sessionId: "sess-main",
+          sessionId: "sess-reset-3",
           updatedAt: Date.now(),
         },
       },
@@ -766,11 +776,11 @@ describe("session.message websocket events", () => {
     await writeSessionStore({
       entries: {
         main: {
-          sessionId: "sess-main",
+          sessionId: "sess-deleted-main",
           updatedAt: Date.now(),
         },
         worker: {
-          sessionId: "sess-worker",
+          sessionId: "sess-deleted-worker",
           updatedAt: Date.now(),
         },
       },
