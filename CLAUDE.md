@@ -9,9 +9,11 @@ Reduce runaway token/cost accumulation for a Windows-hosted OpenClaw instance
 with Telegram as the primary chat interface and Claude (Haiku default, Sonnet
 on demand) as the AI provider.
 
-Active branch: `claude/reduce-token-usage-at4C2`
+Active branch: `claude/automate-fork-sync-IR128`
 
-## What This Branch Adds
+## Fork Customizations (in main)
+
+These features are specific to this fork and live in `main`:
 
 - `session.reset.maxAgeHours` — hard wall-clock lifetime cap for sessions
 - `session.reset.maxContextTokens` — token-budget reset trigger
@@ -64,7 +66,7 @@ Active branch: `claude/reduce-token-usage-at4C2`
 ```powershell
 # In the fork directory
 git fetch upstream main
-git rebase upstream/main
+git merge --no-edit upstream/main
 pnpm install
 pnpm build
 
@@ -83,7 +85,7 @@ pnpm test src/config/schema.help.quality.test.ts
 pnpm config:docs:gen   # update hash after schema/help changes
 ```
 
-## Key Files for This Feature
+## Key Files for Fork Customizations
 
 | File | Role |
 |---|---|
@@ -97,9 +99,67 @@ pnpm config:docs:gen   # update hash after schema/help changes
 
 ## Upstream Sync
 
+`.github/workflows/upstream-sync.yml` automates daily syncing from `openclaw/openclaw`
+upstream into this fork's `main`.
+
+### How it works
+
+| Scenario | Result |
+|---|---|
+| Fork `main` is already current | No action — logged and skipped |
+| Upstream has new commits, no conflicts | Auto-merged into `main` and pushed |
+| Upstream has new commits, conflicts detected | Branch `upstream-sync/YYYY-MM-DD` created + PR opened |
+
+### Schedule
+
+Runs daily at **06:00 UTC**. Also available as a manual trigger:
+**Actions → Sync Fork with Upstream → Run workflow**
+
+Use the **Dry run** checkbox to see the sync gap without actually merging.
+
+### Required secret (optional, for branch-protected repos)
+
+Create a fine-grained PAT with **Contents: write** + **Pull requests: write** scope
+and store it as repo secret **`SYNC_TOKEN`**. Without it, the built-in `GITHUB_TOKEN`
+is used, which works for unprotected `main` branches.
+
+### When a conflict PR is opened
+
+PR title: `chore: upstream sync — conflicts need manual resolution (XXXXXXX)`
+
+**Resolution steps:**
+
 ```bash
-git remote add upstream https://github.com/openclaw/openclaw  # once
+git fetch origin
+git checkout upstream-sync/YYYY-MM-DD   # the branch from the PR
+
+# Merge fork customizations on top of the upstream state
+git merge main
+# Resolve any conflict markers (<<<<< / ===== / >>>>>)
+
+git add .
+git commit -m "chore: resolve upstream sync conflicts"
+git push origin upstream-sync/YYYY-MM-DD
+```
+
+**Files to always keep our (fork) version of during conflict resolution:**
+
+| File | Why |
+|---|---|
+| `CLAUDE.md` | Fork-only guide — upstream does not have this |
+| `src/config/sessions/reset.ts` | Token-budget enforcement logic |
+| `src/config/sessions/types.ts` | `SessionEntry.createdAt` field |
+| `src/config/types.base.ts` | `SessionResetConfig` additions |
+| `src/config/zod-schema.session.ts` | Zod schema additions |
+| `src/auto-reply/reply/session.ts` | Freshness check wiring |
+
+After pushing, approve and merge the PR.
+
+### Manual sync (fallback or one-off)
+
+```bash
+git remote add upstream https://github.com/openclaw/openclaw.git  # once
 git fetch upstream main
-git rebase upstream/main
-git push -u origin claude/reduce-token-usage-at4C2
+git merge --no-edit upstream/main
+git push origin main
 ```

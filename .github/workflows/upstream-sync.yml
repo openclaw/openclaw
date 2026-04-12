@@ -1,0 +1,197 @@
+name: Sync Fork with Upstream
+
+# Fetches openclaw/openclaw main daily and merges it into this fork's main.
+# Clean merges are pushed automatically.  Conflicts open a PR for manual resolution.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # Daily at 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — report sync gap without pushing or opening PRs'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  upstream-sync:
+    name: Merge openclaw/openclaw → main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream main --tags
+
+      - name: Evaluate sync gap
+        id: gap
+        run: |
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          AHEAD=$(git rev-list --count upstream/main..HEAD)
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          echo "behind=$BEHIND"                       >> "$GITHUB_OUTPUT"
+          echo "ahead=$AHEAD"                         >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$UPSTREAM_SHA"           >> "$GITHUB_OUTPUT"
+          echo "upstream_short=${UPSTREAM_SHA:0:7}"   >> "$GITHUB_OUTPUT"
+          echo "Fork is ${BEHIND} commit(s) behind and ${AHEAD} commit(s) ahead of upstream/main."
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "sync_needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "sync_needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summary — already in sync
+        if: steps.gap.outputs.sync_needed == 'false'
+        run: |
+          echo "Fork main is already up to date with upstream. Nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry-run report
+        if: steps.gap.outputs.sync_needed == 'true' && inputs.dry_run == 'true'
+        run: |
+          {
+            echo "## Dry Run \u2014 Upstream Sync Gap"
+            echo ""
+            echo "**${{ steps.gap.outputs.behind }} commit(s)** from \`openclaw/openclaw\` pending merge:"
+            echo ""
+            echo '```'
+            git log --oneline upstream/main ^HEAD
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Attempt merge
+        if: steps.gap.outputs.sync_needed == 'true' && inputs.dry_run != 'true'
+        id: merge
+        run: git merge --no-edit upstream/main
+        continue-on-error: true
+
+      - name: Push clean merge
+        if: |
+          steps.gap.outputs.sync_needed == 'true' &&
+          inputs.dry_run != 'true' &&
+          steps.merge.outcome == 'success'
+        run: |
+          git push origin main
+          {
+            echo "## Upstream Sync \u2014 Complete"
+            echo ""
+            echo "Merged **${{ steps.gap.outputs.behind }}** upstream commit(s) into \`main\` cleanly."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare conflict-resolution branch
+        if: |
+          steps.gap.outputs.sync_needed == 'true' &&
+          inputs.dry_run != 'true' &&
+          steps.merge.outcome == 'failure'
+        id: conflict_branch
+        run: |
+          git merge --abort || true
+          BRANCH="upstream-sync/$(date +%Y-%m-%d)"
+          # Append time if the branch already exists from an earlier run today
+          if git ls-remote --exit-code origin "refs/heads/$BRANCH" > /dev/null 2>&1; then
+            BRANCH="upstream-sync/$(date +%Y-%m-%d-%H%M)"
+          fi
+          git checkout -b "$BRANCH" upstream/main
+          git push origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Open conflict-resolution PR
+        if: |
+          steps.gap.outputs.sync_needed == 'true' &&
+          inputs.dry_run != 'true' &&
+          steps.merge.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+          SYNC_BRANCH: ${{ steps.conflict_branch.outputs.branch }}
+          UPSTREAM_SHORT: ${{ steps.gap.outputs.upstream_short }}
+          BEHIND: ${{ steps.gap.outputs.behind }}
+        run: |
+          EXISTING=$(gh pr list --head "$SYNC_BRANCH" --json number --jq '.[0].number' 2>/dev/null)
+          if [ -n "$EXISTING" ]; then
+            echo "PR #$EXISTING already open for $SYNC_BRANCH \u2014 skipping duplicate."
+            exit 0
+          fi
+
+          python3 - << 'PYEOF'
+          import os
+
+          behind         = os.environ["BEHIND"]
+          sync_branch    = os.environ["SYNC_BRANCH"]
+          upstream_short = os.environ["UPSTREAM_SHORT"]
+
+          lines = [
+            "## Upstream Sync \u2014 Manual Resolution Required",
+            "",
+            f"**Why this PR exists:** The automated sync detected {behind} new upstream",
+            "commit(s) from `openclaw/openclaw` that could not be auto-merged into",
+            "`main` due to conflicts.",
+            "",
+            "### This branch",
+            "",
+            f"`{sync_branch}` was created from `upstream/main` at commit `{upstream_short}`.",
+            "",
+            "### Steps to resolve",
+            "",
+            "```bash",
+            "git fetch origin",
+            f"git checkout {sync_branch}",
+            "",
+            "# Merge fork customizations on top of upstream, then resolve conflicts",
+            "git merge main",
+            "# Edit files containing conflict markers (<<<<< / ===== / >>>>>)",
+            "",
+            "git add .",
+            'git commit -m "chore: resolve upstream sync conflicts"',
+            f"git push origin {sync_branch}",
+            "```",
+            "",
+            "### Fork files \u2014 always keep our version during conflict resolution",
+            "",
+            "| File | Reason |",
+            "|---|---|",
+            "| `CLAUDE.md` | Fork-only guide, upstream does not have this |",
+            "| `src/config/sessions/reset.ts` | Token-budget enforcement logic |",
+            "| `src/config/sessions/types.ts` | `SessionEntry.createdAt` field |",
+            "| `src/config/types.base.ts` | `SessionResetConfig` additions |",
+            "| `src/config/zod-schema.session.ts` | Zod schema additions |",
+            "| `src/auto-reply/reply/session.ts` | Freshness check wiring |",
+            "",
+            "After pushing, approve and merge this PR.",
+            "",
+            "---",
+            "_Auto-generated by `.github/workflows/upstream-sync.yml`_",
+          ]
+
+          with open("/tmp/pr-body.md", "w") as f:
+            f.write("\n".join(lines))
+          PYEOF
+
+          gh pr create \
+            --base main \
+            --head "$SYNC_BRANCH" \
+            --title "chore: upstream sync \u2014 conflicts need manual resolution ($UPSTREAM_SHORT)" \
+            --body-file /tmp/pr-body.md
+
+          {
+            echo "## Upstream Sync \u2014 Conflicts Detected"
+            echo ""
+            echo "A conflict-resolution PR was opened for branch \`$SYNC_BRANCH\`."
+            echo "See the PR for resolution steps."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
