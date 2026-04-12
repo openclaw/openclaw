@@ -4,7 +4,7 @@ import {
 } from "../../shared/string-coerce.js";
 
 function resolveExplicitConversationTargetId(target: string): string | undefined {
-  for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:"]) {
+  for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:", "user:"]) {
     if (normalizeLowercaseStringOrEmpty(target).startsWith(prefix)) {
       return normalizeOptionalString(target.slice(prefix.length));
     }

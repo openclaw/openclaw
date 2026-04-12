@@ -350,6 +350,18 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           return false;
         }
       },
+      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
+        if (parentConversationId && parentConversationId !== conversationId) {
+          return { to: `channel:${parentConversationId}`, threadId: conversationId };
+        }
+        if (conversationId && /^U[A-Z0-9]+$/i.test(conversationId)) {
+          return { to: `user:${conversationId}` };
+        }
+        if (conversationId && /^[DGC][A-Z0-9]+$/i.test(conversationId)) {
+          return { to: `channel:${conversationId}` };
+        }
+        return conversationId ? { to: `channel:${conversationId}` } : {};
+      },
       targetResolver: {
         looksLikeId: looksLikeSlackTargetId,
         hint: "<channelId|user:ID|channel:ID>",
