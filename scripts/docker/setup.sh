@@ -114,53 +114,9 @@ config_path_exists() {
   if [[ ! -f "$config_path" ]]; then
     return 1
   fi
-  if command -v node >/dev/null 2>&1; then
-    node - "$config_path" "$path" "$ROOT_DIR" <<'NODE'
-const fs = require("node:fs");
-const vm = require("node:vm");
-const configPath = process.argv[2];
-const parts = process.argv[3].split(".");
-try {
-  const source = fs.readFileSync(configPath, "utf8");
-  let current = vm.runInNewContext(`(${source})`, Object.create(null), {
-    timeout: 1000,
-  });
-  for (const part of parts) {
-    if (!current || typeof current !== "object" || !(part in current)) {
-      process.exit(1);
-    }
-    current = current[part];
-  }
-  process.exit(0);
-} catch {
-  process.exit(1);
-}
-NODE
-    return $?
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$config_path" "$path" <<'PY'
-import json
-import sys
-
-config_path = sys.argv[1]
-path = sys.argv[2].split(".")
-try:
-    with open(config_path, "r", encoding="utf-8") as f:
-        current = json.load(f)
-except Exception:
-    raise SystemExit(1)
-
-for part in path:
-    if not isinstance(current, dict) or part not in current:
-        raise SystemExit(1)
-    current = current[part]
-
-raise SystemExit(0)
-PY
-    return $?
-  fi
-  return 1
+  # Ask the containerized CLI so path checks honor the same JSON5 parsing and
+  # config semantics as `openclaw config`, regardless of host tooling.
+  run_prestart_cli config get "$path" >/dev/null 2>&1
 }
 
 set_config_if_missing() {

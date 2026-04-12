@@ -54,6 +54,36 @@ for (const target of [data.defaults, data.agents.main]) {
 fs.writeFileSync(approvalsPath, \`\${JSON.stringify(data, null, 2)}\\n\`, "utf8");
 NODE
 }
+config_path_exists_in_stub() {
+  local path="$1"
+  local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
+  if [[ ! -f "$config_path" ]]; then
+    return 1
+  fi
+
+  node - "$config_path" "$path" <<'NODE'
+const fs = require("node:fs");
+const vm = require("node:vm");
+const configPath = process.argv[2];
+const parts = process.argv[3].split(".");
+
+try {
+  const source = fs.readFileSync(configPath, "utf8");
+  let current = vm.runInNewContext(\`(\${source})\`, Object.create(null), {
+    timeout: 1000,
+  });
+  for (const part of parts) {
+    if (!current || typeof current !== "object" || !(part in current)) {
+      process.exit(1);
+    }
+    current = current[part];
+  }
+  process.exit(0);
+} catch {
+  process.exit(1);
+}
+NODE
+}
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "version" ]]; then
   exit 0
 fi
@@ -69,6 +99,14 @@ if [[ "\${1:-}" == "compose" ]]; then
   if [[ -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
     echo "compose-fail $*" >>"$log"
     exit 1
+  fi
+  if [[ "$*" == *"dist/index.js config get "* ]]; then
+    args=("$@")
+    path_index=$((\${#args[@]} - 1))
+    if ! config_path_exists_in_stub "\${args[$path_index]}"; then
+      echo "compose-fail $*" >>"$log"
+      exit 1
+    fi
   fi
   if [[ "$*" == *"--entrypoint node openclaw-gateway -e"* && "$*" == *"/home/node/.openclaw/exec-approvals.json"* ]]; then
     args=("$@")
@@ -407,6 +445,12 @@ describe("scripts/docker/setup.sh", () => {
 
     expect(result.status).toBe(0);
     const log = await readDockerLog(activeSandbox);
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config get browser.enabled",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config get browser.executablePath",
+    );
     expect(log).not.toContain("config set browser.enabled true");
     expect(log).not.toContain("config set browser.headless true");
     expect(log).not.toContain(
