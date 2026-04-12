@@ -332,6 +332,10 @@ function applyConfiguredProviderOverrides(params: {
       input: normalizedInput,
       cost: configuredModel?.cost ?? discoveredModel.cost,
       contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
+      contextWindowIsLiteralDefault:
+        configuredModel?.contextWindow !== undefined
+          ? false
+          : discoveredModel.contextWindowIsLiteralDefault,
       contextTokens: configuredModel?.contextTokens ?? discoveredModel.contextTokens,
       maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
       headers: requestConfig.headers,
