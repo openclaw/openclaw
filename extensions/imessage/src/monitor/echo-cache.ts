@@ -23,11 +23,72 @@ export type SentMessageCache = {
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
+function isLowControlOrReplacementChar(char: string): boolean {
+  if (char === "\uFFFD") {
+    return true;
+  }
+  const code = char.charCodeAt(0);
+  return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+}
+
+function isHighAttributedLeadChar(char: string): boolean {
+  if (char === "\uFFFD") {
+    return true;
+  }
+  const code = char.charCodeAt(0);
+  return code >= 0x80 && code <= 0x9f;
+}
+
+function isAsciiPrintableChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 0x20 && code <= 0x7e;
+}
+
+function stripLeadingIMessageAttributedTextPrefix(text: string): string {
+  let offset = 0;
+
+  while (offset < text.length) {
+    const first = text[offset];
+    if (!first) {
+      break;
+    }
+    const second = text[offset + 1];
+    const third = text[offset + 2];
+    if (
+      isHighAttributedLeadChar(first) &&
+      third &&
+      isLowControlOrReplacementChar(third) &&
+      (!second || isAsciiPrintableChar(second))
+    ) {
+      offset += second ? 3 : 2;
+      continue;
+    }
+
+    let runEnd = offset;
+    while (runEnd < text.length && runEnd - offset < 4) {
+      const char = text[runEnd];
+      if (!char || !isLowControlOrReplacementChar(char)) {
+        break;
+      }
+      runEnd += 1;
+    }
+    if (runEnd > offset) {
+      offset = runEnd;
+      continue;
+    }
+
+    break;
+  }
+
+  const stripped = offset > 0 ? text.slice(offset) : text;
+  return stripped || text;
+}
+
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  const normalized = stripLeadingIMessageAttributedTextPrefix(text).replace(/\r\n?/g, "\n").trim();
   return normalized ? normalized : null;
 }
 

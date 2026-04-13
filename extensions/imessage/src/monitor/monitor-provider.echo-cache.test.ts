@@ -41,4 +41,23 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has("acct:imessage:+1555", { text: "hello" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { messageId: "m-1" })).toBe(true);
   });
+
+  it("strips attributed-text prefix bytes before text fallback matching", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", {
+      text: "Confirmed full access",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    expect(
+      cache.has(
+        "acct:imessage:+1555",
+        { text: "\u0093b\u0002Confirmed full access", messageId: "123799" },
+        true,
+      ),
+    ).toBe(true);
+  });
 });
