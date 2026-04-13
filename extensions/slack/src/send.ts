@@ -1,4 +1,9 @@
-import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
+import {
+  type Block,
+  type ChatPostMessageArguments,
+  type KnownBlock,
+  type WebClient,
+} from "@slack/web-api";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
@@ -107,20 +112,11 @@ async function postSlackMessageBestEffort(params: {
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
 }) {
-  const basePayload: {
-    channel: string;
-    text: string;
-    thread_ts: string | undefined;
-    reply_broadcast: boolean;
-    blocks?: (Block | KnownBlock)[];
-    username?: string;
-    icon_url?: string;
-    icon_emoji?: string;
-  } = {
+  const basePayload: ChatPostMessageArguments = {
     channel: params.channelId,
     text: params.text,
-    thread_ts: params.threadTs,
-    reply_broadcast: params.replyBroadcast === true,
+    ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+    ...(params.threadTs && params.replyBroadcast === true ? { reply_broadcast: true } : {}),
   };
   if (params.blocks?.length) {
     basePayload.blocks = params.blocks;
