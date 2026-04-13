@@ -16,8 +16,6 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
-const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
-
 export async function stageSandboxMedia(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -80,21 +78,19 @@ export async function stageSandboxMedia(params: {
           remotePath: source,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
+          maxBytes: getMediaMaxBytes(),
         });
       } else {
         await stageLocalFileIntoRoot({
           sourcePath: source,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
+          maxBytes: getMediaMaxBytes(),
         });
       }
     } catch (err) {
       if (err instanceof SafeOpenError && err.code === "too-large") {
-        logVerbose(
-          `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source}`,
-        );
+        logVerbose(`Blocking inbound media staging above ${getMediaMaxBytes()} bytes: ${source}`);
       } else {
         logVerbose(`Failed to stage inbound media path ${source}: ${String(err)}`);
       }

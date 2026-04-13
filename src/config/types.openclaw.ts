@@ -107,6 +107,8 @@ export type OpenClawConfig = {
     preserveFilenames?: boolean;
     /** Optional retention window for persisted inbound media cleanup. */
     ttlHours?: number;
+    /** Maximum inbound media file size in bytes (default 5 MB). */
+    maxBytes?: number;
   };
   messages?: MessagesConfig;
   commands?: CommandsConfig;

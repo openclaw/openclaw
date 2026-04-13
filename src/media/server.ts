@@ -15,7 +15,6 @@ import {
 const DEFAULT_TTL_MS = 2 * 60 * 1000;
 const MAX_MEDIA_ID_CHARS = 200;
 const MEDIA_ID_PATTERN = /^[\p{L}\p{N}._-]+$/u;
-const MAX_MEDIA_BYTES = MEDIA_MAX_BYTES;
 
 const isValidMediaId = (id: string) => {
   if (!id) {
@@ -52,7 +51,7 @@ export function attachMediaRoutes(
       } = await readFileWithinRoot({
         rootDir: mediaDir,
         relativePath: id,
-        maxBytes: MAX_MEDIA_BYTES,
+        maxBytes: getMediaMaxBytes(),
       });
       if (Date.now() - stat.mtimeMs > ttlMs) {
         await fs.rm(realPath).catch(() => {});

@@ -310,6 +310,7 @@ export const FIELD_LABELS: Record<string, string> = {
   media: "Media",
   "media.preserveFilenames": "Preserve Media Filenames",
   "media.ttlHours": "Media Retention TTL (hours)",
+  "media.maxBytes": "Media Max File Size (bytes)",
   audio: "Audio",
   "audio.transcription": "Audio Transcription",
   "audio.transcription.command": "Audio Transcription Command",

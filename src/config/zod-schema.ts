@@ -514,6 +514,12 @@ export const OpenClawSchema = z
           .min(1)
           .max(24 * 7)
           .optional(),
+        maxBytes: z
+          .number()
+          .int()
+          .positive()
+          .max(500 * 1024 * 1024)
+          .optional(),
       })
       .strict()
       .optional(),
