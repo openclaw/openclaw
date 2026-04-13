@@ -20,6 +20,7 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   createPluginActivationSource,
+  normalizePluginId,
   normalizePluginsConfig,
   resolvePluginActivationState,
 } from "../../plugins/config-state.js";
@@ -154,8 +155,9 @@ function isPluginDangerousFlagActive(
 ): boolean {
   const rootConfig = config as OpenClawConfig;
   const pluginId = getPluginIdFromDangerousFlag(flag, config);
-  const pluginEntry = (rootConfig.plugins as { entries?: Record<string, unknown> } | undefined)
-    ?.entries?.[pluginId];
+  const normalizedPluginId = normalizePluginId(pluginId);
+  const normalizedPlugins = normalizePluginsConfig(rootConfig.plugins);
+  const pluginEntry = normalizedPlugins.entries[normalizedPluginId];
   if (!pluginEntry || typeof pluginEntry !== "object" || Array.isArray(pluginEntry)) {
     return false;
   }
@@ -165,27 +167,25 @@ function isPluginDangerousFlagActive(
     workspaceDir,
     env: process.env,
     cache: true,
-  }).plugins.find((plugin) => plugin.id === pluginId);
+  }).plugins.find((plugin) => plugin.id === normalizedPluginId);
   if (!manifestRecord) {
-    // When manifest is unavailable, check global and per-plugin enablement.
-    // Also respect plugins.deny to prevent false negatives when a dangerous plugin
-    // is explicitly blocked via deny list.
-    const globalEnabled = (rootConfig.plugins as { enabled?: unknown } | undefined)?.enabled;
-    if (globalEnabled === false) {
+    // When manifest is unavailable, fall back to the same normalized plugin policy
+    // inputs that runtime activation uses so non-canonical ids still gate correctly.
+    if (!normalizedPlugins.enabled) {
       return false;
     }
-    const denyList = (rootConfig.plugins as { deny?: unknown } | undefined)?.deny;
-    if (Array.isArray(denyList) && denyList.includes(pluginId)) {
+    if (normalizedPlugins.deny.includes(normalizedPluginId)) {
       return false;
     }
-    const allowList = (rootConfig.plugins as { allow?: unknown } | undefined)?.allow;
-    if (Array.isArray(allowList) && allowList.length > 0 && !allowList.includes(pluginId)) {
+    if (
+      normalizedPlugins.allow.length > 0 &&
+      !normalizedPlugins.allow.includes(normalizedPluginId)
+    ) {
       return false;
     }
-    return (pluginEntry as { enabled?: unknown }).enabled !== false;
+    return pluginEntry.enabled !== false;
   }
 
-  const normalizedPlugins = normalizePluginsConfig(rootConfig.plugins);
   const activationSource = createPluginActivationSource({
     config: rootConfig,
     plugins: normalizedPlugins,
@@ -194,38 +194,45 @@ function isPluginDangerousFlagActive(
   // Without this, provider-driven auto-enable paths could activate dangerous config without
   // tripping the mutation guard.
   return resolvePluginActivationState({
-    id: pluginId,
+    id: normalizedPluginId,
     origin: manifestRecord.origin,
     config: normalizedPlugins,
     rootConfig,
     enabledByDefault: manifestRecord.enabledByDefault,
     activationSource,
-    autoEnabledReason: autoEnabledReasons?.[pluginId]?.[0],
+    autoEnabledReason: autoEnabledReasons?.[normalizedPluginId]?.[0],
   }).activated;
 }
 
 function resolveAutoEnabledPluginReasons(
   config: Record<string, unknown>,
 ): Record<string, string[]> {
-  const rootConfig = config as OpenClawConfig;
-  if (!configMayNeedPluginAutoEnable(rootConfig, process.env)) {
+  try {
+    const rootConfig = config as OpenClawConfig;
+    if (!configMayNeedPluginAutoEnable(rootConfig, process.env)) {
+      return {};
+    }
+    const manifestRegistry = resolvePluginAutoEnableManifestRegistry({
+      config: rootConfig,
+      env: process.env,
+    });
+    const candidates = resolveConfiguredPluginAutoEnableCandidates({
+      config: rootConfig,
+      env: process.env,
+      registry: manifestRegistry,
+    });
+    return materializePluginAutoEnableCandidatesInternal({
+      config: rootConfig,
+      candidates,
+      env: process.env,
+      manifestRegistry,
+    }).autoEnabledReasons;
+  } catch {
+    // Degrade gracefully when a plugin setup probe throws (e.g. buggy third-party
+    // setup probe). Empty reasons means no auto-enable is assumed, so the guard
+    // stays conservative rather than blocking all config writes.
     return {};
   }
-  const manifestRegistry = resolvePluginAutoEnableManifestRegistry({
-    config: rootConfig,
-    env: process.env,
-  });
-  const candidates = resolveConfiguredPluginAutoEnableCandidates({
-    config: rootConfig,
-    env: process.env,
-    registry: manifestRegistry,
-  });
-  return materializePluginAutoEnableCandidatesInternal({
-    config: rootConfig,
-    candidates,
-    env: process.env,
-    manifestRegistry,
-  }).autoEnabledReasons;
 }
 
 type DangerousFlagToken = {
@@ -402,6 +409,43 @@ function collectNewlyEnabledDangerousConfigFlags(
   return newlyEnabledFlags;
 }
 
+/**
+ * Returns true when the change at `path` only reduces the activation surface
+ * (hardening), so it can be permitted on remote gateways. Conservative: returns
+ * false for any transition we cannot prove is strictly hardening.
+ */
+function isRemoteHardeningTransition(
+  path: string,
+  currentValue: unknown,
+  nextValue: unknown,
+): boolean {
+  // plugins.enabled: going to false disables all plugins (hardening).
+  if (path === "plugins.enabled") {
+    return nextValue === false;
+  }
+  // plugins.deny: adding entries to the denylist is hardening. Require the next
+  // list to be a strict superset of the current list (no removals).
+  if (path === "plugins.deny") {
+    const current = Array.isArray(currentValue) ? currentValue : [];
+    if (!Array.isArray(nextValue)) {
+      return false;
+    }
+    const nextSet = new Set(nextValue as unknown[]);
+    return current.every((entry) => nextSet.has(entry)) && nextValue.length > current.length;
+  }
+  // plugins.allow: removing entries from the allowlist is hardening (more restrictive).
+  // Going from a populated list to an empty list or removing entries restricts activation.
+  if (path === "plugins.allow") {
+    const current = Array.isArray(currentValue) ? currentValue : [];
+    if (!Array.isArray(nextValue)) {
+      return false;
+    }
+    const currentSet = new Set(current as unknown[]);
+    return nextValue.every((entry) => currentSet.has(entry)) && nextValue.length < current.length;
+  }
+  return false;
+}
+
 function assertGatewayConfigMutationAllowed(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
@@ -460,7 +504,17 @@ function assertGatewayConfigMutationAllowed(params: {
           getValueAtCanonicalPath(nextConfig, path),
         ),
     );
-    if (changedActivationPaths.length > 0) {
+    // Allow purely hardening edits (reducing activation surface) through the remote guard.
+    // Block only changes that could increase activation on the remote host.
+    const riskyActivationPaths = changedActivationPaths.filter(
+      (path) =>
+        !isRemoteHardeningTransition(
+          path,
+          getValueAtCanonicalPath(params.currentConfig, path),
+          getValueAtCanonicalPath(nextConfig, path),
+        ),
+    );
+    if (riskyActivationPaths.length > 0) {
       throw new Error(
         `gateway ${params.action} cannot change plugin config on remote gateways because dangerous plugin flags are host-specific`,
       );

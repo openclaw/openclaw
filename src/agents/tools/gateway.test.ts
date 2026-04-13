@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const callGatewayMock = vi.fn();
 const configState = vi.hoisted(() => ({
@@ -220,13 +221,17 @@ describe("gateway tool defaults", () => {
       },
     };
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+    expect(
+      isRemoteGatewayTargetForAgentTools({ config: configState.value as OpenClawConfig }),
+    ).toBe(true);
   });
 
   it("treats OPENCLAW_GATEWAY_URL-selected targets as remote when no override is passed", () => {
     process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-from-env.example/ws";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+    expect(
+      isRemoteGatewayTargetForAgentTools({ config: configState.value as OpenClawConfig }),
+    ).toBe(true);
   });
 
   it("treats OPENCLAW_GATEWAY_URL pointing to loopback as remote for mutation guards", () => {
@@ -234,32 +239,42 @@ describe("gateway tool defaults", () => {
     // For mutation-guard purposes, treat all env URLs as remote to prevent bypasses.
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+    expect(
+      isRemoteGatewayTargetForAgentTools({ config: configState.value as OpenClawConfig }),
+    ).toBe(true);
   });
 
   it("treats non-canonical IPv4 loopback env targets as remote for mutation guards", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.2:18789";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+    expect(
+      isRemoteGatewayTargetForAgentTools({ config: configState.value as OpenClawConfig }),
+    ).toBe(true);
   });
 
   it("treats IPv4-mapped IPv6 loopback env targets as remote for mutation guards", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://[::ffff:127.0.0.1]:18789";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+    expect(
+      isRemoteGatewayTargetForAgentTools({ config: configState.value as OpenClawConfig }),
+    ).toBe(true);
   });
 
   it("treats localhost env targets with a trailing dot as remote for mutation guards", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://localhost.:18789";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+    expect(
+      isRemoteGatewayTargetForAgentTools({ config: configState.value as OpenClawConfig }),
+    ).toBe(true);
   });
 
   it("treats OPENCLAW_GATEWAY_URL pointing to loopback as remote when mode=remote (tunneled gateway)", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
     configState.value = { gateway: { mode: "remote" } };
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+    expect(
+      isRemoteGatewayTargetForAgentTools({ config: configState.value as OpenClawConfig }),
+    ).toBe(true);
   });
 
   it("treats config-selected remote targets as remote when no config is passed (live config fallback)", () => {
@@ -284,7 +299,9 @@ describe("gateway tool defaults", () => {
       },
     };
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(false);
+    expect(
+      isRemoteGatewayTargetForAgentTools({ config: configState.value as OpenClawConfig }),
+    ).toBe(false);
   });
 
   it("uses least-privilege write scope for write methods", async () => {

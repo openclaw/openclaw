@@ -706,6 +706,50 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.patch when a normalized allowlist entry activates dangerous plugin config without manifests", async () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              allow: ["other-plugin"],
+              entries: {
+                acpx: {
+                  config: {
+                    permissionMode: "approve-all",
+                  },
+                },
+              },
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-normalized-allow-dangerous-plugin-without-manifests", {
+        action: "config.patch",
+        raw: '{ plugins: { allow: ["ACPX"] } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch when empty allowlist is present and manifests are unavailable", async () => {
     // Regression: empty plugins.allow should be treated as unrestricted (matching
     // resolvePluginActivationState which checks allow.length > 0), not as "deny all".
@@ -944,9 +988,7 @@ describe("gateway tool", () => {
   });
 
   it.each([
-    ["plugins.enabled", "{ plugins: { enabled: false } }"],
     ["plugins.allow", '{ plugins: { allow: ["acpx"] } }'],
-    ["plugins.deny", '{ plugins: { deny: ["acpx"] } }'],
     ["plugins.slots", '{ plugins: { slots: { memory: "acpx" } } }'],
     ["plugins.load", '{ plugins: { load: { paths: ["/extra/plugins"] } } }'],
     ["channels", "{ channels: { telegram: { enabled: true } } }"],
@@ -968,6 +1010,53 @@ describe("gateway tool", () => {
       "config.patch",
       expect.any(Object),
       expect.anything(),
+    );
+  });
+
+  it.each([
+    ["plugins.enabled=false", "{ plugins: { enabled: false } }"],
+    ["plugins.deny add", '{ plugins: { deny: ["acpx"] } }'],
+  ])("allows remote hardening edits via %s", async (_label, raw) => {
+    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute(`call-remote-hardening-${_label}`, {
+      action: "config.patch",
+      gatewayUrl: "wss://gateway.example",
+      raw,
+    });
+    expect(result).toBeDefined();
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects remote config.patch that re-enables plugins via plugins.enabled", async () => {
+    callGatewayToolMock.mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: { enabled: false },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-remote-plugin-reenable", {
+        action: "config.patch",
+        gatewayUrl: "wss://gateway.example",
+        raw: "{ plugins: { enabled: true } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
     );
   });
 
