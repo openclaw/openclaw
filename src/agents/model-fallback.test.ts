@@ -1612,6 +1612,69 @@ describe("runWithImageModelFallback", () => {
       ["google", "gemini-2.5-flash-image-preview"],
     ]);
   });
+
+  it("uses configured provider for bare image model names instead of hardcoding openai", async () => {
+    // When the user's primary model is ollama-based and they set imageModel
+    // to a bare name like "qwen3.5:latest", the image tool should resolve it
+    // as "ollama/qwen3.5:latest" — not "openai/qwen3.5:latest".
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: { primary: "ollama/llama3.1:latest" },
+          imageModel: { primary: "qwen3.5:latest" },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("described");
+
+    const result = await runWithImageModelFallback({ cfg, run });
+
+    expect(result.result).toBe("described");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("ollama");
+    expect(run.mock.calls[0]?.[1]).toBe("qwen3.5:latest");
+  });
+
+  it("falls back to openai when no primary model is configured", async () => {
+    // With no agents.defaults.model configured, bare image model names
+    // should still default to openai (backwards compatible).
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: { primary: "gpt-image-1" },
+        },
+      },
+    } as OpenClawConfig;
+    const run = vi.fn().mockResolvedValueOnce("described");
+
+    const result = await runWithImageModelFallback({ cfg, run });
+
+    expect(result.result).toBe("described");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("openai");
+    expect(run.mock.calls[0]?.[1]).toBe("gpt-image-1");
+  });
+
+  it("respects explicit provider prefix even when default provider differs", async () => {
+    // When image model has explicit "google/" prefix but default provider is
+    // ollama, the explicit prefix should win.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: { primary: "ollama/llama3.1:latest" },
+          imageModel: { primary: "google/gemini-2.5-flash-image-preview" },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("described");
+
+    const result = await runWithImageModelFallback({ cfg, run });
+
+    expect(result.result).toBe("described");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("google");
+    expect(run.mock.calls[0]?.[1]).toBe("gemini-2.5-flash-image-preview");
+  });
 });
 
 describe("isAnthropicBillingError", () => {

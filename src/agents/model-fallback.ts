@@ -907,9 +907,22 @@ export async function runWithImageModelFallback<T>(params: {
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
+  // Resolve the default provider from user config so that bare model names
+  // (e.g. "qwen3.5:latest") are attributed to the configured provider
+  // (e.g. "ollama") instead of always defaulting to "openai".  This mirrors
+  // the pattern used in resolveFallbackCandidates for the main model chain.
+  const configuredPrimary = params.cfg
+    ? resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      })
+    : null;
+  const defaultProvider = configuredPrimary?.provider ?? DEFAULT_PROVIDER;
+
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider,
     modelOverride: params.modelOverride,
   });
   if (candidates.length === 0) {
