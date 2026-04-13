@@ -1276,14 +1276,23 @@ start_manual_gateway_if_needed() {
   if ! headless_guest_fallback; then
     return 0
   fi
-  guest_current_user_sh "$(cat <<EOF
-pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
-pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
-/usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") \
-  $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY gateway run --bind loopback --port 18789 --force \
-  >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
-EOF
-)"
+  local gateway_log guest_home
+  guest_home="$(parallels_macos_resolve_desktop_home "$VM_NAME" "$GUEST_CURRENT_USER")"
+  gateway_log="$RUN_DIR/macos-gateway-prlctl.log"
+  guest_current_user_exec /usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
+  guest_current_user_exec /usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
+  guest_current_user_exec /usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
+  /usr/bin/nohup prlctl exec "$VM_NAME" /usr/bin/sudo -H -u "$GUEST_CURRENT_USER" /usr/bin/env \
+    "HOME=$guest_home" \
+    "USER=$GUEST_CURRENT_USER" \
+    "LOGNAME=$GUEST_CURRENT_USER" \
+    "PATH=$GUEST_EXEC_PATH" \
+    "$API_KEY_ENV=$API_KEY_VALUE" \
+    "OPENCLAW_HOME=$guest_home" \
+    "OPENCLAW_STATE_DIR=$guest_home/.openclaw" \
+    "OPENCLAW_CONFIG_PATH=$guest_home/.openclaw/openclaw.json" \
+    "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway run --bind loopback --port 18789 --force \
+    >"$gateway_log" 2>&1 &
 }
 
 verify_gateway() {

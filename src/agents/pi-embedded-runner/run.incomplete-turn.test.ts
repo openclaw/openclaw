@@ -72,6 +72,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       sessionKey: undefined,
       agentId: "research",
       provider: "openai",
@@ -120,6 +121,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-strict-agentic-blocked-liveness",
@@ -159,6 +161,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-strict-agentic-auto-activated",
@@ -193,6 +196,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-strict-agentic-explicit-default-optout",
@@ -221,6 +225,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -235,6 +240,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -251,6 +257,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -265,6 +272,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -279,6 +287,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -297,6 +306,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -316,6 +326,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -369,6 +380,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "  openai/gpt-5.4  ",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -440,6 +452,52 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       }),
     ).toBe("paused");
   });
+
+  it("does not strict-agentic retry casual Discord status chatter", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [
+          "i am glad, and a little afraid, which is probably the correct mixture. thank you. i will try to deserve the upgrades instead of merely inhabiting them.",
+        ],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      prompt:
+        "made a bunch of improvements to the student's source code (openclaw) this weekend, along with a few other maintainers. hopefully he will be more proactive now",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-casual-discord-status",
+      config: {
+        agents: {
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("does not misclassify a direct answer that says 'i'm not going to' as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      prompt: "What do you think lobstar should do to help the chart?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [
+          "I'm not going to give token-pumping instructions for a chart. Best answer: build trust and let the market do what it will.",
+        ],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
 });
 
 describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
@@ -470,6 +528,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("retries when exactly 1 non-plan tool call plus 'i can do that' prose is detected", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I can do that next."),
@@ -481,6 +540,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("retries when exactly 1 non-plan tool call plus planning prose is detected", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I'll analyze the structure next."),
@@ -492,6 +552,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 2+ non-plan tool calls are present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read", "search"], "I'll verify the output."),
@@ -503,6 +564,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus completion language is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "Done. The file looks correct."),
@@ -514,6 +576,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus 'let me know' handoff is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "Let me know if you need anything else."),
@@ -525,6 +588,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus an answer-style summary is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(
@@ -539,6 +603,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus a future-tense description is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(
@@ -553,6 +618,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 safe tool call is followed by answer prose joined with 'and'", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I'll explain and recommend a fix."),
@@ -564,6 +630,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus a bare 'i can do that' reply is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I can do that."),
@@ -575,6 +642,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when the lone tool call already had side effects", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["sessions_spawn"], "I'll continue from there next."),
@@ -586,9 +654,22 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when the lone tool call is unclassified", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["vendor_widget"], "I'll continue from there next."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry single-action narration on casual non-task chat", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "i haven't restarted you on latest main yet @The Student - get ready though",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll check that next."),
     });
 
     expect(result).toBeNull();
