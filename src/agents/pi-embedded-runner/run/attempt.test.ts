@@ -682,6 +682,46 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result.content).toEqual([expect.objectContaining({ type: "toolCall", name: "exec" })]);
   });
 
+  it("does not reset the unavailable-tool streak on partial-only stream chunks", async () => {
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            partial: { role: "assistant", content: [{ type: "toolCall", name: " exec " }] },
+          },
+        ],
+        resultMessage: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo retry" } }],
+        },
+      }),
+    );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 1,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    await firstStream.result();
+
+    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const _item of secondStream) {
+      // drain
+    }
+    const secondResult = (await secondStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+    };
+
+    expect(secondResult.role).toBe("assistant");
+    expect(secondResult.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"exec"'),
+      }),
+    ]);
+  });
+
   it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
     const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "" };
     const finalToolCallA = { type: "toolCall", id: "functionsread3", name: "" };

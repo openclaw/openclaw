@@ -775,12 +775,12 @@ function wrapStreamTrimToolCallNames(
             };
             trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
             trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
-            guardUnknownToolLoopInMessage(event.message, unknownToolGuardState, {
-              allowedToolNames,
-              threshold: options?.unknownToolThreshold,
-              countAttempt: true,
-            });
             if (event.message && typeof event.message === "object") {
+              guardUnknownToolLoopInMessage(event.message, unknownToolGuardState, {
+                allowedToolNames,
+                threshold: options?.unknownToolThreshold,
+                countAttempt: true,
+              });
               streamAttemptAlreadyCounted = true;
             }
             guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
