@@ -16,6 +16,8 @@ The intended model is:
 - Persistent state lives on the host under `~/.openclaw` by default.
 - Day-to-day management uses `openclaw --container <name> ...` instead of `sudo -u openclaw`, `podman exec`, or a separate service user.
 
+Do not use the repo sample `openclaw.podman.env` as your live env file. Copy it to a private path first, then point `OPENCLAW_PODMAN_ENV` at the copied file.
+
 ## Prerequisites
 
 - **Podman** in rootless mode
@@ -49,6 +51,7 @@ Setup details:
 - It creates `~/.openclaw/openclaw.json` with `gateway.mode: "local"` if missing.
 - It creates `~/.openclaw/.env` with `OPENCLAW_GATEWAY_TOKEN` if missing.
 - For manual launches, the helper reads only a small allowlist of Podman-related keys from `~/.openclaw/.env` and passes explicit runtime env vars to the container; it does not hand the full env file to Podman.
+- If `OPENCLAW_PODMAN_ENV` points to a copied env file and `OPENCLAW_GATEWAY_TOKEN` is unset there, `./scripts/run-openclaw-podman.sh launch` generates a token and writes it back to that copied file before starting the container.
 
 Quadlet-managed setup:
 
@@ -73,6 +76,16 @@ Container start:
 ```
 
 The script starts the container as your current uid/gid with `--userns=keep-id` and bind-mounts your OpenClaw state into the container.
+
+If you want to use the sample env file from the repo, copy it first:
+
+```bash
+cp openclaw.podman.env openclaw.podman.env.local
+chmod 600 openclaw.podman.env.local
+OPENCLAW_PODMAN_ENV=$PWD/openclaw.podman.env.local ./scripts/run-openclaw-podman.sh launch
+```
+
+Leave `OPENCLAW_GATEWAY_TOKEN` unset in the copied file if you want the launcher to generate one automatically.
 
 Onboarding:
 
