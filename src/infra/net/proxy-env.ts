@@ -57,20 +57,26 @@ export function hasEnvHttpProxyConfigured(
 /**
  * Check whether a target URL should bypass the HTTP proxy per NO_PROXY env var.
  *
- * Mirrors undici EnvHttpProxyAgent semantics:
- * - Comma-separated list; case-insensitive
+ * Mirrors undici EnvHttpProxyAgent semantics
+ * (`undici/lib/dispatcher/env-http-proxy-agent.js`):
+ * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
+ * - Case-insensitive
  * - Empty or missing → no bypass
  * - `*` → bypass everything
  * - Exact hostname match
- * - Leading-dot or subdomain suffix match (`.example.com` matches `foo.example.com`)
+ * - Leading-dot match (`.example.com` matches `foo.example.com`)
+ * - Leading `*.` wildcard match (`*.example.com` matches `foo.example.com`);
+ *   undici normalizes via `.replace(/^\*?\./, '')`, so the bare domain also
+ *   matches (kept in sync with that behavior)
+ * - Subdomain suffix match (`openai.com` matches `api.openai.com`)
  * - Optional `:port` suffix; when present, must match target port
  * - IPv6 literals in bracketed form (`[::1]`)
  *
  * Undici does not export its matcher, so this is a targeted reimplementation
- * kept in sync with `undici/lib/dispatcher/env-http-proxy-agent.js`. Paired
- * with `hasEnvHttpProxyConfigured` this gates the trusted-env-proxy
- * auto-upgrade in provider HTTP helpers; see openclaw#64974 review thread on
- * NO_PROXY SSRF bypass.
+ * kept in sync with the upstream file above. Paired with
+ * `hasEnvHttpProxyConfigured` this gates the trusted-env-proxy auto-upgrade
+ * in provider HTTP helpers; see openclaw#64974 review thread on NO_PROXY
+ * SSRF bypass.
  */
 export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY);
@@ -99,7 +105,10 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
           ? "80"
           : "";
 
-  for (const rawEntry of raw.split(",")) {
+  // Undici tokenizes NO_PROXY on BOTH commas and whitespace (single-char
+  // class, empty entries filtered below). Values like `"localhost *.corp"`
+  // or `"a, b\tc"` must all parse correctly.
+  for (const rawEntry of raw.split(/[,\s]/)) {
     const entry = rawEntry.trim().toLowerCase();
     if (!entry) {
       continue;
@@ -131,7 +140,9 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
       continue;
     }
 
-    const normalizedEntry = entryHost.startsWith(".") ? entryHost.slice(1) : entryHost;
+    // Mirror undici: strip optional leading `*` followed by `.` so both
+    // `.example.com` and `*.example.com` normalize to `example.com`.
+    const normalizedEntry = entryHost.replace(/^\*?\./, "");
     if (!normalizedEntry) {
       continue;
     }

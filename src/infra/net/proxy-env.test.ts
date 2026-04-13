@@ -170,6 +170,48 @@ describe("matchesNoProxy", () => {
       expected: true,
     },
     {
+      name: "parses whitespace-separated list (undici tokenizes on [,\\s])",
+      url: "https://foo.corp.internal",
+      env: { NO_PROXY: "localhost *.corp.internal" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "parses mixed comma-and-whitespace list",
+      url: "https://api.openai.com",
+      env: { NO_PROXY: "localhost, 127.0.0.1\tapi.openai.com" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "tab and newline act as delimiters",
+      url: "https://internal.example",
+      env: { NO_PROXY: "localhost\n127.0.0.1\tinternal.example" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches subdomain via *. wildcard normalization",
+      url: "https://foo.example.com/v1",
+      env: { NO_PROXY: "*.example.com" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "wildcard *.example.com matches bare example.com (undici normalizes to base domain)",
+      url: "https://example.com/v1",
+      env: { NO_PROXY: "*.example.com" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "*. wildcard respects port",
+      url: "https://api.corp.internal:8443",
+      env: { NO_PROXY: "*.corp.internal:8443" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "*. wildcard does not match unrelated suffix",
+      url: "https://api.example.org",
+      env: { NO_PROXY: "*.example.com" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
       name: "lower-case no_proxy is honored",
       url: "https://corp.local",
       env: { no_proxy: "corp.local" } as NodeJS.ProcessEnv,
