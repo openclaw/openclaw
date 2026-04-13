@@ -12,10 +12,21 @@ export interface TmpFixture {
 /** Spin up a scratch AGENT_DATA_ROOT. Caller must call cleanup(). */
 export function makeFixture(): TmpFixture {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "lesson-engine-test-"));
+  // Isolate session-scanning from the developer's real ~/.openclaw/agents/
+  // by pointing OPENCLAW_SESSIONS_ROOT at an empty subdir in the fixture.
+  // Tests that need real sessions can write their own JSONL under <root>/sessions/<agent>/sessions/.
+  const sessionsRoot = path.join(root, "sessions");
+  fs.mkdirSync(sessionsRoot, { recursive: true });
+  const priorEnv = process.env.OPENCLAW_SESSIONS_ROOT;
+  process.env.OPENCLAW_SESSIONS_ROOT = sessionsRoot;
   return {
     root,
     agentFile: (agent: string) => path.join(root, agent, "memory", "lessons-learned.json"),
-    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+    cleanup: () => {
+      if (priorEnv === undefined) delete process.env.OPENCLAW_SESSIONS_ROOT;
+      else process.env.OPENCLAW_SESSIONS_ROOT = priorEnv;
+      fs.rmSync(root, { recursive: true, force: true });
+    },
   };
 }
 

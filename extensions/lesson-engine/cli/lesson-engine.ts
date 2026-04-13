@@ -221,8 +221,26 @@ function statusReport(agent: string, root?: string): StatusReport {
   };
 }
 
+function loadMaintenanceState(root: string | undefined, now: Date): MaintenanceState {
+  const statePath = maintenanceStatePath(root);
+  if (fs.existsSync(statePath)) {
+    try {
+      const state = readJson<MaintenanceState>(statePath);
+      if (state.version === 1 && typeof state.agents === "object") return state;
+    } catch {
+      // fall through
+    }
+  }
+  return { version: 1, updatedAt: nowIso(now), agents: {} };
+}
+
 function updateMaintenanceState(params: {
   agent: string;
+  scanSeeds?: number;
+  distillCandidates?: number;
+  distillSkipped?: number;
+  gatePromoted?: number;
+  gateRejected?: number;
   migrate: MigrateResult;
   dedupe: DedupeResult;
   forget: ForgetResult;
@@ -231,26 +249,24 @@ function updateMaintenanceState(params: {
   now: Date;
 }): string {
   const statePath = maintenanceStatePath(params.root);
-  let state: MaintenanceState;
-  if (fs.existsSync(statePath)) {
-    try {
-      state = readJson<MaintenanceState>(statePath);
-      if (state.version !== 1 || typeof state.agents !== "object") throw new Error("schema");
-    } catch {
-      state = { version: 1, updatedAt: nowIso(params.now), agents: {} };
-    }
-  } else {
-    state = { version: 1, updatedAt: nowIso(params.now), agents: {} };
-  }
+  const state = loadMaintenanceState(params.root, params.now);
   const iso = nowIso(params.now);
   const prior = state.agents[params.agent] ?? {};
   state.agents[params.agent] = {
     ...prior,
+    lastScanAt: iso,
+    lastDistillAt: iso,
+    lastGateAt: iso,
     lastMigrateAt: iso,
     lastDedupeAt: iso,
     lastForgetAt: iso,
     ...(params.inject ? { lastInjectAt: iso } : {}),
     lastMaintenanceAt: iso,
+    scanSeeds: params.scanSeeds ?? 0,
+    distillCandidates: params.distillCandidates ?? 0,
+    distillSkipped: params.distillSkipped ?? 0,
+    gatePromoted: params.gatePromoted ?? 0,
+    gateRejected: params.gateRejected ?? 0,
     dedupeMerged: params.dedupe.merges.length,
     forgetStale: params.forget.transitions.filter((t) => t.to === "stale").length,
     forgetArchived: params.forget.transitions.filter((t) => t.to === "archive").length,
@@ -325,13 +341,81 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
     }
     case "maintenance": {
       const agents = resolveAgents(args);
+
+      // ── scan (all agents at once) ──
+      const scanState = readScannerState(args.root);
+      const { seeds, updatedState } = scanAll({
+        agents,
+        root: args.root,
+        state: scanState,
+        now,
+      });
+      if (!dryRun) {
+        if (seeds.length > 0) writeSeedsAppend(seeds, args.root, now);
+        writeScannerState(updatedState, args.root);
+      }
+      stderr.push(
+        `[scan] ${seeds.length} error seeds across ${agents.length} agent(s) (${dryRun ? "dry-run" : "applied"})`,
+      );
+
+      // ── distill (per-agent, async — skip agents with no seeds) ──
+      const allSeeds = dryRun ? seeds : readPersistedSeeds(args.root);
+      const distillSummary: { agent: string; candidates: number; skipped: number }[] = [];
+      for (const agent of agents) {
+        const agentSeeds = allSeeds.filter((s) => s.agent === agent);
+        if (agentSeeds.length === 0) {
+          stderr.push(`[distill] ${agent}: 0 new candidates, 0 skipped`);
+          distillSummary.push({ agent, candidates: 0, skipped: 0 });
+          continue;
+        }
+        const llm = opts.llm ?? new NativeProvider(agent);
+        const freshExisting = readCandidatesFile(args.root);
+        const { candidates, skipped } = await distillAll({
+          seeds: agentSeeds,
+          llm,
+          root: args.root,
+          minClusterSize: args.minCluster,
+          existing: freshExisting,
+          now,
+        });
+        if (!dryRun && candidates.length > 0) {
+          const next = {
+            ...freshExisting,
+            updatedAt: nowIso(now),
+            candidates: [...freshExisting.candidates, ...candidates],
+          };
+          writeCandidatesFile(next, args.root);
+        }
+        stderr.push(`[distill] ${agent}: ${candidates.length} new candidates, ${skipped} skipped`);
+        distillSummary.push({ agent, candidates: candidates.length, skipped });
+      }
+
+      // ── gate (all agents at once) ──
+      const gateResult = gateCandidates({
+        agents,
+        root: args.root,
+        confidenceThreshold: args.confidence,
+        dryRun,
+        now,
+      });
+      stderr.push(`[gate] promoted=${gateResult.promoted} rejected=${gateResult.rejected}`);
+
+      // ── migrate → dedupe → forget → inject (per-agent) ──
       const injectResults: {
         agent: string;
         selected: number;
         estimatedTokens: number;
         outputPath: string | null;
       }[] = [];
-      const results = agents.map((agent) => {
+      const results: {
+        agent: string;
+        filePath: string;
+        migrate: MigrateResult;
+        dedupe: DedupeResult;
+        forget: ForgetResult;
+        statePath?: string;
+      }[] = [];
+      for (const agent of agents) {
         const filePath = lessonsFilePath(agent, args.root);
         const migrate = migrateFile({ filePath, agent, dryRun, now });
         const dedupe = dedupeFile({ filePath, agent, dryRun, now });
@@ -342,17 +426,23 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
           maxActive: args.maxActive,
           now,
         });
-        // inject step — after gate/forget
         const inject = injectLessons({
           agent: agent as AgentName,
           root: args.root,
           dryRun,
           now,
         });
+
+        const agentDistill = distillSummary.find((d) => d.agent === agent);
         let statePath: string | undefined;
         if (!dryRun) {
           statePath = updateMaintenanceState({
             agent,
+            scanSeeds: seeds.filter((s) => s.agent === agent).length,
+            distillCandidates: agentDistill?.candidates ?? 0,
+            distillSkipped: agentDistill?.skipped ?? 0,
+            gatePromoted: gateResult.promoted,
+            gateRejected: gateResult.rejected,
             migrate,
             dedupe,
             forget,
@@ -374,10 +464,18 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
           estimatedTokens: inject.estimatedTokens,
           outputPath: inject.outputPath,
         });
-        return { agent, filePath, migrate, dedupe, forget, statePath };
-      });
+        results.push({ agent, filePath, migrate, dedupe, forget, statePath });
+      }
       return {
-        stdout: { command: "maintenance", dryRun, results, injectResults },
+        stdout: {
+          command: "maintenance",
+          dryRun,
+          scanSeedCount: seeds.length,
+          distillSummary,
+          gateResult: { promoted: gateResult.promoted, rejected: gateResult.rejected },
+          results,
+          injectResults,
+        },
         stderr,
         exitCode: 0,
       };

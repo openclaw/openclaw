@@ -135,15 +135,28 @@ describe("CLI", () => {
       const statePath = results[0].statePath!;
       expect(statePath).toBeDefined();
       expect(fs.existsSync(statePath)).toBe(true);
-      const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as MaintenanceState;
       expect(state.version).toBe(1);
       expect(state.agents.builder.lastMaintenanceAt).toBeTruthy();
+      expect(state.agents.builder.lastScanAt).toBeTruthy();
+      expect(state.agents.builder.lastDistillAt).toBeTruthy();
+      expect(state.agents.builder.lastGateAt).toBeTruthy();
       expect(state.agents.builder.forgetStale).toBeGreaterThanOrEqual(2);
       expect(statePath.startsWith(fx.root)).toBe(true);
       const after = JSON.parse(
         fs.readFileSync(path.join(fx.root, "builder", "memory", "lessons-learned.json"), "utf8"),
       );
       expect(after.lessons.length).toBe(52);
+      // stdout includes scan/distill/gate summary
+      const out = stdout as {
+        scanSeedCount: number;
+        distillSummary: unknown[];
+        gateResult: { promoted: number; rejected: number };
+      };
+      expect(out.scanSeedCount).toBe(0);
+      expect(out.distillSummary).toHaveLength(1);
+      expect(out.gateResult.promoted).toBe(0);
+      expect(out.gateResult.rejected).toBe(0);
     } finally {
       fx.cleanup();
     }
@@ -236,6 +249,76 @@ describe("CLI", () => {
       const file = readCandidatesFile(fx.root);
       expect(file.candidates).toHaveLength(1);
       expect(file.candidates[0].agent).toBe("builder");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("maintenance --apply runs full scan→distill→gate→migrate→dedupe→forget→inject pipeline", async () => {
+    const fx = makeFixture();
+    try {
+      // Pre-populate persisted error seeds (simulating a prior scan)
+      const seeds: ErrorSeed[] = [
+        makeCLISeed("builder", "fp-perm", "sess-1"),
+        makeCLISeed("builder", "fp-perm", "sess-2"),
+      ];
+      writeSeedsAppend(seeds, fx.root);
+      // Write a minimal lessons file so migrate/dedupe/forget have something to work with
+      writeLessons(fx, "builder", { version: 1, lessons: [] });
+
+      const { stdout, stderr, exitCode } = await main(
+        ["maintenance", "--agent", "builder", "--apply", "--root", fx.root],
+        { llm: new MockProvider(MOCK_LLM_RESPONSE) },
+      );
+      expect(exitCode).toBe(0);
+
+      const out = stdout as {
+        scanSeedCount: number;
+        distillSummary: { agent: string; candidates: number; skipped: number }[];
+        gateResult: { promoted: number; rejected: number };
+        results: { statePath?: string }[];
+        injectResults: { agent: string; selected: number }[];
+      };
+
+      // distill should have produced 1 candidate (2 seeds with same fingerprint → 1 cluster)
+      expect(out.distillSummary).toHaveLength(1);
+      expect(out.distillSummary[0].candidates).toBe(1);
+
+      // gate should have promoted it (confidence 0.85 > default 0.7 threshold)
+      expect(out.gateResult.promoted).toBe(1);
+
+      // candidates.json should exist with the distilled candidate
+      const candidates = readCandidatesFile(fx.root);
+      expect(candidates.candidates.length).toBeGreaterThanOrEqual(1);
+
+      // The promoted lesson should now appear in lessons-learned.json
+      const lessonsPath = path.join(fx.root, "builder", "memory", "lessons-learned.json");
+      const lessonsFile = JSON.parse(fs.readFileSync(lessonsPath, "utf8"));
+      expect(lessonsFile.lessons.length).toBeGreaterThanOrEqual(1);
+      const promotedLesson = lessonsFile.lessons.find(
+        (l: { promotedFrom?: string }) => l.promotedFrom != null,
+      );
+      expect(promotedLesson).toBeDefined();
+      expect(promotedLesson.lifecycle).toBe("active");
+
+      // inject should pick up the promoted lesson
+      expect(out.injectResults[0].selected).toBeGreaterThanOrEqual(1);
+
+      // maintenance-state should record scan/distill/gate timestamps
+      const statePath = out.results[0].statePath!;
+      expect(statePath).toBeDefined();
+      const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as MaintenanceState;
+      expect(state.agents.builder.lastScanAt).toBeTruthy();
+      expect(state.agents.builder.lastDistillAt).toBeTruthy();
+      expect(state.agents.builder.lastGateAt).toBeTruthy();
+      expect(state.agents.builder.distillCandidates).toBe(1);
+      expect(state.agents.builder.gatePromoted).toBe(1);
+
+      // stderr should have log lines for every pipeline step
+      expect(stderr.some((l: string) => l.includes("[scan]"))).toBe(true);
+      expect(stderr.some((l: string) => l.includes("[distill]"))).toBe(true);
+      expect(stderr.some((l: string) => l.includes("[gate]"))).toBe(true);
+      expect(stderr.some((l: string) => l.includes("[inject]"))).toBe(true);
     } finally {
       fx.cleanup();
     }
