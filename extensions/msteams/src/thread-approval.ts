@@ -7,6 +7,7 @@ import {
   deliverTeamsActionApprovalCard,
   failClaimedActionApprovalFlow,
   finishClaimedActionApprovalFlow,
+  hashActionApprovalSnapshot,
   loadActionApprovalFlow,
   resolveActionApprovalDecision,
   type ActionApprovalActionMetadata,
@@ -28,6 +29,7 @@ import { readMSTeamsApproverIds, resolveMSTeamsThreadTarget } from "./thread-tar
 
 export const MSTEAMS_THREAD_APPROVAL_NAMESPACE = "msteams.thread-approval";
 export const MSTEAMS_THREAD_QUEUE_TOOL_NAME = "msteams_thread_queue_action";
+const DEFAULT_MSTEAMS_THREAD_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
 type ThreadToolContext = OpenClawPluginToolContext;
 
@@ -335,6 +337,36 @@ async function editApprovalCard(ctx: MSTeamsThreadInteractiveContext, text: stri
   await ctx.respond.editMessage({ text });
 }
 
+function findExistingThreadApproval(params: {
+  taskFlow: ReturnType<OpenClawPluginApi["runtime"]["taskFlow"]["fromToolContext"]>;
+  snapshotHash: string;
+}) {
+  for (const flow of params.taskFlow.list()) {
+    const loaded = loadActionApprovalFlow<ThreadActionSnapshot>({
+      taskFlow: params.taskFlow,
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      snapshotHash: params.snapshotHash,
+    });
+    if (!loaded.ok) {
+      continue;
+    }
+    if (
+      loaded.state.kind === "action_approval" &&
+      (loaded.state.status === "pending" ||
+        loaded.state.status === "claimed" ||
+        loaded.state.status === "succeeded")
+    ) {
+      return {
+        flowId: loaded.flow.flowId,
+        expectedRevision: loaded.flow.revision,
+        snapshotHash: loaded.snapshotHash,
+      };
+    }
+  }
+  return null;
+}
+
 export function createMSTeamsThreadQueueTool(
   api: OpenClawPluginApi,
   toolContext: OpenClawPluginToolContext,
@@ -374,6 +406,25 @@ export function createMSTeamsThreadQueueTool(
       });
       const taskFlow = api.runtime.taskFlow.fromToolContext(context);
       const action = buildThreadActionMetadata(snapshot);
+      const snapshotHash = hashActionApprovalSnapshot(snapshot);
+      const existing = findExistingThreadApproval({
+        taskFlow,
+        snapshotHash,
+      });
+      if (existing) {
+        return jsonResult({
+          queued: true,
+          deduped: true,
+          operation: snapshot.operation,
+          flowId: existing.flowId,
+          expectedRevision: existing.expectedRevision,
+          snapshotHash: existing.snapshotHash,
+          approverIds: snapshot.approverIds,
+          teamId: snapshot.teamId,
+          channelId: snapshot.channelId,
+          rootMessageId: snapshot.rootMessageId,
+        });
+      }
       const created = createWaitingActionApprovalFlow({
         taskFlow,
         controllerId: "extensions/msteams/thread-approval",
@@ -382,6 +433,7 @@ export function createMSTeamsThreadQueueTool(
         waitingStep: "awaiting-approval",
         action,
         snapshot,
+        expiresAt: Date.now() + DEFAULT_MSTEAMS_THREAD_APPROVAL_TIMEOUT_MS,
       });
       const card = buildTeamsActionApprovalCard({
         namespace: MSTEAMS_THREAD_APPROVAL_NAMESPACE,
@@ -447,6 +499,27 @@ export function registerMSTeamsThreadApproval(api: OpenClawPluginApi): void {
         await editApprovalCard(ctx, `Approval could not be applied (${loaded.code}).`);
         return { handled: true };
       }
+      const now = Date.now();
+      const approvalExpired =
+        loaded.state.status === "expired" ||
+        (loaded.state.expiresAt !== undefined && now >= loaded.state.expiresAt);
+      if (approvalExpired) {
+        const claimed = claimActionApprovalFlow<ThreadActionSnapshot>({
+          taskFlow,
+          flowId: decoded.flowId,
+          expectedRevision: decoded.expectedRevision,
+          snapshotHash: decoded.snapshotHash,
+          actorId: ctx.senderId,
+          now,
+        });
+        await editApprovalCard(
+          ctx,
+          claimed.code === "expired" || approvalExpired
+            ? "Approval expired."
+            : `Approval could not be applied (${claimed.code}).`,
+        );
+        return { handled: true };
+      }
       if (!ctx.senderId || !loaded.snapshot.approverIds.includes(ctx.senderId)) {
         await ctx.respond.reply({ text: "You are not allowed to approve this action." });
         return { handled: true };
@@ -476,6 +549,7 @@ export function registerMSTeamsThreadApproval(api: OpenClawPluginApi): void {
         expectedRevision: decoded.expectedRevision,
         snapshotHash: decoded.snapshotHash,
         actorId: ctx.senderId,
+        now,
       });
       if (!claimed.applied) {
         await editApprovalCard(

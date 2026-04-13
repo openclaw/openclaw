@@ -117,6 +117,7 @@ function buildApprovalPayload(params: {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   resetTaskFlowRegistryForTests({ persist: false });
   for (const mock of Object.values(threadSendMocks)) {
     mock.mockClear();
@@ -128,7 +129,7 @@ describe("msteams thread approval", () => {
     const { api, taskFlow, factories } = createApi();
     registerMSTeamsThreadApproval(api);
 
-    const context = createContext();
+    const context = createContext({ sessionKey: "agent:main:expiry" });
     const tool = factories
       .map((factory) => factory(context))
       .find(
@@ -221,6 +222,39 @@ describe("msteams thread approval", () => {
     expect(threadSendMocks.sendThreadMessageMSTeams).not.toHaveBeenCalled();
   });
 
+  it("dedupes identical queue requests before delivery", async () => {
+    const { api, factories } = createApi();
+    registerMSTeamsThreadApproval(api);
+
+    const context = createContext();
+    const tool = factories
+      .map((factory) => factory(context))
+      .find(
+        (entry): entry is { name: string; execute: (...args: unknown[]) => Promise<unknown> } =>
+          Boolean(entry) && typeof entry === "object" && "name" in entry && "execute" in entry,
+      );
+    if (!tool) {
+      throw new Error("expected thread queue tool to be registered");
+    }
+
+    const params = {
+      operation: "create_poll",
+      teamId: "team-1",
+      channelId: "channel-1",
+      rootMessageId: "root-1",
+      conversationId: "19:channel@thread.tacv2",
+      approverIds: ["approver-aad"],
+      question: "Which option?",
+      options: ["A", "B"],
+    };
+    const first = (await tool.execute("call-1", params)) as { details?: Record<string, unknown> };
+    const second = (await tool.execute("call-2", params)) as { details?: Record<string, unknown> };
+
+    expect(first.details?.flowId).toBe(second.details?.flowId);
+    expect(second.details?.deduped).toBe(true);
+    expect(threadSendMocks.deliverTeamsActionApprovalCard).toHaveBeenCalledTimes(1);
+  });
+
   it("executes the approved side effect exactly once", async () => {
     const { api, factories, interactiveHandlers } = createApi();
     registerMSTeamsThreadApproval(api);
@@ -286,5 +320,70 @@ describe("msteams thread approval", () => {
     expect(editMessage).toHaveBeenNthCalledWith(2, {
       text: "Approval could not be applied (revision_conflict).",
     });
+  });
+
+  it("expires stale approvals before execution", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-13T10:00:00Z"));
+
+    const { api, taskFlow, factories, interactiveHandlers } = createApi();
+    registerMSTeamsThreadApproval(api);
+
+    const context = createContext({ sessionKey: "agent:main:expiry" });
+    const tool = factories
+      .map((factory) => factory(context))
+      .find(
+        (entry): entry is { name: string; execute: (...args: unknown[]) => Promise<unknown> } =>
+          Boolean(entry) && typeof entry === "object" && "name" in entry && "execute" in entry,
+      );
+    if (!tool) {
+      throw new Error("expected thread queue tool to be registered");
+    }
+
+    const result = (await tool.execute("call-1", {
+      operation: "post_summary",
+      teamId: "team-1",
+      channelId: "channel-1",
+      rootMessageId: "root-1",
+      conversationId: "19:channel@thread.tacv2",
+      approverIds: ["approver-aad"],
+      text: "Expiry summary text",
+    })) as { details?: Record<string, unknown> };
+
+    const details = result.details as {
+      flowId: string;
+      expectedRevision: number;
+      snapshotHash: string;
+    };
+    const flow = taskFlow.fromToolContext(context).get(details.flowId);
+    const expiresAt = (flow?.stateJson as { expiresAt?: number } | undefined)?.expiresAt;
+    expect(expiresAt).toBeTypeOf("number");
+    expect(expiresAt).toBeGreaterThan(new Date("2026-04-13T10:00:00Z").getTime());
+    const handler = interactiveHandlers[0]?.handler;
+    if (!handler) {
+      throw new Error("expected thread interactive handler");
+    }
+    const editMessage = vi.fn(async () => undefined);
+
+    vi.setSystemTime(new Date("2026-04-13T10:06:00Z"));
+
+    await handler({
+      senderId: "approver-aad",
+      respond: {
+        reply: vi.fn(async () => undefined),
+        editMessage,
+      },
+      interaction: {
+        payload: buildApprovalPayload({
+          ownerSessionKey: "agent:main:expiry",
+          flowId: details.flowId,
+          expectedRevision: details.expectedRevision,
+          snapshotHash: details.snapshotHash,
+        }),
+      },
+    });
+
+    expect(threadSendMocks.sendThreadMessageMSTeams).not.toHaveBeenCalled();
+    expect(editMessage).toHaveBeenCalledWith({ text: "Approval expired." });
   });
 });
