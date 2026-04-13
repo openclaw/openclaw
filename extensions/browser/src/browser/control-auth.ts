@@ -24,6 +24,20 @@ export function resolveBrowserControlAuth(
   });
   const token = normalizeOptionalString(auth.token) ?? "";
   const password = normalizeOptionalString(auth.password) ?? "";
+  const mode = cfg?.gateway?.auth?.mode;
+
+  if (mode === "password") {
+    return { password: password || undefined };
+  }
+
+  if (mode === "trusted-proxy") {
+    return { password: password || undefined };
+  }
+
+  if (mode === "none") {
+    return { token: token || undefined };
+  }
+
   return {
     token: token || undefined,
     password: password || undefined,

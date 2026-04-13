@@ -96,6 +96,7 @@ async function expectUnresolvedBrowserSecretRefSkipsPersistence(cfg: OpenClawCon
 }
 
 let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
+let resolveBrowserControlAuth: typeof import("./control-auth.js").resolveBrowserControlAuth;
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password") => {
@@ -129,7 +130,7 @@ describe("ensureBrowserControlAuth", () => {
   };
 
   beforeAll(async () => {
-    ({ ensureBrowserControlAuth } = await import("./control-auth.js"));
+    ({ ensureBrowserControlAuth, resolveBrowserControlAuth } = await import("./control-auth.js"));
   });
 
   beforeEach(() => {
@@ -155,6 +156,55 @@ describe("ensureBrowserControlAuth", () => {
     expect(mocks.loadConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+  });
+
+  it("returns only the active credential in password mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "password",
+          token: "inactive-token",
+          password: "active-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      password: "active-password",
+    });
+  });
+
+  it("returns only the browser token in none mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "none",
+          token: "browser-token",
+          password: "inactive-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      token: "browser-token",
+    });
+  });
+
+  it("returns only the browser password in trusted-proxy mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: "inactive-token",
+          password: "browser-password",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      password: "browser-password",
+    });
   });
 
   it("auto-generates and persists a token when auth is missing", async () => {
