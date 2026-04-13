@@ -8,6 +8,7 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { DuplicateJobIdError } from "../../cron/service/ops.js";
 import {
   ErrorCodes,
   errorShape,
@@ -138,12 +139,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
       respond(true, job, undefined);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      if (errorMessage.includes("already exists")) {
+      if (err instanceof DuplicateJobIdError) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, errorMessage),
+          errorShape(ErrorCodes.INVALID_REQUEST, err.message),
         );
       } else {
         throw err;
