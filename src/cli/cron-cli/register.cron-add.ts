@@ -231,8 +231,8 @@ export function registerCronAddCommand(cron: Command) {
               );
             }
             // Check for reasonable length
-            if (customId.length < 2 || customId.length > 100) {
-              throw new Error("--id must be between 2 and 100 characters");
+            if (customId.length > 100) {
+              throw new Error("--id must be at most 100 characters");
             }
           }
 

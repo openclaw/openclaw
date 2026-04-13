@@ -286,6 +286,7 @@ export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: fa
 
 export const CronAddParamsSchema = Type.Object(
   {
+    id: Type.Optional(Type.String()),
     name: NonEmptyString,
     ...CronCommonOptionalFields,
     schedule: CronScheduleSchema,
