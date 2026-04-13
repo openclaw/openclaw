@@ -580,7 +580,8 @@ export function createBrowserTool(opts?: {
         }
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
-          const fullPage = Boolean(params.fullPage);
+          const browserCfg = loadConfig();
+          const fullPage = Boolean(params.fullPage) && !browserCfg.browser?.headless;
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
           const type = params.type === "jpeg" ? "jpeg" : "png";
