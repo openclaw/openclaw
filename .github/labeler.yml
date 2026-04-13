@@ -281,10 +281,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/cloudflare-ai-gateway/**"
-"extensions: minimax-portal-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/minimax-portal-auth/**"
+
 "extensions: huggingface":
   - changed-files:
       - any-glob-to-any-file:
