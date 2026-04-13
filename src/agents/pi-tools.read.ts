@@ -71,6 +71,11 @@ type ReadTruncationDetails = {
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 
+// Helper function to encode file paths for URLs
+function encodePathForUrl(filePath: string): string {
+  return filePath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -729,7 +734,7 @@ export function createOpenClawReadTool(
 
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
-        const mediaUrl = `http://localhost:18791${inputPath}`;
+        const mediaUrl = `http://localhost:18791${encodePathForUrl(inputPath)}`;
 
         if (IMAGE_EXTENSIONS.has(ext)) {
           // Now safe to read after sandbox validation
@@ -756,7 +761,6 @@ export function createOpenClawReadTool(
           } as any;
         }
 
-        // Similar handling for audio/video would also be protected
         if (AUDIO_EXTENSIONS.has(ext)) {
           return {
             toolCallId,

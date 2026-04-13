@@ -173,10 +173,8 @@ marked.use({
 });
 
 export function toSanitizedMarkdownHtml(markdown: string): string {
-  // If it's an audio tag, return it raw without sanitization
-  if (markdown.trim().startsWith('<audio') && markdown.includes('controls')) {
-    return markdown;
-  }
+  // REMOVED: Dangerous bypass that returns raw audio tags without sanitization
+  // This allowed XSS attacks by bypassing DOMPurify entirely
   
   const input = markdown.trim();
   if (!input) {
