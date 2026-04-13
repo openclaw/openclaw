@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
+import type { PlansViewProps } from "../controllers/plans.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
@@ -25,6 +26,7 @@ import {
   shouldShowPairingHint,
 } from "./overview-hints.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
+import { renderPlans } from "./plans.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -46,6 +48,7 @@ export type OverviewProps = {
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;
   attentionItems: AttentionItem[];
+  plans: PlansViewProps;
   eventLog: EventLogEntry[];
   overviewLogLines: string[];
   showGatewayToken: boolean;
@@ -60,6 +63,17 @@ export type OverviewProps = {
   onNavigate: (tab: string) => void;
   onRefreshLogs: () => void;
 };
+
+function renderOverviewPlans(props: OverviewProps) {
+  return html`
+    <div>
+      ${renderPlans(props.plans)}
+      <div class="muted" style="margin-top: 10px; font-size: 12px;">
+        Use the Plans tab for the full inspect and lifecycle control surface.
+      </div>
+    </div>
+  `;
+}
 
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
@@ -420,6 +434,10 @@ export function renderOverview(props: OverviewProps) {
       onNavigate: props.onNavigate,
     })}
     ${renderOverviewAttention({ items: props.attentionItems })}
+
+    <div class="ov-section-divider"></div>
+
+    ${renderOverviewPlans(props)}
 
     <div class="ov-section-divider"></div>
 

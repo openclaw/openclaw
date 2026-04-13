@@ -93,6 +93,15 @@ import {
 } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
+import {
+  buildPlansOverviewTeaserProps,
+  buildPlansViewProps,
+  loadSelectedPlan,
+  refreshPlansOverview,
+  selectPlan,
+  setPlansStatusFilter,
+  updateSelectedPlanStatus,
+} from "./controllers/plans.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
@@ -165,6 +174,7 @@ const lazyDebug = createLazy(() => import("./views/debug.ts"));
 const lazyInstances = createLazy(() => import("./views/instances.ts"));
 const lazyLogs = createLazy(() => import("./views/logs.ts"));
 const lazyNodes = createLazy(() => import("./views/nodes.ts"));
+const lazyPlans = createLazy(() => import("./views/plans.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
 
@@ -1126,6 +1136,18 @@ export function renderApp(state: AppViewState) {
               cronJobs: state.cronJobs,
               cronStatus: state.cronStatus,
               attentionItems: state.attentionItems,
+              plans: buildPlansOverviewTeaserProps(state, {
+                onRefresh: () => state.setTab("plans" as import("./navigation.ts").Tab),
+                onSelectPlan: (planId) => {
+                  selectPlan(state, planId);
+                  void loadSelectedPlan(state, planId);
+                },
+                onStatusFilterChange: (status) => {
+                  setPlansStatusFilter(state, status);
+                  void state.loadOverview();
+                },
+                onStatusAction: (status) => updateSelectedPlanStatus(state, status),
+              }),
               eventLog: state.eventLog,
               overviewLogLines: state.overviewLogLines,
               showGatewayToken: state.overviewShowGatewayToken,
@@ -1154,6 +1176,24 @@ export function renderApp(state: AppViewState) {
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
               onRefreshLogs: () => state.loadOverview(),
             })
+          : nothing}
+        ${state.tab === "plans"
+          ? lazyRender(lazyPlans, (m) =>
+              m.renderPlans(
+                buildPlansViewProps(state, {
+                  onRefresh: () => state.loadOverview(),
+                  onSelectPlan: (planId) => {
+                    selectPlan(state, planId);
+                    void loadSelectedPlan(state, planId);
+                  },
+                  onStatusFilterChange: (status) => {
+                    setPlansStatusFilter(state, status);
+                    void refreshPlansOverview(state);
+                  },
+                  onStatusAction: (status) => updateSelectedPlanStatus(state, status),
+                }),
+              ),
+            )
           : nothing}
         ${state.tab === "channels"
           ? lazyRender(lazyChannels, (m) =>

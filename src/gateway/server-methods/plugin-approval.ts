@@ -110,11 +110,20 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      const requestEvent = {
+      const requestEvent: {
+        id: typeof record.id;
+        request: typeof record.request;
+        createdAtMs: typeof record.createdAtMs;
+        expiresAtMs: typeof record.expiresAtMs;
+        routeStatus: "pending-route" | "delivered" | "delivery-failed";
+        recoverability: "reconnect-recoverable";
+      } = {
         id: record.id,
         request: record.request,
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
+        routeStatus: "pending-route",
+        recoverability: "reconnect-recoverable",
       };
 
       await handlePendingApprovalRequest({

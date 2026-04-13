@@ -170,8 +170,15 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     // AbortSignal issue in Node.js (grammY's signal may come from a different module context,
     // causing "signals[0] must be an instance of AbortSignal" errors).
     finalFetch = (input: TelegramFetchInput, init?: TelegramFetchInit) => {
+      type AbortSignalLike = Pick<
+        globalThis.AbortSignal,
+        "aborted" | "addEventListener" | "removeEventListener"
+      > & {
+        reason?: unknown;
+      };
       const controller = new AbortController();
-      const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
+      const abortWith = (signal: Pick<AbortSignalLike, "reason">) =>
+        controller.abort(signal.reason);
       const shutdownSignal = opts.fetchAbortSignal;
       const onShutdown = () => {
         if (shutdownSignal) {
@@ -182,7 +189,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
       const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method);
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
       let onRequestAbort: (() => void) | undefined;
-      const requestSignal = init?.signal;
+      const requestSignal = init?.signal as AbortSignalLike | undefined;
       if (shutdownSignal?.aborted) {
         abortWith(shutdownSignal);
       } else if (shutdownSignal) {

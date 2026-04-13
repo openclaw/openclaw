@@ -259,6 +259,21 @@ import {
   type ToolsCatalogParams,
   ToolsCatalogParamsSchema,
   type ToolsCatalogResult,
+  type PlansListParams,
+  PlansListParamsSchema,
+  type PlansGetParams,
+  PlansGetParamsSchema,
+  type PlansUpdateStatusParams,
+  PlansUpdateStatusParamsSchema,
+  type PlanRecord,
+  PlanRecordSchema,
+  type PlanRegistrySummary,
+  PlanRegistrySummarySchema,
+  type PlansListResult,
+  PlansListResultSchema,
+  type PlansGetResult,
+  PlansGetResultSchema,
+  PlansUpdateStatusResultSchema,
   type ToolsEffectiveParams,
   ToolsEffectiveParamsSchema,
   type ToolsEffectiveResult,
@@ -437,6 +452,11 @@ export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
 export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
 export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsCatalogParamsSchema);
+export const validatePlansListParams = ajv.compile<PlansListParams>(PlansListParamsSchema);
+export const validatePlansGetParams = ajv.compile<PlansGetParams>(PlansGetParamsSchema);
+export const validatePlansUpdateStatusParams = ajv.compile<PlansUpdateStatusParams>(
+  PlansUpdateStatusParamsSchema,
+);
 export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
   ToolsEffectiveParamsSchema,
 );
@@ -640,6 +660,14 @@ export {
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
+  PlansListParamsSchema,
+  PlansGetParamsSchema,
+  PlansUpdateStatusParamsSchema,
+  PlanRecordSchema,
+  PlanRegistrySummarySchema,
+  PlansListResultSchema,
+  PlansGetResultSchema,
+  PlansUpdateStatusResultSchema,
   ToolsEffectiveParamsSchema,
   SkillsInstallParamsSchema,
   SkillsSearchParamsSchema,
@@ -745,6 +773,12 @@ export type {
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,
+  PlansListParams,
+  PlansGetParams,
+  PlanRecord,
+  PlanRegistrySummary,
+  PlansListResult,
+  PlansGetResult,
   ToolsEffectiveParams,
   ToolsEffectiveResult,
   SkillsBinsParams,

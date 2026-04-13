@@ -3104,6 +3104,12 @@ public struct ToolCatalogEntry: Codable, Sendable {
     public let source: AnyCodable
     public let pluginid: String?
     public let optional: Bool?
+    public let activationmode: AnyCodable
+    public let executionscope: AnyCodable
+    public let operatorvisibility: AnyCodable
+    public let bindabletosubagent: Bool?
+    public let policyhints: [String]?
+    public let category: String?
     public let defaultprofiles: [AnyCodable]
 
     public init(
@@ -3113,6 +3119,12 @@ public struct ToolCatalogEntry: Codable, Sendable {
         source: AnyCodable,
         pluginid: String?,
         optional: Bool?,
+        activationmode: AnyCodable,
+        executionscope: AnyCodable,
+        operatorvisibility: AnyCodable,
+        bindabletosubagent: Bool?,
+        policyhints: [String]?,
+        category: String?,
         defaultprofiles: [AnyCodable])
     {
         self.id = id
@@ -3121,6 +3133,12 @@ public struct ToolCatalogEntry: Codable, Sendable {
         self.source = source
         self.pluginid = pluginid
         self.optional = optional
+        self.activationmode = activationmode
+        self.executionscope = executionscope
+        self.operatorvisibility = operatorvisibility
+        self.bindabletosubagent = bindabletosubagent
+        self.policyhints = policyhints
+        self.category = category
         self.defaultprofiles = defaultprofiles
     }
 
@@ -3131,6 +3149,12 @@ public struct ToolCatalogEntry: Codable, Sendable {
         case source
         case pluginid = "pluginId"
         case optional
+        case activationmode = "activationMode"
+        case executionscope = "executionScope"
+        case operatorvisibility = "operatorVisibility"
+        case bindabletosubagent = "bindableToSubagent"
+        case policyhints = "policyHints"
+        case category
         case defaultprofiles = "defaultProfiles"
     }
 }
@@ -3184,6 +3208,218 @@ public struct ToolsCatalogResult: Codable, Sendable {
         case agentid = "agentId"
         case profiles
         case groups
+    }
+}
+
+public struct PlansListParams: Codable, Sendable {
+    public let ownerkey: String?
+    public let scopekind: AnyCodable?
+    public let status: AnyCodable?
+
+    public init(
+        ownerkey: String?,
+        scopekind: AnyCodable?,
+        status: AnyCodable?)
+    {
+        self.ownerkey = ownerkey
+        self.scopekind = scopekind
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ownerkey = "ownerKey"
+        case scopekind = "scopeKind"
+        case status
+    }
+}
+
+public struct PlansGetParams: Codable, Sendable {
+    public let planid: String
+
+    public init(
+        planid: String)
+    {
+        self.planid = planid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case planid = "planId"
+    }
+}
+
+public struct PlansUpdateStatusParams: Codable, Sendable {
+    public let planid: String
+    public let status: AnyCodable
+
+    public init(
+        planid: String,
+        status: AnyCodable)
+    {
+        self.planid = planid
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case planid = "planId"
+        case status
+    }
+}
+
+public struct PlanRecord: Codable, Sendable {
+    public let planid: String
+    public let ownerkey: String
+    public let scopekind: AnyCodable
+    public let sessionkey: String?
+    public let parentplanid: String?
+    public let title: String
+    public let summary: String?
+    public let content: String
+    public let format: AnyCodable
+    public let status: AnyCodable
+    public let linkedflowids: [String]?
+    public let createdat: Int
+    public let updatedat: Int
+    public let reviewedat: Int?
+    public let approvedat: Int?
+    public let rejectedat: Int?
+    public let archivedat: Int?
+
+    public init(
+        planid: String,
+        ownerkey: String,
+        scopekind: AnyCodable,
+        sessionkey: String?,
+        parentplanid: String?,
+        title: String,
+        summary: String?,
+        content: String,
+        format: AnyCodable,
+        status: AnyCodable,
+        linkedflowids: [String]?,
+        createdat: Int,
+        updatedat: Int,
+        reviewedat: Int?,
+        approvedat: Int?,
+        rejectedat: Int?,
+        archivedat: Int?)
+    {
+        self.planid = planid
+        self.ownerkey = ownerkey
+        self.scopekind = scopekind
+        self.sessionkey = sessionkey
+        self.parentplanid = parentplanid
+        self.title = title
+        self.summary = summary
+        self.content = content
+        self.format = format
+        self.status = status
+        self.linkedflowids = linkedflowids
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.reviewedat = reviewedat
+        self.approvedat = approvedat
+        self.rejectedat = rejectedat
+        self.archivedat = archivedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case planid = "planId"
+        case ownerkey = "ownerKey"
+        case scopekind = "scopeKind"
+        case sessionkey = "sessionKey"
+        case parentplanid = "parentPlanId"
+        case title
+        case summary
+        case content
+        case format
+        case status
+        case linkedflowids = "linkedFlowIds"
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case reviewedat = "reviewedAt"
+        case approvedat = "approvedAt"
+        case rejectedat = "rejectedAt"
+        case archivedat = "archivedAt"
+    }
+}
+
+public struct PlanRegistrySummary: Codable, Sendable {
+    public let total: Int
+    public let reviewable: Int
+    public let terminal: Int
+    public let bystatus: [String: AnyCodable]
+
+    public init(
+        total: Int,
+        reviewable: Int,
+        terminal: Int,
+        bystatus: [String: AnyCodable])
+    {
+        self.total = total
+        self.reviewable = reviewable
+        self.terminal = terminal
+        self.bystatus = bystatus
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case total
+        case reviewable
+        case terminal
+        case bystatus = "byStatus"
+    }
+}
+
+public struct PlansListResult: Codable, Sendable {
+    public let count: Int
+    public let summary: PlanRegistrySummary
+    public let plans: [PlanRecord]
+
+    public init(
+        count: Int,
+        summary: PlanRegistrySummary,
+        plans: [PlanRecord])
+    {
+        self.count = count
+        self.summary = summary
+        self.plans = plans
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case count
+        case summary
+        case plans
+    }
+}
+
+public struct PlansGetResult: Codable, Sendable {
+    public let plan: PlanRecord
+
+    public init(
+        plan: PlanRecord)
+    {
+        self.plan = plan
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case plan
+    }
+}
+
+public struct PlansUpdateStatusResult: Codable, Sendable {
+    public let plan: PlanRecord
+    public let previousstatus: AnyCodable
+
+    public init(
+        plan: PlanRecord,
+        previousstatus: AnyCodable)
+    {
+        self.plan = plan
+        self.previousstatus = previousstatus
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case plan
+        case previousstatus = "previousStatus"
     }
 }
 

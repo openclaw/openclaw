@@ -40,6 +40,8 @@ import type {
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
+  PlanRecord,
+  PlansListResult,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
@@ -219,6 +221,16 @@ export type AppViewState = {
   threadsLoading: boolean;
   threadsResult: SessionsListResult | null;
   threadsError: string | null;
+  plansLoading: boolean;
+  plansError: string | null;
+  plansResult: PlansListResult | null;
+  plansSelectedId: string | null;
+  plansStatusFilter: import("./controllers/plans.ts").PlanStatusFilter;
+  planDetailLoading: boolean;
+  planDetailError: string | null;
+  planDetail: PlanRecord | null;
+  planStatusUpdating: boolean;
+  planStatusError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;

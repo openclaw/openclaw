@@ -189,6 +189,14 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "plans",
+      nativeName: "plans",
+      description: "List, inspect, or change orchestration plans.",
+      textAlias: "/plans",
+      category: "status",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",

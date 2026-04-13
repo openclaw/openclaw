@@ -23,6 +23,10 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
+type ToolCatalogActivationMode = "always" | "optional" | "deferred";
+type ToolCatalogExecutionScope = "session" | "subagent" | "gateway" | "unknown";
+type ToolCatalogOperatorVisibility = "normal" | "advanced" | "internal";
+
 type ToolCatalogEntry = {
   id: string;
   label: string;
@@ -30,6 +34,12 @@ type ToolCatalogEntry = {
   source: "core" | "plugin";
   pluginId?: string;
   optional?: boolean;
+  activationMode: ToolCatalogActivationMode;
+  executionScope: ToolCatalogExecutionScope;
+  operatorVisibility: ToolCatalogOperatorVisibility;
+  bindableToSubagent?: boolean;
+  policyHints?: string[];
+  category?: string;
   defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
 };
 
@@ -67,6 +77,9 @@ function buildCoreGroups(): ToolCatalogGroup[] {
       label: tool.label,
       description: tool.description,
       source: "core",
+      activationMode: "always",
+      executionScope: "unknown",
+      operatorVisibility: "normal",
       defaultProfiles: resolveCoreToolProfiles(tool.id),
     })),
   }));
@@ -115,6 +128,12 @@ function buildPluginGroups(params: {
       source: "plugin",
       pluginId,
       optional: meta?.optional,
+      activationMode: meta?.activationMode ?? (meta?.optional ? "optional" : "always"),
+      executionScope: meta?.bindableToSubagent ? "subagent" : "gateway",
+      operatorVisibility: meta?.operatorVisibility ?? "normal",
+      bindableToSubagent: meta?.bindableToSubagent,
+      policyHints: meta?.policyHints,
+      category: meta?.category,
       defaultProfiles: [],
     });
     groups.set(groupId, existing);

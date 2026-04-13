@@ -93,6 +93,8 @@ import type {
   LogEntry,
   LogLevel,
   ModelCatalogEntry,
+  PlanRecord,
+  PlansListResult,
   PresenceEntry,
   ChannelsStatusSnapshot,
   SessionCompactionCheckpoint,
@@ -322,6 +324,16 @@ export class OpenClawApp extends LitElement {
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;
+  @state() plansLoading = false;
+  @state() plansError: string | null = null;
+  @state() plansResult: PlansListResult | null = null;
+  @state() plansSelectedId: string | null = null;
+  @state() plansStatusFilter: import("./controllers/plans.ts").PlanStatusFilter = "all";
+  @state() planDetailLoading = false;
+  @state() planDetailError: string | null = null;
+  @state() planDetail: PlanRecord | null = null;
+  @state() planStatusUpdating = false;
+  @state() planStatusError: string | null = null;
   @state() sessionsFilterActive = "";
   @state() sessionsFilterLimit = "120";
   @state() sessionsIncludeGlobal = true;

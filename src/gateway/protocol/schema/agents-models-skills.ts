@@ -345,6 +345,46 @@ export const ToolsCatalogParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const PlansListParamsSchema = Type.Object(
+  {
+    ownerKey: Type.Optional(NonEmptyString),
+    scopeKind: Type.Optional(
+      Type.Union([Type.Literal("session"), Type.Literal("agent"), Type.Literal("system")]),
+    ),
+    status: Type.Optional(
+      Type.Union([
+        Type.Literal("draft"),
+        Type.Literal("ready_for_review"),
+        Type.Literal("approved"),
+        Type.Literal("rejected"),
+        Type.Literal("archived"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const PlansGetParamsSchema = Type.Object(
+  {
+    planId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const PlansUpdateStatusParamsSchema = Type.Object(
+  {
+    planId: NonEmptyString,
+    status: Type.Union([
+      Type.Literal("draft"),
+      Type.Literal("ready_for_review"),
+      Type.Literal("approved"),
+      Type.Literal("rejected"),
+      Type.Literal("archived"),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
 export const ToolsEffectiveParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -374,6 +414,25 @@ export const ToolCatalogEntrySchema = Type.Object(
     source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
     pluginId: Type.Optional(NonEmptyString),
     optional: Type.Optional(Type.Boolean()),
+    activationMode: Type.Union([
+      Type.Literal("always"),
+      Type.Literal("optional"),
+      Type.Literal("deferred"),
+    ]),
+    executionScope: Type.Union([
+      Type.Literal("session"),
+      Type.Literal("subagent"),
+      Type.Literal("gateway"),
+      Type.Literal("unknown"),
+    ]),
+    operatorVisibility: Type.Union([
+      Type.Literal("normal"),
+      Type.Literal("advanced"),
+      Type.Literal("internal"),
+    ]),
+    bindableToSubagent: Type.Optional(Type.Boolean()),
+    policyHints: Type.Optional(Type.Array(NonEmptyString)),
+    category: Type.Optional(NonEmptyString),
     defaultProfiles: Type.Array(
       Type.Union([
         Type.Literal("minimal"),
@@ -402,6 +461,84 @@ export const ToolsCatalogResultSchema = Type.Object(
     agentId: NonEmptyString,
     profiles: Type.Array(ToolCatalogProfileSchema),
     groups: Type.Array(ToolCatalogGroupSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const PlanRecordSchema = Type.Object(
+  {
+    planId: NonEmptyString,
+    ownerKey: NonEmptyString,
+    scopeKind: Type.Union([Type.Literal("session"), Type.Literal("agent"), Type.Literal("system")]),
+    sessionKey: Type.Optional(NonEmptyString),
+    parentPlanId: Type.Optional(NonEmptyString),
+    title: NonEmptyString,
+    summary: Type.Optional(Type.String()),
+    content: Type.String(),
+    format: Type.Union([Type.Literal("markdown"), Type.Literal("text"), Type.Literal("json")]),
+    status: Type.Union([
+      Type.Literal("draft"),
+      Type.Literal("ready_for_review"),
+      Type.Literal("approved"),
+      Type.Literal("rejected"),
+      Type.Literal("archived"),
+    ]),
+    linkedFlowIds: Type.Optional(Type.Array(NonEmptyString)),
+    createdAt: Type.Integer({ minimum: 0 }),
+    updatedAt: Type.Integer({ minimum: 0 }),
+    reviewedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    approvedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    rejectedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    archivedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const PlanRegistrySummarySchema = Type.Object(
+  {
+    total: Type.Integer({ minimum: 0 }),
+    reviewable: Type.Integer({ minimum: 0 }),
+    terminal: Type.Integer({ minimum: 0 }),
+    byStatus: Type.Object(
+      {
+        draft: Type.Integer({ minimum: 0 }),
+        ready_for_review: Type.Integer({ minimum: 0 }),
+        approved: Type.Integer({ minimum: 0 }),
+        rejected: Type.Integer({ minimum: 0 }),
+        archived: Type.Integer({ minimum: 0 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const PlansListResultSchema = Type.Object(
+  {
+    count: Type.Integer({ minimum: 0 }),
+    summary: PlanRegistrySummarySchema,
+    plans: Type.Array(PlanRecordSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const PlansGetResultSchema = Type.Object(
+  {
+    plan: PlanRecordSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const PlansUpdateStatusResultSchema = Type.Object(
+  {
+    plan: PlanRecordSchema,
+    previousStatus: Type.Union([
+      Type.Literal("draft"),
+      Type.Literal("ready_for_review"),
+      Type.Literal("approved"),
+      Type.Literal("rejected"),
+      Type.Literal("archived"),
+    ]),
   },
   { additionalProperties: false },
 );
