@@ -267,10 +267,7 @@ export async function fetchCdpChecked(
         url,
         init: { ...init, headers },
         signal: ctrl.signal,
-        policy:
-          ssrfPolicy && Object.keys(ssrfPolicy).length > 0
-            ? ssrfPolicy
-            : { allowPrivateNetwork: true },
+        policy: ssrfPolicy ?? { allowPrivateNetwork: true },
         auditContext: "browser-cdp",
       });
       guardedRelease = guarded.release;

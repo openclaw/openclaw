@@ -143,9 +143,9 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     !allowedHostnames &&
     !hostnameAllowlist
   ) {
-    // Keep the default policy object present so CDP guards still enforce
-    // fail-closed private-network checks on unconfigured installs.
-    return {};
+    // No explicit SSRF policy configured. Return undefined so CDP helpers
+    // apply their default fallback ({ allowPrivateNetwork: true }).
+    return undefined;
   }
 
   return {
