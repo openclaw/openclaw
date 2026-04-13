@@ -319,6 +319,28 @@ describe("resolveGatewayReloadSettings", () => {
     const settings = resolveGatewayReloadSettings({});
     expect(settings.mode).toBe("hybrid");
     expect(settings.debounceMs).toBe(300);
+    expect(settings.fallbackToRestart).toBe(true);
+  });
+
+  it("parses fallbackToRestart=false", () => {
+    const settings = resolveGatewayReloadSettings({
+      gateway: { reload: { fallbackToRestart: false } },
+    });
+    expect(settings.fallbackToRestart).toBe(false);
+  });
+
+  it("parses fallbackToRestart=true", () => {
+    const settings = resolveGatewayReloadSettings({
+      gateway: { reload: { fallbackToRestart: true } },
+    });
+    expect(settings.fallbackToRestart).toBe(true);
+  });
+
+  it("defaults fallbackToRestart to true for non-boolean values", () => {
+    const settings = resolveGatewayReloadSettings({
+      gateway: { reload: { fallbackToRestart: "yes" as unknown as boolean } },
+    });
+    expect(settings.fallbackToRestart).toBe(true);
   });
 });
 
@@ -363,7 +385,10 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
 
 function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
-  options: { initialInternalWriteHash?: string | null } = {},
+  options: {
+    initialInternalWriteHash?: string | null;
+    initialConfig?: Record<string, unknown>;
+  } = {},
 ) {
   const watcher = createWatcherMock();
   vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
@@ -384,7 +409,7 @@ function createReloaderHarness(
     error: vi.fn(),
   };
   const reloader = startGatewayConfigReloader({
-    initialConfig: { gateway: { reload: { debounceMs: 0 } } },
+    initialConfig: options.initialConfig ?? { gateway: { reload: { debounceMs: 0 } } },
     initialInternalWriteHash: options.initialInternalWriteHash,
     readSnapshot,
     subscribeToWrites,
@@ -612,6 +637,84 @@ describe("startGatewayConfigReloader", () => {
 
     expect(readSnapshot).toHaveBeenCalledTimes(2);
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
+  });
+
+  it("hot mode with fallbackToRestart=true calls onRestart for restart-required changes", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0, mode: "hot", fallbackToRestart: true }, port: 19999 },
+        },
+        hash: "hot-fallback-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: {
+        gateway: { reload: { debounceMs: 0, mode: "hot", fallbackToRestart: true } },
+      },
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("hot mode falling back to restart"),
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("hot mode with fallbackToRestart=false does NOT call onRestart for restart-required changes", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: {
+            reload: { debounceMs: 0, mode: "hot", fallbackToRestart: false },
+            port: 19999,
+          },
+        },
+        hash: "hot-no-fallback-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: {
+        gateway: { reload: { debounceMs: 0, mode: "hot", fallbackToRestart: false } },
+      },
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("hot mode skipping restart-required changes"),
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("hybrid mode still restarts for restart-required changes regardless of fallbackToRestart", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0 }, port: 19999 },
+        },
+        hash: "hybrid-1",
+      }),
+    );
+    // Default mode is hybrid, fallbackToRestart irrelevant for hybrid.
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).not.toHaveBeenCalled();
 
     await harness.reloader.stop();
   });

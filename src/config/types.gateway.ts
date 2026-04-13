@@ -206,6 +206,12 @@ export type GatewayReloadConfig = {
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
   /**
+   * When true, `hot` mode falls back to a full gateway restart for changes
+   * that cannot be hot-reloaded. When false, those changes are silently
+   * ignored (legacy behavior). Default: true.
+   */
+  fallbackToRestart?: boolean;
+  /**
    * Maximum time (ms) to wait for in-flight operations to complete before
    * forcing a SIGUSR1 restart. Default: 300000 (5 minutes).
    * Lower values risk aborting active subagent LLM calls.
