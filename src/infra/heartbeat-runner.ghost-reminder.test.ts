@@ -121,6 +121,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {
           Provider?: string;
           Body?: string;
+          ForceSenderIsOwnerFalse?: boolean;
         } | null;
         return {
           result,
@@ -278,6 +279,44 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Provider).toBe("exec-event");
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("classifies hook:wake exec completions as exec-event prompts", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-hook-exec-",
+      replyText: "Handled internally",
+      reason: "hook:wake",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("exec finished: webhook-triggered backup completed", { sessionKey });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
+    expect(calledCtx?.Body).toContain("Handle the result internally");
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("forces owner downgrade for untrusted hook:wake system events", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-hook-untrusted-",
+      replyText: "Handled internally",
+      reason: "hook:wake",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
+          sessionKey,
+          trusted: false,
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 

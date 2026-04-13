@@ -538,7 +538,10 @@ async function resolveHeartbeatPreflight(params: {
     event.contextKey?.startsWith("cron:"),
   );
   const shouldInspectPendingEvents =
-    reasonFlags.isExecEventReason || reasonFlags.isCronEventReason || hasTaggedCronEvents;
+    reasonFlags.isExecEventReason ||
+    reasonFlags.isCronEventReason ||
+    reasonFlags.isWakeReason ||
+    hasTaggedCronEvents;
   const shouldBypassFileGates =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
@@ -802,6 +805,9 @@ export async function runHeartbeatOnce(opts: {
     startedAt,
     heartbeatFileContent: preflight.heartbeatFileContent,
   });
+  const hasUntrustedPendingEvents = preflight.pendingEventEntries.some(
+    (event) => event.trusted === false,
+  );
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -917,7 +923,7 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
-    ForceSenderIsOwnerFalse: hasExecCompletion,
+    ForceSenderIsOwnerFalse: hasExecCompletion || hasUntrustedPendingEvents,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
