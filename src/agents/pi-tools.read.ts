@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
   appendFileWithinRoot,
@@ -502,13 +501,13 @@ export function createOpenClawReadTool(
           }
 
           let mimeType: string;
-          if (ext === "mp3") mimeType = "audio/mpeg";
-          else if (ext === "wav") mimeType = "audio/wav";
-          else if (ext === "ogg") mimeType = "audio/ogg";
-          else if (ext === "m4a") mimeType = "audio/mp4";
-          else if (ext === "flac") mimeType = "audio/flac";
-          else if (ext === "aac") mimeType = "audio/aac";
-          else mimeType = "audio/ogg";
+          if (ext === "mp3") { mimeType = "audio/mpeg";}
+          else if (ext === "wav") { mimeType = "audio/wav";}
+          else if (ext === "ogg") { mimeType = "audio/ogg";}
+          else if (ext === "m4a") { mimeType = "audio/mp4";}
+          else if (ext === "flac") { mimeType = "audio/flac";}
+          else if (ext === "aac") { mimeType = "audio/aac";}
+          else { mimeType = "audio/ogg";}
 
           return {
             toolCallId,
@@ -539,12 +538,12 @@ export function createOpenClawReadTool(
           }
 
           let mimeType: string;
-          if (ext === "mp4") mimeType = "video/mp4";
-          else if (ext === "webm") mimeType = "video/webm";
-          else if (ext === "mov") mimeType = "video/quicktime";
-          else if (ext === "avi") mimeType = "video/x-msvideo";
-          else if (ext === "mkv") mimeType = "video/x-matroska";
-          else mimeType = "video/mp4";
+          if (ext === "mp4") { mimeType = "video/mp4";}
+          else if (ext === "webm") { mimeType = "video/webm";}
+          else if (ext === "mov") { mimeType = "video/quicktime";}
+          else if (ext === "avi") { mimeType = "video/x-msvideo";}
+          else if (ext === "mkv") { mimeType = "video/x-matroska";}
+          else { mimeType = "video/mp4";}
 
           return {
             toolCallId,
