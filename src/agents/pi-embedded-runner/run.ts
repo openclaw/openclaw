@@ -262,8 +262,14 @@ export async function runEmbeddedPiAgent(
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
 
+      const attachments = (params.images ?? []).map((img) => ({
+        kind: "image" as const,
+        mimeType: img.media_type,
+      }));
+
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
+        attachments: attachments.length > 0 ? attachments : undefined,
         provider,
         modelId,
         hookRunner,

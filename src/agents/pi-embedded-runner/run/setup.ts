@@ -26,7 +26,7 @@ type HookContext = {
 type HookRunnerLike = {
   hasHooks(hookName: string): boolean;
   runBeforeModelResolve(
-    input: { prompt: string },
+    input: { prompt: string; attachments?: { kind: string; mimeType?: string }[] },
     context: HookContext,
   ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
   runBeforeAgentStart(
@@ -37,6 +37,7 @@ type HookRunnerLike = {
 
 export async function resolveHookModelSelection(params: {
   prompt: string;
+  attachments?: { kind: string; mimeType?: string }[];
   provider: string;
   modelId: string;
   hookRunner?: HookRunnerLike | null;
@@ -56,7 +57,7 @@ export async function resolveHookModelSelection(params: {
   if (hookRunner?.hasHooks("before_model_resolve")) {
     try {
       modelResolveOverride = await hookRunner.runBeforeModelResolve(
-        { prompt: params.prompt },
+        { prompt: params.prompt, attachments: params.attachments },
         params.hookContext,
       );
     } catch (hookErr) {
