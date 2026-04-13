@@ -115,7 +115,8 @@ const signalApproveTestPlugin: ChannelPlugin = {
   approvalCapability: createResolvedApproverActionAuthAdapter({
     channelLabel: "Signal",
     resolveApprovers: ({ cfg, accountId }) => {
-      const signal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : cfg.channels?.signal;
+      const scopedSignal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : undefined;
+      const signal = scopedSignal ?? cfg.channels?.signal;
       return resolveApprovalApprovers({
         allowFrom: signal?.allowFrom,
         defaultTo: signal?.defaultTo,
