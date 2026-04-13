@@ -770,8 +770,9 @@ export function buildOpenAIResponsesParams(
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(metadata ? { metadata } : {}),
   };
-  if (options?.maxTokens) {
-    params.max_output_tokens = options.maxTokens;
+  const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+  if (effectiveMaxTokens) {
+    params.max_output_tokens = effectiveMaxTokens;
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
@@ -1304,11 +1305,14 @@ export function buildOpenAICompletionsParams(
   if (compat.supportsStore) {
     params.store = false;
   }
-  if (options?.maxTokens) {
-    if (compat.maxTokensField === "max_tokens") {
-      params.max_tokens = options.maxTokens;
-    } else {
-      params.max_completion_tokens = options.maxTokens;
+  {
+    const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+    if (effectiveMaxTokens) {
+      if (compat.maxTokensField === "max_tokens") {
+        params.max_tokens = effectiveMaxTokens;
+      } else {
+        params.max_completion_tokens = effectiveMaxTokens;
+      }
     }
   }
   if (options?.temperature !== undefined) {
