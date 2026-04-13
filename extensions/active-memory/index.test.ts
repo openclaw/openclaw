@@ -1174,6 +1174,33 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
+  it("caps active-memory log field lengths", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      logging: true,
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+    const hugeSession = `agent:main:${"x".repeat(500)}`;
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? long log value", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: hugeSession,
+        messageProvider: "webchat",
+      },
+    );
+
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    const startLine = infoLines.find((line: string) => line.includes(" start timeoutMs="));
+    expect(startLine).toBeTruthy();
+    expect(startLine && startLine.length < 500).toBe(true);
+    expect(startLine).toContain("...");
+  });
+
   it("uses a canonical agent session key when only sessionId is available", async () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
@@ -1544,6 +1571,39 @@ describe("active-memory plugin", () => {
     );
     expect(prompt).not.toContain("<active_memory_plugin>");
     expect(prompt).not.toContain("User prefers aisle seats and extra buffer on connections.");
+  });
+
+  it("does not drop ordinary user text when the active-memory tag appears inline without a matching block", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "what should i grab on the way?",
+        messages: [
+          {
+            role: "user",
+            content:
+              "i literally typed <active_memory_plugin> in chat and still have a flight tomorrow",
+          },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain(
+      "user: i literally typed <active_memory_plugin> in chat and still have a flight tomorrow",
+    );
   });
 
   it("trusts the subagent's relevance decision for explicit preference recall prompts", async () => {
