@@ -127,34 +127,34 @@ function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
   return lines;
 }
 
-function stripLeadingActiveMemoryPromptPrefix(lines: string[]): string[] {
-  let index = 0;
-  while (index < lines.length && lines[index]?.trim() === "") {
-    index += 1;
-  }
-  if (lines[index]?.trim() !== UNTRUSTED_CONTEXT_HEADER) {
-    return lines;
-  }
-  if (lines[index + 1]?.trim() !== ACTIVE_MEMORY_OPEN_TAG) {
-    return lines;
-  }
+function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
+  const result: string[] = [];
 
-  let closeIndex = -1;
-  for (let probe = index + 2; probe < lines.length; probe += 1) {
-    if (lines[probe]?.trim() === ACTIVE_MEMORY_CLOSE_TAG) {
-      closeIndex = probe;
-      break;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (
+      lines[index]?.trim() === UNTRUSTED_CONTEXT_HEADER &&
+      lines[index + 1]?.trim() === ACTIVE_MEMORY_OPEN_TAG
+    ) {
+      let closeIndex = -1;
+      for (let probe = index + 2; probe < lines.length; probe += 1) {
+        if (lines[probe]?.trim() === ACTIVE_MEMORY_CLOSE_TAG) {
+          closeIndex = probe;
+          break;
+        }
+      }
+      if (closeIndex !== -1) {
+        index = closeIndex;
+        while (index + 1 < lines.length && lines[index + 1]?.trim() === "") {
+          index += 1;
+        }
+        continue;
+      }
     }
-  }
-  if (closeIndex === -1) {
-    return lines;
+
+    result.push(lines[index]!);
   }
 
-  let next = closeIndex + 1;
-  while (next < lines.length && lines[next]?.trim() === "") {
-    next += 1;
-  }
-  return lines.slice(next);
+  return result;
 }
 
 /**
@@ -183,7 +183,7 @@ export function stripInboundMetadata(text: string): string {
   }
 
   const lines = withoutTimestamp.split("\n");
-  const strippedLeadingPrefixLines = stripLeadingActiveMemoryPromptPrefix(lines);
+  const strippedLeadingPrefixLines = stripActiveMemoryPromptPrefixBlocks(lines);
   const result: string[] = [];
   let inMetaBlock = false;
   let inFencedJson = false;
@@ -244,7 +244,7 @@ export function stripLeadingInboundMetadata(text: string): string {
     return text;
   }
 
-  const lines = stripLeadingActiveMemoryPromptPrefix(text.split("\n"));
+  const lines = stripActiveMemoryPromptPrefixBlocks(text.split("\n"));
   let index = 0;
 
   while (index < lines.length && lines[index] === "") {
