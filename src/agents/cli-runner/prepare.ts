@@ -18,6 +18,7 @@ import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
+import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-materialize.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -181,6 +182,22 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionAgentId,
   });
+  let reportTools: import("../pi-bundle-mcp-types.js").BundleMcpToolRuntime["tools"] = [];
+  if (backendResolved.bundleMcp && preparedBackend.reportMcpConfig) {
+    const reportToolRuntime = await createBundleMcpToolRuntime({
+      workspaceDir,
+      cfg: {
+        mcp: {
+          servers: preparedBackend.reportMcpConfig.mcpServers,
+        },
+      },
+    });
+    try {
+      reportTools = reportToolRuntime.tools;
+    } finally {
+      await reportToolRuntime.dispose();
+    }
+  }
   const builtSystemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
@@ -234,9 +251,8 @@ export async function prepareCliRunContext(
     bootstrapFiles,
     injectedFiles: contextFiles,
     skillsPrompt,
-    tools: [],
+    tools: reportTools,
   });
-
   return {
     params,
     started,

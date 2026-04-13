@@ -41,10 +41,11 @@ describe("runCliAgent bundle MCP e2e", () => {
       const sessionFile = path.join(tempHome, "session.jsonl");
       const binDir = path.join(tempHome, "bin");
       const serverScriptPath = path.join(tempHome, "mcp", "bundle-probe.mjs");
+      const exclusiveLockPath = path.join(tempHome, "mcp", "bundle-probe.lock");
       const fakeClaudePath = path.join(binDir, "fake-claude.mjs");
       const pluginRoot = path.join(tempHome, ".openclaw", "extensions", "bundle-probe");
       await fs.mkdir(workspaceDir, { recursive: true });
-      await writeBundleProbeMcpServer(serverScriptPath);
+      await writeBundleProbeMcpServer(serverScriptPath, { exclusiveLockPath });
       await writeFakeClaudeCli(fakeClaudePath);
       await writeClaudeBundle({ pluginRoot, serverScriptPath });
 
@@ -83,6 +84,14 @@ describe("runCliAgent bundle MCP e2e", () => {
 
         expect(result.payloads?.[0]?.text).toContain("BUNDLE MCP OK FROM-BUNDLE");
         expect(result.meta.agentMeta?.sessionId.length ?? 0).toBeGreaterThan(0);
+        expect(result.meta.systemPromptReport?.tools.entries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              name: "bundleProbe__bundle_probe",
+            }),
+          ]),
+        );
+        expect(result.meta.systemPromptReport?.tools.schemaChars ?? 0).toBeGreaterThan(0);
       } finally {
         await fs.rm(tempHome, { recursive: true, force: true });
         envSnapshot.restore();

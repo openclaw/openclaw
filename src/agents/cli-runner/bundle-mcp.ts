@@ -23,6 +23,8 @@ type PreparedCliBundleMcpConfig = {
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   env?: Record<string, string>;
+  mergedConfig?: BundleMcpConfig;
+  reportMcpConfig?: BundleMcpConfig;
 };
 
 function resolveBundleMcpMode(mode: CliBundleMcpMode | undefined): CliBundleMcpMode {
@@ -181,6 +183,57 @@ function resolveEnvPlaceholder(
   return decoded.bearer ? `Bearer ${resolved}` : resolved;
 }
 
+function resolveReportServerConfig(
+  server: BundleMcpServerConfig,
+  inheritedEnv: Record<string, string> | undefined,
+): BundleMcpServerConfig {
+  const next: BundleMcpServerConfig = { ...server };
+  const headers = normalizeStringRecord(next.headers);
+  if (headers) {
+    next.headers = Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name,
+        resolveEnvPlaceholder(value, inheritedEnv),
+      ]),
+    );
+  }
+  const env = normalizeStringRecord(next.env);
+  if (env) {
+    next.env = Object.fromEntries(
+      Object.entries(env).map(([name, value]) => [
+        name,
+        resolveEnvPlaceholder(value, inheritedEnv),
+      ]),
+    );
+  }
+  return next;
+}
+
+function resolveReportMcpConfig(
+  mergedConfig: BundleMcpConfig,
+  inheritedEnv: Record<string, string> | undefined,
+): BundleMcpConfig {
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(mergedConfig.mcpServers).map(([name, server]) => [
+        name,
+        resolveReportServerConfig(server, inheritedEnv),
+      ]),
+    ),
+  };
+}
+
+function mergeBundleMcpEnv(
+  backendEnv: Record<string, string> | undefined,
+  runtimeEnv: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  const merged = {
+    ...backendEnv,
+    ...runtimeEnv,
+  };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 function normalizeGeminiServerConfig(
   server: BundleMcpServerConfig,
   inheritedEnv: Record<string, string> | undefined,
@@ -220,6 +273,7 @@ function injectCodexMcpConfigArgs(args: string[] | undefined, config: BundleMcpC
 async function writeGeminiSystemSettings(
   mergedConfig: BundleMcpConfig,
   inheritedEnv: Record<string, string> | undefined,
+  runtimeEnv: Record<string, string> | undefined,
 ): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gemini-mcp-"));
   const settingsPath = path.join(tempDir, "settings.json");
@@ -246,7 +300,7 @@ async function writeGeminiSystemSettings(
   await fs.writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
   return {
     env: {
-      ...inheritedEnv,
+      ...runtimeEnv,
       GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath,
     },
     cleanup: async () => {
@@ -260,6 +314,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   backend: CliBackendConfig;
   mergedConfig: BundleMcpConfig;
   env?: Record<string, string>;
+  inheritedEnv?: Record<string, string>;
 }): Promise<PreparedCliBundleMcpConfig> {
   const serializedConfig = `${JSON.stringify(params.mergedConfig, null, 2)}\n`;
   const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
@@ -280,7 +335,11 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   }
 
   if (params.mode === "gemini-system-settings") {
-    const settings = await writeGeminiSystemSettings(params.mergedConfig, params.env);
+    const settings = await writeGeminiSystemSettings(
+      params.mergedConfig,
+      params.inheritedEnv,
+      params.env,
+    );
     return {
       backend: params.backend,
       mcpConfigHash,
@@ -352,10 +411,19 @@ export async function prepareCliBundleMcpConfig(params: {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
 
-  return await prepareModeSpecificBundleMcpConfig({
+  const inheritedEnv = mergeBundleMcpEnv(params.backend.env, params.env);
+
+  const prepared = await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
     mergedConfig,
     env: params.env,
+    inheritedEnv,
   });
+
+  return {
+    ...prepared,
+    mergedConfig,
+    reportMcpConfig: resolveReportMcpConfig(mergedConfig, inheritedEnv),
+  };
 }
