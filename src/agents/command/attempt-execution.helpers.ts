@@ -73,7 +73,7 @@ export function resolveFallbackRetryPrompt(params: {
   if (!params.sessionHasHistory) {
     return params.body;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  return `[Retry after previous model attempt failed or timed out.]\n\n${params.body}`;
 }
 
 export function createAcpVisibleTextAccumulator() {
