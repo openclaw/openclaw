@@ -13,7 +13,7 @@ type BlockReplyPipelineLike = NonNullable<
 >;
 
 describe("createBlockReplyDeliveryHandler", () => {
-  it("keeps captioned media-bearing block replies buffered when block streaming is disabled", async () => {
+  it("sends captioned media-bearing block replies with text when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
     const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
       text: payload.text,
@@ -40,8 +40,15 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: true,
     });
 
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(directlySentBlockKeys).toEqual(new Set());
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "here's the vibe",
+        mediaUrl: "/tmp/generated.png",
+        mediaUrls: ["/tmp/generated.png"],
+        replyToCurrent: true,
+      }),
+    );
+    expect(directlySentBlockKeys.size).toBe(1);
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
   });
 
@@ -85,8 +92,9 @@ describe("createBlockReplyDeliveryHandler", () => {
     );
   });
 
-  it("keeps text-only block replies buffered when block streaming is disabled", async () => {
+  it("sends text-only block replies immediately when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
 
     const handler = createBlockReplyDeliveryHandler({
       onBlockReply,
@@ -97,12 +105,15 @@ describe("createBlockReplyDeliveryHandler", () => {
       } as unknown as TypingSignaler,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
-      directlySentBlockKeys: new Set(),
+      directlySentBlockKeys,
     });
 
     await handler({ text: "text only" });
 
-    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "text only" }),
+    );
+    expect(directlySentBlockKeys.size).toBe(1);
   });
 
   it("trims leading whitespace in block-streamed replies", async () => {

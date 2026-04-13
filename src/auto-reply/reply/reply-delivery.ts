@@ -166,7 +166,16 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
+    } else {
+      // Block streaming disabled, text-only block: deliver progressively so that
+      // text arrives before tool calls rather than piling up in the final reply.
+      // Track sent keys so the final-reply dedup filters out already-delivered content.
+      await sendDirectBlockReply({
+        onBlockReply: params.onBlockReply,
+        directlySentBlockKeys: params.directlySentBlockKeys,
+        trackingPayload: blockPayload,
+        payload: blockPayload,
+      });
     }
-    // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };
 }
