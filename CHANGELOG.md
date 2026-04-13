@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/context engines: run opt-in turn maintenance as idle-aware background work so the next foreground turn no longer waits on proactive maintenance. (#65233) thanks @100yenadmin
 
+- Plugins/status: report the registered context-engine IDs in `plugins inspect` instead of the owning plugin ID, so non-matching engine IDs and multi-engine plugins are classified correctly. (#58766) thanks @zhuisDEV
 ## 2026.4.12
 
 ### Changes

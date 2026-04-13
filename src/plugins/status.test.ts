@@ -663,6 +663,7 @@ describe("plugin status reports", () => {
           id: "moon",
           name: "Moon",
           kind: "context-engine",
+          contextEngineIds: ["moon-engine"],
           hookCount: 1,
         }),
       ],
@@ -676,7 +677,7 @@ describe("plugin status reports", () => {
       capabilityMode: "plain",
       capabilityKinds: ["context-engine"],
     });
-    expect(inspect.capabilities).toEqual([{ kind: "context-engine", ids: ["moon"] }]);
+    expect(inspect.capabilities).toEqual([{ kind: "context-engine", ids: ["moon-engine"] }]);
     expect(inspect.compatibility).toEqual([]);
     expectNoCompatibilityWarnings();
   });

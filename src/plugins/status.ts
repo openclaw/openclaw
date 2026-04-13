@@ -253,7 +253,10 @@ function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
     {
       kind: "context-engine" as const,
-      ids: plugin.status === "loaded" && hasKind(plugin.kind, "context-engine") ? [plugin.id] : [],
+      ids:
+        plugin.status === "loaded" && hasKind(plugin.kind, "context-engine")
+          ? (plugin.contextEngineIds ?? [])
+          : [],
     },
     { kind: "channel" as const, ids: plugin.channelIds },
   ].filter((entry) => entry.ids.length > 0);
