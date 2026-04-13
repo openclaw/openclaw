@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../pi-hooks/context-pruning.js";
+import { getContextPruningRuntime } from "../pi-hooks/context-pruning/runtime.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -94,5 +95,52 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
 
     expect(factories).toContain(contextPruningExtension);
+  });
+
+  it("reduces keepLastAssistants to 1 when skillsSnapshot is present", () => {
+    const sessionManager = {} as SessionManager;
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            contextPruning: {
+              mode: "cache-ttl",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      model: { api: "anthropic-messages", contextWindow: 200_000 } as Model<Api>,
+      skillsSnapshot: { prompt: "test skill", skills: [{ name: "test" }] },
+    });
+
+    expect(factories).toContain(contextPruningExtension);
+    const runtime = getContextPruningRuntime(sessionManager);
+    expect(runtime?.settings.keepLastAssistants).toBe(1);
+  });
+
+  it("keeps default keepLastAssistants of 3 without skillsSnapshot", () => {
+    const sessionManager = {} as SessionManager;
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            contextPruning: {
+              mode: "cache-ttl",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      model: { api: "anthropic-messages", contextWindow: 200_000 } as Model<Api>,
+    });
+
+    expect(factories).toContain(contextPruningExtension);
+    const runtime = getContextPruningRuntime(sessionManager);
+    expect(runtime?.settings.keepLastAssistants).toBe(3);
   });
 });
