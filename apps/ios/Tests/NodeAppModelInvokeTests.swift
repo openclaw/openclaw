@@ -244,6 +244,10 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         let parsedFallback = NodeAppModel._test_extractA2UIHostError(from: hostFailNoError)
         #expect(parsedFallback == "host returned ok=false")
 
+        let hostFailEmptyError = #"{"ok":false,"error":""}"#
+        let parsedEmptyError = NodeAppModel._test_extractA2UIHostError(from: hostFailEmptyError)
+        #expect(parsedEmptyError == "host returned ok=false")
+
         let hostSuccess = #"{"ok":true}"#
         let parsedSuccess = NodeAppModel._test_extractA2UIHostError(from: hostSuccess)
         #expect(parsedSuccess == nil)
