@@ -158,5 +158,5 @@ export async function resolveCommandsSystemPromptBundle(
     memoryCitationsMode: params.cfg?.memory?.citations,
   });
 
-  return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };
+  return { systemPrompt, tools: tools as AgentTool[], skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };
 }

@@ -5,7 +5,7 @@ import type {
 } from "@mariozechner/pi-agent-core";
 
 // Use `unknown` for the schema type to bypass the constraint
-export type AnyAgentTool<TDetails = unknown> = AgentTool<unknown, TDetails>;
+export type AnyAgentTool<TDetails = unknown> = AgentTool<any, TDetails>;
 
 export type AgentToolResult<TDetails = unknown> = CoreAgentToolResult<TDetails>;
 

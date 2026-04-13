@@ -392,7 +392,7 @@ export function createOpenClawCodingTools(options?: {
         ];
       }
       const freshReadTool = createReadTool(workspaceRoot);
-      const wrapped = createOpenClawReadTool(freshReadTool, {
+      const wrapped = createOpenClawReadTool(freshReadTool as AnyAgentTool, {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,
       });

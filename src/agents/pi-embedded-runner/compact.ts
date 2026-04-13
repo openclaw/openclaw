@@ -527,7 +527,7 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
     const tools = normalizeProviderToolSchemas({
-      tools: toolsEnabled ? toolsRaw : [],
+      tools: toolsEnabled ? (toolsRaw as any[]) : [],
       provider,
       config: params.config,
       workspaceDir: effectiveWorkspace,
