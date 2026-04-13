@@ -59,8 +59,8 @@ Add this section to your `HEARTBEAT.md` file (after your mandatory checks):
 - Did I learn something about the environment, tools, or workflow?
 - If YES → write to `memory/YYYY-MM-DD.md` (daily log) AND update `MEMORY.md` if durable
 - If NO → skip silently
-- **Character limit:** MEMORY.md must stay under 8000 chars. If over, trim oldest/least relevant.
-- **SOUL.md and USER.md must also stay under 8000 chars.** Check `wc -c` before editing.
+- **Size limit:** MEMORY.md must stay under 8000 bytes. If over, trim oldest/least relevant.
+- **SOUL.md and USER.md must also stay under 8000 bytes.** Check `wc -c` before editing.
 
 ### 2. Skill Auto-Creation Check
 - Did I solve a non-trivial problem this session (5+ tool calls, trial-and-error, user correction)?
