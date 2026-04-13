@@ -99,7 +99,6 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   if (ctx.processedEventIds.has(dedupeKey)) {
     return;
   }
-  ctx.processedEventIds.add(dedupeKey);
 
   let call = findCall({
     activeCalls: ctx.activeCalls,
@@ -125,6 +124,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         );
         return;
       }
+      ctx.processedEventIds.add(dedupeKey);
       if (ctx.rejectedProviderCallIds.has(pid)) {
         return;
       }
@@ -138,6 +138,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           reason: "hangup-bot",
         })
         .catch((err) => {
+          ctx.rejectedProviderCallIds.delete(pid);
           const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
         });
@@ -159,6 +160,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   if (!call) {
     return;
   }
+
+  ctx.processedEventIds.add(dedupeKey);
 
   if (event.providerCallId && event.providerCallId !== call.providerCallId) {
     const previousProviderCallId = call.providerCallId;

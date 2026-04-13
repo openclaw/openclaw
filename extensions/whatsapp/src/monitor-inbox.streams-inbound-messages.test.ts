@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import {
   type InboxMonitorOptions,
   InboxOnMessage,
@@ -333,6 +334,47 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("flushes pending debounced inbound batches after close", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "second",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await listener.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await waitForMessageCalls(onMessage, 1);
+      expect(onMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: "first\nsecond",
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries timed-out sends on the same socket without clearing the socket ref", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
@@ -413,6 +455,33 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("retries redelivered messages after an explicit retryable inbound failure", async () => {
+    let attempts = 0;
+    const onMessage = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new WhatsAppRetryableInboundError("retry me");
+      }
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("retryable-dedupe"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 2);
 
     await listener.close();
   });

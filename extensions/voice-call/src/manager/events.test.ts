@@ -199,6 +199,48 @@ describe("processEvent (functional)", () => {
     expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
   });
 
+  it("does not burn replay keys for unknown calls before a later replay can resolve them", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    const event: NormalizedEvent = {
+      id: "evt-late-call",
+      dedupeKey: "stable-late-call",
+      type: "call.answered",
+      callId: "call-late",
+      providerCallId: "provider-late",
+      timestamp: now + 1,
+    };
+
+    processEvent(ctx, event);
+
+    expect(ctx.processedEventIds.size).toBe(0);
+
+    ctx.activeCalls.set("call-late", {
+      callId: "call-late",
+      providerCallId: "provider-late",
+      provider: "plivo",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550000002",
+      to: "+15550000000",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-late", "call-late");
+
+    processEvent(ctx, event);
+
+    const call = ctx.activeCalls.get("call-late");
+    if (!call) {
+      throw new Error("expected replayed event to resolve after call registration");
+    }
+    expect(call.state).toBe("answered");
+    expect(call.answeredAt).toBe(now + 1);
+    expect(Array.from(ctx.processedEventIds)).toEqual(["stable-late-call"]);
+  });
+
   it("invokes onCallAnswered hook for answered events", () => {
     const now = Date.now();
     let answeredCallId: string | null = null;

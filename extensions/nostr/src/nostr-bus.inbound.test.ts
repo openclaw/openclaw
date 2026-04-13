@@ -235,6 +235,32 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
+  it("retries a replayed event after the message handler fails", async () => {
+    const onMessage = vi
+      .fn<(sender: string, plaintext: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(undefined);
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      onMetric: () => {},
+    });
+
+    const event = createEvent({
+      id: "retry-after-handler-failure",
+    });
+
+    await emitEvent(event);
+    await emitEvent(event);
+
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(2);
+    expect(mockState.decrypt).toHaveBeenCalledTimes(2);
+    expect(onMessage).toHaveBeenCalledTimes(2);
+    expect(bus.getMetrics().eventsProcessed).toBe(1);
+
+    bus.close();
+  });
+
   it("does not rate limit an allowed sender while another authorization is still pending", async () => {
     const onMessage = vi.fn(async () => {});
     let resolveBlocked: ((value: "block") => void) | undefined;

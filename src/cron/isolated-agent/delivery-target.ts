@@ -1,4 +1,4 @@
-import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
@@ -177,7 +177,7 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  const channelPlugin = getLoadedChannelPlugin(channel);
+  const channelPlugin = getLoadedChannelPluginForRead(channel);
   const resolvedAccountId = normalizeAccountId(accountId);
   const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
     cfg,
