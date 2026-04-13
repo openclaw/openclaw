@@ -30,8 +30,8 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agent-scope.
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 import { isRemoteGatewayTargetForAgentTools } from "./gateway.js";
+import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
@@ -167,8 +167,15 @@ function isPluginDangerousFlagActive(
     cache: true,
   }).plugins.find((plugin) => plugin.id === pluginId);
   if (!manifestRecord) {
+    // When manifest is unavailable, check global and per-plugin enablement.
+    // Also respect plugins.deny to prevent false negatives when a dangerous plugin
+    // is explicitly blocked via deny list.
     const globalEnabled = (rootConfig.plugins as { enabled?: unknown } | undefined)?.enabled;
     if (globalEnabled === false) {
+      return false;
+    }
+    const denyList = (rootConfig.plugins as { deny?: unknown } | undefined)?.deny;
+    if (Array.isArray(denyList) && denyList.includes(pluginId)) {
       return false;
     }
     return (pluginEntry as { enabled?: unknown }).enabled !== false;
@@ -179,6 +186,9 @@ function isPluginDangerousFlagActive(
     config: rootConfig,
     plugins: normalizedPlugins,
   });
+  // Pass autoEnabledReason so that auto-activated plugins are correctly identified as active.
+  // Without this, provider-driven auto-enable paths could activate dangerous config without
+  // tripping the mutation guard.
   return resolvePluginActivationState({
     id: pluginId,
     origin: manifestRecord.origin,
@@ -300,20 +310,29 @@ function takeMatchingDangerousFlag(
   nextToken: DangerousFlagToken,
 ): boolean {
   const matchIndex = remainingCurrentTokens.findIndex((currentToken) => {
+    // Priority 1: id-vs-id match (explicit stable identity)
     if (currentToken.idIdentity && nextToken.idIdentity) {
       return currentToken.idIdentity === nextToken.idIdentity;
     }
+    // Priority 2: legacy mapping match (preserves identity when adding id to existing mapping)
+    // This handles the case where a legacy id-less mapping gains an id in the same write.
+    // The old token has legacyMappingIdentity but no idIdentity; the new token has both.
+    // Matching by legacyMappingIdentity ensures this is not treated as newly enabled.
     if (currentToken.legacyMappingIdentity && nextToken.legacyMappingIdentity) {
       return currentToken.legacyMappingIdentity === nextToken.legacyMappingIdentity;
     }
-    // When both tokens have a fingerprint (the mapping object existed in the config at tokenization
-    // time), match by fingerprint only — not by index. This prevents a swap of one dangerous
-    // mapping for a *different* dangerous mapping at the same array index from being treated as
-    // "already present" just because the index-based identity strings overlap.
-    if (currentToken.fingerprintIdentity && nextToken.fingerprintIdentity) {
+    // Priority 3: fingerprint match for id-less mappings (prevents swap attacks)
+    // When both tokens lack idIdentity but have fingerprints, match by fingerprint to detect
+    // when the same mapping object is being modified vs. replaced with a different one.
+    if (
+      !currentToken.idIdentity &&
+      !nextToken.idIdentity &&
+      currentToken.fingerprintIdentity &&
+      nextToken.fingerprintIdentity
+    ) {
       return currentToken.fingerprintIdentity === nextToken.fingerprintIdentity;
     }
-    // Fallback for index-only tokens (mapping object was absent from config at tokenization time).
+    // Fallback: index-based match for tokens where mapping object was absent at tokenization
     return currentToken.identities.some((identity) => nextToken.identities.includes(identity));
   });
   if (matchIndex < 0) {
@@ -424,6 +443,15 @@ function assertGatewayConfigMutationAllowed(params: {
       // channels.<id>.enabled activates bundled channel plugins via isBundledChannelEnabledByChannelConfig;
       // block channel config changes on remote gateways to close this activation path.
       "channels",
+      // Plugin auto-enable can be triggered through auth profiles, model providers, and agent defaults.
+      // Block these on remote gateways where local contract discovery cannot fully model host state.
+      "auth.profiles",
+      "models.providers",
+      "agents.defaults",
+      "agents.list",
+      // tools.web.fetch.provider controls which fetch provider is used; changes can activate
+      // provider-specific plugin contracts on the remote host.
+      "tools.web.fetch.provider",
     ] as const;
     const changedActivationPaths = REMOTE_PLUGIN_ACTIVATION_PATHS.filter(
       (path) =>

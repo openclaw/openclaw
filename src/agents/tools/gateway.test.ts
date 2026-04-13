@@ -34,7 +34,10 @@ const buildGatewayConnectionDetailsMock = vi.fn(
     }
     const fallbackLocal =
       gateway?.mode === "remote" &&
-      (!remote || typeof remote !== "object" || typeof remote.url !== "string" || !remote.url.trim());
+      (!remote ||
+        typeof remote !== "object" ||
+        typeof remote.url !== "string" ||
+        !remote.url.trim());
     return {
       url: "ws://127.0.0.1:18789",
       urlSource: fallbackLocal ? "missing gateway.remote.url (fallback local)" : "local loopback",
@@ -226,28 +229,30 @@ describe("gateway tool defaults", () => {
     expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
   });
 
-  it("treats OPENCLAW_GATEWAY_URL pointing to loopback as local when mode is not remote", () => {
+  it("treats OPENCLAW_GATEWAY_URL pointing to loopback as remote for mutation guards", () => {
+    // Even loopback URLs from env may be SSH tunnels or port forwards into a remote gateway.
+    // For mutation-guard purposes, treat all env URLs as remote to prevent bypasses.
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(false);
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
   });
 
-  it("treats non-canonical IPv4 loopback env targets as local when mode is not remote", () => {
+  it("treats non-canonical IPv4 loopback env targets as remote for mutation guards", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.2:18789";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(false);
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
   });
 
-  it("treats IPv4-mapped IPv6 loopback env targets as local when mode is not remote", () => {
+  it("treats IPv4-mapped IPv6 loopback env targets as remote for mutation guards", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://[::ffff:127.0.0.1]:18789";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(false);
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
   });
 
-  it("treats localhost env targets with a trailing dot as local when mode is not remote", () => {
+  it("treats localhost env targets with a trailing dot as remote for mutation guards", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://localhost.:18789";
 
-    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(false);
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
   });
 
   it("treats OPENCLAW_GATEWAY_URL pointing to loopback as remote when mode=remote (tunneled gateway)", () => {

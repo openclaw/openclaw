@@ -9,10 +9,7 @@ import {
 import { isLoopbackHost } from "../../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { readStringParam } from "./common.js";
 
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -159,8 +156,8 @@ export function isRemoteGatewayTargetForAgentTools(params: {
   config?: ReturnType<typeof loadConfig>;
   gatewayUrl?: string;
 }): boolean {
-  // Use live config when none is captured, so gateway.remote.url set in config file is detected
-  // even when the tool was created without a config snapshot.
+  // Always load config fresh when not explicitly provided. Using captured opts.config or {}
+  // allows bypasses when gateway.mode or gateway.remote.url changes during a session.
   const cfg = params.config ?? loadConfig();
   const override = trimToUndefined(params.gatewayUrl);
   if (override) {
@@ -188,20 +185,12 @@ export function isRemoteGatewayTargetForAgentTools(params: {
     }
   }
   const connectionDetails = buildGatewayConnectionDetails({ config: cfg });
-  // OPENCLAW_GATEWAY_URL may point to a loopback address for local dev setups. Only classify as
-  // remote when the resolved host is non-loopback, or when gateway.mode=remote is set (which
-  // means even loopback URLs may be SSH tunnels into a remote gateway — see tunneled-remote guard).
-  if (
-    connectionDetails.urlSource === "env OPENCLAW_GATEWAY_URL" &&
-    cfg.gateway?.mode !== "remote"
-  ) {
-    try {
-      if (isLoopbackHost(new URL(connectionDetails.url).hostname)) {
-        return false;
-      }
-    } catch {
-      // Malformed URL — fall through and treat as remote (conservative).
-    }
+  // For mutation-guard purposes, treat OPENCLAW_GATEWAY_URL as remote. Even loopback URLs from
+  // env may be SSH tunnels or port forwards into a remote gateway. The local-vs-remote distinction
+  // for loopback env URLs only applies to read operations; writes to plugin/channel config must be
+  // blocked when the target host is ambiguous.
+  if (connectionDetails.urlSource === "env OPENCLAW_GATEWAY_URL") {
+    return true;
   }
   return isRemoteAgentToolGatewayUrlSource(connectionDetails.urlSource);
 }
