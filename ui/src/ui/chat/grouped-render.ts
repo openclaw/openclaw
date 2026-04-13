@@ -6,7 +6,6 @@ import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
-import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type {
@@ -27,6 +26,7 @@ import {
   normalizeMessage,
   normalizeRoleForGrouping,
 } from "./message-normalizer.ts";
+import { setupResizeHandles, getStoredMessageSize } from "./message-resize.ts";
 import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
 import {
   extractToolCards,
@@ -35,7 +35,6 @@ import {
   renderToolCard,
   renderToolPreview,
 } from "./tool-cards.ts";
-import { setupResizeHandles, getStoredMessageSize } from "./message-resize.ts";
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
@@ -75,7 +74,9 @@ const DETAILS_STATE_KEY = "chat:details_state";
 function saveDetailsState(id: string, isOpen: boolean) {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) {return;}
+    if (!storage) {
+      return;
+    }
     const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
     state[id] = isOpen;
     storage.setItem(DETAILS_STATE_KEY, JSON.stringify(state));
@@ -85,9 +86,13 @@ function saveDetailsState(id: string, isOpen: boolean) {
 function getDetailsState(id: string): boolean {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) {return true;}
+    if (!storage) {
+      return true;
+    }
     const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
-    if (state[id] === undefined) {return true;}
+    if (state[id] === undefined) {
+      return true;
+    }
     return state[id] === true;
   } catch {
     return true;
@@ -99,7 +104,7 @@ function generateDetailsId(message: unknown, index: number): string {
   const id = m.id || m.messageId || m.timestamp;
   // Convert id to string safely
   // eslint-disable-next-line @typescript-eslint/no-base-to-string
-  const idString = id ? (typeof id === 'object' ? JSON.stringify(id) : String(id)) : 'unknown';
+  const idString = id ? (typeof id === "object" ? JSON.stringify(id) : String(id)) : "unknown";
   return `tool-${idString}-${index}`;
 }
 
@@ -125,8 +130,8 @@ function extractImages(message: unknown): ImageBlock[] {
           images.push({ url, filename, httpUrl: undefined });
         } else if (typeof b.url === "string") {
           const u = b.url;
-          const isMediaServerUrl = u.startsWith("http://localhost:18791/") || 
-                                 u.startsWith("http://127.0.0.1:18791/");
+          const isMediaServerUrl =
+            u.startsWith("http://localhost:18791/") || u.startsWith("http://127.0.0.1:18791/");
           const httpUrl = isMediaServerUrl ? u : undefined;
           const filename = typeof b.filename === "string" ? b.filename : u.split("/").pop();
           images.push({ url: u, filename, httpUrl });
@@ -135,8 +140,8 @@ function extractImages(message: unknown): ImageBlock[] {
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
           const u = imageUrl.url;
-          const isMediaServerUrl = u.startsWith("http://localhost:18791/") || 
-                                 u.startsWith("http://127.0.0.1:18791/");
+          const isMediaServerUrl =
+            u.startsWith("http://localhost:18791/") || u.startsWith("http://127.0.0.1:18791/");
           const httpUrl = isMediaServerUrl ? u : undefined;
           images.push({
             url: u,
@@ -685,9 +690,7 @@ function renderAvatar(
 }
 
 function isAvatarUrl(value: string): boolean {
-  return (
-    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/")
-  );
+  return /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/");
 }
 
 function renderMessageImages(images: ImageBlock[]) {
@@ -707,11 +710,11 @@ function renderMessageImages(images: ImageBlock[]) {
               @load=${(e: Event) => {
                 const imgEl = e.target as HTMLImageElement;
                 const naturalWidth = imgEl.naturalWidth;
-                
-                const bubble = imgEl.closest('.chat-bubble') as HTMLElement;
+
+                const bubble = imgEl.closest(".chat-bubble") as HTMLElement;
                 if (bubble && !bubble.style.width) {
                   let targetWidth: number;
-                  
+
                   if (naturalWidth >= 3840) {
                     targetWidth = 400;
                   } else if (naturalWidth >= 2560) {
@@ -727,7 +730,7 @@ function renderMessageImages(images: ImageBlock[]) {
                   } else {
                     targetWidth = Math.floor(naturalWidth * 0.8);
                   }
-                  
+
                   bubble.style.width = `${targetWidth}px`;
                 }
               }}
@@ -755,9 +758,19 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
 
   for (let i = 0; i < audioBlocks.length; i++) {
     const audio = audioBlocks[i];
+    // Add error handler to hide the "Unavailable" message
+    const handleError = (e: Event) => {
+      const audioEl = e.target as HTMLAudioElement;
+      const wrapper = audioEl.closest(".chat-media-wrapper");
+      if (wrapper) {
+        // Hide the entire audio player on error
+        (wrapper as HTMLElement).style.display = "none";
+      }
+    };
+
     elements.push(html`
       <div class="chat-media-wrapper">
-        <audio controls class="chat-message-audio">
+        <audio controls class="chat-message-audio" @error=${handleError}>
           <source src=${audio.data} type=${audio.mimeType} />
           Your browser does not support the audio element.
         </audio>
@@ -768,6 +781,14 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
 
   for (let i = 0; i < videoBlocks.length; i++) {
     const video = videoBlocks[i];
+    const handleError = (e: Event) => {
+      const videoEl = e.target as HTMLVideoElement;
+      const wrapper = videoEl.closest(".chat-media-wrapper");
+      if (wrapper) {
+        (wrapper as HTMLElement).style.display = "none";
+      }
+    };
+
     elements.push(html`
       <div class="chat-media-wrapper" style="width: 100%; max-width: 640px;">
         <video
@@ -775,6 +796,7 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
           class="chat-message-video"
           style="width: 100%; max-width: 640px; height: auto; max-height: 360px;"
           playsinline
+          @error=${handleError}
         >
           <source src=${video.data} type=${video.mimeType} />
           Your browser does not support the video element.
@@ -868,14 +890,16 @@ function renderCollapsedToolCards(
         <span class="chat-tools-summary__names">${summaryLabel}</span>
       </summary>
       <div class="chat-tools-collapse__body">
-        ${toolCards.map((card) => renderToolCard(card, {
-          expanded: false,
-          onToggleExpanded: () => {},
-          onOpenSidebar,
-          canvasHostUrl: null,
-          embedSandboxMode: "scripts",
-          allowExternalEmbedUrls: false,
-        }))}
+        ${toolCards.map((card) =>
+          renderToolCard(card, {
+            expanded: false,
+            onToggleExpanded: () => {},
+            onOpenSidebar,
+            canvasHostUrl: null,
+            embedSandboxMode: "scripts",
+            allowExternalEmbedUrls: false,
+          }),
+        )}
       </div>
     </details>
   `;
@@ -1120,6 +1144,15 @@ function renderAssistantAttachments(
   return html`
     <div class="chat-assistant-attachments">
       ${attachments.map(({ attachment }) => {
+        // Skip audio - handled by audio player
+        if (attachment.kind === "audio") {
+          return nothing;
+        }
+        // Skip image - handled by renderMessageImages
+        if (attachment.kind === "image") {
+          return nothing;
+        }
+
         const availability = resolveAssistantAttachmentAvailability(
           attachment.url,
           localMediaPreviewRoots,
@@ -1131,48 +1164,6 @@ function renderAssistantAttachments(
           availability.status === "available"
             ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
             : null;
-        if (attachment.kind === "image") {
-          if (!attachmentUrl) {
-            return renderAssistantAttachmentStatusCard({
-              kind: "image",
-              label: attachment.label,
-              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
-              reason: availability.status === "unavailable" ? availability.reason : undefined,
-            });
-          }
-          return html`
-            <img
-              src=${attachmentUrl}
-              alt=${attachment.label}
-              class="chat-message-image"
-              @click=${() => openExternalUrlSafe(attachmentUrl, { allowDataImage: true })}
-            />
-          `;
-        }
-        if (attachment.kind === "audio") {
-          return html`
-            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
-              <div class="chat-assistant-attachment-card__header">
-                <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
-                ${!attachmentUrl
-                  ? html`<span
-                      class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                      >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
-                    >`
-                  : attachment.isVoiceNote
-                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
-                    : nothing}
-              </div>
-              ${attachmentUrl
-                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
-                : availability.status === "unavailable"
-                  ? html`<div class="chat-assistant-attachment-card__reason">
-                      ${availability.reason}
-                    </div>`
-                  : nothing}
-            </div>
-          `;
-        }
         if (attachment.kind === "video") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({
@@ -1364,23 +1355,55 @@ function renderGroupedMessage(
 
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const isResizable = (role === "assistant" || role === "tool" || isToolResult) && !opts.isStreaming;
-  const messageId = (m.id || m.messageId || m.timestamp?.toString() || Date.now().toString()) as string;
+  const isResizable =
+    (role === "assistant" || role === "tool" || isToolResult) && !opts.isStreaming;
+  const messageId = (m.id ||
+    m.messageId ||
+    m.timestamp?.toString() ||
+    Date.now().toString()) as string;
   const storedSize = isResizable ? getStoredMessageSize(messageId) : null;
   const bubbleClasses = [
-    "chat-bubble", 
-    opts.isStreaming ? "streaming" : "", 
+    "chat-bubble",
+    opts.isStreaming ? "streaming" : "",
     "fade-in",
-    isResizable ? "chat-bubble-resizable" : ""
-  ].filter(Boolean).join(" ");
+    isResizable ? "chat-bubble-resizable" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   if (!markdown && hasToolCards && isToolResult && !hasMedia) {
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
-  if (!markdown && !visibleToolCards && !hasImages && assistantAttachments.length === 0 && 
-      assistantViewBlocks.length === 0 && !normalizedMessage.replyTarget && !hasMedia) {
+
+  // Check if there's any content to render
+  if (
+    !markdown &&
+    !visibleToolCards &&
+    !hasImages &&
+    assistantAttachments.length === 0 &&
+    assistantViewBlocks.length === 0 &&
+    !normalizedMessage.replyTarget &&
+    !hasMedia
+  ) {
+    return nothing;
+  }
+
+  // Check if after filtering audio/image attachments there's any real content
+  const hasNonMediaAttachments = assistantAttachments.some(
+    (att) => att.attachment.kind !== "audio" && att.attachment.kind !== "image",
+  );
+  const hasContentAfterFilter =
+    markdown ||
+    visibleToolCards ||
+    hasImages ||
+    hasNonMediaAttachments ||
+    assistantViewBlocks.length > 0 ||
+    normalizedMessage.replyTarget ||
+    hasMedia;
+
+  if (!hasContentAfterFilter) {
     return nothing;
   }
 
@@ -1401,19 +1424,22 @@ function renderGroupedMessage(
       : "Tool output";
 
   const hasActions = canCopyMarkdown || canExpand;
-  
-  const styleString = storedSize?.width
-    ? `width: ${storedSize.width}px;`
-    : '';
-  
+
+  const styleString = storedSize?.width ? `width: ${storedSize.width}px;` : "";
+
   const resizeRef = (el: Element | undefined) => {
-    if (!isResizable || !el) {return;}
-    // Ensure it's an HTMLElement before proceeding
-    if (!(el instanceof HTMLElement)) {return;}
-    if (el.hasAttribute('data-resize-initialized')) {return;}
-    el.setAttribute('data-resize-initialized', 'true');
+    if (!isResizable || !el) {
+      return;
+    }
+    if (!(el instanceof HTMLElement)) {
+      return;
+    }
+    if (el.hasAttribute("data-resize-initialized")) {
+      return;
+    }
+    el.setAttribute("data-resize-initialized", "true");
     setTimeout(() => {
-      setupResizeHandles(el, 'bottom-right', messageId);
+      setupResizeHandles(el, "bottom-right", messageId);
     }, 100);
   };
 
@@ -1421,11 +1447,7 @@ function renderGroupedMessage(
   const isOpen = getDetailsState(detailsId);
 
   return html`
-    <div 
-      class="${bubbleClasses}"
-      style="${styleString}"
-      ${ref(resizeRef)}
-    >
+    <div class="${bubbleClasses}" style="${styleString}" ${ref(resizeRef)}>
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">
@@ -1435,7 +1457,7 @@ function renderGroupedMessage(
         : nothing}
       ${isToolMessage
         ? html`
-            <details 
+            <details
               class="chat-tool-msg-collapse"
               ?open=${isOpen}
               @toggle=${(e: Event) => {
@@ -1443,11 +1465,11 @@ function renderGroupedMessage(
                 saveDetailsState(detailsId, details.open);
                 if (details.open) {
                   setTimeout(() => {
-                    details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    details.scrollIntoView({ behavior: "smooth", block: "nearest" });
                   }, 50);
                 }
               }}
->
+            >
               <summary class="chat-tool-msg-summary">
                 <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
                 <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
@@ -1458,8 +1480,7 @@ function renderGroupedMessage(
                     : nothing}
               </summary>
               <div class="chat-tool-msg-body">
-                ${renderMessageImages(images)}
-                ${renderMessageMedia(audioBlocks, videoBlocks)}
+                ${renderMessageImages(images)} ${renderMessageMedia(audioBlocks, videoBlocks)}
                 ${renderAssistantAttachments(
                   assistantAttachments,
                   opts.localMediaPreviewRoots ?? [],
@@ -1472,7 +1493,7 @@ function renderGroupedMessage(
                       ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                     </div>`
                   : nothing}
-                ${jsonResult
+                ${!hasMedia && jsonResult
                   ? html`<details class="chat-json-collapse">
                       <summary class="chat-json-summary">
                         <span class="chat-json-badge">JSON</span>
@@ -1480,7 +1501,7 @@ function renderGroupedMessage(
                       </summary>
                       <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                     </details>`
-                  : markdown
+                  : !hasMedia && markdown
                     ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                         ${markdown.trim().startsWith("<audio")
                           ? unsafeHTML(toSanitizedMarkdownHtml(markdown))
@@ -1514,8 +1535,7 @@ function renderGroupedMessage(
             </details>
           `
         : html`
-            ${renderMessageImages(images)}
-            ${renderMessageMedia(audioBlocks, videoBlocks)}
+            ${renderMessageImages(images)} ${renderMessageMedia(audioBlocks, videoBlocks)}
             ${renderAssistantAttachments(
               assistantAttachments,
               opts.localMediaPreviewRoots ?? [],
@@ -1539,7 +1559,7 @@ function renderGroupedMessage(
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
                 )}`
               : nothing}
-            ${jsonResult
+            ${!hasMedia && jsonResult
               ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
                     <span class="chat-json-badge">JSON</span>
@@ -1547,7 +1567,7 @@ function renderGroupedMessage(
                   </summary>
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
-              : markdown
+              : !hasMedia && markdown
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                     ${markdown.trim().startsWith("<audio")
                       ? unsafeHTML(toSanitizedMarkdownHtml(markdown))

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
   appendFileWithinRoot,
@@ -31,8 +30,12 @@ export {
 } from "./pi-tools.params.js";
 
 const normalizeToolParams = (params: unknown): Record<string, unknown> | undefined => {
-  if (!params) {return undefined;}
-  if (typeof params === "object") {return params as Record<string, unknown>;}
+  if (!params) {
+    return undefined;
+  }
+  if (typeof params === "object") {
+    return params as Record<string, unknown>;
+  }
   return undefined;
 };
 
@@ -298,32 +301,13 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 
 function getImageMimeType(ext: string): string {
-  if (ext === "svg") {return "image/svg+xml";}
-  if (ext === "jpg") {return "image/jpeg";}
+  if (ext === "svg") {
+    return "image/svg+xml";
+  }
+  if (ext === "jpg") {
+    return "image/jpeg";
+  }
   return `image/${ext}`;
-}
-
-function getAudioMimeType(ext: string): string {
-  switch (ext) {
-    case 'mp3': return 'audio/mpeg';
-    case 'wav': return 'audio/wav';
-    case 'ogg': return 'audio/ogg';
-    case 'm4a': return 'audio/mp4';
-    case 'flac': return 'audio/flac';
-    case 'aac': return 'audio/aac';
-    default: return 'audio/ogg';
-  }
-}
-
-function getVideoMimeType(ext: string): string {
-  switch (ext) {
-    case 'mp4': return 'video/mp4';
-    case 'webm': return 'video/webm';
-    case 'mov': return 'video/quicktime';
-    case 'avi': return 'video/x-msvideo';
-    case 'mkv': return 'video/x-matroska';
-    default: return 'video/mp4';
-  }
 }
 
 type SandboxToolParams = {
@@ -395,26 +379,28 @@ export function createOpenClawReadTool(
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
 
       let rawPath = typeof record?.path === "string" ? record.path : ".";
-      rawPath = rawPath.match(/[\x20-\x7E]/g)?.join('') || '';
+      rawPath = rawPath.match(/[\x20-\x7E]/g)?.join("") || "";
 
-      // Get paging parameters for text files
-      const offset = typeof record?.offset === 'number' ? record.offset : 0;
-      const limit = typeof record?.limit === 'number' ? record.limit : undefined;
+      // P1 FIX #3: Get paging parameters for text files
+      const offset = typeof record?.offset === "number" ? record.offset : 0;
+      const limit = typeof record?.limit === "number" ? record.limit : undefined;
 
       const rootDir = options?.root ? path.resolve(options.root) : process.cwd();
-      
+
       let inputPath: string;
-      
+
       if (path.isAbsolute(rawPath)) {
         inputPath = rawPath;
       } else {
         inputPath = path.resolve(rootDir, rawPath);
       }
-      
+
       try {
         await fs.access(inputPath);
       } catch {
-        const workspacePattern = new RegExp(`${rootDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(.+)`);
+        const workspacePattern = new RegExp(
+          `${rootDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(.+)`,
+        );
         const match = rawPath.match(workspacePattern);
         if (match) {
           const alternativePath = path.resolve(rootDir, match[1]);
@@ -428,19 +414,21 @@ export function createOpenClawReadTool(
       }
 
       try {
-        await assertSandboxPath({ 
-          filePath: inputPath, 
-          cwd: rootDir, 
-          root: rootDir 
+        await assertSandboxPath({
+          filePath: inputPath,
+          cwd: rootDir,
+          root: rootDir,
         });
       } catch (err) {
         const error = err as Error;
         return {
           toolCallId,
-          content: [{ 
-            type: "text", 
-            text: `Access denied: ${error.message}. File exists at ${inputPath} but cannot be accessed.` 
-          }],
+          content: [
+            {
+              type: "text",
+              text: `Access denied: ${error.message}. File exists at ${inputPath} but cannot be accessed.`,
+            },
+          ],
           details: { isError: true, path: inputPath },
         };
       }
@@ -460,18 +448,20 @@ export function createOpenClawReadTool(
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
         const mediaUrl = `http://localhost:18791${inputPath}`;
-        
-        // Handle images
+
+        // Handle images - keep base64 for images (they work)
         if (IMAGE_EXTENSIONS.has(ext)) {
           const fileBuffer = await fs.readFile(inputPath);
-          const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
-          if (fileBuffer.length > MAX_IMAGE_SIZE) {
+          // P1 FIX #1: Size cap for images
+          if (fileBuffer.length > 5242880) {
             return {
               toolCallId,
-              content: [{ 
-                type: "text", 
-                text: `Image too large to display inline (${formatBytes(fileBuffer.length)} > ${formatBytes(MAX_IMAGE_SIZE)} limit). Access via media URL: ${mediaUrl}` 
-              }],
+              content: [
+                {
+                  type: "text",
+                  text: `🖼️ ${fileName} - Image too large (${formatBytes(fileBuffer.length)}). View at: ${mediaUrl}`,
+                },
+              ],
               details: { path: inputPath, size: fileBuffer.length, truncated: true },
             };
           }
@@ -487,92 +477,122 @@ export function createOpenClawReadTool(
                   data: fileBuffer.toString("base64"),
                 },
               },
+              {
+                type: "text",
+                text: `📷 [${fileName}](${mediaUrl})`,
+              },
             ],
             details: { path: inputPath, size: fileBuffer.length },
-          } as unknown as AgentToolResult<unknown>;
+          };
         }
 
-        // Handle audio files
+        // Handle audio files - use URL streaming, NOT base64
         if (AUDIO_EXTENSIONS.has(ext)) {
-          const audioStats = await fs.stat(inputPath);
-          const MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10MB threshold for embedding
-          
-          // For large files, just return the URL without loading into memory
-          if (audioStats.size > MAX_AUDIO_SIZE) {
+          const MAX_AUDIO_SIZE = 10 * 1024 * 1024;
+          if (stats.size > MAX_AUDIO_SIZE) {
             return {
               toolCallId,
-              content: [{ 
-                type: "text", 
-                text: `🎵 ${fileName} - Audio file (${formatBytes(audioStats.size)}) available for streaming at: ${mediaUrl}` 
-              }],
-              details: { path: inputPath, size: audioStats.size, streamed: true },
+              content: [
+                {
+                  type: "text",
+                  text: `🎵 ${fileName} (${formatBytes(stats.size)}) - ${mediaUrl}`,
+                },
+              ],
+              details: { path: inputPath, size: stats.size, streamed: true },
             };
           }
-          
-          // For smaller files, load and embed
-          const fileBuffer = await fs.readFile(inputPath);
-          const mimeType = getAudioMimeType(ext);
+
+          let mimeType: string;
+          if (ext === "mp3") {
+            mimeType = "audio/mpeg";
+          } else if (ext === "wav") {
+            mimeType = "audio/wav";
+          } else if (ext === "ogg") {
+            mimeType = "audio/ogg";
+          } else if (ext === "m4a") {
+            mimeType = "audio/mp4";
+          } else if (ext === "flac") {
+            mimeType = "audio/flac";
+          } else if (ext === "aac") {
+            mimeType = "audio/aac";
+          } else {
+            mimeType = "audio/ogg";
+          }
+
           return {
             toolCallId,
             content: [
               {
                 type: "audio",
-                data: fileBuffer.toString("base64"),
+                url: mediaUrl,
                 mimeType: mimeType,
+                filename: fileName,
               },
             ],
-            details: { path: inputPath, size: fileBuffer.length },
-          } as unknown as AgentToolResult<unknown>;
+            details: { path: inputPath, size: stats.size },
+          };
         }
 
-        // Handle video files
+        // Handle video files - use URL streaming, NOT base64
         if (VIDEO_EXTENSIONS.has(ext)) {
-          const videoStats = await fs.stat(inputPath);
-          const MAX_VIDEO_SIZE = 10 * 1024 * 1024; // 10MB threshold for embedding
-          
-          // For large files, just return the URL without loading into memory
-          if (videoStats.size > MAX_VIDEO_SIZE) {
+          const MAX_VIDEO_SIZE = 10 * 1024 * 1024;
+          if (stats.size > MAX_VIDEO_SIZE) {
             return {
               toolCallId,
-              content: [{ 
-                type: "text", 
-                text: `🎬 ${fileName} - Video file (${formatBytes(videoStats.size)}) available for streaming at: ${mediaUrl}` 
-              }],
-              details: { path: inputPath, size: videoStats.size, streamed: true },
+              content: [
+                {
+                  type: "text",
+                  text: `🎬 ${fileName} (${formatBytes(stats.size)}) - ${mediaUrl}`,
+                },
+              ],
+              details: { path: inputPath, size: stats.size, streamed: true },
             };
           }
-          
-          // For smaller files, load and embed
-          const fileBuffer = await fs.readFile(inputPath);
-          const mimeType = getVideoMimeType(ext);
+
+          let mimeType: string;
+          if (ext === "mp4") {
+            mimeType = "video/mp4";
+          } else if (ext === "webm") {
+            mimeType = "video/webm";
+          } else if (ext === "mov") {
+            mimeType = "video/quicktime";
+          } else if (ext === "avi") {
+            mimeType = "video/x-msvideo";
+          } else if (ext === "mkv") {
+            mimeType = "video/x-matroska";
+          } else {
+            mimeType = "video/mp4";
+          }
+
           return {
             toolCallId,
             content: [
               {
                 type: "video",
-                data: fileBuffer.toString("base64"),
+                url: mediaUrl,
                 mimeType: mimeType,
+                filename: fileName,
               },
             ],
-            details: { path: inputPath, size: fileBuffer.length },
-          } as unknown as AgentToolResult<unknown>;
+            details: { path: inputPath, size: stats.size },
+          };
         }
 
-        // Handle text files with paging support
+        // Handle text files with P1 FIX #3 (offset/limit paging)
         const fileBuffer = await fs.readFile(inputPath, "utf-8");
         const maxChars = (options?.modelContextWindowTokens || 100000) * 4;
         let text = fileBuffer;
         let truncated = false;
 
-        // Apply offset and limit if provided (for paging)
         if (offset > 0 || limit !== undefined) {
-          const lines = text.split('\n');
+          const lines = text.split("\n");
           const start = Math.min(offset, lines.length);
           const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
-          text = lines.slice(start, end).join('\n');
+          text = lines.slice(start, end).join("\n");
           truncated = true;
         } else if (text.length > maxChars) {
-          text = text.slice(0, maxChars) + `\n\n[Truncated: File is ${formatBytes(fileBuffer.length)}]`;
+          text =
+            text.slice(0, maxChars) + `\n\n[Truncated: File is ${formatBytes(fileBuffer.length)}]`;
           truncated = true;
         }
 
@@ -581,12 +601,16 @@ export function createOpenClawReadTool(
           content: [{ type: "text", text }],
           details: { path: inputPath, size: fileBuffer.length, truncated, offset, limit },
         };
-        
       } catch (err) {
         const error = err as Error;
         return {
           toolCallId,
-          content: [{ type: "text", text: `Read failed: ${error.message}. File path attempted: ${inputPath}` }],
+          content: [
+            {
+              type: "text",
+              text: `Read failed: ${error.message}. File path attempted: ${inputPath}`,
+            },
+          ],
           details: { isError: true, path: inputPath },
         };
       }
