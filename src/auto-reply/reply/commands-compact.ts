@@ -112,7 +112,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const result = await runtime.compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    agentId: sessionAgentId,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     groupId: targetSessionEntry.groupId,
