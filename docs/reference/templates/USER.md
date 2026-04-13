@@ -12,7 +12,8 @@ _Learn about the person you're helping. Update this as you go._
 - **Name:**
 - **What to call them:**
 - **Pronouns:** _(optional)_
-- **Timezone:**
+- **City:** _(ask if unknown — used to derive timezone and for weather/local info)_.
+- **Timezone:** _(derived from city if possible; ask if unknown — needed for scheduling and quiet hours)**
 - **Notes:**
 
 ## Context
