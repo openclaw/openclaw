@@ -713,7 +713,7 @@ export async function attachWebInboxToSocket(
             { consecutiveFailures },
             "WA health probe: 3 consecutive failures, triggering reconnect",
           );
-          resolveClose({ status: "lost", isLoggedOut: false, error: "health probe failures" });
+          resolveClose({ status: 499, isLoggedOut: false, error: "health probe failures" });
         }
       } finally {
         if (timedOut && fetchPromise) {
