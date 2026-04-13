@@ -40,9 +40,7 @@ The self-hosted bot project can be downloaded from:
 - `https://selfhostbot.com`
 
 ## Required configuration
-
-Set these environment values in the active OpenClaw config (`$OPENCLAW_CONFIG_PATH`, default `~/.openclaw/openclaw.json`) or shell environment.
-
+- Example: `https://your-bot-host.example.com`
 - `CRYPTO_BOT_BINANCE_BASE_URL` (required)
   - Example: `https://bot.adduser.xyz`
 - `CRYPTO_BOT_BINANCE_TOKEN` (recommended; required for control endpoints if server token is configured)
