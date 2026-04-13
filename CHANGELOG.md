@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - Context engines: reject resolved plugin engines whose reported `info.id` does not match their registered slot id, so malformed engines fail fast before id-based runtime branches can misbehave. (#63222) Thanks @fuller-stack-dev.
 - WhatsApp: patch installed Baileys media encryption writes during OpenClaw postinstall so the default npm/install.sh delivery path waits for encrypted media files to finish flushing before readback, avoiding transient `ENOENT` crashes on image sends. (#65896) Thanks @frankekn.
 - Gateway/update: unify service entrypoint resolution around the canonical bundled gateway entrypoint so update, reinstall, and doctor repair stop drifting between stale `dist/entry.js` and current `dist/index.js` paths. (#65984) Thanks @mbelinky.
+
 ## 2026.4.12
 
 ### Changes
@@ -791,7 +792,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/SecretRef: resolve restart token drift checks with merged service/runtime env sources and hard-fail unsupported mutable SecretRef plus OAuth-profile combinations so restart warnings and policy enforcement match runtime behavior. (#58141) Thanks @joshavant.
 - Telegram/outbound chunking: use static markdown chunking when Telegram runtime state is unavailable so long outbound Telegram messages still split correctly after cold starts. (#57816) Thanks @ForestDengHK.
 - Update/Corepack: disable interactive Corepack download prompts during update preflight install unless `COREPACK_ENABLE_DOWNLOAD_PROMPT` is already explicitly set, so `openclaw update` can fetch the repo-pinned pnpm version non-interactively. (#61456) Thanks @p6l-richard.
-- Heartbeat/Telegram topics: keep isolated heartbeat replies on the bound forum topic when `target=last`, instead of dropping them into the group root chat.
+- Heartbeat/Telegram topics: keep isolated heartbeat replies on the bound forum topic when `target=last`, instead of dropping them into the group root chat. (#66035)
 
 ## 2026.4.2
 
