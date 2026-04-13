@@ -176,6 +176,26 @@ export async function loadModelCatalog(params?: {
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
 
+      // When models.mode is "replace", the user expects ONLY models from their
+      // explicitly configured providers to appear in the catalog (and the UI
+      // model-selector dropdown).  Filter out any built-in registry entries
+      // whose provider is not listed in cfg.models.providers.
+      if (cfg.models?.mode === "replace") {
+        const configuredProviders = cfg.models?.providers;
+        if (configuredProviders && typeof configuredProviders === "object") {
+          const allowedProviders = new Set(
+            Object.keys(configuredProviders).map((p) => normalizeProviderId(p)),
+          );
+          // Walk backwards so splice indices stay valid.
+          for (let i = models.length - 1; i >= 0; i--) {
+            if (!allowedProviders.has(normalizeProviderId(models[i].provider))) {
+              models.splice(i, 1);
+            }
+          }
+          logStage("replace-mode-filtered", `entries=${models.length}`);
+        }
+      }
+
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
         modelCatalogPromise = null;
