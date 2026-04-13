@@ -159,6 +159,13 @@ function buildTelegramConnectOptions(params: {
   return Object.keys(connect).length > 0 ? connect : null;
 }
 
+function shouldStartWithStickyIpv4Transport(params: {
+  autoSelectFamily: boolean | null;
+  dnsResultOrder: TelegramDnsResultOrder | null;
+}): boolean {
+  return params.autoSelectFamily === false && params.dnsResultOrder === "ipv4first";
+}
+
 function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
   const noProxyValue = env.no_proxy ?? env.NO_PROXY ?? "";
   if (!noProxyValue) {
@@ -433,8 +440,8 @@ export type TelegramTransport = {
 
 function createTelegramTransportAttempts(params: {
   defaultDispatcher: ReturnType<typeof createTelegramDispatcher>;
-  allowFallback: boolean;
-  fallbackPolicy?: PinnedDispatcherPolicy;
+  stickyFallbackPolicy?: PinnedDispatcherPolicy;
+  fallbackIpPolicy?: PinnedDispatcherPolicy;
 }): TelegramTransportAttempt[] {
   const attempts: TelegramTransportAttempt[] = [
     {
@@ -443,45 +450,34 @@ function createTelegramTransportAttempts(params: {
     },
   ];
 
-  if (!params.allowFallback || !params.fallbackPolicy) {
-    return attempts;
-  }
-  const fallbackPolicy = params.fallbackPolicy;
-
-  let ipv4Dispatcher: TelegramDispatcher | null = null;
-  attempts.push({
-    createDispatcher: () => {
-      if (!ipv4Dispatcher) {
-        ipv4Dispatcher = createTelegramDispatcher(fallbackPolicy).dispatcher;
-      }
-      return ipv4Dispatcher;
-    },
-    exportAttempt: { dispatcherPolicy: fallbackPolicy },
-    logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
-  });
-
-  if (TELEGRAM_FALLBACK_IPS.length === 0) {
-    return attempts;
+  if (params.stickyFallbackPolicy) {
+    const fallbackPolicy = params.stickyFallbackPolicy;
+    let ipv4Dispatcher: TelegramDispatcher | null = null;
+    attempts.push({
+      createDispatcher: () => {
+        if (!ipv4Dispatcher) {
+          ipv4Dispatcher = createTelegramDispatcher(fallbackPolicy).dispatcher;
+        }
+        return ipv4Dispatcher;
+      },
+      exportAttempt: { dispatcherPolicy: fallbackPolicy },
+      logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
+    });
   }
 
-  const fallbackIpPolicy: PinnedDispatcherPolicy = {
-    ...fallbackPolicy,
-    pinnedHostname: {
-      hostname: TELEGRAM_API_HOSTNAME,
-      addresses: [...TELEGRAM_FALLBACK_IPS],
-    },
-  };
-  let fallbackIpDispatcher: TelegramDispatcher | null = null;
-  attempts.push({
-    createDispatcher: () => {
-      if (!fallbackIpDispatcher) {
-        fallbackIpDispatcher = createTelegramDispatcher(fallbackIpPolicy).dispatcher;
-      }
-      return fallbackIpDispatcher;
-    },
-    exportAttempt: { dispatcherPolicy: fallbackIpPolicy },
-    logMessage: "fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP",
-  });
+  if (params.fallbackIpPolicy && TELEGRAM_FALLBACK_IPS.length > 0) {
+    let fallbackIpDispatcher: TelegramDispatcher | null = null;
+    attempts.push({
+      createDispatcher: () => {
+        if (!fallbackIpDispatcher) {
+          fallbackIpDispatcher = createTelegramDispatcher(params.fallbackIpPolicy!).dispatcher;
+        }
+        return fallbackIpDispatcher;
+      },
+      exportAttempt: { dispatcherPolicy: params.fallbackIpPolicy },
+      logMessage: "fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP",
+    });
+  }
 
   return attempts;
 }
@@ -522,19 +518,23 @@ export function resolveTelegramTransport(
   }
 
   const useEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  const startWithStickyIpv4Transport = shouldStartWithStickyIpv4Transport({
+    autoSelectFamily: autoSelectDecision.value,
+    dnsResultOrder,
+  });
   const defaultDispatcherResolution = resolveTelegramDispatcherPolicy({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
     useEnvProxy,
-    forceIpv4: false,
+    forceIpv4: startWithStickyIpv4Transport,
     proxyUrl: explicitProxyUrl,
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
   const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
-  const allowStickyFallback =
+  const allowIpv4Recovery =
     defaultDispatcher.mode === "direct" ||
     (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy);
-  const fallbackDispatcherPolicy = allowStickyFallback
+  const ipv4RecoveryPolicy = allowIpv4Recovery
     ? resolveTelegramDispatcherPolicy({
         autoSelectFamily: false,
         dnsResultOrder: "ipv4first",
@@ -543,10 +543,20 @@ export function resolveTelegramTransport(
         proxyUrl: explicitProxyUrl,
       }).policy
     : undefined;
+  const fallbackIpPolicy =
+    ipv4RecoveryPolicy && TELEGRAM_FALLBACK_IPS.length > 0
+      ? {
+          ...ipv4RecoveryPolicy,
+          pinnedHostname: {
+            hostname: TELEGRAM_API_HOSTNAME,
+            addresses: [...TELEGRAM_FALLBACK_IPS],
+          },
+        }
+      : undefined;
   const transportAttempts = createTelegramTransportAttempts({
     defaultDispatcher,
-    allowFallback: allowStickyFallback,
-    fallbackPolicy: fallbackDispatcherPolicy,
+    stickyFallbackPolicy: startWithStickyIpv4Transport ? undefined : ipv4RecoveryPolicy,
+    fallbackIpPolicy,
   });
 
   let stickyAttemptIndex = 0;

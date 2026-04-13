@@ -38,6 +38,8 @@ export function resolveCronSkillsSnapshot(params: {
     skillFilter,
     eligibility: {
       remote: getRemoteSkillEligibility({
+        cfg: params.config,
+        agentId: params.agentId,
         advertiseExecNode: canExecRequestNode({
           cfg: params.config,
           agentId: params.agentId,

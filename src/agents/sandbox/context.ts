@@ -61,6 +61,9 @@ async function ensureSandboxWorkspaceLayout(params: {
           agentId: params.agentId,
           eligibility: {
             remote: getRemoteSkillEligibility({
+              cfg: params.config,
+              sessionKey: rawSessionKey,
+              agentId: params.agentId,
               advertiseExecNode: canExecRequestNode({
                 cfg: params.config,
                 sessionKey: rawSessionKey,

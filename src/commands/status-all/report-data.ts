@@ -105,6 +105,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
               config: overview.cfg,
               eligibility: {
                 remote: getRemoteSkillEligibility({
+                  cfg: overview.cfg,
+                  agentId: overview.agentStatus.defaultId,
                   advertiseExecNode: canExecRequestNode({
                     cfg: overview.cfg,
                     agentId: overview.agentStatus.defaultId,

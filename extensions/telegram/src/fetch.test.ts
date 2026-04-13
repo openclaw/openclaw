@@ -328,6 +328,31 @@ describe("resolveTelegramFetch", () => {
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
   });
 
+  it("starts with IPv4-only transport when autoSelectFamily is disabled and dnsResultOrder is ipv4first", async () => {
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(AgentCtor).toHaveBeenCalledTimes(1);
+    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
+
+    const dispatcher = getDispatcherFromUndiciCall(1);
+    expect(dispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+        lookup: expect.any(Function),
+      }),
+    );
+  });
+
   it("emits default transport decisions at debug level", () => {
     resolveTelegramFetchOrThrow();
 
@@ -356,14 +381,16 @@ describe("resolveTelegramFetch", () => {
     const dispatcher = getDispatcherFromUndiciCall(1);
     expect(dispatcher?.options?.connect).toEqual(
       expect.objectContaining({
+        family: 4,
         autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
+        lookup: expect.any(Function),
       }),
     );
     expect(dispatcher?.options?.proxyTls).toEqual(
       expect.objectContaining({
+        family: 4,
         autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
+        lookup: expect.any(Function),
       }),
     );
   });

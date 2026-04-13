@@ -97,6 +97,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       config: cfg,
       eligibility: {
         remote: getRemoteSkillEligibility({
+          cfg,
+          agentId,
           advertiseExecNode: canExecRequestNode({
             cfg,
             agentId,
