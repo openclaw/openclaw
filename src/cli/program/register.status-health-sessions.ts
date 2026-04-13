@@ -50,6 +50,19 @@ async function runWithVerboseAndTimeout(
 }
 
 export function registerStatusHealthSessionsCommands(program: Command) {
+  // 'flows' is not a top-level command; the correct command is 'tasks flow'.
+  // This alias prevents an infinite loop when users run 'openclaw flows --help'
+  // and ensures a clear error message is shown.
+  program
+    .command("flows")
+    .description("TaskFlow commands are under 'tasks flow'; use 'openclaw tasks flow'")
+    .action(() => {
+      defaultRuntime.error(
+        "The 'flows' command is not a top-level command. Use 'openclaw tasks flow list', 'openclaw tasks flow show', or 'openclaw tasks flow cancel' instead.",
+      );
+      defaultRuntime.exit(1);
+    });
+
   program
     .command("status")
     .description("Show channel health and recent session recipients")

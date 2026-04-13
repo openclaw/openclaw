@@ -354,10 +354,12 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
   });
 
-  it("does not register the legacy top-level flows command", () => {
+  it("registers flows command that shows error with guidance to use tasks flow", () => {
     const program = new Command();
     registerStatusHealthSessionsCommands(program);
 
-    expect(program.commands.find((command) => command.name() === "flows")).toBeUndefined();
+    const flowsCommand = program.commands.find((command) => command.name() === "flows");
+    expect(flowsCommand).toBeDefined();
+    expect(flowsCommand?.description()).toContain("TaskFlow commands are under 'tasks flow'");
   });
 });

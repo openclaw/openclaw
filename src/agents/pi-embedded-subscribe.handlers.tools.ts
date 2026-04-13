@@ -573,23 +573,6 @@ export function handleToolExecutionStart(
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
 
-    if (toolName === "read") {
-      const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-      const filePathValue =
-        typeof record.path === "string"
-          ? record.path
-          : typeof record.file_path === "string"
-            ? record.file_path
-            : "";
-      const filePath = filePathValue.trim();
-      if (!filePath) {
-        const argsPreview = readStringValue(args)?.slice(0, 200);
-        ctx.log.warn(
-          `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
-        );
-      }
-    }
-
     const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
     ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
     ctx.log.debug(
