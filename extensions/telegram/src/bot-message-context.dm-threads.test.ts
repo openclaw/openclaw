@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetTopicNameCacheForTest } from "./topic-name-cache.js";
 const { recordInboundSessionMock } = vi.hoisted(() => ({
   recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
 }));
@@ -34,10 +38,12 @@ const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
 
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
+  resetTopicNameCacheForTest();
 });
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  resetTopicNameCacheForTest();
   recordInboundSessionMock.mockClear();
 });
 
@@ -160,6 +166,52 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+  });
+
+  it("reloads topic name from disk after cache reset", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-topic-name-"));
+    const sessionStorePath = path.join(tempDir, "sessions.json");
+    const buildPersistedContext = async (message: Record<string, unknown>) =>
+      await buildTelegramMessageContextForTest({
+        message,
+        options: { forceWasMentioned: true },
+        resolveGroupActivation: () => true,
+        sessionRuntime: {
+          resolveStorePath: () => sessionStorePath,
+        },
+      });
+
+    try {
+      await buildPersistedContext({
+        message_id: 4,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+        date: 1700000003,
+        text: "@bot hello",
+        message_thread_id: 99,
+        from: { id: 42, first_name: "Alice" },
+        reply_to_message: {
+          message_id: 3,
+          forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
+        },
+      });
+
+      resetTopicNameCacheForTest();
+
+      const ctx = await buildPersistedContext({
+        message_id: 5,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+        date: 1700000004,
+        text: "@bot again",
+        message_thread_id: 99,
+        from: { id: 42, first_name: "Alice" },
+      });
+
+      expect(ctx).not.toBeNull();
+      expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      resetTopicNameCacheForTest();
+    }
   });
 });
 
