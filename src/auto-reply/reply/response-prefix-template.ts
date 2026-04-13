@@ -18,6 +18,10 @@ export type ResponsePrefixContext = {
   thinkingLevel?: string;
   /** Agent identity name */
   identityName?: string;
+  /** Context window usage in tokens (e.g., "15k" or "15000") */
+  context?: string;
+  /** Context usage as percentage (e.g., "75" for 75%) */
+  contextPercent?: string;
 };
 
 // Regex pattern for template variables: {variableName} or {variable.name}
@@ -61,6 +65,10 @@ export function resolveResponsePrefixTemplate(
       case "identity.name":
       case "identityname":
         return context.identityName ?? match;
+      case "context":
+        return context.context ?? match;
+      case "contextpercent":
+        return context.contextPercent ?? match;
       default:
         // Leave unrecognized variables as-is
         return match;
