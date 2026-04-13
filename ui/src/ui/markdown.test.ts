@@ -30,6 +30,16 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("console.log(1)");
   });
 
+  it("copy button hides 'Copied!' text by default (#50756)", () => {
+    const html = toSanitizedMarkdownHtml(["```ts", "const x = 1", "```"].join("\n"));
+    // The done span must carry the hidden attribute so it is invisible
+    // even before CSS loads, preventing the "CopyCopied!" regression.
+    expect(html).toContain('class="code-block-copy__done" hidden');
+    expect(html).toContain('class="code-block-copy__idle"');
+    // Idle span must NOT be hidden
+    expect(html).not.toMatch(/code-block-copy__idle[^>]*hidden/);
+  });
+
   it("flattens remote markdown images into alt text", () => {
     const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
     expect(html).not.toContain("<img");
