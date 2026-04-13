@@ -9,6 +9,7 @@
  */
 
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export type ModelCostTier = "economy" | "standard" | "premium";
 
@@ -71,7 +72,7 @@ function splitModelRef(model: string): { provider: string; modelId: string } {
 }
 
 function normalizeProvider(provider: string): string {
-  return provider.trim().toLowerCase();
+  return normalizeProviderId(provider);
 }
 
 function resolveCatalogProvider(model: string, catalog: ModelCatalogEntry[]): string | null {
