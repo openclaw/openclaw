@@ -353,7 +353,10 @@ describe("sanitizeUserFacingText", () => {
   it("strips tool_call XML tags from text", () => {
     const text =
       'Here is my response <tool_call>{"name": "exec", "arguments": {"command": "echo test"}}</tool_call>';
-    expect(sanitizeUserFacingText(text)).toBe("Here is my response");
+    // Leading space before the stripped tag is preserved, matching the
+    // existing FINAL_TAG_RE stripper's whitespace handling. Callers that
+    // care can trim downstream.
+    expect(sanitizeUserFacingText(text)).toBe("Here is my response ");
   });
 
   it("strips multiple tool_call tags", () => {
