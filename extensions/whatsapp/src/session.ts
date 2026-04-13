@@ -4,7 +4,6 @@ import type { Agent } from "node:https";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
-import { renderQrAscii } from "openclaw/plugin-sdk/media-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
@@ -22,6 +21,7 @@ import {
   writeCredsJsonAtomically,
   type CredsQueueWaitResult,
 } from "./creds-persistence.js";
+import { renderQrTerminal } from "./qr-terminal.js";
 import { formatError, getStatusCode } from "./session-errors.js";
 import {
   DisconnectReason,
@@ -110,7 +110,7 @@ async function safeSaveCreds(
 }
 
 async function printTerminalQr(qr: string): Promise<void> {
-  const output = await renderQrAscii(qr);
+  const output = await renderQrTerminal(qr, { small: true });
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 

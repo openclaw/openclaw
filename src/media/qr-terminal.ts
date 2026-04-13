@@ -1,6 +1,6 @@
 import { loadQrCodeTuiRuntime } from "./qr-runtime.ts";
 
-export async function renderQrAscii(
+export async function renderQrTerminal(
   input: string,
   opts: { small?: boolean } = {},
 ): Promise<string> {

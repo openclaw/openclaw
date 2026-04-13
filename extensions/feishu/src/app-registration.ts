@@ -5,9 +5,8 @@
  * Replaces axios with native fetch, removes inquirer/ora/chalk in favor of
  * the openclaw WizardPrompter surface.
  */
-
-import { renderQrAscii } from "openclaw/plugin-sdk/media-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -253,7 +252,7 @@ export async function pollAppRegistration(params: {
  * otherwise the pattern is corrupted and cannot be scanned.
  */
 export async function printQrCode(url: string): Promise<void> {
-  const output = await renderQrAscii(url);
+  const output = await renderQrTerminal(url, { small: true });
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 

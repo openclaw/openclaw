@@ -610,8 +610,8 @@ vi.mock("./session.runtime.js", () => {
   };
 });
 
-vi.mock("@vincentkoc/qrcode-tui", () => ({
-  renderTerminal: vi.fn(async () => "ASCII-QR"),
+vi.mock("./qr-terminal.js", () => ({
+  renderQrTerminal: vi.fn(async () => "ASCII-QR"),
 }));
 
 export const baileys = await import("./session.runtime.js");

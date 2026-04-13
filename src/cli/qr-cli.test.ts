@@ -25,6 +25,9 @@ vi.mock("../runtime.js", async () => {
 });
 vi.mock("../config/config.js", () => ({ loadConfig: mocks.loadConfig }));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
+vi.mock("../media/qr-terminal.ts", () => ({
+  renderQrTerminal: mocks.renderTerminal,
+}));
 vi.mock("./command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
@@ -34,10 +37,6 @@ vi.mock("../infra/device-bootstrap.js", () => ({
     expiresAtMs: 123,
   })),
 }));
-vi.mock("@vincentkoc/qrcode-tui", () => ({
-  renderTerminal: mocks.renderTerminal,
-}));
-
 const loadConfig = mocks.loadConfig;
 const runCommandWithTimeout = mocks.runCommandWithTimeout;
 const resolveCommandSecretRefsViaGateway = mocks.resolveCommandSecretRefsViaGateway;
