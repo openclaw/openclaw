@@ -55,6 +55,8 @@ describe("qqbot file-utils downloadFile", () => {
         "*.ugcimg.cn",
         "*.myqcloud.com",
         "*.tencentcos.cn",
+        "*.myqcloud.com",
+        "*.tencentcos.com",
       ],
       allowRfc2544BenchmarkRange: true,
     });
