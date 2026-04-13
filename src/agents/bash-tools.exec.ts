@@ -175,6 +175,109 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+const MAIN_HOST_LEVEL_OPENCLAW_COMMAND = new RegExp(
+  String.raw`(?:^|[;\n]|&&|\|\|)\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*(?:openclaw\b|/Users/[^/\s]+/\.openclaw/scripts/ops-host-openclaw\.sh\b|/Users/[^/\s]+/openclaw/openclaw\.mjs\b|/Users/[^/\s]+/\.npm-global/bin/openclaw\b)`,
+  "u",
+);
+const MAIN_HOST_LEVEL_OPENCLAW_WRAPPER =
+  /\/Users\/[^/\s]+\/\.openclaw\/scripts\/ops-host-openclaw\.sh$/u;
+const MAIN_HOST_LEVEL_OPENCLAW_MJS = /\/Users\/[^/\s]+\/openclaw\/openclaw\.mjs$/u;
+const MAIN_HOST_LEVEL_OPENCLAW_NPM_BIN = /\/Users\/[^/\s]+\/\.npm-global\/bin\/openclaw$/u;
+
+function stripLeadingEnvAssignments(argv: string[]): string[] {
+  let index = 0;
+  while (index < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=.*/u.test(argv[index] ?? "")) {
+    index += 1;
+  }
+  return argv.slice(index);
+}
+
+function isHostLevelOpenClawBinary(token?: string): boolean {
+  if (!token) {
+    return false;
+  }
+  return (
+    token === "openclaw" ||
+    MAIN_HOST_LEVEL_OPENCLAW_MJS.test(token) ||
+    MAIN_HOST_LEVEL_OPENCLAW_NPM_BIN.test(token) ||
+    MAIN_HOST_LEVEL_OPENCLAW_WRAPPER.test(token)
+  );
+}
+
+function isAllowedMainHostLevelOpenClawSelfInspectionArgv(argv: string[]): boolean {
+  const stripped = stripLeadingEnvAssignments(argv);
+  const [bin, subcommand, noun, ...rest] = stripped;
+  if (!bin || !isHostLevelOpenClawBinary(bin) || MAIN_HOST_LEVEL_OPENCLAW_WRAPPER.test(bin)) {
+    return false;
+  }
+  if (subcommand === "status") {
+    return true;
+  }
+  if (subcommand === "gateway" && noun === "status") {
+    return true;
+  }
+  if (subcommand === "doctor") {
+    return noun !== "--fix" && !rest.includes("--fix");
+  }
+  if (subcommand === "cron" && noun === "list") {
+    return true;
+  }
+  if (subcommand === "tasks" && noun === "list") {
+    return true;
+  }
+  if (subcommand === "memory" && noun === "status") {
+    return true;
+  }
+  return false;
+}
+
+function isAllowedMainHostLevelOpenClawSelfInspectionCommand(command: string): boolean {
+  const analysis = analyzeShellCommand({ command: command.trim() });
+  if (!analysis.ok || analysis.segments.length === 0) {
+    return false;
+  }
+  let sawOpenClaw = false;
+  for (const segment of analysis.segments) {
+    const [bin] = stripLeadingEnvAssignments(segment.argv);
+    if (!isHostLevelOpenClawBinary(bin)) {
+      return false;
+    }
+    sawOpenClaw = true;
+    if (!isAllowedMainHostLevelOpenClawSelfInspectionArgv(segment.argv)) {
+      return false;
+    }
+  }
+  return sawOpenClaw;
+}
+
+function assertMainHostLevelOpenClawBoundary(params: {
+  agentId?: string;
+  host: ExecHost;
+  command: string;
+  sandboxEnabled: boolean;
+  security: "deny" | "allowlist" | "full";
+}): void {
+  if (params.agentId !== "main" || params.host === "sandbox") {
+    return;
+  }
+  if (!MAIN_HOST_LEVEL_OPENCLAW_COMMAND.test(params.command)) {
+    return;
+  }
+  if (
+    !params.sandboxEnabled &&
+    params.security === "full" &&
+    isAllowedMainHostLevelOpenClawSelfInspectionCommand(params.command)
+  ) {
+    return;
+  }
+  throw new Error(
+    [
+      "main cannot run host-level OpenClaw commands directly.",
+      "Delegate bounded runtime inspection to ops, and route approved host mutation through ops or warden.",
+    ].join("\n"),
+  );
+}
+
 type ParsedExecApprovalCommand = {
   approvalId: string;
   decision: "allow-once" | "allow-always" | "deny";
@@ -604,6 +707,13 @@ export function createExecTool(
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
+      assertMainHostLevelOpenClawBoundary({
+        agentId,
+        host,
+        command: params.command,
+        sandboxEnabled: Boolean(defaults?.sandbox),
+        security,
+      });
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
       const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "on-miss";
       const requestedAsk = normalizeExecAsk(params.ask);

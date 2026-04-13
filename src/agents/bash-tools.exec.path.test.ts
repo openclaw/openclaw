@@ -287,6 +287,92 @@ describe("exec host env validation", () => {
   });
 
   it.each([
+    "/Users/test/.npm-global/bin/openclaw status",
+    "/Users/test/.npm-global/bin/openclaw gateway status",
+    "/Users/test/.npm-global/bin/openclaw doctor",
+    "/Users/test/.npm-global/bin/openclaw cron list",
+    "/Users/test/.npm-global/bin/openclaw tasks list",
+    "/Users/test/.npm-global/bin/openclaw memory status --deep",
+  ])(
+    "allows main read-only host-level OpenClaw self-inspection when unsandboxed and full-trust: %s",
+    async (command) => {
+      const tool = createExecTool({
+        agentId: "main",
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      });
+
+      const result = await tool.execute("call-main-host-openclaw", {
+        command,
+      });
+      const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+      expect(text).not.toContain("main cannot run host-level OpenClaw commands directly");
+      expect(text).not.toContain("Delegate bounded runtime inspection to ops");
+    },
+  );
+
+  it("keeps main blocked from host-level OpenClaw self-inspection when full trust is not enabled", async () => {
+    const tool = createExecTool({
+      agentId: "main",
+      host: "gateway",
+      security: "allowlist",
+      ask: "off",
+    });
+
+    await expect(
+      tool.execute("call-main-host-openclaw-restricted", {
+        command: "openclaw status",
+      }),
+    ).rejects.toThrow(/main cannot run host-level OpenClaw commands directly/);
+  });
+
+  it("blocks mixed shell commands even when the OpenClaw subcommand is read-only", async () => {
+    const tool = createExecTool({
+      agentId: "main",
+      host: "gateway",
+      security: "full",
+      ask: "off",
+    });
+
+    await expect(
+      tool.execute("call-main-host-openclaw-mixed", {
+        command: "openclaw status && echo ok",
+      }),
+    ).rejects.toThrow(/main cannot run host-level OpenClaw commands directly/);
+  });
+
+  it("blocks mutating host-level OpenClaw commands for main", async () => {
+    const tool = createExecTool({
+      agentId: "main",
+      host: "gateway",
+      security: "full",
+      ask: "off",
+    });
+
+    await expect(
+      tool.execute("call-main-host-openclaw-update", {
+        command: "openclaw update",
+      }),
+    ).rejects.toThrow(/main cannot run host-level OpenClaw commands directly/);
+  });
+
+  it("blocks main from invoking the managed host wrapper directly", async () => {
+    const tool = createExecTool({
+      agentId: "main",
+      host: "gateway",
+      security: "full",
+      ask: "off",
+    });
+
+    await expect(
+      tool.execute("call-main-host-wrapper", {
+        command: "/Users/admin/.openclaw/scripts/ops-host-openclaw.sh --json host-status",
+      }),
+    ).rejects.toThrow(/Delegate bounded runtime inspection to ops/);
+  });
+
+  it.each([
     "echo ok && /approve abc123 allow-once",
     "echo ok | /approve abc123 deny",
     "echo ok\n/approve abc123 allow-once",
