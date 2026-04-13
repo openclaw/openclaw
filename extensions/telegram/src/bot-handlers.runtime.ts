@@ -1803,9 +1803,10 @@ export const registerTelegramHandlers = ({
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
-    // Bot-authored message updates can be echoed back by Telegram. Skip them here
-    // and rely on the dedicated channel_post handler for channel-originated posts.
-    if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
+    // Regular message updates from bots should never enter the group/DM pipeline.
+    // They can show up as self-echoed bot output or other bot-authored chatter in
+    // groups. Keep bot-to-bot channel flows on the dedicated channel_post handler.
+    if (normalizedMsg.from?.is_bot) {
       return;
     }
     await handleInboundMessageLike({
