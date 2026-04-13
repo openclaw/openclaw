@@ -644,6 +644,16 @@ export function createThreadBindingManager(
               token: resolveCurrentToken(),
               threadId: conversationId,
             })) ?? undefined;
+          // Fallback: if Discord API resolution failed but conversationId is a guild
+          // channel (possibly with "channel:" prefix), strip the prefix and use it as
+          // channelId for thread creation. This handles ACP spawns where conversationId
+          // is a guild channel ID with no parentConversationId.
+          if (!channelId && conversationId) {
+            const stripped = conversationId.replace(/^channel:/i, "");
+            if (/^\d{17,20}$/.test(stripped)) {
+              channelId = stripped;
+            }
+          }
         }
       } else {
         threadId = conversationId || undefined;
