@@ -17,6 +17,7 @@ import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnosti
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
@@ -673,6 +674,12 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+    const effectiveMessageChannel = resolveMessageChannel(
+      followupRun.run.messageProvider,
+      sessionCtx.Surface ?? sessionCtx.Provider,
+    );
+    const shouldSurfaceFallbackNoticesToUser =
+      verboseEnabled || effectiveMessageChannel === "telegram";
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg);
       const showCost = authMode === "api-key";
@@ -729,7 +736,7 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
-      if (verboseEnabled) {
+      if (shouldSurfaceFallbackNoticesToUser) {
         const fallbackNotice = buildFallbackNotice({
           selectedProvider,
           selectedModel,
@@ -756,7 +763,7 @@ export async function runReplyAgent(params: {
           previousActiveModel: fallbackTransition.previousState.activeModel,
         },
       });
-      if (verboseEnabled) {
+      if (shouldSurfaceFallbackNoticesToUser) {
         verboseNotices.push({
           text: buildFallbackClearedNotice({
             selectedProvider,

@@ -112,12 +112,14 @@ function createMinimalRun(params?: {
   isRunActive?: () => boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
+  messageProvider?: string;
+  sessionProvider?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
   const sessionCtx = {
-    Provider: "whatsapp",
+    Provider: params?.sessionProvider ?? params?.messageProvider ?? "whatsapp",
     MessageSid: "msg",
   } as unknown as TemplateContext;
   const resolvedQueue = {
@@ -131,7 +133,7 @@ function createMinimalRun(params?: {
     run: {
       sessionId: "session",
       sessionKey,
-      messageProvider: "whatsapp",
+      messageProvider: params?.messageProvider ?? "whatsapp",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config: {},
@@ -619,10 +621,26 @@ describe("runReplyAgent typing (heartbeat)", () => {
     vi.useRealTimers();
   });
 
-  it("announces model fallback only when verbose mode is enabled", async () => {
+  it("announces model fallback for verbose sessions and telegram chats", async () => {
     const cases = [
-      { name: "verbose on", verbose: "on" as const, expectNotice: true },
-      { name: "verbose off", verbose: "off" as const, expectNotice: false },
+      {
+        name: "verbose on",
+        verbose: "on" as const,
+        messageProvider: "whatsapp",
+        expectNotice: true,
+      },
+      {
+        name: "verbose off non-telegram",
+        verbose: "off" as const,
+        messageProvider: "whatsapp",
+        expectNotice: false,
+      },
+      {
+        name: "verbose off telegram",
+        verbose: "off" as const,
+        messageProvider: "telegram",
+        expectNotice: true,
+      },
     ] as const;
     for (const testCase of cases) {
       const sessionEntry: SessionEntry = {
@@ -652,6 +670,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const { run } = createMinimalRun({
         resolvedVerboseLevel: testCase.verbose,
+        messageProvider: testCase.messageProvider,
         sessionEntry,
         sessionStore,
         sessionKey: "main",
@@ -882,6 +901,74 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(thirdText).not.toContain("Model Fallback cleared:");
       expect(phases.filter((phase) => phase === "fallback")).toHaveLength(1);
       expect(phases.filter((phase) => phase === "fallback_cleared")).toHaveLength(1);
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("surfaces fallback-cleared notice in telegram even while verbose is off", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    let callCount = 0;
+
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementation(
+        async ({
+          provider,
+          model,
+          run,
+        }: {
+          provider: string;
+          model: string;
+          run: (provider: string, model: string) => Promise<unknown>;
+        }) => {
+          callCount += 1;
+          if (callCount === 1) {
+            return {
+              result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+              provider: "deepinfra",
+              model: "moonshotai/Kimi-K2.5",
+              attempts: [
+                {
+                  provider: "fireworks",
+                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+                  error: "Provider fireworks is in cooldown (all profiles unavailable)",
+                  reason: "rate_limit",
+                },
+              ],
+            };
+          }
+          return {
+            result: await run(provider, model),
+            provider,
+            model,
+            attempts: [],
+          };
+        },
+      );
+    try {
+      const { run } = createMinimalRun({
+        resolvedVerboseLevel: "off",
+        messageProvider: "telegram",
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+      });
+      const first = await run();
+      const second = await run();
+
+      const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
+      const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
+      expect(firstText).toContain("Model Fallback:");
+      expect(secondText).toContain("Model Fallback cleared:");
     } finally {
       fallbackSpy.mockRestore();
     }
