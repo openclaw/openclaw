@@ -571,6 +571,38 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dropAssistant).not.toHaveBeenCalledWith("run-error-envelope");
   });
 
+  it("resets activity to idle when a final arrives after the active run was already cleared", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-late-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("resets activity to error when a terminal error arrives after the active run was already cleared", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-late-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "boom",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("error");
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
