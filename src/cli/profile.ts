@@ -106,6 +106,12 @@ export function applyCliProfileEnv(params: {
   // Convenience only: fill defaults, never override explicit env values.
   env.OPENCLAW_PROFILE = profile;
 
+  // Clear inherited launchd label so resolveLaunchAgentLabel() re-derives
+  // from OPENCLAW_PROFILE instead of always returning the inherited value.
+  // Without this, CLI invocations from within a gateway process resolve the
+  // wrong plist when --profile is used to target a different profile.
+  delete env.OPENCLAW_LAUNCHD_LABEL;
+
   const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
   const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
   if (!existingStateDir) {

@@ -123,6 +123,29 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
   });
 
+  it("clears inherited OPENCLAW_LAUNCHD_LABEL so --profile resolves correct plist", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.batch",
+    };
+    applyCliProfileEnv({
+      profile: "interactive",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_PROFILE).toBe("interactive");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+  });
+
+  it("does not set OPENCLAW_LAUNCHD_LABEL when it was absent", () => {
+    const env: Record<string, string | undefined> = {};
+    applyCliProfileEnv({
+      profile: "ops",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+  });
+
   it("uses OPENCLAW_HOME when deriving profile state dir", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_HOME: "/srv/openclaw-home",
