@@ -13,6 +13,8 @@ import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
+  isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
@@ -31,6 +33,9 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 }
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
+
+const AUTH_ERROR_USER_MESSAGE =
+  "⚠️ API provider returned an authentication error. Check your API key or credentials, or re-authenticate with /connect_ai_subscription.";
 
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
@@ -417,6 +422,10 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isAuthPermanentErrorMessage(trimmed) || isAuthErrorMessage(trimmed)) {
+      return AUTH_ERROR_USER_MESSAGE;
     }
 
     if (isInvalidStreamingEventOrderError(trimmed)) {

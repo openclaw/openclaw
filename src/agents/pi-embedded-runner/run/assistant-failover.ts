@@ -5,6 +5,7 @@ import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import {
   formatAssistantErrorText,
+  formatAuthErrorMessage,
   formatBillingErrorMessage,
   isTimeoutErrorMessage,
   type FailoverReason,
@@ -202,7 +203,10 @@ export async function handleAssistantFailover(params: {
                 params.activeErrorContext.model,
               )
             : params.authFailure
-              ? "LLM request unauthorized."
+              ? formatAuthErrorMessage(
+                  params.activeErrorContext.provider,
+                  params.activeErrorContext.model,
+                )
               : "LLM request failed.");
     const status =
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);

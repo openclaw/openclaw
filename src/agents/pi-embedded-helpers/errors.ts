@@ -70,6 +70,36 @@ export {
 
 const log = createSubsystemLogger("errors");
 
+// Providers whose OAuth credentials can be repaired via `/connect_ai_subscription gemini`.
+const GEMINI_OAUTH_PROVIDER_IDS = ["google-gemini-cli", "google-antigravity"];
+
+function isGeminiOAuthProvider(provider?: string): boolean {
+  if (!provider) {
+    return false;
+  }
+  const lower = provider.trim().toLowerCase();
+  return GEMINI_OAUTH_PROVIDER_IDS.some((id) => lower === id || lower.startsWith(`${id}/`));
+}
+
+export function formatAuthErrorMessage(provider?: string, model?: string): string {
+  const providerName = provider?.trim();
+  const modelName = model?.trim();
+  if (isGeminiOAuthProvider(providerName)) {
+    return (
+      "⚠️ Your Gemini connection couldn't authenticate. " +
+      "Send /connect_ai_subscription gemini to reconnect, or check that your Google account still has Gemini API access."
+    );
+  }
+  const providerLabel =
+    providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+  if (providerLabel) {
+    return `⚠️ ${providerLabel} returned an authentication error. Check your API key or credentials, or re-authenticate with /connect_ai_subscription.`;
+  }
+  return "⚠️ API provider returned an authentication error. Check your API key or credentials, or re-authenticate with /connect_ai_subscription.";
+}
+
+export const AUTH_ERROR_USER_MESSAGE = formatAuthErrorMessage();
+
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
@@ -941,6 +971,10 @@ export function formatAssistantErrorText(
 
   if (isBillingErrorMessage(raw)) {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+  }
+
+  if (isAuthPermanentErrorMessage(raw) || isAuthErrorMessage(raw)) {
+    return formatAuthErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   if (providerRuntimeFailureKind === "schema") {

@@ -130,5 +130,8 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
       };
     },
     fetchUsageSnapshot: async (ctx) => await fetchGeminiCliUsage(ctx),
+    buildAuthDoctorHint: () =>
+      "Your Gemini OAuth connection may be broken. Run /connect_ai_subscription gemini to re-authenticate, " +
+      "or verify that your Google account still has Gemini API access.",
   });
 }
