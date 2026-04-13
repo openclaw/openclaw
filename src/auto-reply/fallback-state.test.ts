@@ -120,4 +120,41 @@ describe("fallback-state", () => {
     expect(resolved.nextState.activeModel).toBeUndefined();
     expect(resolved.nextState.reason).toBeUndefined();
   });
+
+  it("does not mark github-copilot/auto resolved model as fallback when no attempts exist", () => {
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "github-copilot",
+      selectedModel: "auto",
+      activeProvider: "github-copilot",
+      activeModel: "gpt-5.4-mini",
+      attempts: [],
+      state: {},
+    });
+
+    expect(resolved.fallbackActive).toBe(false);
+    expect(resolved.fallbackTransitioned).toBe(false);
+    expect(resolved.stateChanged).toBe(false);
+  });
+
+  it("keeps fallback behavior for github-copilot/auto when actual fallback attempts occurred", () => {
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "github-copilot",
+      selectedModel: "auto",
+      activeProvider: "github-copilot",
+      activeModel: "gpt-5.4-mini",
+      attempts: [
+        {
+          provider: "github-copilot",
+          model: "gpt-5.4",
+          reason: "rate_limit",
+          error: "429 too many requests",
+        },
+      ],
+      state: {},
+    });
+
+    expect(resolved.fallbackActive).toBe(true);
+    expect(resolved.fallbackTransitioned).toBe(true);
+    expect(resolved.stateChanged).toBe(true);
+  });
 });

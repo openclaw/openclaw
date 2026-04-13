@@ -6,6 +6,11 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
+import {
+  buildCopilotModelDefinition,
+  COPILOT_AUTO_MODEL_ID,
+  getDefaultCopilotModelIds,
+} from "./models-defaults.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
@@ -104,7 +109,7 @@ export default definePluginEntry({
             credential,
           },
         ],
-        defaultModel: "github-copilot/gpt-4o",
+        defaultModel: `github-copilot/${COPILOT_AUTO_MODEL_ID}`,
       };
     }
 
@@ -162,7 +167,7 @@ export default definePluginEntry({
           return {
             provider: {
               baseUrl,
-              models: [],
+              models: getDefaultCopilotModelIds().map(buildCopilotModelDefinition),
             },
           };
         },

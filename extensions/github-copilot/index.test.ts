@@ -49,4 +49,18 @@ describe("github-copilot plugin", () => {
     expect(result).toBeNull();
     expect(resolveCopilotApiTokenMock).not.toHaveBeenCalled();
   });
+
+  it("publishes auto in the discovered catalog and uses it as the setup default", async () => {
+    const provider = _registerProvider();
+
+    const result = await provider.catalog.run({
+      config: {},
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+    } as never);
+
+    expect(result?.provider?.models.map((model: { id: string }) => model.id)).toContain("auto");
+    expect(provider.auth[0]).toBeTruthy();
+  });
 });

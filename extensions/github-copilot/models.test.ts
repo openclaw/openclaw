@@ -63,12 +63,21 @@ function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
 
 describe("github-copilot model defaults", () => {
   describe("getDefaultCopilotModelIds", () => {
-    it("includes claude-sonnet-4.6", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
+    it("includes auto", () => {
+      expect(getDefaultCopilotModelIds()).toContain("auto");
     });
 
-    it("includes claude-sonnet-4.5", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.5");
+    it("includes recent OpenAI families", () => {
+      expect(getDefaultCopilotModelIds()).toContain("gpt-5.4");
+      expect(getDefaultCopilotModelIds()).toContain("gpt-5.4-mini");
+      expect(getDefaultCopilotModelIds()).toContain("gpt-5.3-codex");
+    });
+
+    it("includes recent Anthropic/Google/xAI families", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
+      expect(getDefaultCopilotModelIds()).toContain("claude-haiku-4.5");
+      expect(getDefaultCopilotModelIds()).toContain("gemini-2.5-pro");
+      expect(getDefaultCopilotModelIds()).toContain("grok-code-fast-1");
     });
 
     it("returns a mutable copy", () => {
@@ -80,6 +89,13 @@ describe("github-copilot model defaults", () => {
   });
 
   describe("buildCopilotModelDefinition", () => {
+    it("builds a labeled definition for auto", () => {
+      const def = buildCopilotModelDefinition("auto");
+      expect(def.id).toBe("auto");
+      expect(def.name).toBe("Auto");
+      expect(def.api).toBe("openai-responses");
+    });
+
     it("builds a valid definition for claude-sonnet-4.6", () => {
       const def = buildCopilotModelDefinition("claude-sonnet-4.6");
       expect(def.id).toBe("claude-sonnet-4.6");
@@ -110,6 +126,29 @@ describe("resolveCopilotForwardCompatModel", () => {
       "github-copilot/gpt-4o": { id: "gpt-4o", name: "gpt-4o" },
     });
     expect(resolveCopilotForwardCompatModel(ctx)).toBeUndefined();
+  });
+
+  it("resolves auto to the first preferred candidate found in registry", () => {
+    const ctx = createMockCtx("auto", {
+      "github-copilot/gpt-5.4-mini": { id: "gpt-5.4-mini", name: "gpt-5.4-mini", provider: "github-copilot", api: "openai-responses" },
+    });
+    const result = resolveCopilotForwardCompatModel(ctx);
+    expect(result?.id).toBe("gpt-5.4-mini");
+  });
+
+  it("resolves auto to fallback gpt-5.4-mini when registry has no candidates", () => {
+    const ctx = createMockCtx("auto");
+    const result = resolveCopilotForwardCompatModel(ctx);
+    expect(result?.id).toBe("gpt-5.4-mini");
+    expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
+  });
+
+  it("resolves auto to next preferred candidate when first is absent", () => {
+    const ctx = createMockCtx("auto", {
+      "github-copilot/gpt-4.1": { id: "gpt-4.1", name: "gpt-4.1", provider: "github-copilot", api: "openai-responses" },
+    });
+    const result = resolveCopilotForwardCompatModel(ctx);
+    expect(result?.id).toBe("gpt-4.1");
   });
 
   it("clones gpt-5.2-codex template for gpt-5.4", () => {

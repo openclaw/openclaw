@@ -1632,7 +1632,7 @@ describe("applyAuthChoice", () => {
                   },
                 },
               ],
-              defaultModel: "github-copilot/gpt-4o",
+              defaultModel: "github-copilot/auto",
             })),
           },
         ],
@@ -1661,7 +1661,7 @@ describe("applyAuthChoice", () => {
       });
 
       expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-        "github-copilot/gpt-4o",
+        "github-copilot/auto",
       );
     } finally {
       if (previousIsTTYDescriptor) {

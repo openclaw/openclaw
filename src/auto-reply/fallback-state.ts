@@ -14,6 +14,22 @@ export type FallbackNoticeState = Pick<
   "fallbackNoticeSelectedModel" | "fallbackNoticeActiveModel" | "fallbackNoticeReason"
 >;
 
+function isCopilotAutoSelection(params: {
+  selectedProvider: string;
+  selectedModel: string;
+  activeProvider: string;
+  attempts: RuntimeFallbackAttempt[];
+}): boolean {
+  if (params.attempts.length > 0) {
+    return false;
+  }
+  return (
+    params.selectedProvider.trim().toLowerCase() === "github-copilot" &&
+    params.selectedModel.trim().toLowerCase() === "auto" &&
+    params.activeProvider.trim().toLowerCase() === "github-copilot"
+  );
+}
+
 function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {
   const text = value.replace(/\s+/g, " ").trim();
   if (text.length <= max) {
@@ -164,7 +180,14 @@ export function resolveFallbackTransition(params: {
     activeModel: normalizeOptionalString(params.state?.fallbackNoticeActiveModel),
     reason: normalizeOptionalString(params.state?.fallbackNoticeReason),
   };
-  const fallbackActive = selectedModelRef !== activeModelRef;
+  const fallbackActive =
+    selectedModelRef !== activeModelRef &&
+    !isCopilotAutoSelection({
+      selectedProvider: params.selectedProvider,
+      selectedModel: params.selectedModel,
+      activeProvider: params.activeProvider,
+      attempts: params.attempts,
+    });
   const fallbackTransitioned =
     fallbackActive &&
     (previousState.selectedModel !== selectedModelRef ||

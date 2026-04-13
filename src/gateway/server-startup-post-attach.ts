@@ -47,6 +47,10 @@ import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
+function isVirtualStartupWarmupModel(provider: string, model: string): boolean {
+  return provider.trim().toLowerCase() === "github-copilot" && model.trim().toLowerCase() === "auto";
+}
+
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
@@ -77,6 +81,9 @@ async function prewarmConfiguredPrimaryModel(params: {
       skipProviderRuntimeHooks: true,
     });
     if (!resolved.model) {
+      if (isVirtualStartupWarmupModel(provider, model)) {
+        return;
+      }
       throw new Error(
         resolved.error ??
           `Unknown model: ${provider}/${model} (startup warmup only checks static model resolution)`,

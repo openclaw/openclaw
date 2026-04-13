@@ -9,6 +9,18 @@ export const PROVIDER_ID = "github-copilot";
 const CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
+// Ordered preference list for local auto model selection.
+// Prefer low-multiplier, broadly-available models (per GitHub Copilot docs).
+// At runtime, the first one found in the model registry is used.
+const AUTO_CANDIDATE_MODEL_IDS = [
+  "gpt-5.4-mini",
+  "gpt-4.1",
+  "claude-haiku-4.5",
+  "gpt-5.4",
+  "claude-sonnet-4.6",
+  "gpt-5.3-codex",
+] as const;
+
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
 
@@ -28,8 +40,36 @@ export function resolveCopilotForwardCompatModel(
     return undefined;
   }
 
-  // If the model is already in the registry, let the normal path handle it.
   const lowerModelId = normalizeOptionalLowercaseString(trimmedModelId) ?? "";
+
+  // "auto" is a local virtual selector — not a real Copilot API model ID.
+  // Resolve it to the best available concrete model from the registry.
+  if (lowerModelId === "auto") {
+    for (const candidateId of AUTO_CANDIDATE_MODEL_IDS) {
+      const candidate = ctx.modelRegistry.find(
+        PROVIDER_ID,
+        candidateId,
+      ) as ProviderRuntimeModel | null;
+      if (candidate) {
+        return normalizeModelCompat({ ...candidate } as ProviderRuntimeModel);
+      }
+    }
+    // No candidate in registry yet (cold start / catalog not loaded).
+    // Fall back to a broadly-available low-multiplier concrete model.
+    return normalizeModelCompat({
+      id: "gpt-5.4-mini",
+      name: "gpt-5.4-mini",
+      provider: PROVIDER_ID,
+      api: resolveCopilotTransportApi("gpt-5.4-mini"),
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: DEFAULT_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_MAX_TOKENS,
+    } as ProviderRuntimeModel);
+  }
+
+  // If the model is already in the registry, let the normal path handle it.
   const existing = ctx.modelRegistry.find(PROVIDER_ID, lowerModelId);
   if (existing) {
     return undefined;

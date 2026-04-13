@@ -103,7 +103,6 @@ function createSpawnOptions(cmd, args, envOverride) {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
-    ...(useShell ? { shell: false } : {}),
   };
 }
 
@@ -115,13 +114,13 @@ function run(cmd, args) {
   try {
     child = spawn(invocation.cmd, invocation.args, createSpawnOptions(cmd, args));
   } catch (err) {
-    console.error(`Failed to launch ${cmd}:`, err);
+    console.error(`Failed to launch ${invocation.cmd}:`, err);
     process.exit(1);
     return;
   }
 
   child.on("error", (err) => {
-    console.error(`Failed to launch ${cmd}:`, err);
+    console.error(`Failed to launch ${invocation.cmd}:`, err);
     process.exit(1);
   });
   child.on("exit", (code) => {
@@ -139,7 +138,7 @@ function runSync(cmd, args, envOverride) {
   try {
     result = spawnSync(invocation.cmd, invocation.args, createSpawnOptions(cmd, args, envOverride));
   } catch (err) {
-    console.error(`Failed to launch ${cmd}:`, err);
+    console.error(`Failed to launch ${invocation.cmd}:`, err);
     process.exit(1);
     return;
   }

@@ -366,7 +366,7 @@ export function describeGithubCopilotProviderAuthContract() {
               },
             },
           ],
-          defaultModel: "github-copilot/gpt-4o",
+          defaultModel: "github-copilot/auto",
         });
       } finally {
         if (previousIsTTYDescriptor) {

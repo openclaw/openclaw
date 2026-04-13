@@ -11,7 +11,7 @@ const resolveModelMock = vi.fn<
     agentDir: unknown,
     cfg: unknown,
     options?: unknown,
-  ) => { model: { id: string; provider: string; api: string } }
+  ) => { model?: { id: string; provider: string; api: string }; error?: string }
 >(() => ({
   model: {
     id: "gpt-5.4",
@@ -193,5 +193,35 @@ describe("gateway startup primary model warmup", () => {
     });
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
     expect(resolveModelMock).toHaveBeenCalled();
+  });
+
+  it("does not warn for github-copilot/auto in startup static warmup", async () => {
+    const warn = vi.fn();
+    resolveModelMock.mockReturnValueOnce({
+      model: undefined,
+      error: "Unknown model: github-copilot/auto",
+    });
+
+    await prewarmConfiguredPrimaryModel({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "github-copilot/auto",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      log: { warn },
+    });
+
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "github-copilot",
+      "auto",
+      "/tmp/agent",
+      expect.any(Object),
+      { skipProviderRuntimeHooks: true },
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 });
