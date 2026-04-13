@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -20,6 +21,7 @@ const ROOT_DTS_INPUTS = [
 ];
 const ROOT_DTS_OUTPUTS = [
   "dist/plugin-sdk/.tsbuildinfo",
+  "dist/plugin-sdk/src/plugin-sdk/agent-harness.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
@@ -36,6 +38,7 @@ const PACKAGE_DTS_INPUTS = [
 ];
 const PACKAGE_DTS_OUTPUTS = [
   "packages/plugin-sdk/dist/.tsbuildinfo",
+  "packages/plugin-sdk/dist/src/plugin-sdk/agent-harness.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",
@@ -309,6 +312,6 @@ export async function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (import.meta.main) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }
