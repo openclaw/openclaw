@@ -537,10 +537,23 @@ async function resolveHeartbeatPreflight(params: {
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
-  // Isolated heartbeat runs consume events from a separate `:heartbeat` queue.
-  // Do not inspect base-session wake events for prompt classification.
-  const shouldInspectWakePendingEvents =
-    reasonFlags.isWakeReason && params.heartbeat?.isolatedSession !== true;
+  // Wake-triggered runs should only inspect pending events when preflight peeks
+  // the same queue that the run itself will execute/drain.
+  const shouldInspectWakePendingEvents = (() => {
+    if (!reasonFlags.isWakeReason) {
+      return false;
+    }
+    if (params.heartbeat?.isolatedSession !== true) {
+      return true;
+    }
+    const configuredSession = resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
+    const { isolatedSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      sessionKey: session.sessionKey,
+      configuredSessionKey: configuredSession.sessionKey,
+      sessionEntry: session.entry,
+    });
+    return isolatedSessionKey === session.sessionKey;
+  })();
   const shouldInspectPendingEvents =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
@@ -812,7 +825,11 @@ export async function runHeartbeatOnce(opts: {
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
-    if (preflight.shouldInspectPendingEvents && preflight.pendingEventEntries.length > 0) {
+    // Wake-triggered events should stay queued when the run short-circuits:
+    // no reply turn ran, so there is nothing that actually consumed that wake payload.
+    const shouldConsumeInspectedEvents =
+      !preflight.isWakeReason && preflight.shouldInspectPendingEvents;
+    if (shouldConsumeInspectedEvents && preflight.pendingEventEntries.length > 0) {
       consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
     }
     return { status: "skipped", reason: "no-tasks-due" };
