@@ -167,7 +167,7 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
   });
 
-  it("preserves custom OPENCLAW_LAUNCHD_LABEL override for the same profile", () => {
+  it("clears custom OPENCLAW_LAUNCHD_LABEL that does not match the profile-derived label", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
     };
