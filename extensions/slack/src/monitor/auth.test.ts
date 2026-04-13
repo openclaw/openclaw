@@ -425,7 +425,7 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     });
   });
 
-  it("denies interactive no-channel events when no allowFrom is configured", async () => {
+  it("keeps interactive no-channel events open when no allowFrom is configured", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx(),
       senderId: "U_ANYONE",
@@ -434,8 +434,9 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     });
 
     expect(result).toEqual({
-      allowed: false,
-      reason: "sender-not-allowlisted",
+      allowed: true,
+      channelType: "channel",
+      channelName: undefined,
     });
   });
 

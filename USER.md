@@ -219,6 +219,89 @@ The `describe("authorizeSlackSystemEventSender")` block uses `authorizeSlackSyst
        await import("./auth.js"));
    });
    ```
+
+[CODEX COMPATIBILITY CHECK]
+
+Context reviewed:
+
+- `USER.md`
+- `gh issue view 422 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`
+- PR `openclaw/openclaw#66028`
+- Diff vs `origin/main...HEAD`
+
+Changed surface:
+
+- `extensions/slack/src/monitor/auth.ts`
+- `extensions/slack/src/monitor/auth.test.ts`
+- `extensions/slack/src/monitor/events/interactions.test.ts`
+
+Compatibility audit summary:
+
+- API Surface: N/A
+- Data Layer: N/A
+- Configuration & Environment: no config keys or env vars renamed/removed
+- Types & Interfaces: no exported symbols removed; one local auth-reason union value added
+
+## Compatibility Report
+
+### BREAKING
+
+- None.
+
+### RISKY
+
+- None.
+
+### MINOR
+
+- `extensions/slack/src/monitor/auth.ts`: channel interactive authorization now applies global `allowFrom` to channel block actions, and when channel `users` are configured it no longer lets wildcard `allowFrom=["*"]` bypass those channel restrictions. This is a caller-visible behavior change for Slack interactive controls, but it is a compatibility-safe hardening change because it preserves existing config keys, permissive defaults when no allowlists are configured, and explicit-owner access while aligning behavior with operator intent.
+- `extensions/slack/src/monitor/auth.ts`: `SlackSystemEventAuthResult.reason` adds `"sender-not-authorized"`. Current call sites in `extensions/slack/src/monitor/events/interactions.block-actions.ts`, `extensions/slack/src/monitor/events/system-event-context.ts`, and `extensions/slack/src/monitor/events/interactions.modal.ts` only gate on `allowed` and log the reason string, so this widened union is non-breaking.
+
+### VERDICT
+
+[CODEX ISSUE SOLVING CHECK]
+
+## Issue Resolution Check
+
+**Issue**: #422 — GHSA-hwmr-gqmh-2j2x
+
+### Addressed
+
+- ✅ Channel block actions now honor the configured global `allowFrom` list in channel contexts — `extensions/slack/src/monitor/auth.ts` now resolves the global allowlist in the channel branch and denies unauthorized senders with `sender-not-allowlisted` or `sender-not-authorized` instead of letting channel interactions fall through open.
+- ✅ Channel-specific `users` allowlists remain a valid alternate authorization path — `extensions/slack/src/monitor/auth.ts` allows senders who match `channelsConfig.<channel>.users` even when they are not in the global `allowFrom`, matching the PR's intended compatibility behavior.
+- ✅ The wildcard review follow-up is handled — `extensions/slack/src/monitor/auth.ts` strips `*` when deciding whether channel restrictions can be bypassed, so `allowFrom=["*"]` no longer overrides a configured channel `users` allowlist.
+
+### Not Addressed
+
+- ❌ The issue's "default-deny when `allowFrom` is empty" remediation is not implemented — the PR explicitly preserves open-by-default behavior when neither a global nor a channel allowlist is configured, and `extensions/slack/src/monitor/auth.test.ts` includes a test asserting that behavior.
+- ❌ The advisory's "block actions without channel context and empty `allowFrom` authorize anyone" vector remains — `extensions/slack/src/monitor/auth.ts` only applies a no-channel check when `allowFrom` is non-empty, and `extensions/slack/src/monitor/auth.test.ts` now asserts that a sender without channel context is still allowed when no `allowFrom` is configured.
+- ❌ The advisory's "make `expectedSenderId` mandatory for all interactive event types" remediation is not implemented — `extensions/slack/src/monitor/auth.ts` still treats `expectedSenderId` as optional and only rejects mismatches when it is provided.
+- ❌ The advisory's "channel type fallback can bypass DM-specific authorization" vector is not addressed in this PR — there is no change to `normalizeSlackChannelType` or the channel-type fallback path in the touched diff.
+
+### Test Coverage
+
+- ✅ Tests cover the implemented channel-scope fixes: `extensions/slack/src/monitor/auth.test.ts` adds unit coverage for global allowlist denial, combined global-plus-channel authorization, wildcard handling, and the preserved open default; `extensions/slack/src/monitor/events/interactions.test.ts` adds interaction-level coverage for denied global-allowlist channel actions, allowed channel-user actions, and the wildcard bypass regression.
+- ❌ Tests do not demonstrate fixes for the advisory's remaining vectors because those behaviors were intentionally left unchanged by the PR.
+
+### Regression Risk
+
+- Low to moderate. The changed code sits in Slack interactive authorization for channel actions, so the main risk is operator-visible behavior changes in channel controls when `allowFrom`, channel `users`, and wildcard `*` entries are combined. The added unit and interaction tests reduce that risk for the intended scenarios.
+
+### Verdict
+
+PARTIALLY RESOLVES — PR #66028 fixes the issue's channel/global allowlist gap for Slack interactive controls, including the wildcard bypass follow-up, but it intentionally does not implement the advisory's broader default-deny and mandatory actor-binding remediations.
+
+`[x] Safe to merge  [ ] Needs mitigation before merge`
+
+Validation:
+
+- `pnpm test extensions/slack/src/monitor/auth.test.ts`
+- `pnpm test extensions/slack/src/monitor/events/interactions.test.ts`
+
+  ```
+
+  ```
+
 2. Verify with: `pnpm test extensions/slack/src/monitor/auth.test.ts -t "authorizeSlackSystemEventSender"`
 
 ### Issue 3 — LOW: Missing `channelsConfigKeys` in interactions test helper
@@ -330,6 +413,10 @@ Validation:
 
 [CODEX COMMENTS RESOLUTION]
 
+- 2026-04-13: Read `USER.md`, loaded tracking context with `gh issue view 422 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`, and inspected `openclaw/openclaw#66028` review threads.
+- Verified the earlier actionable PR findings on the Slack auth/test surface are already addressed on the branch; no additional code changes were required in `extensions/slack/src/monitor/*` for this pass.
+- Remaining unresolved threads are duplicate `USER.md` removal requests from Codex and Greptile. I am leaving them unresolved for now because this workflow explicitly requires `USER.md` to exist and be updated during comment-resolution passes; they should be resolved by dropping `USER.md` before merge.
+
 Date: 2026-04-13
 PR: https://github.com/openclaw/openclaw/pull/66028
 Tracking issue: https://github.com/NVIDIA-dev/openclaw-tracking/issues/422
@@ -351,6 +438,23 @@ Planned GitHub follow-up after validation:
 
 - Resolve the addressed Codex thread.
 - Comment `@codex review`.
+
+Date: 2026-04-13
+PR: https://github.com/openclaw/openclaw/pull/66028
+Tracking issue: https://github.com/NVIDIA-dev/openclaw-tracking/issues/422
+
+Follow-up review pass:
+
+- Read `USER.md` and refreshed tracking context with `gh issue view 422 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`.
+- Inspected PR review threads via GraphQL and confirmed all review threads are already resolved.
+- Verified Greptile posted a final summary marking the runtime issues resolved.
+- Verified the existing `@codex review` trigger has an 👀 reaction and no new unresolved Codex thread is open yet.
+
+Status:
+
+- No additional code changes were required in this pass.
+- No PR threads needed manual resolution in this pass because they were already resolved.
+- Per the review workflow, the PR is currently in `AGENTS ARE REVIEWING` state rather than `READY FOR REVIEW`.
 
 [CLAUDE COMMENTS RESOLUTION]
 
@@ -383,3 +487,135 @@ The Greptile summary mentioned a missing test for explicit owner in a mixed wild
 - Resolved both USER.md threads via GraphQL
 - Deleted previous `@greptile review` and `@codex review` request comments
 - Posted fresh `@greptile review` and `@codex review` requests
+
+Date: 2026-04-13
+PR: https://github.com/openclaw/openclaw/pull/66028
+Tracking issue: https://github.com/NVIDIA-dev/openclaw-tracking/issues/422
+
+## Pass after commit fd3caf64fd
+
+Latest commit `fd3caf64fd` addresses the three remaining advisory bypasses (#1 default-deny, #3 mandatory actor binding, #4 channel type validation) via a new `interactiveEvent` flag on `authorizeSlackSystemEventSender`. This commit was not yet pushed when the previous reviews ran.
+
+## Thread Status
+
+All 7 review threads are now resolved:
+
+1. **Greptile P2 — Test ordering** (`auth.test.ts`): Resolved (prior pass). Local `beforeAll` added.
+2. **Codex P1 — Wildcard short-circuit** (`auth.ts`): Resolved (prior pass). Wildcard filtered from owner check.
+3. **Codex P1 — Preserve explicit owners** (`auth.ts`): Resolved (prior pass). `ownerExplicitlyAllowed` uses filtered list.
+4. **Codex P2 — Remove USER.md** (`USER.md:3`): Resolved (prior pass). Explained as workflow artifact.
+5. **Codex P2 — Remove agent worklog** (`USER.md:3`): Resolved (prior pass). Duplicate of #4.
+6. **Codex P2 — Remove transient USER.md** (`USER.md:3`, on `b56cec8633`): Resolved this pass. Already explained by eleqtrizit; will be removed before merge.
+7. **Greptile P1 Security — Internal agent work log** (`USER.md:1-50`, on `b56cec8633`): Resolved this pass. Same rationale as #6.
+
+## Validation
+
+- `pnpm test extensions/slack/src/monitor/auth.test.ts` — 24 passed
+- `pnpm test extensions/slack/src/monitor/auth.test.ts -- -t "authorizeSlackSystemEventSender"` — 20 passed, 4 skipped (ordering fix confirmed)
+- `pnpm test extensions/slack/src/monitor/events/interactions.test.ts` — 30 passed
+
+## Actions Taken
+
+- Pushed commit `fd3caf64fd` to fork
+- Resolved both remaining USER.md threads via GraphQL
+- Deleted 3 stale review request comments
+- Posted fresh `@greptile review` and `@codex review` requests
+
+Date: 2026-04-13
+PR: https://github.com/openclaw/openclaw/pull/66028
+Tracking issue: https://github.com/NVIDIA-dev/openclaw-tracking/issues/422
+
+Follow-up review pass:
+
+- Read `USER.md` and refreshed tracking context with `gh issue view 422 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`.
+- Re-read unresolved PR threads on `extensions/slack/src/monitor/auth.ts` and confirmed the remaining actionable feedback was about an unintended interactive channel default-deny regression and over-broad owner allowFrom enforcement.
+- Updated `extensions/slack/src/monitor/auth.ts` so interactive owner/global `allowFrom` enforcement stays scoped to interactive channel flows, while channels with no allowlists keep the prior open-by-default behavior.
+- Kept the wildcard hardening in place so `allowFrom: ["*"]` still cannot bypass configured channel `users`, and explicit owner IDs still work for interactive channel events when `allowFrom` also contains `*`.
+- Updated `extensions/slack/src/monitor/auth.test.ts` to separate non-interactive vs interactive expectations and added interactive coverage for owner override and combined denial behavior.
+- Updated `extensions/slack/src/monitor/events/interactions.test.ts` so the no-allowlist block-action path verifies the restored open-by-default behavior.
+
+Validation:
+
+- `pnpm test extensions/slack/src/monitor/auth.test.ts` — 27 passed
+- `pnpm test extensions/slack/src/monitor/events/interactions.test.ts` — 30 passed
+
+Planned GitHub follow-up after validation:
+
+- Resolve the remaining addressed Greptile and Codex auth threads.
+- Delete stale `@greptile review` / `@codex review` trigger comments.
+- Post fresh `@greptile review` and `@codex review` trigger comments.
+
+Date: 2026-04-13
+PR: https://github.com/openclaw/openclaw/pull/66028
+Tracking issue: https://github.com/NVIDIA-dev/openclaw-tracking/issues/422
+
+## Pass after latest Codex review on fd3caf64fd
+
+Reviewed all 11 PR review threads. 10 were already resolved. 1 unresolved thread remained:
+
+- **Codex P1 — Keep interactive channel auth open without allowlists** (`auth.ts:366`): Codex correctly identified that the committed code (`fd3caf64fd`) had a standalone `if (params.interactiveEvent)` block that default-denied all interactive channel events when no allowlists were configured, which is a breaking regression from the prior open-by-default behavior.
+
+The working tree already contained an uncommitted fix that scoped the interactive enforcement:
+
+- `if (ownerAllowed)` → `if (params.interactiveEvent && ownerAllowed)`
+- `if (ownerAllowlistConfigured)` → `if (params.interactiveEvent && ownerAllowlistConfigured)`
+- Removed the standalone `if (params.interactiveEvent)` default-deny block
+- `ownerExplicitlyAllowed` bypass gated behind `params.interactiveEvent` in the channel users block
+- JSDoc updated to describe the corrected behavior
+
+Tests updated to separate non-interactive vs interactive expectations:
+
+- Non-interactive channel events stay fully open (global `allowFrom` does NOT gate non-interactive channel events)
+- Interactive channel events use owner `allowFrom` for authorization when configured, but fall through to open when no allowlists exist
+- Integration test "blocks channel block actions when no allowlists" changed to "keeps channel block actions open when no allowlists"
+
+Work completed:
+
+- Committed `8fe238ef44` (`fix(slack): scope interactive owner/allowFrom enforcement to interactive paths only`)
+- Pushed to `eleqtrizit/openclaw` fork
+- Replied to Thread 11 explaining the fix
+- Resolved Thread 11 via GraphQL
+- Deleted stale `@greptile review` / `@codex review` trigger comments
+- Posted fresh `@greptile review` and `@codex review` trigger comments
+
+Validation:
+
+- `pnpm test extensions/slack/src/monitor/auth.test.ts` — 27 passed
+- `pnpm test extensions/slack/src/monitor/events/interactions.test.ts` — 30 passed
+
+Current status: All 11 review threads resolved. Awaiting fresh reviews from Greptile and Codex on commit `8fe238ef44`.
+
+Date: 2026-04-13
+PR: https://github.com/openclaw/openclaw/pull/66028
+Tracking issue: https://github.com/NVIDIA-dev/openclaw-tracking/issues/422
+
+## Pass after latest unresolved Codex thread on 8fe238ef44
+
+Refreshed context for this pass:
+
+- Read `USER.md`
+- Ran `gh issue view 422 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`
+- Queried PR review threads for `openclaw/openclaw#66028`
+
+Thread status at start of pass:
+
+- 1 unresolved thread remained: **Codex P1 — Preserve open default for no-channel interactive events** (`extensions/slack/src/monitor/auth.ts:284`)
+
+Resolution:
+
+- Confirmed the report was valid. The no-channel auth branch still denied `interactiveEvent` callbacks whenever `allowFrom` was unset, which contradicted the branch intent and could block legitimate modal lifecycle events that carry only `userId` metadata.
+- Updated `extensions/slack/src/monitor/auth.ts` so no-channel events preserve the prior open default unless a global `allowFrom` list is actually configured.
+- Updated `extensions/slack/src/monitor/auth.test.ts` to assert that interactive no-channel events stay open when `allowFrom` is unset.
+- Added a regression test in `extensions/slack/src/monitor/events/interactions.test.ts` covering a modal submission with `private_metadata` containing only `userId` and `allowFrom: []`.
+
+Validation:
+
+- `pnpm test extensions/slack/src/monitor/auth.test.ts` — 27 passed
+- `pnpm test extensions/slack/src/monitor/events/interactions.test.ts` — 31 passed
+
+Planned GitHub follow-up for this pass:
+
+- Reply on the unresolved Codex thread with the fix summary
+- Resolve that thread
+- Delete stale review trigger comments if present
+- Post fresh `@greptile review` and `@codex review` trigger comments

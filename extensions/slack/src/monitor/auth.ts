@@ -275,14 +275,10 @@ export async function authorizeSlackSystemEventSender(params: {
       }
     }
   } else if (!channelId) {
-    // No channel context. Interactive events always require explicit
-    // authorization; non-interactive events only check when allowFrom is
-    // configured.
+    // No channel context. Preserve the existing open default unless a global
+    // allowFrom list is configured.
     const allowFromLower = await resolveAllowFromLower(false);
-    if (params.interactiveEvent || allowFromLower.length > 0) {
-      if (allowFromLower.length === 0) {
-        return { allowed: false, reason: "sender-not-allowlisted" };
-      }
+    if (allowFromLower.length > 0) {
       const senderAllowListed = isSlackSenderAllowListed({
         allowListLower: allowFromLower,
         senderId,
