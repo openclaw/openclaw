@@ -243,6 +243,31 @@ describe("devices cli approve", () => {
       expect.objectContaining({ method: "device.pair.approve" }),
     );
   });
+
+  it("treats 'all' as an implicit selection trigger (previews latest, does not approve)", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [
+        { requestId: "req-latest", deviceId: "device-x", ts: 3000 },
+        { requestId: "req-older", deviceId: "device-y", ts: 1000 },
+      ],
+    });
+
+    await runDevicesApprove(["all"]);
+
+    // "all" is not a valid requestId — should be treated as implicit selection,
+    // listing pending requests and exiting with code 1 to preview (not auto-approve).
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.approve" }),
+    );
+    const logOutput = runtime.log.mock.calls.map((c) => readRuntimeCallText(c)).join("\n");
+    // Should show the latest pending request (req-latest, ts=3000)
+    expect(logOutput).toContain("req-latest");
+  });
 });
 
 describe("devices cli remove", () => {

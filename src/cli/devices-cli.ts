@@ -450,7 +450,11 @@ export function registerDevicesCli(program: Command) {
       .option("--latest", "Show the most recent pending request to approve explicitly", false)
       .action(async (requestId: string | undefined, opts: DevicesRpcOpts) => {
         let resolvedRequestId = requestId?.trim();
-        const usingImplicitSelection = !resolvedRequestId || Boolean(opts.latest);
+        // "all" is not a valid requestId — treat it as an implicit selection trigger
+        // (same as calling `approve` with no arguments, which previews the latest
+        // pending request and exits with code 1 to prevent accidental approvals).
+        const usingImplicitSelection =
+          !resolvedRequestId || resolvedRequestId === "all" || Boolean(opts.latest);
         let selectedRequest: PendingDevice | null = null;
         if (usingImplicitSelection) {
           selectedRequest = selectLatestPendingRequest(

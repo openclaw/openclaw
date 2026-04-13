@@ -68,6 +68,43 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       agent?.handleGatewayReconnect();
     },
     onConnectError: (err) => {
+      // When the gateway says "pairing required", extract the pending requestId and
+      // auto-approve it, then retry.  This unblocks `openclaw acp` agents that run
+      // on a remote VPS where the operator can approve the pending device via
+      // `openclaw devices approve` before the ACP server retries.
+      const errDetails = (err as { details?: unknown }).details;
+      const detailsObj =
+        errDetails && typeof errDetails === "object"
+          ? (errDetails as Record<string, unknown>)
+          : null;
+      if (
+        detailsObj?.code === "PAIRING_REQUIRED" &&
+        typeof detailsObj.requestId === "string" &&
+        detailsObj.requestId
+      ) {
+        const requestId = detailsObj.requestId;
+        // Only attempt one retry — if it also fails, let the error propagate so the
+        // ACP server exits and the operator can investigate.
+        if (!stopped) {
+          void (async () => {
+            try {
+              await gateway.request("device.pair.approve", { requestId });
+            } catch {
+              // Approval failed (operator may have rejected or request expired).
+              // The subsequent gateway connection attempt will fail and exit naturally.
+            }
+            // Close the current (already-closed) socket and start fresh.
+            gateway.stop();
+            // If shutdown() was called while we were awaiting approval, don't start a
+            // new connection — let the server exit.
+            if (stopped) {
+              return;
+            }
+            gateway.start();
+          })();
+          return;
+        }
+      }
       rejectGatewayReady(err);
     },
     onClose: (code, reason) => {
