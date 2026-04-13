@@ -27,6 +27,7 @@ model as `provider/model`.
 - [Alibaba Model Studio](/providers/alibaba)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Amazon Bedrock](/providers/bedrock)
+- [Amazon Bedrock Mantle](/providers/bedrock-mantle)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [ComfyUI](/providers/comfy)
