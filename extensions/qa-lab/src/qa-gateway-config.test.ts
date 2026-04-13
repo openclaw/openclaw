@@ -77,7 +77,6 @@ describe("buildQaGatewayConfig", () => {
       gatewayPort: 18789,
       gatewayToken: "token",
       providerBaseUrl: "http://127.0.0.1:44080/v1",
-      qaBusBaseUrl: "http://127.0.0.1:43124",
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.4",
@@ -94,7 +93,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.models.map((model) => model.id)).toContain(
       "claude-opus-4-6",
     );
-    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core"]);
   });
 
   it("can omit qa-channel for live transport gateway children", () => {
