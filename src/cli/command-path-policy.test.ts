@@ -12,6 +12,23 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("loads plugins for wiki commands", () => {
+    expect(resolveCliCommandPathPolicy(["wiki", "status"])).toEqual({
+      bypassConfigGuard: false,
+      routeConfigGuard: "never",
+      loadPlugins: "always",
+      hideBanner: false,
+      ensureCliPath: true,
+    });
+    expect(resolveCliCommandPathPolicy(["wiki", "bridge", "import"])).toEqual({
+      bypassConfigGuard: false,
+      routeConfigGuard: "never",
+      loadPlugins: "always",
+      hideBanner: false,
+      ensureCliPath: true,
+    });
+  });
+
   it("applies exact overrides after broader channel plugin rules", () => {
     expect(resolveCliCommandPathPolicy(["channels", "send"])).toEqual({
       bypassConfigGuard: false,

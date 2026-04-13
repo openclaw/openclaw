@@ -91,6 +91,44 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
   });
 
+  it("stays healthy when bridge mode sees exported memory artifacts", async () => {
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+        },
+      },
+      { homedir: "/Users/tester" },
+    );
+
+    const status = await resolveMemoryWikiStatus(config, {
+      appConfig: {
+        agents: {
+          list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+        },
+      } as OpenClawConfig,
+      listPublicArtifacts: async () => [
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/workspace",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/workspace/MEMORY.md",
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+      ],
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.bridgePublicArtifactCount).toBe(1);
+    expect(status.warnings.map((warning) => warning.code)).not.toContain(
+      "bridge-artifacts-missing",
+    );
+  });
+
   it("counts source provenance from the vault", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-status-",

@@ -62,6 +62,18 @@ describe("command-startup-policy", () => {
         jsonOutputMode: false,
       }),
     ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["wiki", "status"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["wiki", "status"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
   });
 
   it("matches banner suppression policy", () => {
@@ -109,6 +121,32 @@ describe("command-startup-policy", () => {
       hideBanner: false,
       skipConfigGuard: true,
       loadPlugins: false,
+    });
+  });
+
+  it("keeps wiki commands on the plugin-loading path in text and json modes", () => {
+    expect(
+      resolveCliStartupPolicy({
+        commandPath: ["wiki", "status"],
+        jsonOutputMode: true,
+      }),
+    ).toEqual({
+      suppressDoctorStdout: true,
+      hideBanner: false,
+      skipConfigGuard: false,
+      loadPlugins: true,
+    });
+
+    expect(
+      resolveCliStartupPolicy({
+        commandPath: ["wiki", "bridge", "import"],
+        jsonOutputMode: false,
+      }),
+    ).toEqual({
+      suppressDoctorStdout: false,
+      hideBanner: false,
+      skipConfigGuard: false,
+      loadPlugins: true,
     });
   });
 });
