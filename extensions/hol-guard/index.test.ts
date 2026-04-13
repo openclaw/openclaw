@@ -305,6 +305,42 @@ describe("hol-guard plugin", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("fails closed when the guard verdict payload is malformed", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(createJsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const hooks = setupPlugin({
+      baseUrl: "https://guard.example/api/v1/consumer",
+      failOpen: false,
+    });
+    const beforeToolCall = hooks.get("before_tool_call");
+
+    const result = await beforeToolCall?.(
+      {
+        toolName: "mcp_invalid_verdict",
+        toolCallId: "tool-invalid-verdict",
+        params: {
+          artifactId: "mcp-server:openclaw:invalid-verdict",
+          artifactName: "invalid verdict",
+          artifactSlug: "invalid-verdict",
+          artifactType: "mcp-server",
+          launchSummary: "guard returned malformed verdict payload",
+        },
+      },
+      {
+        runId: "run-invalid-verdict",
+        toolName: "mcp_invalid_verdict",
+        toolCallId: "tool-invalid-verdict",
+      },
+    );
+
+    expect(result).toEqual({
+      block: true,
+      blockReason: "HOL Guard policy lookup failed: Invalid HOL Guard verdict payload.",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves a block verdict when receipt signaling fails", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

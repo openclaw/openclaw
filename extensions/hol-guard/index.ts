@@ -211,15 +211,15 @@ async function resolvePreExecutionVerdict(
     launchSummary: artifact.launchSummary,
   });
   if (!isRecord(response)) {
-    return undefined;
+    throw new Error("Invalid HOL Guard verdict payload.");
   }
   const decisionRaw = readString(response.decision);
   if (!decisionRaw) {
-    return undefined;
+    throw new Error("Invalid HOL Guard verdict payload.");
   }
   const decision = decisionRaw.toLowerCase();
   if (decision !== "allow" && decision !== "review" && decision !== "block") {
-    return undefined;
+    throw new Error("Invalid HOL Guard verdict payload.");
   }
   return {
     decision,
