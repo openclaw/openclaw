@@ -94,6 +94,12 @@ function parseRoamWebhookEvent(raw: unknown): RoamWebhookEvent | null {
   if (typeof obj.userId !== "string") {
     return null;
   }
+  if (typeof obj.chatId !== "string") {
+    return null;
+  }
+  if (typeof obj.timestamp !== "number" || !Number.isFinite(obj.timestamp)) {
+    return null;
+  }
   return obj as unknown as RoamWebhookEvent;
 }
 

@@ -251,6 +251,27 @@ describe("handleRoamInbound", () => {
 
       expect(mockDispatchInboundReplyWithBase).not.toHaveBeenCalled();
     });
+
+    it("processes media-only messages with no text", async () => {
+      mockFetchRemoteMedia.mockResolvedValue({
+        buffer: Buffer.from("image-data"),
+        contentType: "image/png",
+      });
+      mockSaveMediaBuffer.mockResolvedValue({ path: "/tmp/media/img.png" });
+
+      await handleRoamInbound({
+        message: makeMessage({
+          text: "",
+          mediaUrls: ["https://example.com/photo.png"],
+          mediaTypes: ["image/png"],
+        }),
+        account: makeAccount(),
+        config: defaultConfig,
+        runtime: defaultRuntime,
+      });
+
+      expect(mockDispatchInboundReplyWithBase).toHaveBeenCalled();
+    });
   });
 
   describe("bot mention stripping", () => {

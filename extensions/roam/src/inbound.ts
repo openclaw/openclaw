@@ -121,7 +121,8 @@ export async function handleRoamInbound(params: {
   });
 
   const rawBody = message.text?.trim() ?? "";
-  if (!rawBody) {
+  const hasMedia = (message.mediaUrls?.length ?? 0) > 0;
+  if (!rawBody && !hasMedia) {
     return;
   }
 
@@ -248,8 +249,8 @@ export async function handleRoamInbound(params: {
   // Strip bot mentions from body before processing
   const bodyForAgent = stripBotMention(rawBody, botId);
 
-  // If the message was only a bot mention with no actual content, drop it.
-  if (!bodyForAgent && !hasControlCommand) {
+  // If the message was only a bot mention with no actual content (and no media), drop it.
+  if (!bodyForAgent && !hasControlCommand && !hasMedia) {
     runtime.log?.(`roam: drop mention-only message from ${senderId}`);
     return;
   }
