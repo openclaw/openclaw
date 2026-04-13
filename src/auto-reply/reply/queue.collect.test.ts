@@ -632,6 +632,90 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("- first");
   });
 
+  it("includes the overflow summary only in the first split auth group", async () => {
+    const key = `test-collect-overflow-summary-once-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+
+    const droppedGuest = createRun({
+      prompt: "dropped guest message",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    const guest = createRun({
+      prompt: "guest message",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    const owner = createRun({
+      prompt: "owner message",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...droppedGuest,
+        run: {
+          ...droppedGuest.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...guest,
+        run: {
+          ...guest.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...owner,
+        run: {
+          ...owner.run,
+          senderId: "owner-1",
+          senderName: "Owner",
+          senderIsOwner: true,
+        },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.prompt).toContain("- dropped guest message");
+    expect(calls[1]?.prompt).not.toContain("[Queue overflow]");
+    expect(calls[1]?.prompt).not.toContain("dropped guest message");
+  });
+
   it("preserves routing metadata on overflow summary followups", async () => {
     const key = `test-overflow-summary-routing-${Date.now()}`;
     const calls: FollowupRun[] = [];
