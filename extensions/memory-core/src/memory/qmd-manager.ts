@@ -2556,6 +2556,15 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       try {
+        const exactRow = this.ensureDb()
+          .prepare("SELECT path FROM documents WHERE collection = ? AND active = 1 AND path = ?")
+          .get(collection, collectionRelativePath) as { path: string } | undefined;
+        if (
+          exactRow &&
+          path.normalize(path.resolve(root.path, exactRow.path)) === normalizedAbsPath
+        ) {
+          return true;
+        }
         const rows = this.ensureDb()
           .prepare("SELECT path FROM documents WHERE collection = ? AND active = 1")
           .all(collection) as Array<{ path: string }>;
