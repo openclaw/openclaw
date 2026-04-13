@@ -66,10 +66,17 @@ function describeNextcloudTalkMessageTool({
   if (enabledAccounts.length > 0) {
     actions.push("send");
     actions.push("react");
+    actions.push("edit");
   }
 
   return { actions, capabilities: [], schema: null };
 }
+
+// Nextcloud Talk's bot API has no in-place edit endpoint. The edit action is
+// implemented as a re-post prefixed with this header and threaded as a reply
+// to the original message id.
+const NEXTCLOUD_TALK_EDIT_HEADER =
+  "> Edited update — Nextcloud Talk does not support editing bot messages in place.";
 
 function parseNextcloudTalkReactActionParams(params: Record<string, unknown>): {
   roomToken: string;
@@ -94,23 +101,73 @@ function parseNextcloudTalkReactActionParams(params: Record<string, unknown>): {
   return { roomToken, messageId, emoji };
 }
 
+function parseNextcloudTalkEditActionParams(params: Record<string, unknown>): {
+  roomToken: string;
+  originalMessageId: string;
+  message: string;
+} {
+  const roomToken = normalizeOptionalString(params.to) ?? normalizeOptionalString(params.target);
+  if (!roomToken) {
+    throw new Error("Nextcloud Talk edit requires a target (to) room token.");
+  }
+
+  const originalMessageId = normalizeOptionalString(params.messageId);
+  if (!originalMessageId) {
+    throw new Error("Nextcloud Talk edit requires messageId.");
+  }
+
+  const message = normalizeOptionalString(params.message);
+  if (!message) {
+    throw new Error("Nextcloud Talk edit requires message.");
+  }
+
+  return { roomToken, originalMessageId, message };
+}
+
 const nextcloudTalkMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeNextcloudTalkMessageTool,
-  // Send stays on outbound.attachedResults; only react needs plugin dispatch here.
-  supportsAction: ({ action }) => action === "react",
+  // Send stays on outbound.attachedResults; only react + edit need plugin dispatch here.
+  // Delete is intentionally unsupported — callers should send a follow-up note instead.
+  supportsAction: ({ action }) => action === "react" || action === "edit",
   handleAction: async ({ action, params, cfg, accountId }) => {
-    if (action !== "react") {
-      throw new Error(`Unsupported Nextcloud Talk action: ${action}`);
+    if (action === "react") {
+      const { roomToken, messageId, emoji } = parseNextcloudTalkReactActionParams(params);
+      await sendReactionNextcloudTalk(roomToken, messageId, emoji, {
+        accountId: accountId ?? undefined,
+        cfg: cfg as CoreConfig,
+      });
+      return {
+        content: [{ type: "text" as const, text: `Reacted ${emoji} on ${messageId}` }],
+        details: {},
+      };
     }
-    const { roomToken, messageId, emoji } = parseNextcloudTalkReactActionParams(params);
-    await sendReactionNextcloudTalk(roomToken, messageId, emoji, {
-      accountId: accountId ?? undefined,
-      cfg: cfg as CoreConfig,
-    });
-    return {
-      content: [{ type: "text" as const, text: `Reacted ${emoji} on ${messageId}` }],
-      details: {},
-    };
+
+    if (action === "edit") {
+      const { roomToken, originalMessageId, message } = parseNextcloudTalkEditActionParams(params);
+      const prefixed = `${NEXTCLOUD_TALK_EDIT_HEADER}\n\n${message}`;
+      const result = await sendMessageNextcloudTalk(roomToken, prefixed, {
+        accountId: accountId ?? undefined,
+        replyTo: originalMessageId,
+        cfg: cfg as CoreConfig,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              ok: true,
+              channel: "nextcloud-talk",
+              messageId: result.messageId,
+              originalMessageId,
+              replacedAsReply: true,
+            }),
+          },
+        ],
+        details: {},
+      };
+    }
+
+    throw new Error(`Unsupported Nextcloud Talk action: ${action}`);
   },
 };
 

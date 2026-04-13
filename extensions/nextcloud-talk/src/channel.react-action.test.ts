@@ -130,7 +130,7 @@ describe("nextcloud-talk react message action", () => {
   it("rejects unsupported actions", async () => {
     await expect(
       nextcloudTalkPlugin.actions?.handleAction?.(
-        makeReactCtx({}, { action: "edit" as NextcloudTalkActionContext["action"] }),
+        makeReactCtx({}, { action: "delete" as NextcloudTalkActionContext["action"] }),
       ),
     ).rejects.toThrow(/Unsupported/);
   });
