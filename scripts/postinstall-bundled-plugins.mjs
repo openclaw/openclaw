@@ -6,8 +6,17 @@
 // plugin deps from the workspace root, so stale plugin-local node_modules must
 // not linger under extensions/* and shadow the root graph.
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
@@ -39,10 +48,12 @@ const BAILEYS_MEDIA_HOTFIX_REPLACEMENT = [
   "        encFileWriteStream.end();",
   "        originalFileStream?.end?.();",
   "        stream.destroy();",
-  "        await encFinishPromise;",
-  "        await originalFinishPromise;",
+  "        await Promise.all([encFinishPromise, originalFinishPromise]);",
   "        logger?.debug('encrypted data successfully');",
 ].join("\n");
+const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
+const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
+  /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -181,28 +192,67 @@ export function createNestedNpmInstallEnv(env = process.env) {
 export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const pathExists = params.existsSync ?? existsSync;
+  const pathLstat = params.lstatSync ?? lstatSync;
   const readFile = params.readFileSync ?? readFileSync;
+  const resolveRealPath = params.realpathSync ?? realpathSync;
+  const renameFile = params.renameSync ?? renameSync;
+  const removePath = params.rmSync ?? rmSync;
   const writeFile =
     params.writeFileSync ?? ((filePath, value) => writeFileSync(filePath, value, "utf8"));
   const targetPath = join(packageRoot, BAILEYS_MEDIA_FILE);
+  const nodeModulesRoot = join(packageRoot, "node_modules");
 
-  if (!pathExists(targetPath)) {
-    return { applied: false, reason: "missing" };
-  }
+  try {
+    if (!pathExists(targetPath)) {
+      return { applied: false, reason: "missing" };
+    }
 
-  const currentText = readFile(targetPath, "utf8");
-  if (currentText.includes(BAILEYS_MEDIA_HOTFIX_REPLACEMENT)) {
-    return { applied: false, reason: "already_patched" };
-  }
-  if (!currentText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE)) {
-    return { applied: false, reason: "unexpected_content" };
-  }
+    const targetStats = pathLstat(targetPath);
+    if (!targetStats.isFile() || targetStats.isSymbolicLink()) {
+      return { applied: false, reason: "unsafe_target", targetPath };
+    }
 
-  writeFile(
-    targetPath,
-    currentText.replace(BAILEYS_MEDIA_HOTFIX_NEEDLE, BAILEYS_MEDIA_HOTFIX_REPLACEMENT),
-  );
-  return { applied: true, reason: "patched", targetPath };
+    const nodeModulesRootReal = resolveRealPath(nodeModulesRoot);
+    const targetPathReal = resolveRealPath(targetPath);
+    const relativeTargetPath = relative(nodeModulesRootReal, targetPathReal);
+    if (relativeTargetPath.startsWith("..") || isAbsolute(relativeTargetPath)) {
+      return { applied: false, reason: "path_escape", targetPath };
+    }
+
+    const currentText = readFile(targetPath, "utf8");
+    if (currentText.includes(BAILEYS_MEDIA_HOTFIX_REPLACEMENT)) {
+      return { applied: false, reason: "already_patched" };
+    }
+    if (!currentText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE)) {
+      return { applied: false, reason: "unexpected_content" };
+    }
+    if (!BAILEYS_MEDIA_ONCE_IMPORT_RE.test(currentText)) {
+      return { applied: false, reason: "missing_once_import", targetPath };
+    }
+    if (!BAILEYS_MEDIA_ASYNC_CONTEXT_RE.test(currentText)) {
+      return { applied: false, reason: "not_async_context", targetPath };
+    }
+
+    const patchedText = currentText.replace(
+      BAILEYS_MEDIA_HOTFIX_NEEDLE,
+      BAILEYS_MEDIA_HOTFIX_REPLACEMENT,
+    );
+    const tempPath = `${targetPath}.openclaw-hotfix-${process.pid}-${Date.now()}`;
+    try {
+      writeFile(tempPath, patchedText, "utf8");
+      renameFile(tempPath, targetPath);
+    } finally {
+      removePath(tempPath, { force: true });
+    }
+    return { applied: true, reason: "patched", targetPath };
+  } catch (error) {
+    return {
+      applied: false,
+      reason: "error",
+      targetPath,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function applyBundledPluginRuntimeHotfixes(params = {}) {
@@ -212,9 +262,9 @@ function applyBundledPluginRuntimeHotfixes(params = {}) {
     log.log("[postinstall] patched @whiskeysockets/baileys encryptedStream flush ordering");
     return;
   }
-  if (baileysResult.reason === "unexpected_content") {
+  if (baileysResult.reason !== "missing" && baileysResult.reason !== "already_patched") {
     log.warn(
-      "[postinstall] could not patch @whiskeysockets/baileys encryptedStream: unexpected file content",
+      `[postinstall] could not patch @whiskeysockets/baileys encryptedStream: ${baileysResult.reason}`,
     );
   }
 }

@@ -23,18 +23,26 @@ async function loadStageBundledPluginRuntimeDeps(): Promise<StageBundledPluginRu
 }
 
 async function loadPostinstallBundledPluginsModule(): Promise<{
-  applyBaileysEncryptedStreamFinishHotfix: (params?: { packageRoot?: string }) => {
+  applyBaileysEncryptedStreamFinishHotfix: (params?: {
+    packageRoot?: string;
+    writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
+  }) => {
     applied: boolean;
     reason: string;
     targetPath?: string;
+    error?: string;
   };
 }> {
   const moduleUrl = new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url);
   return (await import(moduleUrl.href)) as {
-    applyBaileysEncryptedStreamFinishHotfix: (params?: { packageRoot?: string }) => {
+    applyBaileysEncryptedStreamFinishHotfix: (params?: {
+      packageRoot?: string;
+      writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
+    }) => {
       applied: boolean;
       reason: string;
       targetPath?: string;
+      error?: string;
     };
   };
 }
@@ -197,11 +205,14 @@ describe("stageBundledPluginRuntimeDeps", () => {
       repoRoot,
       "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
       [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
         "        encFileWriteStream.write(mac);",
         "        encFileWriteStream.end();",
         "        originalFileStream?.end?.();",
         "        stream.destroy();",
         "        logger?.debug('encrypted data successfully');",
+        "};",
       ].join("\n"),
     );
 
@@ -216,6 +227,78 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
       "const encFinishPromise = once(encFileWriteStream, 'finish');",
     );
-    expect(fs.readFileSync(targetPath, "utf8")).toContain("await originalFinishPromise;");
+    expect(fs.readFileSync(targetPath, "utf8")).toContain(
+      "await Promise.all([encFinishPromise, originalFinishPromise]);",
+    );
+  });
+
+  it("refuses symlink targets for the Baileys hotfix", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-hotfix-symlink-");
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    const redirectedTarget = path.join(repoRoot, "redirected-messages-media.js");
+    writeRepoFile(repoRoot, "redirected-messages-media.js", "const untouched = true;\n");
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.symlinkSync(redirectedTarget, targetPath);
+
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({ packageRoot: repoRoot });
+
+    expect(result).toEqual({
+      applied: false,
+      reason: "unsafe_target",
+      targetPath,
+    });
+    expect(fs.readFileSync(redirectedTarget, "utf8")).toBe("const untouched = true;\n");
+  });
+
+  it("downgrades Baileys hotfix write failures to a non-fatal result", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-hotfix-write-failure-");
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    writeRepoFile(
+      repoRoot,
+      "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+      ].join("\n"),
+    );
+
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({
+      packageRoot: repoRoot,
+      writeFileSync() {
+        throw new Error("read-only filesystem");
+      },
+    });
+
+    expect(result).toEqual({
+      applied: false,
+      reason: "error",
+      targetPath,
+      error: "read-only filesystem",
+    });
+    expect(fs.readFileSync(targetPath, "utf8")).toContain("encFileWriteStream.end();");
   });
 });
