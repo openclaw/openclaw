@@ -24,7 +24,6 @@ const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "ash",
   "awk",
   "bash",
-  "busybox",
   "bun",
   "cmd",
   "cmd.exe",
@@ -53,7 +52,6 @@ const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "ruby",
   "sed",
   "sh",
-  "toybox",
   "wscript",
   "zsh",
 ]);

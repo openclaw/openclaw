@@ -47,6 +47,8 @@ const GENERIC_MUTABLE_SCRIPT_RUNNERS = new Set([
   "vite-node",
 ]);
 
+const OPAQUE_MUTABLE_SCRIPT_RUNNERS = new Set(["busybox", "toybox"]);
+
 const BUN_SUBCOMMANDS = new Set([
   "add",
   "audit",
@@ -743,7 +745,11 @@ function hasPerlUnsafeApprovalFlag(argv: string[]): boolean {
 }
 
 function isMutableScriptRunner(executable: string): boolean {
-  return GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) || isInterpreterLikeSafeBin(executable);
+  return (
+    GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) ||
+    OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(executable) ||
+    isInterpreterLikeSafeBin(executable)
+  );
 }
 
 function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined): number | null {

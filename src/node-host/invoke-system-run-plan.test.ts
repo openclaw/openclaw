@@ -203,6 +203,12 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
     command: ["tsx", "--eval", "console.log('SAFE')"],
   },
   {
+    name: "rejects busybox non-shell applets that cannot be safely bound",
+    binName: "busybox",
+    tmpPrefix: "openclaw-busybox-awk-",
+    command: ["busybox", "awk", 'BEGIN{system("id")}'],
+  },
+  {
     name: "rejects node inline import operands that cannot be bound to one stable file",
     binName: "node",
     tmpPrefix: "openclaw-node-import-inline-",
