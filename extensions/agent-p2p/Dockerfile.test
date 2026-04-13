@@ -1,0 +1,36 @@
+# OpenClaw with Agent P2P Plugin Test Environment
+FROM node:20-slim
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    python3 \
+    python3-pip \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Clone OpenClaw with Agent P2P plugin
+RUN git clone --branch agent-p2p-channel --depth 1 https://github.com/yananli199307-dev/openclaw-P2P.git openclaw
+
+WORKDIR /app/openclaw
+
+# Install dependencies
+RUN npm install
+
+# Build the project
+RUN npm run build
+
+# Create config directory
+RUN mkdir -p /root/.openclaw
+
+# Copy test config
+COPY docker-test-config.json /root/.openclaw/config.json
+
+# Expose ports
+EXPOSE 18789
+
+# Start OpenClaw Gateway
+CMD ["npm", "run", "gateway:start"]

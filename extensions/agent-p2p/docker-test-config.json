@@ -1,0 +1,24 @@
+{
+  "gateway": {
+    "port": 18789,
+    "host": "0.0.0.0"
+  },
+  "channels": {
+    "agent-p2p": {
+      "enabled": true,
+      "accounts": [
+        {
+          "id": "test",
+          "portalUrl": "https://agentportalp2p.com",
+          "apiKey": "test-api-key",
+          "agentName": "Test Agent"
+        }
+      ]
+    }
+  },
+  "agents": {
+    "default": {
+      "model": "openai/gpt-4o"
+    }
+  }
+}

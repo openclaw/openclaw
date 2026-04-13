@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  openclaw-agent-p2p:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: openclaw-agent-p2p-test
+    ports:
+      - "18789:18789"
+    volumes:
+      - openclaw-data:/root/.openclaw
+    environment:
+      - NODE_ENV=development
+      - OPENCLAW_LOG_LEVEL=debug
+    networks:
+      - agent-p2p-test
+
+  # Mock Portal for testing
+  mock-portal:
+    image: node:20-slim
+    container_name: mock-portal
+    working_dir: /app
+    command: >
+      sh -c "
+        echo 'const WebSocket = require(\"ws\");' > server.js &&
+        echo 'const wss = new WebSocket.Server({ port: 8080 });' >> server.js &&
+        echo 'wss.on(\"connection\", (ws) => {' >> server.js &&
+        echo '  console.log(\"Client connected\");' >> server.js &&
+        echo '  ws.on(\"message\", (data) => {' >> server.js &&
+        echo '    console.log(\"Received:\", data.toString());' >> server.js &&
+        echo '    ws.send(JSON.stringify({ type: \"echo\", content: data.toString() }));' >> server.js &&
+        echo '  });' >> server.js &&
+        echo '});' >> server.js &&
+        echo 'console.log(\"Mock Portal running on ws://localhost:8080\");' >> server.js &&
+        node server.js
+      "
+    ports:
+      - "8080:8080"
+    networks:
+      - agent-p2p-test
+
+volumes:
+  openclaw-data:
+
+networks:
+  agent-p2p-test:
+    driver: bridge

@@ -1,8 +1,5 @@
-export type AgentP2PConfig = {
-  portalUrl: string;
-  apiKey: string;
-  agentName?: string;
-};
+// Re-export from config-schema.ts to avoid duplication
+export type { AgentP2PConfig } from "./config-schema.js";
 
 export type AgentP2PMessage = {
   type: "message" | "file" | "contact_request";

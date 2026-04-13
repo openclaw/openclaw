@@ -3,9 +3,13 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-contract";
 import { AgentP2PConfigSchema, type AgentP2PConfig } from "./config-schema.js";
 import { createAgentP2PClient, type AgentP2PClient } from "./client.js";
 import type { AgentP2PMessage } from "./types.js";
+import { getRuntimeLogger } from "../runtime-api.js";
 
 // Store active clients
 const clients = new Map<string, AgentP2PClient>();
+
+// Store account configs for listAccounts
+const accountConfigs = new Map<string, AgentP2PConfig>();
 
 export const agentP2PPlugin: ChannelPlugin<AgentP2PConfig> = createChatChannelPlugin({
   id: "agent-p2p",
@@ -17,13 +21,23 @@ export const agentP2PPlugin: ChannelPlugin<AgentP2PConfig> = createChatChannelPl
   
   // Account management
   async listAccounts() {
-    // Return configured accounts from config
-    return [];
+    // Return configured accounts
+    return Array.from(accountConfigs.entries()).map(([id, config]) => ({
+      id,
+      name: config.agentName || id,
+      status: clients.has(id) && clients.get(id)?.isConnected() ? "connected" : "disconnected",
+    }));
   },
   
   async resolveAccount(accountId: string) {
-    // Resolve account by ID
-    return null;
+    const config = accountConfigs.get(accountId);
+    if (!config) return null;
+    
+    return {
+      id: accountId,
+      name: config.agentName || accountId,
+      status: clients.has(accountId) && clients.get(accountId)?.isConnected() ? "connected" : "disconnected",
+    };
   },
   
   // Message handling
@@ -42,18 +56,7 @@ export const agentP2PPlugin: ChannelPlugin<AgentP2PConfig> = createChatChannelPl
   
   // Send message
   async sendMessage(ctx, target, content) {
-    // Send message via Portal API
-    const account = ctx.account;
-    if (!account) {
-      throw new Error("No account configured");
-    }
-    
-    // TODO: Implement HTTP POST to Portal /api/message/send
-    console.log("[Agent P2P] Sending message:", { target, content });
-  },
-  
-  // Lifecycle
-  async startMonitoring(ctx) {
+    const logger = getRuntimeLogger();
     const account = ctx.account;
     if (!account) {
       throw new Error("No account configured");
@@ -61,20 +64,58 @@ export const agentP2PPlugin: ChannelPlugin<AgentP2PConfig> = createChatChannelPl
     
     const config = account.config as AgentP2PConfig;
     
+    try {
+      // Send via Portal HTTP API
+      const response = await fetch(`${config.portalUrl}/api/message/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": config.apiKey,
+        },
+        body: JSON.stringify({
+          to: target,
+          content: content,
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      }
+      
+      logger.log(`[Agent P2P] Message sent to ${target}`);
+    } catch (err) {
+      logger.error("[Agent P2P] Failed to send message:", err);
+      throw err;
+    }
+  },
+  
+  // Lifecycle
+  async startMonitoring(ctx) {
+    const logger = getRuntimeLogger();
+    const account = ctx.account;
+    if (!account) {
+      throw new Error("No account configured");
+    }
+    
+    const config = account.config as AgentP2PConfig;
+    
+    // Store config for listAccounts
+    accountConfigs.set(account.id, config);
+    
     const client = createAgentP2PClient({
       config,
       onConnect: () => {
-        console.log(`[Agent P2P] Account ${account.id} connected`);
+        logger.log(`[Agent P2P] Account ${account.id} connected`);
       },
       onDisconnect: () => {
-        console.log(`[Agent P2P] Account ${account.id} disconnected`);
+        logger.log(`[Agent P2P] Account ${account.id} disconnected`);
       },
       onMessage: (message: AgentP2PMessage) => {
         // Handle incoming message
         ctx.onMessage?.(message);
       },
       onError: (err) => {
-        console.error(`[Agent P2P] Account ${account.id} error:`, err);
+        logger.error(`[Agent P2P] Account ${account.id} error:`, err);
       },
     });
     
@@ -91,5 +132,6 @@ export const agentP2PPlugin: ChannelPlugin<AgentP2PConfig> = createChatChannelPl
       client.disconnect();
       clients.delete(account.id);
     }
+    accountConfigs.delete(account.id);
   },
 });

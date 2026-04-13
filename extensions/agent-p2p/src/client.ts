@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import type { AgentP2PConfig, AgentP2PMessage } from "./types.js";
+import { getRuntimeLogger } from "../runtime-api.js";
 
 export type AgentP2PClientOptions = {
   config: AgentP2PConfig;
@@ -15,6 +16,9 @@ export class AgentP2PClient {
   private options: AgentP2PClientOptions;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private shouldReconnect = true;
+  private reconnectAttempts = 0;
+  private maxReconnectDelay = 60000; // 60 seconds max
+  private baseReconnectDelay = 5000; // 5 seconds base
 
   constructor(options: AgentP2PClientOptions) {
     this.config = options.config;
@@ -23,8 +27,11 @@ export class AgentP2PClient {
 
   async connect(): Promise<void> {
     const wsUrl = `${this.config.portalUrl.replace("https://", "wss://").replace("http://", "ws://")}/ws/agent`;
+    const logger = getRuntimeLogger();
     
     return new Promise((resolve, reject) => {
+      let isResolved = false;
+      
       try {
         this.ws = new WebSocket(wsUrl, {
           headers: {
@@ -33,9 +40,13 @@ export class AgentP2PClient {
         });
 
         this.ws.on("open", () => {
-          console.log(`[Agent P2P] Connected to ${this.config.portalUrl}`);
+          this.reconnectAttempts = 0; // Reset on successful connection
+          logger.log(`[Agent P2P] Connected to ${this.config.portalUrl}`);
           this.options.onConnect?.();
-          resolve();
+          if (!isResolved) {
+            isResolved = true;
+            resolve();
+          }
         });
 
         this.ws.on("message", (data) => {
@@ -43,20 +54,26 @@ export class AgentP2PClient {
             const message = JSON.parse(data.toString()) as AgentP2PMessage;
             this.options.onMessage?.(message);
           } catch (err) {
-            console.error("[Agent P2P] Failed to parse message:", err);
+            const logger = getRuntimeLogger();
+            logger.error("[Agent P2P] Failed to parse message:", err);
           }
         });
 
         this.ws.on("close", () => {
-          console.log("[Agent P2P] Connection closed");
+          const logger = getRuntimeLogger();
+          logger.log("[Agent P2P] Connection closed");
           this.options.onDisconnect?.();
           this.scheduleReconnect();
         });
 
         this.ws.on("error", (err) => {
-          console.error("[Agent P2P] WebSocket error:", err);
+          logger.error("[Agent P2P] WebSocket error:", err);
           this.options.onError?.(err);
-          reject(err);
+          // Only reject if not already resolved
+          if (!isResolved) {
+            isResolved = true;
+            reject(err);
+          }
         });
       } catch (err) {
         reject(err);
@@ -77,12 +94,20 @@ export class AgentP2PClient {
   private scheduleReconnect(): void {
     if (!this.shouldReconnect) return;
     
-    console.log("[Agent P2P] Reconnecting in 5 seconds...");
+    this.reconnectAttempts++;
+    const delay = Math.min(
+      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      this.maxReconnectDelay
+    );
+    
+    const logger = getRuntimeLogger();
+    logger.log(`[Agent P2P] Reconnecting in ${delay / 1000}s (attempt ${this.reconnectAttempts})...`);
+    
     this.reconnectTimer = setTimeout(() => {
       this.connect().catch((err) => {
-        console.error("[Agent P2P] Reconnect failed:", err);
+        logger.error("[Agent P2P] Reconnect failed:", err);
       });
-    }, 5000);
+    }, delay);
   }
 
   isConnected(): boolean {
