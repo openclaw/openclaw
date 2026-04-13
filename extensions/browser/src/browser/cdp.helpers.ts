@@ -68,6 +68,11 @@ export async function assertCdpEndpointAllowed(
   if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
     throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
   }
+  // Loopback CDP endpoints are always allowed — the browser plugin connects
+  // to its own Chrome instance on localhost.
+  if (isLoopbackHost(parsed.hostname)) {
+    return;
+  }
   try {
     await resolvePinnedHostnameWithPolicy(parsed.hostname, {
       policy: ssrfPolicy,
@@ -267,7 +272,9 @@ export async function fetchCdpChecked(
         url,
         init: { ...init, headers },
         signal: ctrl.signal,
-        policy: ssrfPolicy ?? { allowPrivateNetwork: true },
+        policy: isLoopbackHost(new URL(url).hostname)
+          ? { allowPrivateNetwork: true }
+          : (ssrfPolicy ?? { allowPrivateNetwork: true }),
         auditContext: "browser-cdp",
       });
       guardedRelease = guarded.release;
