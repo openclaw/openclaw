@@ -77,9 +77,7 @@ export function startGatewayRuntimeServices(params: {
   channelHealthMonitor: ChannelHealthMonitor | null;
   stopModelPricingRefresh: () => void;
 } {
-  // Return a noop heartbeat runner for now.  The real runner is created
-  // in activateGatewayScheduledServices() after sidecars finish and
-  // chat.history becomes available.  See #65322.
+  // Keep scheduled work inert until post-attach sidecars finish.
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,
@@ -96,24 +94,8 @@ export function startGatewayRuntimeServices(params: {
 }
 
 /**
- * Activate cron scheduler and pending delivery recovery AFTER gateway
- * sidecars are fully started and chat.history is available.
- *
- * Previously these ran inside startGatewayRuntimeServices(), which
- * fires before sidecars finish — creating a race where cron/heartbeat
- * jobs could call chat.history while it was still marked unavailable.
- * See: https://github.com/openclaw/openclaw/issues/65322
- */
-/**
  * Activate cron scheduler, heartbeat runner, and pending delivery recovery
- * AFTER gateway sidecars are fully started and chat.history is available.
- *
- * Previously these ran inside startGatewayRuntimeServices(), which fires
- * before sidecars finish — creating a race where cron/heartbeat jobs
- * could call chat.history while it was still marked unavailable.
- * See: https://github.com/openclaw/openclaw/issues/65322
- *
- * Returns the real heartbeat runner so the caller can update runtimeState.
+ * after gateway sidecars are fully started and chat.history is available.
  */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;

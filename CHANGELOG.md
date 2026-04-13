@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/startup: defer heartbeat, cron, and pending delivery recovery until sidecars finish so Sandbox wake and chat history startup gates cannot block channel resume. (#65365) Thanks @lml2468.
+
 ## 2026.4.12-beta.1
 
 ### Changes
