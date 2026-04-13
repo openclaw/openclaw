@@ -966,6 +966,24 @@ function sweepExpiredCacheEntries(now = Date.now()): void {
   }
 }
 
+function toSingleLineLogValue(value: unknown): string {
+  const raw =
+    typeof value === "string"
+      ? value
+      : typeof value === "number" ||
+          typeof value === "boolean" ||
+          typeof value === "bigint" ||
+          typeof value === "symbol"
+        ? String(value)
+        : value == null
+          ? ""
+          : JSON.stringify(value);
+  return raw
+    .replace(/[\r\n\t]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" || result.status === "empty";
 }
@@ -1423,6 +1441,7 @@ function extractTextContent(content: unknown): string {
 }
 
 function stripRecalledContextNoise(text: string): string {
+  let insideActiveMemoryBlock = false;
   const cleanedLines = text
     .split("\n")
     .map((line) => line.trim())
@@ -1430,10 +1449,18 @@ function stripRecalledContextNoise(text: string): string {
       if (!line) {
         return false;
       }
-      if (
-        line.includes(`<${ACTIVE_MEMORY_PLUGIN_TAG}>`) ||
-        line.includes(`</${ACTIVE_MEMORY_PLUGIN_TAG}>`)
-      ) {
+      if (line.includes(`<${ACTIVE_MEMORY_PLUGIN_TAG}>`)) {
+        insideActiveMemoryBlock = true;
+        return false;
+      }
+      if (line.includes(`</${ACTIVE_MEMORY_PLUGIN_TAG}>`)) {
+        insideActiveMemoryBlock = false;
+        return false;
+      }
+      if (insideActiveMemoryBlock) {
+        return false;
+      }
+      if (line === ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER) {
         return false;
       }
       return !RECALLED_CONTEXT_LINE_PATTERNS.some((pattern) => pattern.test(line));
@@ -1453,7 +1480,7 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
       continue;
     }
     const rawText = extractTextContent(typed.content);
-    const text = role === "assistant" ? stripRecalledContextNoise(rawText) : rawText;
+    const text = stripRecalledContextNoise(rawText);
     if (!text) {
       continue;
     }
@@ -1656,10 +1683,14 @@ async function maybeResolveActiveRecall(params: {
     modelId: params.currentModelId,
   });
   const logPrefix = [
-    `active-memory: agent=${params.agentId}`,
-    `session=${params.sessionKey ?? params.sessionId ?? "none"}`,
-    ...(resolvedModelRef?.provider ? [`activeProvider=${resolvedModelRef.provider}`] : []),
-    ...(resolvedModelRef?.model ? [`activeModel=${resolvedModelRef.model}`] : []),
+    `active-memory: agent=${toSingleLineLogValue(params.agentId)}`,
+    `session=${toSingleLineLogValue(params.sessionKey ?? params.sessionId ?? "none")}`,
+    ...(resolvedModelRef?.provider
+      ? [`activeProvider=${toSingleLineLogValue(resolvedModelRef.provider)}`]
+      : []),
+    ...(resolvedModelRef?.model
+      ? [`activeModel=${toSingleLineLogValue(resolvedModelRef.model)}`]
+      : []),
   ].join(" ");
   if (cached) {
     await persistPluginStatusLines({
@@ -1756,7 +1787,7 @@ async function maybeResolveActiveRecall(params: {
       });
       return result;
     }
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
     if (params.config.logging) {
       params.api.logger.warn?.(`${logPrefix} failed error=${message}`);
     }
