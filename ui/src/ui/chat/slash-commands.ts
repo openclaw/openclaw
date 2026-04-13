@@ -352,7 +352,7 @@ export async function refreshSlashCommands(params: {
 }): Promise<void> {
   const seq = ++_refreshSeq;
   const agentId = params.agentId?.trim();
-  if (!params.client || !agentId) {
+  if (!params.client) {
     if (seq !== _refreshSeq) {
       return;
     }
@@ -361,7 +361,7 @@ export async function refreshSlashCommands(params: {
   }
   try {
     const result = await params.client.request<CommandsListResult>("commands.list", {
-      agentId,
+      ...(agentId ? { agentId } : {}),
       includeArgs: true,
       scope: "text",
     });

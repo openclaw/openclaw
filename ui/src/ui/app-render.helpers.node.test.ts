@@ -425,4 +425,64 @@ describe("switchChatSession", () => {
       includeUnknown: true,
     });
   });
+
+  it("does not force agentId=main for plain session keys", async () => {
+    const settings: AppViewState["settings"] = {
+      gatewayUrl: "",
+      token: "",
+      locale: "en",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "dark",
+      splitRatio: 0.6,
+      navWidth: 280,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      chatFocusMode: false,
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+    };
+    const state = {
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatRunId: null,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      client: { request: vi.fn() },
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "main");
+    await Promise.resolve();
+
+    expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
+      client: state.client,
+      agentId: undefined,
+    });
+  });
 });

@@ -545,7 +545,7 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshChatAvatar(state);
   void refreshSlashCommands({
     client: state.client,
-    agentId: parseAgentSessionKey(nextSessionKey)?.agentId ?? "main",
+    agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
   });
   syncUrlWithSessionKey(
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],

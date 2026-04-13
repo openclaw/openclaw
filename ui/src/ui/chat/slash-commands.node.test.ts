@@ -284,6 +284,32 @@ describe("parseSlashCommand", () => {
     expect(first.argOptions).toHaveLength(50);
   });
 
+  it("requests the gateway default agent when no explicit agentId is available", async () => {
+    const request = vi.fn().mockResolvedValue({
+      commands: [
+        {
+          name: "pair",
+          textAliases: ["/pair"],
+          description: "Generate setup codes.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ],
+    });
+
+    await refreshSlashCommands({
+      client: { request } as never,
+      agentId: undefined,
+    });
+
+    expect(request).toHaveBeenCalledWith("commands.list", {
+      includeArgs: true,
+      scope: "text",
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeDefined();
+  });
+
   it("ignores stale refresh responses and keeps the latest command set", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     const first = new Promise((resolve) => {
