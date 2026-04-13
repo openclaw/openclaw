@@ -3859,7 +3859,7 @@ def cmd_state(args):
     r3 = requests.get(f"{TFC_API}/state-versions/{sv_id}/resources", headers=api_headers())
     if r3.status_code >= 400:
         print(f"ERROR: Failed to fetch resources for workspace '{args.workspace}' (HTTP {r3.status_code}).")
-        return
+        sys.exit(1)
     payload = r3.json()
     resources = payload.get("data", []) if isinstance(payload, dict) else []
     if not resources:
