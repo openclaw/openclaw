@@ -5,6 +5,7 @@ import {
   withBrowserNavigationPolicy,
 } from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { resolveTargetIdFromTabs } from "../target-id.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
@@ -186,7 +187,15 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       ctx,
       targetId,
       mutate: async (profileCtx, id) => {
-        const tab = await profileCtx.ensureTabAvailable(id);
+        const tabs = await profileCtx.listTabs();
+        const resolved = resolveTargetIdFromTabs(id, tabs);
+        if (!resolved.ok) {
+          throw new BrowserTabNotFoundError();
+        }
+        const tab = tabs.find((currentTab) => currentTab.targetId === resolved.targetId);
+        if (!tab) {
+          throw new BrowserTabNotFoundError();
+        }
         const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
         if (ssrfPolicyOpts.ssrfPolicy) {
           await assertBrowserNavigationResultAllowed({
@@ -194,7 +203,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             ...ssrfPolicyOpts,
           });
         }
-        await profileCtx.focusTab(tab.targetId);
+        await profileCtx.focusTab(resolved.targetId);
       },
     });
   });

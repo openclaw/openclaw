@@ -231,12 +231,14 @@ describe("browser tab routes", () => {
       new Error("blocked"),
     );
     const profileCtx = createProfileContext({
-      ensureTabAvailable: vi.fn(async () => ({
-        targetId: "T2",
-        title: "Internal",
-        url: "http://169.254.169.254/latest/meta-data/",
-        type: "page",
-      })),
+      listTabs: vi.fn(async () => [
+        {
+          targetId: "T2",
+          title: "Internal",
+          url: "http://169.254.169.254/latest/meta-data/",
+          type: "page",
+        },
+      ]),
     });
 
     const response = await callTabsFocus({
@@ -246,6 +248,22 @@ describe("browser tab routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
+    expect(profileCtx.focusTab).not.toHaveBeenCalled();
+  });
+
+  it("does not create a tab for /tabs/focus when target is missing", async () => {
+    const profileCtx = createProfileContext({
+      listTabs: vi.fn(async () => []),
+    });
+
+    const response = await callTabsFocus({
+      profileCtx,
+      body: { targetId: "T404" },
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(profileCtx.focusTab).not.toHaveBeenCalled();
   });
 
@@ -282,12 +300,14 @@ describe("browser tab routes", () => {
 
   it("does not run SSRF result validation for /tabs/focus when policy is not configured", async () => {
     const profileCtx = createProfileContext({
-      ensureTabAvailable: vi.fn(async () => ({
-        targetId: "T2",
-        title: "Internal",
-        url: "http://169.254.169.254/latest/meta-data/",
-        type: "page",
-      })),
+      listTabs: vi.fn(async () => [
+        {
+          targetId: "T2",
+          title: "Internal",
+          url: "http://169.254.169.254/latest/meta-data/",
+          type: "page",
+        },
+      ]),
     });
 
     const response = await callTabsFocus({
@@ -298,6 +318,7 @@ describe("browser tab routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true });
     expect(profileCtx.focusTab).toHaveBeenCalledWith("T2");
+    expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
