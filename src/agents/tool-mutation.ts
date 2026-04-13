@@ -12,6 +12,7 @@ const MUTATING_TOOL_NAMES = new Set([
   "bash",
   "process",
   "message",
+  "sessions_spawn",
   "sessions_send",
   "cron",
   "gateway",

@@ -10,6 +10,7 @@ import {
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import {
+  buildAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
@@ -448,12 +449,16 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     toolNames: string[],
     assistantText: string,
   ): Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"] {
+    const toolMetas = toolNames.map((toolName) => ({ toolName }));
     return {
-      toolMetas: toolNames.map((toolName) => ({ toolName })),
+      toolMetas,
       assistantTexts: [assistantText],
       lastAssistant: { stopReason: "stop" },
       itemLifecycle: { startedCount: toolNames.length },
-      replayMetadata: { hadPotentialSideEffects: false },
+      replayMetadata: buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool: false,
+      }),
       clientToolCall: null,
       yieldDetected: false,
       didSendDeterministicApprovalPrompt: false,
@@ -551,6 +556,17 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I can do that."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when the lone tool call already had side effects", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["sessions_spawn"], "I'll continue from there next."),
     });
 
     expect(result).toBeNull();
