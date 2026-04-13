@@ -458,20 +458,7 @@ describe("bedrock discovery", () => {
               "arn:aws:bedrock:ap-southeast-2::inference-profile/au.anthropic.claude-sonnet-4-6",
             status: "ACTIVE",
             type: "SYSTEM_DEFINED",
-            models: [
-              {
-                modelArn:
-                  "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-sonnet-4-6",
-              },
-              {
-                modelArn:
-                  "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-sonnet-4-6",
-              },
-              {
-                modelArn:
-                  "arn:aws:bedrock:ap-southeast-6::foundation-model/anthropic.claude-sonnet-4-6",
-              },
-            ],
+            models: [], // no ARNs — forces the prefix-regex fallback
           },
         ],
       });
