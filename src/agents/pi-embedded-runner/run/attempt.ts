@@ -547,7 +547,8 @@ export async function runEmbeddedAttempt(
         })();
     const toolsEnabled = supportsModelTools(params.model);
     const tools = normalizeProviderToolSchemas({
-      tools: toolsEnabled ? (toolsRaw as unknown[]) : [],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tools: toolsEnabled ? (toolsRaw as any[]) : [],
       provider: params.provider,
       config: params.config,
       workspaceDir: effectiveWorkspace,
