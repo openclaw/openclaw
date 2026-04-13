@@ -614,6 +614,28 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     ]);
   });
 
+  it("leaves repeated unavailable tool calls alone when the unknown-tool guard is disabled", async () => {
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo eleven" } }],
+        },
+      }),
+    );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]));
+
+    for (let i = 0; i < 11; i += 1) {
+      const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+      const result = await stream.result();
+      expect(result).toMatchObject({
+        role: "assistant",
+        content: [{ type: "toolCall", name: "exec" }],
+      });
+    }
+  });
+
   it("does not count partial tool-call deltas as separate unavailable-tool retries", async () => {
     const partialToolCall = { type: "toolCall", name: " exec " };
     const messageToolCall = { type: "toolCall", name: " exec " };

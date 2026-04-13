@@ -7,7 +7,6 @@ import {
   sanitizeToolUseResultPairing,
 } from "../../session-transcript-repair.js";
 import { extractToolCallsFromAssistant } from "../../tool-call-id.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
@@ -697,8 +696,8 @@ function guardUnknownToolLoopInMessage(
   state: UnknownToolLoopGuardState,
   params: { allowedToolNames?: Set<string>; threshold?: number; countAttempt: boolean },
 ): void {
-  const threshold = params.threshold ?? UNKNOWN_TOOL_THRESHOLD;
-  if (threshold <= 0) {
+  const threshold = params.threshold;
+  if (threshold === undefined || threshold <= 0) {
     return;
   }
 
