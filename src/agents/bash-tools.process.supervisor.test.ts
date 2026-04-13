@@ -140,4 +140,28 @@ describe("process tool supervisor cancellation", () => {
       text: "Unable to remove session sess-no-pid: no active supervisor run or process id.",
     });
   });
+
+  it("reconciles orphaned supervisor runs before serving process requests", async () => {
+    addSession(createBackgroundSession("sess-owned"));
+    supervisorMock.reconcileOrphans.mockImplementation(async (params?: unknown) => {
+      const typed = params as { isSessionTracked?: (sessionId: string) => boolean };
+      return {
+        cancelledRunIds: typed.isSessionTracked?.("missing-session") ? [] : ["missing-session"],
+      };
+    });
+    const processTool = createProcessTool();
+
+    await processTool.execute("toolcall", {
+      action: "list",
+    });
+
+    expect(supervisorMock.reconcileOrphans).toHaveBeenCalledTimes(1);
+    const firstCall = supervisorMock.reconcileOrphans.mock.calls[0]?.[0] as
+      | { isSessionTracked: (sessionId: string) => boolean }
+      | undefined;
+    expect(typeof firstCall?.isSessionTracked).toBe("function");
+    const { isSessionTracked } = firstCall as { isSessionTracked: (sessionId: string) => boolean };
+    expect(isSessionTracked("sess-owned")).toBe(true);
+    expect(isSessionTracked("missing-session")).toBe(false);
+  });
 });

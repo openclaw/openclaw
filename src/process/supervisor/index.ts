@@ -15,6 +15,8 @@ export { createProcessSupervisor } from "./supervisor.js";
 export type {
   ManagedRun,
   ProcessSupervisor,
+  ReconcileOrphansParams,
+  ReconcileOrphansResult,
   RunExit,
   RunRecord,
   RunState,

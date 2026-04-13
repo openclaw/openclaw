@@ -8,6 +8,15 @@ export type TerminationReason =
   | "signal"
   | "exit";
 
+export type ReconcileOrphansParams = {
+  isSessionTracked: (sessionId: string) => boolean;
+  reason?: TerminationReason;
+};
+
+export type ReconcileOrphansResult = {
+  cancelledRunIds: string[];
+};
+
 export type RunRecord = {
   runId: string;
   sessionId: string;
@@ -101,6 +110,6 @@ export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
-  reconcileOrphans(): Promise<void>;
+  reconcileOrphans(params: ReconcileOrphansParams): Promise<ReconcileOrphansResult>;
   getRecord(runId: string): RunRecord | undefined;
 }

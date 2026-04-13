@@ -7,6 +7,8 @@ import { createRunRegistry } from "./registry.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
+  ReconcileOrphansParams,
+  ReconcileOrphansResult,
   RunExit,
   RunRecord,
   SpawnInput,
@@ -269,14 +271,29 @@ export function createProcessSupervisor(): ProcessSupervisor {
     }
   };
 
+  const reconcileOrphans = async (
+    params: ReconcileOrphansParams,
+  ): Promise<ReconcileOrphansResult> => {
+    const cancelledRunIds: string[] = [];
+    const reason = params.reason ?? "manual-cancel";
+    for (const record of registry.list()) {
+      if (record.state !== "starting" && record.state !== "running") {
+        continue;
+      }
+      if (params.isSessionTracked(record.sessionId)) {
+        continue;
+      }
+      cancel(record.runId, reason);
+      cancelledRunIds.push(record.runId);
+    }
+    return { cancelledRunIds };
+  };
+
   return {
     spawn,
     cancel,
     cancelScope,
-    reconcileOrphans: async () => {
-      // Deliberate no-op: this supervisor uses in-memory ownership only.
-      // Active runs are not recovered after process restart in the current model.
-    },
+    reconcileOrphans,
     getRecord: (runId: string) => registry.get(runId),
   };
 }
