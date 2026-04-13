@@ -1676,8 +1676,8 @@ export async function runEmbeddedPiAgent(
             attempt,
           });
           const nextReasoningOnlyRetryInstruction = resolveReasoningOnlyRetryInstruction({
-            provider,
-            modelId,
+            provider: activeErrorContext.provider,
+            modelId: activeErrorContext.model,
             aborted,
             timedOut,
             attempt,
@@ -1730,7 +1730,7 @@ export async function runEmbeddedPiAgent(
             reasoningOnlyRetryInstruction = nextReasoningOnlyRetryInstruction;
             log.warn(
               `reasoning-only assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} — retrying ${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
                 `with visible-answer continuation`,
             );
             continue;
