@@ -18,12 +18,17 @@ const YTDLP_URLS: Record<string, string> = {
   win32: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
 };
 
+/**
+ * FIXED: Recursively follows HTTP redirects (301/302) to prevent 
+ * corrupt binaries when downloading from GitHub Releases.
+ */
 async function downloadFile(url: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
     function doGet(currentUrl: string, redirectsLeft: number): void {
       if (redirectsLeft <= 0) return reject(new Error(`Too many redirects: ${url}`));
 
       https.get(currentUrl, (response) => {
+        // Handle Redirects
         if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
           response.resume();
           return doGet(response.headers.location, redirectsLeft - 1);
@@ -159,7 +164,7 @@ export const downloadVideoTool = {
       const finalPath = path.join(workspaceRoot, downloadedFile);
       const stats = await fs.stat(finalPath);
       
-      // Fixed: Removes the leading slash from the absolute path before joining to avoid double slash
+      // Fixed: Removes leading slash to avoid http://localhost:18791//home/...
       const cleanPath = finalPath.startsWith('/') ? finalPath.substring(1) : finalPath;
       const fileUrl = `http://localhost:${MEDIA_SERVER_PORT}/${cleanPath}`;
 
