@@ -716,6 +716,99 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).not.toContain("dropped guest message");
   });
 
+  it("does not re-deliver overflow summary on partial auth group failure retry", async () => {
+    const key = `test-collect-overflow-partial-retry-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    let attempt = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      attempt += 1;
+      // First group succeeds (attempt 1), second group fails (attempt 2),
+      // then second group succeeds on retry (attempt 3).
+      if (attempt === 2) {
+        throw new Error("transient failure");
+      }
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+
+    const droppedGuest = createRun({
+      prompt: "dropped guest message",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    const guest = createRun({
+      prompt: "guest message",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    const owner = createRun({
+      prompt: "owner message",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...droppedGuest,
+        run: {
+          ...droppedGuest.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...guest,
+        run: {
+          ...guest.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...owner,
+        run: {
+          ...owner.run,
+          senderId: "owner-1",
+          senderName: "Owner",
+          senderIsOwner: true,
+        },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    // First group got the overflow summary
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.prompt).toContain("- dropped guest message");
+    // Second group (retried after failure) must NOT get the overflow summary again
+    expect(calls[1]?.prompt).not.toContain("[Queue overflow]");
+    expect(calls[1]?.prompt).not.toContain("dropped guest message");
+    expect(calls[1]?.prompt).toContain("owner message");
+  });
+
   it("preserves routing metadata on overflow summary followups", async () => {
     const key = `test-overflow-summary-routing-${Date.now()}`;
     const calls: FollowupRun[] = [];

@@ -196,10 +196,10 @@ export function scheduleFollowupDrain(
               ...routing,
             });
             queue.items.splice(0, groupItems.length);
-            pendingSummary = undefined;
-          }
-          if (summary) {
-            clearQueueSummaryState(queue);
+            if (pendingSummary) {
+              clearQueueSummaryState(queue);
+              pendingSummary = undefined;
+            }
           }
           continue;
         }
