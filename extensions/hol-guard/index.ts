@@ -70,8 +70,6 @@ const DEFAULT_GUARD_SETTINGS: GuardSettings = {
   painSignalsEnabled: true,
 };
 
-const pendingExecutions = new Map<string, PendingGuardExecution>();
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -186,9 +184,6 @@ async function postGuardJson(
   payload: Record<string, unknown>,
 ): Promise<unknown> {
   const headers = createAuthHeaders(settings);
-  if (!headers) {
-    return undefined;
-  }
   const response = await fetch(`${settings.baseUrl}${path}`, {
     method: "POST",
     headers,
@@ -338,6 +333,7 @@ async function settleResolution(
 }
 
 function rememberPendingExecution(
+  pendingExecutions: Map<string, PendingGuardExecution>,
   runId: string | undefined,
   toolCallId: string | undefined,
   pending: PendingGuardExecution,
@@ -363,6 +359,7 @@ export default definePluginEntry({
   configSchema: buildPluginConfigSchema(guardPluginConfigSchema),
   register(api) {
     const settings = readGuardSettings(api.pluginConfig);
+    const pendingExecutions = new Map<string, PendingGuardExecution>();
 
     api.on("before_tool_call", async (event, ctx) => {
       if (!settings.enabled) {
@@ -376,7 +373,7 @@ export default definePluginEntry({
       try {
         const verdict = await resolvePreExecutionVerdict(settings, artifact);
         if (!verdict || verdict.decision === "allow") {
-          rememberPendingExecution(ctx.runId, event.toolCallId, {
+          rememberPendingExecution(pendingExecutions, ctx.runId, event.toolCallId, {
             artifact,
             recommendation: "monitor",
             rationale: verdict?.rationale || "Guard allowed tool execution.",
@@ -407,7 +404,7 @@ export default definePluginEntry({
             severity: severityForVerdict(verdict),
             async onResolution(resolution) {
               if (resolution === "allow-once" || resolution === "allow-always") {
-                rememberPendingExecution(ctx.runId, event.toolCallId, {
+                rememberPendingExecution(pendingExecutions, ctx.runId, event.toolCallId, {
                   artifact,
                   recommendation: "review",
                   rationale: verdict.rationale || `Guard reviewed ${artifact.artifactName}.`,

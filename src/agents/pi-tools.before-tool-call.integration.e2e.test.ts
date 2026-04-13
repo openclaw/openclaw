@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import holGuardPlugin from "../../extensions/hol-guard/index.js";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
@@ -9,6 +8,7 @@ import {
 import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 
 type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
 type PiToolsAbortModule = typeof import("./pi-tools.abort.js");
@@ -27,6 +27,12 @@ let wrapToolWithAbortSignal!: WrapToolWithAbortSignal;
 let beforeToolCallTesting!: BeforeToolCallTesting;
 let consumeAdjustedParamsForToolCall!: ConsumeAdjustedParamsForToolCall;
 let wrapToolWithBeforeToolCallHook!: WrapToolWithBeforeToolCallHook;
+
+const holGuardPluginModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "hol-guard",
+  artifactBasename: "index.js",
+});
 
 beforeEach(async () => {
   if (!wrapToolWithBeforeToolCallHook) {
@@ -79,7 +85,7 @@ function installBeforeToolCallHooks(hooks: BeforeToolCallHookInstall[]): void {
   initializeGlobalHookRunner(registry);
 }
 
-function installHolGuardPlugin(config?: Record<string, unknown>): void {
+async function installHolGuardPlugin(config?: Record<string, unknown>): Promise<void> {
   resetGlobalHookRunner();
   const hooks = new Map<string, PluginHookRegistration["handler"]>();
   const api = createTestPluginApi({
@@ -90,7 +96,8 @@ function installHolGuardPlugin(config?: Record<string, unknown>): void {
       hooks.set(hookName, handler);
     },
   });
-  void holGuardPlugin.register(api);
+  const { default: holGuardPlugin } = await import(holGuardPluginModuleId);
+  await holGuardPlugin.register(api);
   const beforeToolCallHandler = hooks.get("before_tool_call");
   if (!beforeToolCallHandler) {
     throw new Error("HOL Guard plugin did not register before_tool_call");
@@ -209,7 +216,7 @@ describe("before_tool_call hook integration", () => {
           }),
         ),
     );
-    installHolGuardPlugin({
+    await installHolGuardPlugin({
       baseUrl: "https://guard.example/api/v1/consumer",
       failOpen: false,
     });
