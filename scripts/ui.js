@@ -98,7 +98,6 @@ function resolveWindowsCmdInvocation(cmd, args) {
 }
 
 function createSpawnOptions(cmd, args, envOverride) {
-  const useShell = shouldUseShellForCommand(cmd);
   return {
     cwd: uiDir,
     stdio: "inherit",
