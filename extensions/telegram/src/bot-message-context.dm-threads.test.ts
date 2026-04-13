@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetTopicNameCacheForTest } from "./topic-name-cache.js";
-const { recordInboundSessionMock } = vi.hoisted(() => ({
+const { recordInboundSessionMock, resolveStorePathMock } = vi.hoisted(() => ({
   recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
+  resolveStorePathMock: vi.fn(() => "/tmp/openclaw-session-store.json"),
 }));
 
 vi.mock("./bot-message-context.session.runtime.js", async () => {
@@ -14,6 +15,7 @@ vi.mock("./bot-message-context.session.runtime.js", async () => {
   return {
     ...actual,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };
 });
 
@@ -45,6 +47,8 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   resetTopicNameCacheForTest();
   recordInboundSessionMock.mockClear();
+  resolveStorePathMock.mockReset();
+  resolveStorePathMock.mockReturnValue("/tmp/openclaw-session-store.json");
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
@@ -227,6 +231,54 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
         text: "@bot again",
         message_thread_id: 99,
         from: { id: 42, first_name: "Alice" },
+      });
+
+      expect(ctx).not.toBeNull();
+      expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      resetTopicNameCacheForTest();
+    }
+  });
+
+  it("persists topic names through the default session runtime path", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-topic-name-"));
+    const sessionStorePath = path.join(tempDir, "sessions.json");
+    resolveStorePathMock.mockReturnValue(sessionStorePath);
+
+    try {
+      await buildTelegramMessageContextForTest({
+        message: {
+          message_id: 6,
+          chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+          date: 1700000005,
+          text: "@bot hello",
+          message_thread_id: 99,
+          from: { id: 42, first_name: "Alice" },
+          reply_to_message: {
+            message_id: 5,
+            forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
+          },
+        },
+        options: { forceWasMentioned: true },
+        resolveGroupActivation: () => true,
+        sessionRuntime: null,
+      });
+
+      resetTopicNameCacheForTest();
+
+      const ctx = await buildTelegramMessageContextForTest({
+        message: {
+          message_id: 7,
+          chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+          date: 1700000006,
+          text: "@bot again",
+          message_thread_id: 99,
+          from: { id: 42, first_name: "Alice" },
+        },
+        options: { forceWasMentioned: true },
+        resolveGroupActivation: () => true,
+        sessionRuntime: null,
       });
 
       expect(ctx).not.toBeNull();

@@ -11,7 +11,10 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
-import { buildTelegramInboundContextPayload } from "./bot-message-context.session.js";
+import {
+  buildTelegramInboundContextPayload,
+  resolveTelegramMessageContextStorePath,
+} from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
   buildTypingThreadParams,
@@ -149,11 +152,13 @@ export const buildTelegramMessageContext = async ({
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-  const topicNameCachePath = sessionRuntime?.resolveStorePath
-    ? resolveTopicNameCachePath(
-        sessionRuntime.resolveStorePath(cfg.session?.store, { agentId: account.accountId }),
-      )
-    : undefined;
+  const topicNameCachePath = resolveTopicNameCachePath(
+    await resolveTelegramMessageContextStorePath({
+      cfg,
+      agentId: account.accountId,
+      sessionRuntime,
+    }),
+  );
   let topicName: string | undefined;
   if (isForum && resolvedThreadId != null) {
     const ftCreated = msg.forum_topic_created;
