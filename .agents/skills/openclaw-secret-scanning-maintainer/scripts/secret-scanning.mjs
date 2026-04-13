@@ -94,42 +94,56 @@ function cmdFetchContent(locationJson) {
   const details = location.details;
 
   if (type === "discussion_comment") {
-    // Discussion comments 只能通过 GraphQL 操作
+    // Discussion comments can only be operated via GraphQL
     const commentUrl = details.discussion_comment_url;
     if (!commentUrl) fail("No discussion_comment_url in location details");
 
-    // 从 URL 提取 discussion number 和 comment id
-    // 格式: https://github.com/owner/repo/discussions/123#discussioncomment-456
+    // Extract discussion number and comment id from URL
+    // Format: https://github.com/owner/repo/discussions/123#discussioncomment-456
     const urlMatch = commentUrl.match(/discussions\/(\d+)#discussioncomment-(\d+)/);
     if (!urlMatch) fail(`Cannot parse discussion comment URL: ${commentUrl}`);
     const discussionNumber = urlMatch[1];
     const discussionCommentDbId = urlMatch[2];
 
-    // 用 GraphQL 获取 discussion comment 内容
-    const gql = ghGraphQL(`{
-      repository(owner: "${REPO.split("/")[0]}", name: "${REPO.split("/")[1]}") {
-        discussion(number: ${discussionNumber}) {
-          id
-          url
-          comments(first: 50) {
-            nodes {
-              id
-              databaseId
-              author { login }
-              body
-              url
+    // Fetch discussion comment via GraphQL with pagination
+    const [owner, name] = REPO.split("/");
+    let comment = null;
+    let discussionId = null;
+    let cursor = null;
+    let hasNextPage = true;
+
+    while (hasNextPage && !comment) {
+      const afterClause = cursor ? `, after: "${cursor}"` : "";
+      const gql = ghGraphQL(`{
+        repository(owner: "${owner}", name: "${name}") {
+          discussion(number: ${discussionNumber}) {
+            id
+            url
+            comments(first: 50${afterClause}) {
+              pageInfo { hasNextPage endCursor }
+              nodes {
+                id
+                databaseId
+                author { login }
+                body
+                url
+              }
             }
           }
         }
-      }
-    }`, { allowFailure: true });
+      }`, { allowFailure: true });
 
-    const discussion = gql?.data?.repository?.discussion;
-    if (!discussion) fail(`Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`);
+      const discussion = gql?.data?.repository?.discussion;
+      if (!discussion) fail(`Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`);
 
-    const comment = discussion.comments.nodes.find(
-      (c) => String(c.databaseId) === discussionCommentDbId,
-    );
+      discussionId = discussion.id;
+      comment = discussion.comments.nodes.find(
+        (c) => String(c.databaseId) === discussionCommentDbId,
+      );
+      hasNextPage = discussion.comments.pageInfo.hasNextPage;
+      cursor = discussion.comments.pageInfo.endCursor;
+    }
+
     if (!comment) fail(`Discussion comment #${discussionCommentDbId} not found in discussion #${discussionNumber}`);
 
     const bodyFile = tmpFile("body.md");
@@ -140,7 +154,7 @@ function cmdFetchContent(locationJson) {
         {
           type,
           comment_node_id: comment.id,
-          discussion_node_id: discussion.id,
+          discussion_node_id: discussionId,
           discussion_number: Number(discussionNumber),
           discussion_comment_db_id: Number(discussionCommentDbId),
           author: comment.author?.login,
@@ -156,7 +170,7 @@ function cmdFetchContent(locationJson) {
     type === "pull_request_comment" ||
     type === "pull_request_review_comment"
   ) {
-    // 从 url 中提取 comment ID
+    // Extract comment ID from URL
     const commentUrl =
       details.issue_comment_url ||
       details.pull_request_comment_url ||
@@ -167,7 +181,7 @@ function cmdFetchContent(locationJson) {
     const bodyFile = tmpFile("body.md");
     fs.writeFileSync(bodyFile, comment.body || "");
 
-    // 获取编辑历史
+    // Fetch edit history
     const nodeId = comment.node_id;
     const typeName =
       type === "pull_request_review_comment" ? "PullRequestReviewComment" : "IssueComment";
@@ -182,7 +196,7 @@ function cmdFetchContent(locationJson) {
     }`);
     const editCount = gql?.data?.node?.userContentEdits?.totalCount ?? 0;
 
-    // 提取 issue number（从 html_url）
+    // Extract issue number from html_url
     const htmlUrl = comment.html_url || details.html_url || "";
     const issueMatch = htmlUrl.match(/\/(issues|pull)\/(\d+)/);
     const issueNumber = issueMatch ? issueMatch[2] : null;
@@ -287,7 +301,7 @@ function cmdFetchContent(locationJson) {
           start_line: details.start_line,
           end_line: details.end_line,
           html_url: details.html_url || details.commit_url || details.blob_url || null,
-          // commit 没有 body 文件
+          // No body file for commits
           body_file: null,
         },
         null,
@@ -358,8 +372,8 @@ function cmdRecreateDiscussionComment(discussionNodeId, bodyFile) {
   if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
 
   const body = fs.readFileSync(bodyFile, "utf8");
-  // GraphQL 字符串需要转义
-  const escapedBody = body.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+  // Escape for GraphQL string literal
+  const escapedBody = body.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n");
   const result = ghGraphQL(`mutation { addDiscussionComment(input: { discussionId: "${discussionNodeId}", body: "${escapedBody}" }) { comment { id url } } }`);
   if (result?.errors) {
     fail(`Failed to create discussion comment: ${JSON.stringify(result.errors)}`);
@@ -452,6 +466,25 @@ function cmdNotify(issueNumber, author, locationType, secretTypes) {
     .filter((line) => line !== undefined)
     .join("\n");
 
+  // Discussion comments must be notified via GraphQL
+  if (locationType === "discussion_comment") {
+    const escapedBody = body.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+    const result = ghGraphQL(`mutation { addDiscussionComment(input: { discussionId: "${issueNumber}", body: "${escapedBody}" }) { comment { id url } } }`);
+    if (result?.errors) {
+      fail(`Failed to post discussion notification: ${JSON.stringify(result.errors)}`);
+    }
+    const newComment = result?.data?.addDiscussionComment?.comment;
+    console.log(
+      JSON.stringify({
+        ok: true,
+        node_id: newComment?.id,
+        html_url: newComment?.url,
+      }),
+    );
+    return;
+  }
+
+  // Issue/PR comments via REST
   const bodyFile = tmpFile("notify.md");
   fs.writeFileSync(bodyFile, body);
 
