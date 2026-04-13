@@ -5,6 +5,9 @@ type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
+let lastDeliverSubagentAnnouncementParams:
+  | { sourceRunId?: string }
+  | undefined;
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));
 const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
@@ -85,7 +88,9 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     directOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
+    sourceRunId?: string;
   }) => {
+    lastDeliverSubagentAnnouncementParams = { sourceRunId: params.sourceRunId };
     const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
     const requesterEntry = (store?.[params.targetRequesterSessionKey] ?? {}) as
       | { sessionId?: string; origin?: { provider?: string; channel?: string } }
@@ -202,6 +207,7 @@ describe("subagent announce seam flow", () => {
     isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
     queueEmbeddedPiMessageMock.mockReset().mockReturnValue(false);
     waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
+    lastDeliverSubagentAnnouncementParams = undefined;
     mockConfig = {
       session: {
         mainKey: "main",
@@ -405,7 +411,9 @@ describe("subagent announce seam flow", () => {
     expect(params.to).toBeUndefined();
     expect(params.accountId).toBeUndefined();
     expect(params.threadId).toBeUndefined();
-    expect(params.sourceRunId).toBe("run-nested-subagent-direct-announce");
+    expect(lastDeliverSubagentAnnouncementParams?.sourceRunId).toBe(
+      "run-nested-subagent-direct-announce",
+    );
   });
 
   it("falls back to stored delivery target when mocked completion origins omit to", async () => {
