@@ -1166,6 +1166,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         });
       }
 
+      // Apply tools.exec.pathPrepend to process.env.PATH so that hasBinary()
+      // (used for skill eligibility) sees the same paths the exec tool uses.
+      const pathPrepend = cfg.tools?.exec?.pathPrepend;
+      if (pathPrepend && pathPrepend.length > 0) {
+        const existing = deps.env.PATH ?? "";
+        const existingParts = new Set(existing.split(path.delimiter).filter(Boolean));
+        const newParts = pathPrepend.map((p) => p.trim()).filter((p) => p && !existingParts.has(p));
+        if (newParts.length > 0) {
+          deps.env.PATH = [...newParts, existing].filter(Boolean).join(path.delimiter);
+        }
+      }
+
       const pendingSecret = AUTO_OWNER_DISPLAY_SECRET_BY_PATH.get(configPath);
       const ownerDisplaySecretResolution = ensureOwnerDisplaySecret(
         cfg,
