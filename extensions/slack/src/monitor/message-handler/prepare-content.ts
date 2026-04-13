@@ -1,5 +1,6 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { runTasksWithConcurrency } from "../../../../../src/utils/run-with-concurrency.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import {
   MAX_SLACK_MEDIA_FILES,
@@ -13,6 +14,8 @@ export type SlackResolvedMessageContent = {
   rawBody: string;
   effectiveDirectMedia: SlackMediaResult[] | null;
 };
+
+const SLACK_MENTION_RESOLUTION_CONCURRENCY = 4;
 
 function filterInheritedParentFiles(params: {
   files: SlackFile[] | undefined;
@@ -92,26 +95,38 @@ export async function resolveSlackMessageContent(params: {
       : undefined;
 
   const renderSlackUserMentions = async (text: string | undefined): Promise<string | undefined> => {
-    const pattern = /<@([A-Z0-9]+)(?:\|[^>]+)?>/gi;
-    if (!text || !params.resolveUserName || !pattern.test(text)) {
+    if (!text || !params.resolveUserName) {
       return text;
     }
-    pattern.lastIndex = 0;
+    const mentionIds = Array.from(
+      new Set(
+        Array.from(text.matchAll(/<@([A-Z0-9]+)(?:\|[^>]+)?>/gi), (match) => match[1]).filter(
+          Boolean,
+        ),
+      ),
+    );
+    if (mentionIds.length === 0) {
+      return text;
+    }
     const seen = new Map<string, string | null>();
-    for (const match of text.matchAll(pattern)) {
-      const userId = match[1];
-      if (!userId || seen.has(userId)) {
+    const { results } = await runTasksWithConcurrency({
+      tasks: mentionIds.map((userId) => async () => {
+        const user = await params.resolveUserName?.(userId);
+        const renderedName = normalizeOptionalString(user?.name);
+        return { userId, rendered: renderedName ? `<@${userId}> (${renderedName})` : null };
+      }),
+      limit: SLACK_MENTION_RESOLUTION_CONCURRENCY,
+    });
+    for (const result of results) {
+      if (!result) {
         continue;
       }
-      const user = await params.resolveUserName(userId);
-      const renderedName = normalizeOptionalString(user?.name);
-      seen.set(userId, renderedName ? `<@${userId}> (${renderedName})` : null);
+      seen.set(result.userId, result.rendered);
     }
     if (seen.size === 0) {
       return text;
     }
-    pattern.lastIndex = 0;
-    return text.replace(pattern, (full, userId: string) => {
+    return text.replace(/<@([A-Z0-9]+)(?:\|[^>]+)?>/gi, (full, userId: string) => {
       const rendered = seen.get(userId);
       return rendered ?? full;
     });
