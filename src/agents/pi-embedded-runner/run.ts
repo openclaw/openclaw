@@ -1603,7 +1603,10 @@ export async function runEmbeddedPiAgent(
               .map((p) => p.text)
               .join("\n\n")
               .trim();
-            if (visibleText.length > 0) {
+            // Skip the sanitizer for very short outputs — the latency of
+            // a model call isn't worth it for "Fixed." or "Done." responses.
+            const SANITIZER_MIN_CHARS = 60;
+            if (visibleText.length >= SANITIZER_MIN_CHARS) {
               // Trailing-portion logic: if the message exceeds maxChars,
               // only rewrite the last maxChars characters. The factual head
               // stays intact; the personality tail gets warmth from SOUL.md.

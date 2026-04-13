@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildPersonalityHybridModelName,
   classifyTurnIntent,
+  extractCodeBlocks,
   PERSONALITY_CLOSEOUT_INSTRUCTION,
+  restoreCodeBlocks,
 } from "./personality-routing.js";
 
 describe("classifyTurnIntent", () => {
@@ -31,12 +33,25 @@ describe("classifyTurnIntent", () => {
     expect(classifyTurnIntent({ prompt: "I'm stressed about this deadline" })).toBe("personality");
   });
 
-  it("routes messages with code signals to execution", () => {
+  it("routes messages with strong code signals to execution", () => {
     expect(classifyTurnIntent({ prompt: "fix the bug in auth.ts" })).toBe("execution");
-    expect(classifyTurnIntent({ prompt: "run the tests" })).toBe("execution");
     expect(classifyTurnIntent({ prompt: "refactor the login function" })).toBe("execution");
-    expect(classifyTurnIntent({ prompt: "create a new component" })).toBe("execution");
     expect(classifyTurnIntent({ prompt: "look at `src/utils.ts`" })).toBe("execution");
+    expect(classifyTurnIntent({ prompt: "deploy the new version" })).toBe("execution");
+  });
+
+  it("routes ambiguous verbs to execution only when paired with code context", () => {
+    // "run the tests" — "run" is ambiguous but "test" alone isn't code context
+    // so it falls through to the default (execution for long, personality for short)
+    expect(classifyTurnIntent({ prompt: "run the test file config.ts" })).toBe("execution");
+    expect(classifyTurnIntent({ prompt: "create a new `Component`" })).toBe("execution");
+    expect(classifyTurnIntent({ prompt: "update the config file" })).toBe("execution");
+  });
+
+  it("routes ambiguous verbs WITHOUT code context to personality", () => {
+    expect(classifyTurnIntent({ prompt: "run an errand for me" })).toBe("personality");
+    expect(classifyTurnIntent({ prompt: "create a birthday message" })).toBe("personality");
+    expect(classifyTurnIntent({ prompt: "update me on the status" })).toBe("personality");
   });
 
   it("routes long messages without code signals to execution by default", () => {
@@ -78,5 +93,47 @@ describe("PERSONALITY_CLOSEOUT_INSTRUCTION", () => {
   it("instructs to preserve code blocks", () => {
     expect(PERSONALITY_CLOSEOUT_INSTRUCTION).toContain("code blocks");
     expect(PERSONALITY_CLOSEOUT_INSTRUCTION).toContain("exactly as-is");
+  });
+});
+
+describe("extractCodeBlocks + restoreCodeBlocks", () => {
+  it("extracts fenced code blocks and replaces with placeholders", () => {
+    const input = "Here is the fix:\n\n```typescript\nconst x = 1;\n```\n\nLet me know.";
+    const { prose, blocks } = extractCodeBlocks(input);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toBe("```typescript\nconst x = 1;\n```");
+    expect(prose).toContain("⟦CODE_BLOCK_0⟧");
+    expect(prose).not.toContain("const x = 1");
+  });
+
+  it("handles multiple code blocks", () => {
+    const input = "Block 1:\n```js\na();\n```\n\nBlock 2:\n```py\nb()\n```";
+    const { prose, blocks } = extractCodeBlocks(input);
+    expect(blocks).toHaveLength(2);
+    expect(prose).toContain("⟦CODE_BLOCK_0⟧");
+    expect(prose).toContain("⟦CODE_BLOCK_1⟧");
+  });
+
+  it("restores code blocks from placeholders", () => {
+    const rewritten = "I made the change:\n\n⟦CODE_BLOCK_0⟧\n\nHope that helps!";
+    const blocks = ["```ts\nconst x = 1;\n```"];
+    const result = restoreCodeBlocks(rewritten, blocks);
+    expect(result).toContain("```ts\nconst x = 1;\n```");
+    expect(result).not.toContain("⟦CODE_BLOCK_0⟧");
+  });
+
+  it("appends dropped code blocks at the end", () => {
+    const rewritten = "I fixed it."; // model dropped the placeholder
+    const blocks = ["```ts\nconst x = 1;\n```"];
+    const result = restoreCodeBlocks(rewritten, blocks);
+    expect(result).toContain("I fixed it.");
+    expect(result).toContain("```ts\nconst x = 1;\n```");
+  });
+
+  it("passes through text without code blocks unchanged", () => {
+    const input = "No code here, just prose.";
+    const { prose, blocks } = extractCodeBlocks(input);
+    expect(prose).toBe(input);
+    expect(blocks).toHaveLength(0);
   });
 });

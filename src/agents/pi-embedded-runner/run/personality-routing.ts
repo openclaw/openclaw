@@ -4,6 +4,65 @@ import { prepareSimpleCompletionModel } from "../../simple-completion-runtime.js
 import { prepareModelForSimpleCompletion } from "../../simple-completion-transport.js";
 import { isLikelyExecutionAckPrompt } from "./incomplete-turn.js";
 
+// ---------------------------------------------------------------------------
+// Code block extraction — protects code from personality rewrite corruption
+// ---------------------------------------------------------------------------
+
+const CODE_BLOCK_RE = /```[\s\S]*?```/g;
+const CODE_BLOCK_PLACEHOLDER_PREFIX = "⟦CODE_BLOCK_";
+const CODE_BLOCK_PLACEHOLDER_SUFFIX = "⟧";
+
+/**
+ * Extract fenced code blocks from text, replacing them with numbered
+ * placeholders. The personality model rewrites only the prose around the
+ * placeholders. After the rewrite, `restoreCodeBlocks` puts the original
+ * code back exactly as-is.
+ *
+ * This prevents the personality model from subtly altering code (indentation,
+ * comments, variable names) during the prose rewrite.
+ */
+export function extractCodeBlocks(text: string): {
+  prose: string;
+  blocks: string[];
+} {
+  const blocks: string[] = [];
+  const prose = text.replace(CODE_BLOCK_RE, (match) => {
+    const index = blocks.length;
+    blocks.push(match);
+    return `${CODE_BLOCK_PLACEHOLDER_PREFIX}${index}${CODE_BLOCK_PLACEHOLDER_SUFFIX}`;
+  });
+  return { prose, blocks };
+}
+
+/**
+ * Restore code blocks after the personality model has rewritten the prose.
+ * If the rewritten text contains the placeholder markers, they're replaced
+ * with the original code blocks. If any placeholder is missing (the model
+ * dropped it), the code block is appended at the end so no code is lost.
+ */
+export function restoreCodeBlocks(rewrittenProse: string, blocks: string[]): string {
+  let result = rewrittenProse;
+  const restored = new Set<number>();
+  for (let i = 0; i < blocks.length; i++) {
+    const placeholder = `${CODE_BLOCK_PLACEHOLDER_PREFIX}${i}${CODE_BLOCK_PLACEHOLDER_SUFFIX}`;
+    if (result.includes(placeholder)) {
+      result = result.replace(placeholder, blocks[i]);
+      restored.add(i);
+    }
+  }
+  // Append any blocks the model dropped so no code is lost
+  for (let i = 0; i < blocks.length; i++) {
+    if (!restored.has(i)) {
+      result += `\n\n${blocks[i]}`;
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Turn intent classifier
+// ---------------------------------------------------------------------------
+
 /**
  * Turn intent for hybrid personality routing. The harness uses this to
  * decide whether to dispatch a turn to the execution model (GPT-5.4) or
@@ -14,13 +73,38 @@ import { isLikelyExecutionAckPrompt } from "./incomplete-turn.js";
 export type PersonalityTurnIntent = "execution" | "personality";
 
 /**
- * Signals that the user's message involves code, files, tools, or
- * technical commands. When matched, the turn routes to the execution
- * model regardless of length.
+ * Strong execution signals — always route to execution regardless of
+ * message length. These are unambiguous code/file indicators.
  */
-const EXECUTION_SIGNAL_RE =
-  // eslint-disable-next-line no-useless-escape
-  /```|`[^`]+`|\bfile\b|\bcode\b|\bfunction\b|\bclass\b|\bimport\b|\bfix\b|\bbuild\b|\btest\b|\brun\b|\bdeploy\b|\brefactor\b|\binstall\b|\bcreate\b|\bdelete\b|\bupdate\b|\bmodify\b|\brevert\b|\.(?:ts|js|py|rs|go|md|json|yaml|yml)\b/i;
+const STRONG_EXECUTION_SIGNAL_RE =
+  /```|`[^`]+`|\bfunction\b|\bclass\b|\bimport\b|\brefactor\b|\bdeploy\b|\binstall\b|\brevert\b|\.(?:ts|js|py|rs|go|md|json|yaml|yml)\b/i;
+
+/**
+ * Ambiguous verbs that could be conversational ("run an errand",
+ * "create a birthday message") or technical ("run tests", "create a
+ * component"). These only trigger execution routing when they appear
+ * near a code context signal (file extension, backtick, another
+ * strong signal) in the same message.
+ */
+const AMBIGUOUS_VERB_RE = /\b(?:run|test|create|update|delete|modify|build|fix)\b/i;
+
+/**
+ * Combined check: strong signals always match; ambiguous verbs only
+ * match when paired with code context in the same message.
+ */
+function hasExecutionSignal(text: string): boolean {
+  if (STRONG_EXECUTION_SIGNAL_RE.test(text)) {
+    return true;
+  }
+  // Ambiguous verbs need a co-occurring code context signal
+  if (AMBIGUOUS_VERB_RE.test(text)) {
+    // Check for any code-adjacent context in the same message
+    return /`[^`]+`|\.(?:ts|js|py|rs|go|md|json|yaml|yml)\b|\bfile\b|\bcode\b|\bfunction\b|\bclass\b|\bmodule\b|\bpackage\b|\bconfig\b|\bcommand\b|\bscript\b|\btool\b/i.test(
+      text,
+    );
+  }
+  return false;
+}
 
 /**
  * Classify a user turn as "execution" (needs tool work) or "personality"
@@ -59,12 +143,12 @@ export function classifyTurnIntent(params: {
   const trimmed = params.prompt.trim();
 
   // Short messages without tool/file/code signals = personality
-  if (trimmed.length <= 60 && !EXECUTION_SIGNAL_RE.test(trimmed)) {
+  if (trimmed.length <= 60 && !hasExecutionSignal(trimmed)) {
     return "personality";
   }
 
   // Messages with code, file refs, technical commands = execution
-  if (EXECUTION_SIGNAL_RE.test(trimmed)) {
+  if (hasExecutionSignal(trimmed)) {
     return "execution";
   }
 
@@ -138,17 +222,21 @@ export async function runPersonalityCloseout(params: {
       model: prepared.model,
       cfg: params.cfg,
     });
+    // Extract code blocks BEFORE sending to the personality model so they
+    // can't be corrupted during the prose rewrite. The model sees numbered
+    // placeholders instead of real code; we restore the originals after.
+    const { prose: proseOnly, blocks: codeBlocks } = extractCodeBlocks(params.executionText);
+
     const result = await complete(
       model,
       {
         systemPrompt: PERSONALITY_CLOSEOUT_INSTRUCTION,
         // Wrap in markers so the personality model treats the content as
-        // opaque data, not as instructions to follow. This mitigates prompt
-        // injection from tool output or model-generated text.
+        // opaque data, not as instructions to follow.
         messages: [
           {
             role: "user",
-            content: "<execution-output>\n" + params.executionText + "\n</execution-output>",
+            content: "<execution-output>\n" + proseOnly + "\n</execution-output>",
             timestamp: Date.now(),
           },
         ],
@@ -159,13 +247,14 @@ export async function runPersonalityCloseout(params: {
       },
     );
     // AssistantMessage has .content (array of content blocks)
-    const text = result?.content
+    const rawText = result?.content
       ?.filter((block): block is { type: "text"; text: string } => block.type === "text")
       .map((block) => block.text)
       .join("\n\n")
       .trim();
-    if (text && text.length > 0) {
-      return text;
+    if (rawText && rawText.length > 0) {
+      // Restore original code blocks into the rewritten prose
+      return codeBlocks.length > 0 ? restoreCodeBlocks(rawText, codeBlocks) : rawText;
     }
     return null;
   } catch (error) {
