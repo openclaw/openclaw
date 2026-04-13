@@ -1,34 +1,60 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
+import { createWriteStream } from 'fs';
 import path from 'path';
 import os from 'os';
 import https from 'https';
-import { createWriteStream } from 'fs';
 import type { AgentToolResult, AgentToolUpdateCallback } from '@mariozechner/pi-agent-core';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
-// Platform-specific yt-dlp binary URLs
-const YTDLP_URLS = {
+const MEDIA_SERVER_PORT = 18791;
+
+const YTDLP_URLS: Record<string, string> = {
   linux: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp',
-  macos: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos',
+  darwin: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos',
   win32: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
 };
 
 async function downloadFile(url: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const file = createWriteStream(dest);
-    https.get(url, (response) => {
-      response.pipe(file);
-      file.on('finish', () => {
-        file.close();
-        if (process.platform !== 'win32') {
-          fs.chmod(dest, 0o755);
+    function doGet(currentUrl: string, redirectsLeft: number): void {
+      if (redirectsLeft <= 0) return reject(new Error(`Too many redirects: ${url}`));
+
+      https.get(currentUrl, (response) => {
+        if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
+          response.resume();
+          return doGet(response.headers.location, redirectsLeft - 1);
         }
-        resolve();
+
+        if (response.statusCode !== 200) {
+          response.resume();
+          return reject(new Error(`HTTP ${response.statusCode} downloading binary`));
+        }
+
+        const file = createWriteStream(dest);
+        response.pipe(file);
+
+        file.on('error', (err) => {
+          file.close();
+          fs.unlink(dest).catch(() => {});
+          reject(err);
+        });
+
+        file.on('close', async () => {
+          if (process.platform !== 'win32') {
+            await fs.chmod(dest, 0o755);
+          }
+          resolve();
+        });
+      }).on('error', (err) => {
+        fs.unlink(dest).catch(() => {});
+        reject(err);
       });
-    }).on('error', reject);
+    }
+    doGet(url, 10);
   });
 }
 
@@ -38,156 +64,57 @@ async function getYtDlpPath(): Promise<string> {
   return path.join(baseDir, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
 }
 
-async function checkYtDlpVersion(ytDlpPath: string): Promise<string | null> {
-  try {
-    const { stdout } = await execAsync(`"${ytDlpPath}" --version`);
-    return stdout.trim();
-  } catch {
-    return null;
-  }
-}
-
-async function installYtDlp(): Promise<void> {
-  const ytDlpPath = await getYtDlpPath();
-  const platform = process.platform as keyof typeof YTDLP_URLS;
-  const url = YTDLP_URLS[platform];
-  
-  if (!url) {
-    throw new Error(`Unsupported platform: ${platform}`);
-  }
-  
-  console.log(`📥 Installing yt-dlp to ${ytDlpPath}...`);
-  await downloadFile(url, ytDlpPath);
-  console.log('✅ yt-dlp installed successfully');
-}
-
 async function ensureYtDlp(): Promise<string> {
   const ytDlpPath = await getYtDlpPath();
-  const version = await checkYtDlpVersion(ytDlpPath);
-  
-  if (!version) {
-    await installYtDlp();
-  } else {
-    console.log(`📦 yt-dlp version ${version} found`);
-  }
-  
-  return ytDlpPath;
-}
-
-async function checkFfmpeg(): Promise<boolean> {
   try {
-    await execAsync('ffmpeg -version');
-    return true;
+    await execFileAsync(ytDlpPath, ['--version']);
+    return ytDlpPath;
   } catch {
-    return false;
-  }
-}
-
-async function installFfmpegLinux(): Promise<void> {
-  console.log('📥 Installing ffmpeg via apt...');
-  
-  try {
-    await execAsync('sudo apt-get update -qq');
-    await execAsync('sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg');
-    console.log('✅ ffmpeg installed successfully');
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error('❌ Failed to install ffmpeg automatically:', errorMessage);
-    throw new Error(
-      'ffmpeg is required but could not be installed automatically.\n' +
-      'Please run manually: sudo apt-get install ffmpeg', { cause: err }
-    );
+    const url = YTDLP_URLS[process.platform];
+    if (!url) throw new Error(`Unsupported platform: ${process.platform}`);
+    await downloadFile(url, ytDlpPath);
+    return ytDlpPath;
   }
 }
 
 async function ensureFfmpeg(): Promise<void> {
-  const hasFfmpeg = await checkFfmpeg();
-  
-  if (!hasFfmpeg) {
+  try {
+    await execAsync('ffmpeg -version');
+  } catch {
     if (process.platform === 'linux') {
-      console.log('⚠️ ffmpeg not found, attempting automatic installation...');
-      await installFfmpegLinux();
-    } else if (process.platform === 'darwin') {
-      throw new Error(
-        'ffmpeg is required but not installed.\n' +
-        'Please run: brew install ffmpeg'
-      );
-    } else if (process.platform === 'win32') {
-      throw new Error(
-        'ffmpeg is required but not installed.\n' +
-        'Please install from: https://ffmpeg.org/download.html\n' +
-        'Or using chocolatey: choco install ffmpeg'
-      );
+      await execAsync('sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg');
+    } else {
+      throw new Error(`ffmpeg required for merging video/audio.`);
     }
-  } else {
-    console.log('✅ ffmpeg is installed');
   }
 }
 
-// Get video title from URL without downloading the whole video
-async function getVideoTitle(url: string, ytDlpPath: string): Promise<string> {
-  try {
-    const { stdout } = await execAsync(`"${ytDlpPath}" --get-title "${url}"`);
-    const title = stdout.trim();
-    // Sanitize filename (remove invalid characters)
-    let sanitized = title
-      .replace(/[<>:"/\\|?*]/g, '')  // Remove invalid filename chars
-      .replace(/\s+/g, '_')           // Replace spaces with underscores
-      .substring(0, 100);             // Limit length
-    
-    // Remove common suffixes that make filenames too long
-    sanitized = sanitized.replace(/_-_YouTube$|_-_YouTube_Music$|_-_YouTube_$/, '');
-    
-    return sanitized || `video_${Date.now()}`;
-  } catch {
-    return `video_${Date.now()}`;
+async function findWorkspaceFolder(): Promise<string> {
+  let currentPath = path.resolve(process.cwd());
+  const root = path.parse(currentPath).root;
+  while (currentPath !== root) {
+    if (path.basename(currentPath) === 'workspace') return currentPath;
+    const sub = path.join(currentPath, 'workspace');
+    try { if ((await fs.stat(sub)).isDirectory()) return sub; } catch {}
+    currentPath = path.dirname(currentPath);
   }
-}
-
-async function downloadVideo(url: string, outputPath: string, ytDlpPath: string, quality: string): Promise<void> {
-  // Ensure the directory exists
-  const outputDir = path.dirname(outputPath);
-  await fs.mkdir(outputDir, { recursive: true });
-  
-  // Check if file already exists
-  try {
-    await fs.access(outputPath);
-    console.log(`📁 File already exists: ${outputPath}`);
-    return;
-  } catch {
-    // File doesn't exist, proceed
-  }
-  
-  console.log(`📥 Downloading video from ${url}...`);
-  console.log(`📁 Output path: ${outputPath}`);
-  
-  try {
-    // Use absolute path and force the output location
-    const absoluteOutputPath = path.resolve(outputPath);
-    await execAsync(`"${ytDlpPath}" -f "${quality}" -o "${absoluteOutputPath}" "${url}"`, {
-      timeout: 300000,
-      cwd: path.dirname(absoluteOutputPath)  // Force working directory to target folder
-    });
-    console.log(`✅ Video downloaded to ${absoluteOutputPath}`);
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error('❌ Download failed:', errorMessage);
-    throw new Error(`Failed to download video: ${errorMessage}`, { cause: err });
-  }
+  const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
+  await fs.mkdir(fallback, { recursive: true });
+  return fallback;
 }
 
 export const downloadVideoTool = {
   name: "download_video",
   label: "Download Video",
-  description: "Download a video from YouTube, Vimeo, Twitch, etc. to the workspace. Automatically installs yt-dlp and ffmpeg if missing (Linux only).",
+  description: "Downloads video to workspace using absolute paths for the URL.",
   parameters: {
     type: "object",
     properties: {
-      url: { type: "string", description: "The video URL to download" },
+      url: { type: "string", description: "URL to download" },
       quality: { 
         type: "string", 
-        description: "Quality: 'best', 'best[height<=720]', 'worst'",
-        default: "best[height<=720]"
+        description: "Examples: '1080', '720', 'best', 'worst'",
+        default: "1080" 
       }
     },
     required: ["url"]
@@ -196,59 +123,63 @@ export const downloadVideoTool = {
     try {
       await ensureFfmpeg();
       const ytDlpPath = await ensureYtDlp();
-      
-      const quality = params.quality || "best[height<=720]";
-      
-      // Get the video title for a readable filename
-      let videoTitle = await getVideoTitle(params.url, ytDlpPath);
-      
-      // FORCE the correct workspace path
-      const workspaceRoot = '/home/jeffc/.openclaw/workspace';
-      let finalPath = path.join(workspaceRoot, `${videoTitle}.mp4`);
-      
-      // Handle duplicate filenames by adding a number suffix
-      let counter = 1;
-      while (true) {
-        try {
-          await fs.access(finalPath);
-          finalPath = path.join(workspaceRoot, `${videoTitle}_${counter}.mp4`);
-          counter++;
-        } catch {
-          break;
-        }
+      const workspaceRoot = await findWorkspaceFolder();
+
+      let formatSelector = "best[height<=1080]";
+      if (params.quality === "720") formatSelector = "best[height<=720]";
+      else if (params.quality === "best") formatSelector = "best";
+      else if (params.quality === "worst") formatSelector = "worst";
+      else if (params.quality && params.quality.includes("[")) formatSelector = params.quality;
+
+      const { stdout: rawTitle } = await execFileAsync(ytDlpPath, ['--get-title', params.url]);
+      const sanitized = rawTitle.trim().replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
+      const outputTemplate = `${sanitized}.%(ext)s`;
+
+      if (onUpdate) {
+        await onUpdate({ 
+          content: [{ type: "text", text: `Downloading in ${params.quality || '1080p'}...` }],
+          details: { status: "downloading", quality: params.quality || '1080' }
+        });
       }
-      
-      // Ensure the workspace directory exists
-      await fs.mkdir(workspaceRoot, { recursive: true });
-      
-      // Download the video
-      await downloadVideo(params.url, finalPath, ytDlpPath, quality);
-      
+
+      await execFileAsync(ytDlpPath, [
+        '-f', formatSelector,
+        '--no-playlist',
+        '--restrict-filenames',
+        '--force-overwrites',
+        '-o', outputTemplate,
+        params.url
+      ], { cwd: workspaceRoot, timeout: 300000 });
+
+      const files = await fs.readdir(workspaceRoot);
+      const downloadedFile = files.find(f => f.startsWith(sanitized) && !f.endsWith('.part'));
+
+      if (!downloadedFile) throw new Error("Verification failed: file not found.");
+
+      const finalPath = path.join(workspaceRoot, downloadedFile);
       const stats = await fs.stat(finalPath);
-      const filename = path.basename(finalPath);
-      const fileUrl = `http://localhost:18791/${encodeURIComponent(filename)}`;
       
+      // Fixed: Removes the leading slash from the absolute path before joining to avoid double slash
+      const cleanPath = finalPath.startsWith('/') ? finalPath.substring(1) : finalPath;
+      const fileUrl = `http://localhost:${MEDIA_SERVER_PORT}/${cleanPath}`;
+
       return {
         content: [{
           type: "text",
-          text: `<video controls src="${fileUrl}" width="854" height="480" style="max-width: 100%;"></video>`
+          text: `✅ **Download Success**\nURL: ${fileUrl}\nFile: ${downloadedFile}\nSize: ${(stats.size / 1e6).toFixed(2)} MB`
         }],
-        details: {
-          originalUrl: params.url,
-          downloadedTo: finalPath,
-          filename: filename,
-          quality: quality,
-          size: stats.size
+        details: { 
+          status: "complete",
+          filename: downloadedFile, 
+          mediaUrl: fileUrl, 
+          fullPath: finalPath,
+          sizeMB: (stats.size / 1e6).toFixed(2) 
         }
       };
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+    } catch (err: any) {
       return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to download video: ${errorMessage}`
-        }],
-        details: null
+        content: [{ type: "text", text: `❌ Error: ${err.message}` }],
+        details: { error: err.message, status: "failed" }
       };
     }
   }
