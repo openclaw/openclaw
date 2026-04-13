@@ -53,7 +53,7 @@ export {
   type CommandsMessageOptions,
   type CommandsMessageResult,
 } from "./command-status-builders.js";
-import { resolveActiveFallbackState } from "./fallback-state.js";
+import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { formatProviderModelRef, resolveSelectedAndActiveModel } from "./model-runtime.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 

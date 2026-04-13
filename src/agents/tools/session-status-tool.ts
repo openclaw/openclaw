@@ -87,7 +87,7 @@ let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = 
 
 function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
   commandsStatusRuntimePromise ??=
-    import("../../auto-reply/reply/commands-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
+    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
   return commandsStatusRuntimePromise;
 }
 
