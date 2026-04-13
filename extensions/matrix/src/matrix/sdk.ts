@@ -139,6 +139,7 @@ export type MatrixVerificationBootstrapResult = {
 
 const MATRIX_INITIAL_CRYPTO_BOOTSTRAP_OPTIONS = {
   allowAutomaticCrossSigningReset: false,
+  allowSecretStorageRecreateWithoutRecoveryKey: true,
 } satisfies MatrixCryptoBootstrapOptions;
 
 const MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS = {
