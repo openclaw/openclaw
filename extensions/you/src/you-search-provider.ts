@@ -53,7 +53,7 @@ export function createYouWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "you",
     label: "You.com Search",
-    hint: "Web search, deep research, and content extraction",
+    hint: "Search, research & content extraction · $100 credit on signup",
     credentialLabel: "You.com API key",
     requiresCredential: false,
     envVars: ["YDC_API_KEY"],
