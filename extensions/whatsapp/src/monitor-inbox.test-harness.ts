@@ -40,6 +40,7 @@ export type MockSock = {
   readMessages: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
   updateMediaMessage: AnyMockFn;
+  fetchStatus?: AnyMockFn;
   logger: Record<string, unknown>;
   signalRepository: {
     lidMapping: {
