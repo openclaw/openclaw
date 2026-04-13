@@ -202,6 +202,72 @@ export function resolveDefaultMemoryWikiVaultPath(homedir = os.homedir()): strin
   return path.join(homedir, ".openclaw", "wiki", "main");
 }
 
+/**
+ * Context fields available for `vault.path` template expansion. All fields are
+ * optional; missing values expand to an empty string so callers can detect
+ * unresolved templates via {@link containsVaultPathTemplate}.
+ */
+export type VaultPathTemplateContext = {
+  workspaceDir?: string;
+  agentDir?: string;
+  agentId?: string;
+  sessionKey?: string;
+};
+
+const VAULT_PATH_TEMPLATE_TOKENS = ["workspaceDir", "agentDir", "agentId", "sessionKey"] as const;
+
+const VAULT_PATH_TEMPLATE_PATTERN = new RegExp(
+  `\\{(${VAULT_PATH_TEMPLATE_TOKENS.join("|")})\\}`,
+  "g",
+);
+
+export function containsVaultPathTemplate(candidatePath: string): boolean {
+  VAULT_PATH_TEMPLATE_PATTERN.lastIndex = 0;
+  return VAULT_PATH_TEMPLATE_PATTERN.test(candidatePath);
+}
+
+/**
+ * Expand `{workspaceDir}`, `{agentDir}`, `{agentId}`, `{sessionKey}` placeholders
+ * in a vault path using the supplied tool invocation context. Missing values
+ * expand to an empty string; the result is normalized so path-traversal
+ * segments (e.g. `..`) collapse only after expansion.
+ */
+export function expandVaultPathTemplate(
+  templatePath: string,
+  ctx: VaultPathTemplateContext,
+): string {
+  if (!containsVaultPathTemplate(templatePath)) {
+    return templatePath;
+  }
+  const expanded = templatePath.replace(
+    VAULT_PATH_TEMPLATE_PATTERN,
+    (_match, token: (typeof VAULT_PATH_TEMPLATE_TOKENS)[number]) => ctx[token] ?? "",
+  );
+  return path.normalize(expanded);
+}
+
+/**
+ * Return a {@link ResolvedMemoryWikiConfig} with `vault.path` expanded against
+ * the supplied invocation context. If the path has no template tokens the
+ * input config is returned unchanged (identity) so the fast path allocates
+ * nothing.
+ */
+export function resolveMemoryWikiConfigForCtx(
+  base: ResolvedMemoryWikiConfig,
+  ctx: VaultPathTemplateContext,
+): ResolvedMemoryWikiConfig {
+  if (!containsVaultPathTemplate(base.vault.path)) {
+    return base;
+  }
+  return {
+    ...base,
+    vault: {
+      ...base.vault,
+      path: expandVaultPathTemplate(base.vault.path, ctx),
+    },
+  };
+}
+
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
   options?: { homedir?: string },

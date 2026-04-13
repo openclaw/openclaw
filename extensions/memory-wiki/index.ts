@@ -1,6 +1,10 @@
 import { definePluginEntry } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
-import { memoryWikiConfigSchema, resolveMemoryWikiConfig } from "./src/config.js";
+import {
+  memoryWikiConfigSchema,
+  resolveMemoryWikiConfig,
+  resolveMemoryWikiConfigForCtx,
+} from "./src/config.js";
 import { createWikiCorpusSupplement } from "./src/corpus-supplement.js";
 import { registerMemoryWikiGatewayMethods } from "./src/gateway.js";
 import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
@@ -25,12 +29,21 @@ export default definePluginEntry({
       createWikiCorpusSupplement({ config, appConfig: api.config }),
     );
     registerMemoryWikiGatewayMethods({ api, config, appConfig: api.config });
-    api.registerTool(() => createWikiStatusTool(config, api.config), { name: "wiki_status" });
-    api.registerTool(() => createWikiLintTool(config, api.config), { name: "wiki_lint" });
-    api.registerTool(() => createWikiApplyTool(config, api.config), { name: "wiki_apply" });
+    api.registerTool(
+      (ctx) => createWikiStatusTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      { name: "wiki_status" },
+    );
+    api.registerTool(
+      (ctx) => createWikiLintTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      { name: "wiki_lint" },
+    );
+    api.registerTool(
+      (ctx) => createWikiApplyTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      { name: "wiki_apply" },
+    );
     api.registerTool(
       (ctx) =>
-        createWikiSearchTool(config, api.config, {
+        createWikiSearchTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config, {
           agentId: ctx.agentId,
           agentSessionKey: ctx.sessionKey,
         }),
@@ -38,7 +51,7 @@ export default definePluginEntry({
     );
     api.registerTool(
       (ctx) =>
-        createWikiGetTool(config, api.config, {
+        createWikiGetTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config, {
           agentId: ctx.agentId,
           agentSessionKey: ctx.sessionKey,
         }),
