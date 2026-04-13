@@ -1,4 +1,4 @@
-import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
+import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -28,7 +28,7 @@ export const DEFAULT_RESET_AT_HOUR = 4;
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 
 export function isThreadSessionKey(sessionKey?: string | null): boolean {
-  return Boolean(resolveSessionThreadInfo(sessionKey, { bundledFallback: false }).threadId);
+  return Boolean(resolveLoadedSessionThreadInfo(sessionKey).threadId);
 }
 
 export function resolveSessionResetType(params: {

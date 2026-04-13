@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import * as authProfileSourceCheckModule from "./auth-profiles/source-check.js";
 import * as authProfileStoreModule from "./auth-profiles/store.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -200,7 +201,7 @@ const CONNECTION_ERROR_MESSAGE = "Connection error.";
 describe("runWithModelFallback", () => {
   it("skips auth store bootstrap when no auth profile sources exist", async () => {
     const hasSourcesSpy = vi
-      .spyOn(authProfileStoreModule, "hasAnyAuthProfileStoreSource")
+      .spyOn(authProfileSourceCheckModule, "hasAnyAuthProfileStoreSource")
       .mockReturnValue(false);
     const ensureStoreSpy = vi.spyOn(authProfileStoreModule, "ensureAuthProfileStore");
     const run = vi.fn().mockResolvedValueOnce("ok");

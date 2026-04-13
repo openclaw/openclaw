@@ -21,7 +21,7 @@ function setupEnsureBrowserAvailableHarness() {
   const ctx = createBrowserRouteContext({ getState: () => state });
   const profile = ctx.forProfile("openclaw");
 
-  return { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile };
+  return { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state };
 }
 
 afterEach(() => {
@@ -62,9 +62,10 @@ describe("browser server-context ensureBrowserAvailable", () => {
   });
 
   it("reuses a pre-existing loopback browser after an initial short probe miss", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
     const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    state.resolved.ssrfPolicy = {};
 
     isChromeReachable.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     isChromeCdpReady.mockResolvedValueOnce(true);
@@ -75,17 +76,13 @@ describe("browser server-context ensureBrowserAvailable", () => {
       1,
       "http://127.0.0.1:18800",
       PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-      {
-        allowPrivateNetwork: true,
-      },
+      undefined,
     );
     expect(isChromeReachable).toHaveBeenNthCalledWith(
       2,
       "http://127.0.0.1:18800",
       PROFILE_ATTACH_RETRY_TIMEOUT_MS,
-      {
-        allowPrivateNetwork: true,
-      },
+      undefined,
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
