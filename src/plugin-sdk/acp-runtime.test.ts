@@ -37,7 +37,7 @@ const ctx = {
   cfg: {},
   dispatcher: {
     sendToolResult: () => false,
-    sendBlockReply: () => false,
+    sendBlockReply: () => false as const,
     sendFinalReply: () => false,
     waitForIdle: async () => {},
     getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),

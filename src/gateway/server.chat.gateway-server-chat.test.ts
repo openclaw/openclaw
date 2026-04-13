@@ -738,18 +738,21 @@ describe("gateway server chat", () => {
         const [params] = args as [
           {
             dispatcher: {
-              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              sendBlockReply: (payload: {
+                text: string;
+                btw: { question: string };
+              }) => boolean | Promise<true>;
               markComplete: () => void;
               waitForIdle: () => Promise<void>;
               getQueuedCounts: () => { final: number; block: number; tool: number };
             };
           },
         ];
-        params.dispatcher.sendBlockReply({
+        void params.dispatcher.sendBlockReply({
           text: "first chunk",
           btw: { question: "what changed?" },
         });
-        params.dispatcher.sendBlockReply({
+        void params.dispatcher.sendBlockReply({
           text: "second chunk",
           btw: { question: "what changed?" },
         });

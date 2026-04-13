@@ -985,7 +985,63 @@ export async function dispatchReplyFromConfig(
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(normalizedPayload);
+              // Await delivery so block text reaches the user before tool
+              // execution continues on the same channel (#32868).
+              // Race delivery against the pipeline timeout/abort to avoid hanging.
+              const deliveryPromise = dispatcher.sendBlockReply(normalizedPayload);
+              if (deliveryPromise !== false) {
+                if (context?.abortSignal) {
+                  let abortHandler: (() => void) | undefined;
+                  try {
+                    await Promise.race([
+                      deliveryPromise,
+                      new Promise<void>((_, reject) => {
+                        if (context.abortSignal!.aborted) {
+                          reject(new Error("block reply aborted before delivery"));
+                        } else {
+                          abortHandler = () => {
+                            reject(new Error("block reply aborted during delivery"));
+                          };
+                          context.abortSignal!.addEventListener("abort", abortHandler);
+                        }
+                      }),
+                    ]);
+                  } finally {
+                    // Clean up abort listener to prevent memory leaks
+                    if (abortHandler) {
+                      context.abortSignal.removeEventListener("abort", abortHandler);
+                    }
+                  }
+                } else {
+                  // Fallback timeout protection when no abort signal is available
+                  // (e.g., compaction notice path). Use 15s timeout (MAX_HUMAN_DELAY_MS + 5s buffer).
+                  // Make timeout non-fatal for no-context callers (followup runners, etc.)
+                  let timeoutId: NodeJS.Timeout | undefined;
+                  try {
+                    await Promise.race([
+                      deliveryPromise,
+                      new Promise<void>((_, reject) => {
+                        timeoutId = setTimeout(() => {
+                          reject(new Error("block reply delivery timeout (no abort context)"));
+                        }, 15_000);
+                      }),
+                    ]);
+                  } catch (err) {
+                    // Log timeout but continue - no-context callers shouldn't fail on slow delivery
+                    if (err instanceof Error && err.message.includes("delivery timeout")) {
+                      console.warn(
+                        `[dispatch-from-config] ${err.message}, delivery may continue in background`,
+                      );
+                    } else {
+                      throw err; // Re-throw non-timeout errors
+                    }
+                  } finally {
+                    if (timeoutId) {
+                      clearTimeout(timeoutId);
+                    }
+                  }
+                }
+              }
             }
           };
           return run();

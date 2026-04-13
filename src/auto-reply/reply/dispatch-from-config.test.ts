@@ -378,7 +378,7 @@ beforeAll(async () => {
 function createDispatcher(): ReplyDispatcher {
   return {
     sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
+    sendBlockReply: vi.fn(() => Promise.resolve(true as const)),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),

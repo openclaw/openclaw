@@ -170,7 +170,7 @@ function createDispatcher(): {
   const counts = { tool: 0, block: 0, final: 0 };
   const dispatcher: ReplyDispatcher = {
     sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
+    sendBlockReply: vi.fn(() => Promise.resolve(true as const)),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
