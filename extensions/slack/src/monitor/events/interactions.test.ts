@@ -141,6 +141,7 @@ function createContext(overrides?: {
     allowFrom: overrides?.allowFrom ?? [],
     allowNameMatching: overrides?.allowNameMatching ?? false,
     channelsConfig: overrides?.channelsConfig ?? {},
+    channelsConfigKeys: Object.keys(overrides?.channelsConfig ?? {}),
     defaultRequireMention: true,
     shouldDropMismatchedSlackEvent: (body: unknown) =>
       overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
@@ -845,6 +846,47 @@ describe("registerSlackInteractionEvents", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
     expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("blocks wildcard global allowFrom from bypassing configured channel users", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext({
+      allowFrom: ["*"],
+      channelsConfig: {
+        C1: { users: ["U_ALLOWED"] },
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U_ATTACKER" },
+        channel: { id: "C1" },
+        message: {
+          ts: "270.271",
+          blocks: [{ type: "actions", block_id: "verify_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "verify_block",
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to use this control.",
+      response_type: "ephemeral",
+    });
   });
 
   it("blocks DM block actions when sender is not in allowFrom", async () => {

@@ -116,6 +116,11 @@ describe("resolveSlackEffectiveAllowFrom", () => {
 });
 
 describe("authorizeSlackSystemEventSender", () => {
+  beforeAll(async () => {
+    ({ authorizeSlackSystemEventSender, clearSlackAllowFromCacheForTest } =
+      await import("./auth.js"));
+  });
+
   beforeEach(() => {
     clearSlackAllowFromCacheForTest();
   });
@@ -204,6 +209,78 @@ describe("authorizeSlackSystemEventSender", () => {
       allowed: true,
       channelType: "channel",
       channelName: "general",
+    });
+  });
+
+  it("does not let a wildcard global allowFrom bypass channel users restrictions", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-authorized",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("still allows a channel user when the global allowFrom is wildcard", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ALLOWED",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("ignores wildcard owner access when channel users are configured, even if explicit owners are also listed", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER", "*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-authorized",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("allows senders without channel context when no allowFrom is configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: undefined,
     });
   });
 });

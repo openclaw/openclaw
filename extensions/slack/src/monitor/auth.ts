@@ -3,6 +3,7 @@ import {
   allowListMatches,
   normalizeAllowList,
   normalizeAllowListLower,
+  resolveSlackAllowListMatch,
   resolveSlackUserAllowed,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
@@ -253,14 +254,6 @@ export async function authorizeSlackSystemEventSender(params: {
   } else {
     const allowFromLower = await resolveAllowFromLower(false);
     const ownerAllowlistConfigured = allowFromLower.length > 0;
-    const ownerAllowed =
-      ownerAllowlistConfigured &&
-      isSlackSenderAllowListed({
-        allowListLower: allowFromLower,
-        senderId,
-        senderName,
-        allowNameMatching: params.ctx.allowNameMatching,
-      });
     const channelConfig = resolveSlackChannelConfig({
       channelId,
       channelName,
@@ -271,13 +264,16 @@ export async function authorizeSlackSystemEventSender(params: {
     });
     const channelUsersAllowlistConfigured =
       Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
-    if (ownerAllowed) {
-      return {
-        allowed: true,
-        channelType,
-        channelName,
-      };
-    }
+    const ownerMatch = ownerAllowlistConfigured
+      ? resolveSlackAllowListMatch({
+          allowList: allowFromLower,
+          id: senderId,
+          name: senderName,
+          allowNameMatching: params.ctx.allowNameMatching,
+        })
+      : { allowed: false };
+    const ownerAllowed = ownerMatch.allowed;
+    const ownerExplicitlyAllowed = ownerAllowed && ownerMatch.matchSource !== "wildcard";
     if (channelUsersAllowlistConfigured) {
       const channelUserAllowed = resolveSlackUserAllowed({
         allowList: channelConfig?.users,
@@ -285,15 +281,28 @@ export async function authorizeSlackSystemEventSender(params: {
         userName: senderName,
         allowNameMatching: params.ctx.allowNameMatching,
       });
-      if (!channelUserAllowed) {
+      if (channelUserAllowed || ownerExplicitlyAllowed) {
         return {
-          allowed: false,
-          reason: ownerAllowlistConfigured ? "sender-not-authorized" : "sender-not-channel-allowed",
+          allowed: true,
           channelType,
           channelName,
         };
       }
-    } else if (ownerAllowlistConfigured) {
+      return {
+        allowed: false,
+        reason: ownerAllowlistConfigured ? "sender-not-authorized" : "sender-not-channel-allowed",
+        channelType,
+        channelName,
+      };
+    }
+    if (ownerAllowed) {
+      return {
+        allowed: true,
+        channelType,
+        channelName,
+      };
+    }
+    if (ownerAllowlistConfigured) {
       return {
         allowed: false,
         reason: "sender-not-allowlisted",
