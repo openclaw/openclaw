@@ -18,6 +18,7 @@ import {
   stopBackgroundTokenRefresh,
 } from "./api.js";
 import { formatQQBotAllowFrom } from "./channel-config-shared.js";
+import { resolveQQBotGatewaySessionRecovery } from "./gateway-close-session-recovery.js";
 import { formatVoiceText, processAttachments } from "./inbound-attachments.js";
 import { flushKnownUsers, recordKnownUser } from "./known-users.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
@@ -1449,19 +1450,17 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           return;
         }
 
-        if (code === 4006 || code === 4007 || code === 4009) {
-          const codeDesc: Record<number, string> = {
-            4006: "session no longer valid",
-            4007: "invalid seq on resume",
-            4009: "session timed out",
-          };
+        const sessionRecovery = resolveQQBotGatewaySessionRecovery(code);
+        if (sessionRecovery) {
           log?.info(
-            `[qqbot:${account.accountId}] Error ${code} (${codeDesc[code]}), will re-identify`,
+            `[qqbot:${account.accountId}] Error ${code} (${sessionRecovery.description}), will ${sessionRecovery.reconnectMode === "identify" ? "re-identify" : "resume"}`,
           );
-          sessionId = null;
-          lastSeq = null;
-          clearSession(account.accountId);
-          shouldRefreshToken = true;
+          if (sessionRecovery.clearSession) {
+            sessionId = null;
+            lastSeq = null;
+            clearSession(account.accountId);
+          }
+          shouldRefreshToken = sessionRecovery.shouldRefreshToken;
         } else if (code >= 4900 && code <= 4913) {
           log?.info(`[qqbot:${account.accountId}] Internal error (${code}), will re-identify`);
           sessionId = null;
