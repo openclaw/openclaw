@@ -14,8 +14,6 @@ export type SlackResolvedMessageContent = {
   effectiveDirectMedia: SlackMediaResult[] | null;
 };
 
-const SLACK_USER_MENTION_PATTERN = /<@([A-Z0-9]+)(?:\|[^>]+)?>/gi;
-
 function filterInheritedParentFiles(params: {
   files: SlackFile[] | undefined;
   isThreadReply: boolean;
@@ -94,12 +92,13 @@ export async function resolveSlackMessageContent(params: {
       : undefined;
 
   const renderSlackUserMentions = async (text: string | undefined): Promise<string | undefined> => {
-    if (!text || !params.resolveUserName || !SLACK_USER_MENTION_PATTERN.test(text)) {
+    const pattern = /<@([A-Z0-9]+)(?:\|[^>]+)?>/gi;
+    if (!text || !params.resolveUserName || !pattern.test(text)) {
       return text;
     }
-    SLACK_USER_MENTION_PATTERN.lastIndex = 0;
+    pattern.lastIndex = 0;
     const seen = new Map<string, string | null>();
-    for (const match of text.matchAll(SLACK_USER_MENTION_PATTERN)) {
+    for (const match of text.matchAll(pattern)) {
       const userId = match[1];
       if (!userId || seen.has(userId)) {
         continue;
@@ -111,7 +110,8 @@ export async function resolveSlackMessageContent(params: {
     if (seen.size === 0) {
       return text;
     }
-    return text.replace(SLACK_USER_MENTION_PATTERN, (full, userId: string) => {
+    pattern.lastIndex = 0;
+    return text.replace(pattern, (full, userId: string) => {
       const rendered = seen.get(userId);
       return rendered ?? full;
     });
