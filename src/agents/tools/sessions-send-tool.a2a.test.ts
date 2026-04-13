@@ -25,10 +25,14 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         return {} as T;
       },
     });
+    __testing.setHelpersForTest({
+      createEventSink: () => ({ append: async () => {} }),
+    });
   });
 
   afterEach(() => {
     __testing.setDepsForTest();
+    __testing.setHelpersForTest();
     vi.restoreAllMocks();
   });
 
@@ -65,5 +69,48 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     const sendParams = sendCall?.params as Record<string, unknown>;
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.threadId).toBeUndefined();
+  });
+});
+
+describe("sessions_send A2A envelope wiring", () => {
+  it("builds a structured delegate task envelope from sessions_send params", () => {
+    const envelope = __testing.buildTaskEnvelopeForTest({
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      targetSessionKey: "agent:worker:main",
+      displayKey: "agent:worker:main",
+      message: "Investigate the latest failure and report back",
+      announceTimeoutMs: 15_000,
+      maxPingPongTurns: 2,
+      waitRunId: "run-a2a-1",
+    });
+
+    expect(envelope).toMatchObject({
+      v: 1,
+      taskId: "run-a2a-1",
+      kind: "delegate_task",
+      requester: {
+        sessionKey: "agent:main:discord:group:req",
+        channel: "discord",
+      },
+      target: {
+        sessionKey: "agent:worker:main",
+        displayKey: "agent:worker:main",
+      },
+      task: {
+        intent: "delegate",
+        instructions: "Investigate the latest failure and report back",
+        expectedOutput: { format: "text" },
+      },
+      constraints: {
+        timeoutSeconds: 15,
+        maxPingPongTurns: 2,
+        allowAnnounce: true,
+      },
+      trace: {
+        parentRunId: "run-a2a-1",
+        correlationId: "run-a2a-1",
+      },
+    });
   });
 });
