@@ -347,6 +347,14 @@ async function deliverMediaReply(params: {
         logFallback: logVerbose,
       });
       if (useVoice) {
+        const voiceDuration = await (async () => {
+          try {
+            const { getOggDurationSecs } = await import("./ogg-duration.js");
+            return getOggDurationSecs(media.buffer);
+          } catch {
+            return undefined;
+          }
+        })();
         const sendVoiceMedia = async (
           requestParams: typeof mediaParams,
           shouldLog?: (err: unknown) => boolean,
@@ -358,7 +366,10 @@ async function deliverMediaReply(params: {
             requestParams,
             shouldLog,
             send: (effectiveParams) =>
-              params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
+              params.bot.api.sendVoice(params.chatId, file, {
+                ...effectiveParams,
+                ...(voiceDuration != null ? { duration: voiceDuration } : {}),
+              }),
           });
           if (firstDeliveredMessageId == null) {
             firstDeliveredMessageId = result.message_id;
