@@ -1,4 +1,5 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-client-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -19,6 +20,7 @@ import {
   type ResolvedNextcloudTalkAccount,
 } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
+import { buildApprovalActions, stashApproval } from "./approval-stash.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import {
   nextcloudTalkConfigAdapter,
@@ -299,6 +301,41 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
         chunkerMode: "markdown",
         textChunkLimit: 4000,
+        sendPayload: async (ctx) => {
+          const metadata = getExecApprovalReplyMetadata(ctx.payload);
+          const result = await sendMessageNextcloudTalk(ctx.to, ctx.text, {
+            accountId: ctx.accountId ?? undefined,
+            replyTo: ctx.replyToId ?? undefined,
+            cfg: ctx.cfg as CoreConfig,
+          });
+          if (metadata) {
+            const allowedDecisions = metadata.allowedDecisions ?? [
+              "allow-once",
+              "allow-always",
+              "deny",
+            ];
+            const actions = buildApprovalActions(allowedDecisions);
+            stashApproval(ctx.accountId ?? "", ctx.to, result.messageId, {
+              approvalId: metadata.approvalId,
+              approvalSlug: metadata.approvalSlug,
+              approvalKind: metadata.approvalKind,
+              sessionKey: metadata.sessionKey,
+              actions,
+            });
+            // Seed one reaction per available decision so users can tap to respond.
+            for (const action of actions) {
+              try {
+                await sendReactionNextcloudTalk(ctx.to, result.messageId, action.emoji, {
+                  accountId: ctx.accountId ?? undefined,
+                  cfg: ctx.cfg as CoreConfig,
+                });
+              } catch {
+                // Best-effort: reaction seeding failure should not block the approval prompt.
+              }
+            }
+          }
+          return { channel: "nextcloud-talk", messageId: result.messageId };
+        },
       },
       attachedResults: {
         channel: "nextcloud-talk",
