@@ -334,10 +334,14 @@ async function settleResolution(
 
 function rememberPendingExecution(
   pendingExecutions: Map<string, PendingGuardExecution>,
+  receiptsEnabled: boolean,
   runId: string | undefined,
   toolCallId: string | undefined,
   pending: PendingGuardExecution,
 ): void {
+  if (!receiptsEnabled) {
+    return;
+  }
   const key = buildPendingKey(runId, toolCallId);
   if (!key) {
     return;
@@ -373,12 +377,18 @@ export default definePluginEntry({
       try {
         const verdict = await resolvePreExecutionVerdict(settings, artifact);
         if (!verdict || verdict.decision === "allow") {
-          rememberPendingExecution(pendingExecutions, ctx.runId, event.toolCallId, {
-            artifact,
-            recommendation: "monitor",
-            rationale: verdict?.rationale || "Guard allowed tool execution.",
-            source: verdict ? verdictSource(verdict) : "preexecution-guard",
-          });
+          rememberPendingExecution(
+            pendingExecutions,
+            settings.receiptsEnabled,
+            ctx.runId,
+            event.toolCallId,
+            {
+              artifact,
+              recommendation: "monitor",
+              rationale: verdict?.rationale || "Guard allowed tool execution.",
+              source: verdict ? verdictSource(verdict) : "preexecution-guard",
+            },
+          );
           return undefined;
         }
 
@@ -404,12 +414,18 @@ export default definePluginEntry({
             severity: severityForVerdict(verdict),
             async onResolution(resolution) {
               if (resolution === "allow-once" || resolution === "allow-always") {
-                rememberPendingExecution(pendingExecutions, ctx.runId, event.toolCallId, {
-                  artifact,
-                  recommendation: "review",
-                  rationale: verdict.rationale || `Guard reviewed ${artifact.artifactName}.`,
-                  source: verdictSource(verdict),
-                });
+                rememberPendingExecution(
+                  pendingExecutions,
+                  settings.receiptsEnabled,
+                  ctx.runId,
+                  event.toolCallId,
+                  {
+                    artifact,
+                    recommendation: "review",
+                    rationale: verdict.rationale || `Guard reviewed ${artifact.artifactName}.`,
+                    source: verdictSource(verdict),
+                  },
+                );
                 return;
               }
               await settleResolution(settings, artifact, verdict, resolution);

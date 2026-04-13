@@ -349,4 +349,66 @@ describe("hol-guard plugin", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it("does not retain pending execution tracking when receipts are disabled", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      createJsonResponse({
+        decision: "review",
+        rationale: "Needs explicit review",
+        scope: "workspace",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const hooks = setupPlugin({
+      baseUrl: "https://guard.example/api/v1/consumer",
+      receiptsEnabled: false,
+      painSignalsEnabled: false,
+    });
+    const beforeToolCall = hooks.get("before_tool_call");
+    const afterToolCall = hooks.get("after_tool_call");
+
+    const reviewResult = (await beforeToolCall?.(
+      {
+        toolName: "mcp_receiptless_review",
+        toolCallId: "tool-7",
+        params: {
+          artifactId: "mcp-server:openclaw:receiptless-review",
+          artifactName: "receiptless review",
+          artifactSlug: "receiptless-review",
+          artifactType: "mcp-server",
+          launchSummary: "review flow with receipts disabled",
+        },
+      },
+      {
+        runId: "run-7",
+        toolName: "mcp_receiptless_review",
+        toolCallId: "tool-7",
+      },
+    )) as {
+      requireApproval?: {
+        onResolution?: (decision: "allow-once") => Promise<void>;
+      };
+    };
+
+    await reviewResult.requireApproval?.onResolution?.("allow-once");
+    await afterToolCall?.(
+      {
+        toolName: "mcp_receiptless_review",
+        toolCallId: "tool-7",
+        params: {},
+        result: { ok: true },
+      },
+      {
+        runId: "run-7",
+        toolName: "mcp_receiptless_review",
+        toolCallId: "tool-7",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://guard.example/api/v1/consumer/verdict/pre-execution",
+    );
+  });
 });
