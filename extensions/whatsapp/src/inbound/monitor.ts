@@ -120,6 +120,27 @@ export async function attachWebInboxToSocket(
     options.authDir,
     sock.user as { id?: string | null; lid?: string | null } | undefined,
   );
+  // Track message IDs that are currently buffered in the debouncer (not yet
+  // flushed to the agent). Used by the messages.update handler to silently
+  // swap in the edited text before the agent ever sees the original.
+  const pendingMessageIds = new Map<string, WebInboundMessage>();
+  // Track message IDs that have been fully processed (flushed + onMessage
+  // completed). Only edits to these messages trigger a notification — this
+  // prevents edits to ignored, historical, or access-denied messages from
+  // producing unexpected outbound replies.
+  const processedMessageIds = new Set<string>();
+  const MAX_PROCESSED_IDS = 512;
+  const rememberProcessedId = (id: string) => {
+    if (processedMessageIds.size >= MAX_PROCESSED_IDS) {
+      // Evict the oldest entry (Sets preserve insertion order).
+      const first = processedMessageIds.values().next().value;
+      if (first !== undefined) {
+        processedMessageIds.delete(first);
+      }
+    }
+    processedMessageIds.add(id);
+  };
+
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
@@ -144,27 +165,51 @@ export async function attachWebInboxToSocket(
       if (!last) {
         return;
       }
+      let messageToDeliver: WebInboundMessage;
       if (entries.length === 1) {
-        await options.onMessage(last);
-        return;
+        messageToDeliver = last;
+      } else {
+        const mentioned = new Set<string>();
+        for (const entry of entries) {
+          for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
+            mentioned.add(jid);
+          }
+        }
+        const combinedBody = entries
+          .map((entry) => entry.body)
+          .filter(Boolean)
+          .join("\n");
+        messageToDeliver = {
+          ...last,
+          body: combinedBody,
+          mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+          mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+        };
       }
-      const mentioned = new Set<string>();
-      for (const entry of entries) {
-        for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
-          mentioned.add(jid);
+      // Deliver first, then update tracking. This closes the race where an
+      // edit event arrives after pendingMessageIds is cleared but before
+      // onMessage completes — without this ordering, Case 2 would fire
+      // a "already processed" notification while the agent is still handling
+      // the original body.
+      // Use try/finally so pendingMessageIds is always cleared even if
+      // onMessage rejects — preventing stale entries from accumulating.
+      // rememberProcessedId runs only on success: a failed flush means the
+      // agent never actually processed the message, so later edits should
+      // not trigger a "already processed" notification.
+      let deliverySucceeded = false;
+      try {
+        await options.onMessage(messageToDeliver);
+        deliverySucceeded = true;
+      } finally {
+        for (const entry of entries) {
+          if (entry.id) {
+            pendingMessageIds.delete(entry.id);
+            if (deliverySucceeded) {
+              rememberProcessedId(entry.id);
+            }
+          }
         }
       }
-      const combinedBody = entries
-        .map((entry) => entry.body)
-        .filter(Boolean)
-        .join("\n");
-      const combinedMessage: WebInboundMessage = {
-        ...last,
-        body: combinedBody,
-        mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-        mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-      };
-      await options.onMessage(combinedMessage);
     },
     onError: (err) => {
       inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
@@ -524,6 +569,11 @@ export async function attachWebInboxToSocket(
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
     };
+    // Register this message as pending so the edit handler can swap its body
+    // before the debouncer flushes it to the agent.
+    if (inboundMessage.id) {
+      pendingMessageIds.set(inboundMessage.id, inboundMessage);
+    }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
       void task.catch((err) => {
@@ -572,6 +622,103 @@ export async function attachWebInboxToSocket(
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
+  // Handle message edits and revocations from WhatsApp.
+  //
+  // Two cases:
+  //   1. Message is still pending in the debouncer → silently swap the body,
+  //      the agent never sees the original typo.
+  //   2. Message already flushed (agent already replied) → send a notification
+  //      so the user knows their edit was seen after the fact.
+  const handleMessagesUpdate = async (
+    updates: Array<{
+      update: Partial<WAMessage>;
+      key: { id?: string; remoteJid?: string; fromMe?: boolean };
+    }>,
+  ) => {
+    for (const { update, key } of updates) {
+      const msgId = key.id;
+      const remoteJid = key.remoteJid;
+
+      // Skip messages with no id or remoteJid.
+      // Do NOT skip fromMe unconditionally: in self-chat mode the owner's own
+      // messages have fromMe=true but should still be tracked for edits.
+      // Instead, skip only outbound bot messages that were sent by sendTrackedMessage
+      // (those are already filtered by the rememberRecentOutboundMessage dedupe path
+      // in normalizeInboundMessage and will not be in pendingMessageIds).
+      if (!msgId || !remoteJid) {
+        continue;
+      }
+
+      // Detect revocation: protocolMessage with type REVOKE (0).
+      const protocolMsg = update.message?.protocolMessage;
+      const isRevoke =
+        protocolMsg != null &&
+        (protocolMsg.type === 0 || (protocolMsg as { type?: number }).type === 0);
+
+      if (isRevoke) {
+        logVerbose(`Message ${msgId} revoked by user — ignoring`);
+        continue;
+      }
+
+      // Detect edit: editedMessage present in the protocol message (type 14).
+      const isEdit =
+        protocolMsg != null &&
+        ((protocolMsg as { type?: number }).type === 14 || protocolMsg.editedMessage != null);
+
+      if (!isEdit) {
+        continue;
+      }
+
+      // Extract new text from the edited message.
+      // protocolMsg.editedMessage is proto.IMessage, which has .conversation
+      // and .extendedTextMessage directly (no intermediate .message wrapper).
+      const editedMsg = protocolMsg?.editedMessage as
+        | { conversation?: string | null; extendedTextMessage?: { text?: string | null } | null }
+        | null
+        | undefined;
+      const editedBody = editedMsg?.conversation ?? editedMsg?.extendedTextMessage?.text ?? null;
+
+      if (!editedBody) {
+        logVerbose(`Edit event for ${msgId} had no extractable text — skipping`);
+        continue;
+      }
+
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
+
+      const pending = pendingMessageIds.get(msgId);
+      if (pending) {
+        // ✅ Case 1: Still buffered — swap the body in place. The debouncer
+        // will flush the updated version; the agent sees only the corrected text.
+        pending.body = editedBody;
+        if (shouldLogVerbose()) {
+          logVerbose(`Swapped pending message ${msgId} body to edited version: "${editedBody}"`);
+        }
+      } else if (processedMessageIds.has(msgId)) {
+        // ⚠️ Case 2: Already flushed and confirmed processed — notify the user
+        // that we've seen an edit after the fact so they can decide to resend.
+        // We only notify for messages that passed access-control and were
+        // actually delivered to the agent; edits to ignored or historical
+        // messages are silently dropped.
+        if (shouldLogVerbose()) {
+          logVerbose(`Edit received for already-processed message ${msgId} — notifying user`);
+        }
+        try {
+          await sendTrackedMessage(remoteJid, {
+            text: `✏️ (You edited a message I already processed. If you'd like me to handle the updated version, please resend it.)`,
+          });
+        } catch (err) {
+          logVerbose(`Failed to send edit-notification for ${msgId}: ${String(err)}`);
+        }
+      } else {
+        logVerbose(`Edit received for unknown/ignored message ${msgId} — skipping notification`);
+      }
+    }
+  };
+
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -600,6 +747,15 @@ export async function attachWebInboxToSocket(
     },
     "messages.upsert",
     handleMessagesUpsert as unknown as (...args: unknown[]) => void,
+  );
+  const detachMessagesUpdate = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+    "messages.update",
+    handleMessagesUpdate as unknown as (...args: unknown[]) => void,
   );
   const detachConnectionUpdate = attachEmitterListener(
     sock.ev as unknown as {
@@ -643,6 +799,7 @@ export async function attachWebInboxToSocket(
     close: async () => {
       try {
         detachMessagesUpsert();
+        detachMessagesUpdate();
         detachConnectionUpdate();
         closeInboundMonitorSocket(sock);
       } catch (err) {
