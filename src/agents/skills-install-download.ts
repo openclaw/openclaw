@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -147,14 +148,8 @@ async function downloadFile(params: {
   };
 
   const destPath = path.resolve(params.rootDir, params.relativePath);
-  const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
+  const stagingDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-download-"));
   await runBeforeTempWrite();
-  await ensureDir(stagingDir);
-  await assertCanonicalPathWithinBase({
-    baseDir: params.rootDir,
-    candidatePath: stagingDir,
-    boundaryLabel: "skill tools directory",
-  });
   const tempPath = path.join(stagingDir, `${randomUUID()}.tmp`);
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
@@ -186,6 +181,7 @@ async function downloadFile(params: {
     return { bytes: stat.size };
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
     await release();
   }
 }
