@@ -30,4 +30,40 @@ describe("browser server-context listProfiles", () => {
       }),
     ]);
   });
+
+  it("uses remote-class probes for attachOnly loopback CDP profiles", async () => {
+    const state = makeBrowserServerState({
+      profile: {
+        name: "manual-cdp",
+        cdpUrl: "http://127.0.0.1:9222",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cdpPort: 9222,
+        color: "#00AA00",
+        driver: "openclaw",
+        attachOnly: true,
+      },
+      resolvedOverrides: {
+        defaultProfile: "manual-cdp",
+        ssrfPolicy: {},
+      },
+    });
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    isChromeReachable.mockResolvedValue(true);
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profiles = await ctx.listProfiles();
+
+    expect(isChromeReachable).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222",
+      state.resolved.remoteCdpTimeoutMs,
+      undefined,
+    );
+    expect(profiles).toEqual([
+      expect.objectContaining({
+        name: "manual-cdp",
+        running: true,
+      }),
+    ]);
+  });
 });

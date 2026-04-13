@@ -2,6 +2,7 @@ import {
   resolveCdpControlPolicy,
   resolveCdpReachabilityPolicy,
 } from "./cdp-reachability-policy.js";
+import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
@@ -190,9 +191,15 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       } else {
         // Check if something is listening on the port
         try {
+          const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+            profileIsLoopback: profile.cdpIsLoopback,
+            attachOnly: profile.attachOnly,
+          })
+            ? 200
+            : current.resolved.remoteCdpTimeoutMs;
           const reachable = await isChromeReachable(
             profile.cdpUrl,
-            200,
+            probeTimeoutMs,
             resolveCdpReachabilityPolicy(profile, current.resolved.ssrfPolicy),
           );
           if (reachable) {
