@@ -310,6 +310,56 @@ describe("parseSlashCommand", () => {
     expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeDefined();
   });
 
+  it("falls back safely when the gateway returns malformed command payload shapes", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ commands: { bad: "shape" } })
+      .mockResolvedValueOnce({
+        commands: [
+          {
+            name: "valid",
+            textAliases: ["/valid"],
+            description: 42,
+            args: { nope: true },
+          },
+          {
+            name: "pair",
+            textAliases: ["/pair"],
+            description: "Generate setup codes.",
+            source: "plugin",
+            scope: "both",
+            acceptsArgs: true,
+            args: [
+              {
+                name: "mode",
+                required: "yes",
+                choices: { broken: true },
+              },
+            ],
+          },
+        ],
+      });
+
+    await refreshSlashCommands({
+      client: { request } as never,
+      agentId: "main",
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeUndefined();
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "help")).toBeDefined();
+
+    await refreshSlashCommands({
+      client: { request } as never,
+      agentId: "main",
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "valid")).toMatchObject({
+      name: "valid",
+      description: "",
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toMatchObject({
+      name: "pair",
+    });
+  });
+
   it("ignores stale refresh responses and keeps the latest command set", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     const first = new Promise((resolve) => {

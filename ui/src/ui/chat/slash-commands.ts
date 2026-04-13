@@ -243,9 +243,57 @@ function normalizeSlashIdentifier(raw: string): string | null {
   return normalized;
 }
 
-function clampText(value: string | undefined, maxLength: number): string {
-  const text = value ?? "";
+function clampText(value: unknown, maxLength: number): string {
+  const text = typeof value === "string" ? value : "";
   return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function getEntryArgs(
+  entry: CommandEntry | Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const rawArgs = "args" in entry ? entry.args : undefined;
+  if (!Array.isArray(rawArgs)) {
+    return [];
+  }
+  return rawArgs
+    .map((arg) => asRecord(arg))
+    .filter((arg): arg is Record<string, unknown> => arg !== null);
+}
+
+function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
+  if (arg.dynamic === true) {
+    return [];
+  }
+  const rawChoices = arg.choices;
+  if (!Array.isArray(rawChoices)) {
+    return [];
+  }
+  return rawChoices
+    .map((choice) => {
+      if (typeof choice === "string") {
+        return clampText(choice, MAX_REMOTE_NAME_LENGTH);
+      }
+      const record = asRecord(choice);
+      if (!record) {
+        return null;
+      }
+      return {
+        value: clampText(record.value, MAX_REMOTE_NAME_LENGTH),
+        label: clampText(record.label, MAX_REMOTE_NAME_LENGTH),
+      };
+    })
+    .filter((choice): choice is LocalArgChoice => {
+      if (!choice) {
+        return false;
+      }
+      return typeof choice === "string" ? Boolean(choice) : Boolean(choice.value);
+    });
 }
 
 function buildLocalSlashCommands(): SlashCommandDef[] {
@@ -282,7 +330,7 @@ function buildReservedLocalSlashNames(): Set<string> {
 }
 
 function normalizeCommandEntry(
-  entry: CommandEntry,
+  entry: CommandEntry | Record<string, unknown>,
   reservedLocalNames: Set<string>,
 ): CommandLike | null {
   const aliases = (Array.isArray(entry.textAliases) ? entry.textAliases : [])
@@ -291,26 +339,31 @@ function normalizeCommandEntry(
     .map(normalizeSlashIdentifier)
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedLocalNames.has(alias));
-  const primaryName = aliases[0] ?? normalizeSlashIdentifier(entry.name);
+  const primaryName =
+    aliases[0] ?? (typeof entry.name === "string" ? normalizeSlashIdentifier(entry.name) : null);
   if (!primaryName || reservedLocalNames.has(primaryName)) {
     return null;
   }
+  const args = getEntryArgs(entry)
+    .slice(0, MAX_REMOTE_ARGS)
+    .map((arg) => ({
+      name: clampText(arg.name, MAX_REMOTE_ARG_NAME_LENGTH),
+      required: arg.required === true,
+      choices: getArgChoices(arg).slice(0, MAX_REMOTE_CHOICES),
+    }))
+    .filter((arg) => arg.name.length > 0)
+    .map((arg) => ({
+      name: arg.name,
+      ...(arg.required ? { required: true } : {}),
+      ...(arg.choices.length > 0 ? { choices: arg.choices } : {}),
+    }));
   return {
     key: primaryName,
     name: primaryName,
     aliases: aliases.map((alias) => `/${alias}`),
     description: clampText(entry.description, MAX_REMOTE_DESCRIPTION_LENGTH),
-    args: entry.args?.slice(0, MAX_REMOTE_ARGS).map((arg) => ({
-      name: clampText(arg.name, MAX_REMOTE_ARG_NAME_LENGTH),
-      required: arg.required,
-      choices: arg.dynamic
-        ? undefined
-        : arg.choices?.slice(0, MAX_REMOTE_CHOICES).map((choice) => ({
-            value: clampText(choice.value, MAX_REMOTE_NAME_LENGTH),
-            label: clampText(choice.label, MAX_REMOTE_NAME_LENGTH),
-          })),
-    })),
-    category: entry.category,
+    ...(args.length > 0 ? { args } : {}),
+    category: typeof entry.category === "string" ? entry.category : undefined,
   };
 }
 
@@ -336,6 +389,16 @@ function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef
     deduped.set(key, command);
   }
   return Array.from(deduped.values());
+}
+
+function getRemoteCommandEntries(result: CommandsListResult | null | undefined): CommandEntry[] {
+  const commands = result?.commands;
+  if (!Array.isArray(commands)) {
+    return [];
+  }
+  return commands
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is CommandEntry => entry !== null);
 }
 
 function buildFallbackSlashCommands(): SlashCommandDef[] {
@@ -368,7 +431,7 @@ export async function refreshSlashCommands(params: {
     if (seq !== _refreshSeq) {
       return;
     }
-    replaceSlashCommands(buildSlashCommandsFromEntries(result?.commands ?? []));
+    replaceSlashCommands(buildSlashCommandsFromEntries(getRemoteCommandEntries(result)));
   } catch {
     if (seq !== _refreshSeq) {
       return;
