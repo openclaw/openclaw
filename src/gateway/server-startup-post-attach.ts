@@ -2,6 +2,7 @@ import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { selectAgentHarness } from "../agents/harness/selection.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   getModelRefStatus,
@@ -11,18 +12,19 @@ import {
 } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import { scheduleSubagentOrphanRecovery } from "../agents/subagent-registry.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { loadConfig } from "../config/config.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
-  clearInternalHooks,
   createInternalHookEvent,
+  setInternalHooksEnabled,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
@@ -41,12 +43,13 @@ import {
 } from "./server-restart-sentinel.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
 async function prewarmConfiguredPrimaryModel(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
   const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
@@ -59,6 +62,13 @@ async function prewarmConfiguredPrimaryModel(params: {
     defaultModel: DEFAULT_MODEL,
   });
   if (isCliProvider(provider, params.cfg)) {
+    return;
+  }
+  const runtime = resolveEmbeddedAgentRuntime();
+  if (runtime !== "auto" && runtime !== "pi") {
+    return;
+  }
+  if (selectAgentHarness({ provider, modelId: model, config: params.cfg }).id !== "pi") {
     return;
   }
   const agentDir = resolveOpenClawAgentDir();
@@ -79,7 +89,7 @@ async function prewarmConfiguredPrimaryModel(params: {
 }
 
 export async function startGatewaySidecars(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -145,7 +155,7 @@ export async function startGatewaySidecars(params: {
   }
 
   try {
-    clearInternalHooks();
+    setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
     const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
     if (loadedCount > 0) {
       params.logHooks.info(
@@ -230,12 +240,11 @@ export async function startGatewaySidecars(params: {
 
 export async function startGatewayPostAttachRuntime(params: {
   minimalTestGateway: boolean;
-  cfgAtStart: ReturnType<typeof loadConfig>;
+  cfgAtStart: OpenClawConfig;
   bindHost: string;
   bindHosts: string[];
   port: number;
   tlsEnabled: boolean;
-  pluginCount: number;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -252,7 +261,7 @@ export async function startGatewayPostAttachRuntime(params: {
     error: (msg: string) => void;
     debug?: (msg: string) => void;
   };
-  gatewayPluginConfigAtStart: ReturnType<typeof loadConfig>;
+  gatewayPluginConfigAtStart: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -271,7 +280,9 @@ export async function startGatewayPostAttachRuntime(params: {
     bindHosts: params.bindHosts,
     port: params.port,
     tlsEnabled: params.tlsEnabled,
-    pluginCount: params.pluginCount,
+    loadedPluginIds: params.pluginRegistry.plugins
+      .filter((plugin) => plugin.status === "loaded")
+      .map((plugin) => plugin.id),
     log: params.log,
     isNixMode: params.isNixMode,
     startupStartedAt: params.startupStartedAt,
@@ -312,7 +323,9 @@ export async function startGatewayPostAttachRuntime(params: {
       logHooks: params.logHooks,
       logChannels: params.logChannels,
     }));
-    params.unavailableGatewayMethods.delete("chat.history");
+    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+      params.unavailableGatewayMethods.delete(method);
+    }
   }
 
   if (!params.minimalTestGateway) {

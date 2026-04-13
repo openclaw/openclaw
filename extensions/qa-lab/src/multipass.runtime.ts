@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -107,6 +108,7 @@ export type QaMultipassPlan = {
   memory: string;
   disk: string;
   pnpmVersion: string;
+  transportId: string;
   providerMode: "mock-openai" | "live-frontier";
   primaryModel?: string;
   alternateModel?: string;
@@ -149,7 +151,7 @@ function createOutputStamp() {
 }
 
 function createVmSuffix() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
 function sleep(ms: number) {
@@ -328,11 +330,13 @@ function appendScenarioArgs(command: string[], scenarioIds: string[]) {
 export function createQaMultipassPlan(params: {
   repoRoot: string;
   outputDir?: string;
+  transportId?: string;
   providerMode?: "mock-openai" | "live-frontier";
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  concurrency?: number;
   image?: string;
   cpus?: number;
   memory?: string;
@@ -340,7 +344,8 @@ export function createQaMultipassPlan(params: {
 }) {
   const outputDir = params.outputDir ?? createQaMultipassOutputDir(params.repoRoot);
   const scenarioIds = [...new Set(params.scenarioIds ?? [])];
-  const providerMode = params.providerMode ?? "mock-openai";
+  const transportId = params.transportId?.trim() || "qa-channel";
+  const providerMode = params.providerMode ?? "live-frontier";
   const forwardedEnv = providerMode === "live-frontier" ? resolveForwardedLiveEnv() : {};
   const hostCodexHomePath = forwardedEnv.CODEX_HOME;
   const liveProviderConfig =
@@ -357,6 +362,8 @@ export function createQaMultipassPlan(params: {
       "openclaw",
       "qa",
       "suite",
+      "--transport",
+      transportId,
       "--provider-mode",
       providerMode,
       "--output-dir",
@@ -364,6 +371,7 @@ export function createQaMultipassPlan(params: {
       ...(params.primaryModel ? ["--model", params.primaryModel] : []),
       ...(params.alternateModel ? ["--alt-model", params.alternateModel] : []),
       ...(params.fastMode ? ["--fast"] : []),
+      ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
     ],
     scenarioIds,
   );
@@ -382,6 +390,7 @@ export function createQaMultipassPlan(params: {
     memory: params.memory ?? qaMultipassDefaultResources.memory,
     disk: params.disk ?? qaMultipassDefaultResources.disk,
     pnpmVersion: validatePnpmVersion(resolvePnpmVersion(params.repoRoot)),
+    transportId,
     providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
@@ -626,11 +635,13 @@ async function tryCopyGuestBootstrapLog(plan: QaMultipassPlan) {
 export async function runQaMultipass(params: {
   repoRoot: string;
   outputDir?: string;
+  transportId?: string;
   providerMode?: "mock-openai" | "live-frontier";
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  concurrency?: number;
   image?: string;
   cpus?: number;
   memory?: string;

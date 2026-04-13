@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { resolveFinalAssistantVisibleText } from "./helpers.js";
+import { resolveFinalAssistantRawText, resolveFinalAssistantVisibleText } from "./helpers.js";
 
 function makeAssistantMessage(
   content: AssistantMessage["content"],
@@ -59,5 +59,35 @@ describe("resolveFinalAssistantVisibleText", () => {
     ]);
 
     expect(resolveFinalAssistantVisibleText(lastAssistant)).toBeUndefined();
+  });
+});
+
+describe("resolveFinalAssistantRawText", () => {
+  it("preserves commentary and final answer text", () => {
+    const lastAssistant = makeAssistantMessage([
+      {
+        type: "text",
+        text: "Working...",
+        textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+      },
+      {
+        type: "text",
+        text: "Section 1\nSection 2",
+        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+      },
+    ]);
+
+    expect(resolveFinalAssistantRawText(lastAssistant)).toBe("Working...\nSection 1\nSection 2");
+  });
+
+  it("returns undefined when the final raw text is empty", () => {
+    const lastAssistant = makeAssistantMessage([
+      {
+        type: "text",
+        text: "   ",
+      },
+    ]);
+
+    expect(resolveFinalAssistantRawText(lastAssistant)).toBeUndefined();
   });
 });

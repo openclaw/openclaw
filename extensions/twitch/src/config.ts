@@ -1,5 +1,5 @@
 import { listCombinedAccountIds } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveTwitchToken, type TwitchTokenResolution } from "./token.js";
 import type { TwitchAccountConfig } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";

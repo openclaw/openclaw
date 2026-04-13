@@ -52,6 +52,47 @@ pnpm qa:lab:watch
 rebuilds that bundle on change, and the browser auto-reloads when the QA Lab
 asset hash changes.
 
+For a transport-real Matrix smoke lane, run:
+
+```bash
+pnpm openclaw qa matrix
+```
+
+That lane provisions a disposable Tuwunel homeserver in Docker, registers
+temporary driver, SUT, and observer users, creates one private room, then runs
+the real Matrix plugin inside a QA gateway child. The live transport lane keeps
+the child config scoped to the transport under test, so Matrix runs without
+`qa-channel` in the child config.
+
+For a transport-real Telegram smoke lane, run:
+
+```bash
+pnpm openclaw qa telegram
+```
+
+That lane targets one real private Telegram group instead of provisioning a
+disposable server. It requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
+`OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and
+`OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`, plus two distinct bots in the same
+private group. The SUT bot must have a Telegram username, and bot-to-bot
+observation works best when both bots have Bot-to-Bot Communication Mode
+enabled in `@BotFather`.
+
+Live transport lanes now share one smaller contract instead of each inventing
+their own scenario list shape:
+
+`qa-channel` remains the broad synthetic product-behavior suite and is not part
+of the live transport coverage matrix.
+
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
+| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+
+This keeps `qa-channel` as the broad product-behavior suite while Matrix,
+Telegram, and future live transports share one explicit transport-contract
+checklist.
+
 For a disposable Linux VM lane without bringing Docker into the QA path, run:
 
 ```bash
@@ -62,6 +103,10 @@ This boots a fresh Multipass guest, installs dependencies, builds OpenClaw
 inside the guest, runs `qa suite`, then copies the normal QA report and
 summary back into `.artifacts/qa-e2e/...` on the host.
 It reuses the same scenario-selection behavior as `qa suite` on the host.
+Host and Multipass suite runs execute multiple selected scenarios in parallel
+with isolated gateway workers by default, up to 64 workers or the selected
+scenario count. Use `--concurrency <count>` to tune the worker count, or
+`--concurrency 1` for serial execution.
 Live runs forward the supported QA auth inputs that are practical for the
 guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the guest
@@ -75,7 +120,23 @@ Seed assets live in `qa/`:
 - `qa/scenarios/*.md`
 
 These are intentionally in git so the QA plan is visible to both humans and the
-agent. The baseline list should stay broad enough to cover:
+agent.
+
+`qa-lab` should stay a generic markdown runner. Each scenario markdown file is
+the source of truth for one test run and should define:
+
+- scenario metadata
+- docs and code refs
+- optional plugin requirements
+- optional gateway config patch
+- the executable `qa-flow`
+
+The reusable runtime surface that backs `qa-flow` is allowed to stay generic
+and cross-cutting. For example, markdown scenarios can combine transport-side
+helpers with browser-side helpers that drive the embedded Control UI through the
+Gateway `browser.request` seam without adding a special-case runner.
+
+The baseline list should stay broad enough to cover:
 
 - DM and channel chat
 - thread behavior
@@ -86,6 +147,22 @@ agent. The baseline list should stay broad enough to cover:
 - subagent handoff
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
+
+## Transport adapters
+
+`qa-lab` owns a generic transport seam for markdown QA scenarios.
+`qa-channel` is the first adapter on that seam, but the design target is wider:
+future real or synthetic channels should plug into the same suite runner
+instead of adding a transport-specific QA runner.
+
+At the architecture level, the split is:
+
+- `qa-lab` owns generic scenario execution, worker concurrency, artifact writing, and reporting.
+- the transport adapter owns gateway config, readiness, inbound and outbound observation, transport actions, and normalized transport state.
+- markdown scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
+
+Maintainer-facing adoption guidance for new channel adapters lives in
+[Testing](/help/testing#adding-a-channel-to-qa).
 
 ## Reporting
 

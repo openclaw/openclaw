@@ -230,6 +230,8 @@ vi.mock("../../logging/diagnostic.js", () => ({
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
     threadInfoMocks.parseSessionThreadInfo(sessionKey),
+  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey),
 }));
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
@@ -342,6 +344,7 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+  shouldAttemptTtsPayload: () => true,
 }));
 
 const noAbortResult = { handled: false, aborted: false } as const;
@@ -446,7 +449,7 @@ function createMockAcpSessionManager() {
           meta: entry.acp,
         };
       }
-      return String(params.sessionKey).startsWith("agent:")
+      return params.sessionKey.startsWith("agent:")
         ? {
             kind: "stale" as const,
             sessionKey: params.sessionKey,
@@ -2685,6 +2688,54 @@ describe("dispatchReplyFromConfig", () => {
         channel: "whatsapp",
         outcome: "skipped",
         reason: "duplicate",
+      }),
+    );
+  });
+
+  it("releases inbound dedupe when dispatch fails before completion", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550124",
+      To: "whatsapp:+15555550124",
+      AccountId: "default",
+      MessageSid: "msg-dup-error",
+      SessionKey: "agent:main:whatsapp:direct:+15555550124",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+    });
+    const replyResolver = vi
+      .fn<
+        (_ctx: MsgContext, _opts?: GetReplyOptions, _cfg?: OpenClawConfig) => Promise<ReplyPayload>
+      >()
+      .mockRejectedValueOnce(new Error("dispatch failed"))
+      .mockResolvedValueOnce({ text: "retry succeeds" });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      }),
+    ).rejects.toThrow("dispatch failed");
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(2);
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        outcome: "error",
+        error: "Error: dispatch failed",
       }),
     );
   });

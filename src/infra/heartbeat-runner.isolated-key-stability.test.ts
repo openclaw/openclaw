@@ -5,6 +5,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
@@ -12,6 +17,7 @@ vi.mock("./outbound/deliver.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetSystemEventsForTest();
 });
 
 describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
@@ -195,6 +201,62 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
+  it("consumes base-session cron events when isolated heartbeat runs on a :heartbeat session", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy
+        .mockResolvedValueOnce({ text: "Relay this cron update now" })
+        .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
+
+      enqueueSystemEvent("Cron: QMD maintenance completed", {
+        sessionKey: baseSessionKey,
+        contextKey: "cron:qmd-maintenance",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(peekSystemEventEntries(baseSessionKey)).toEqual([]);
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      const firstCtx = replySpy.mock.calls[0]?.[0] as {
+        Body?: string;
+        Provider?: string;
+        SessionKey?: string;
+      };
+      const secondCtx = replySpy.mock.calls[1]?.[0] as {
+        Body?: string;
+        Provider?: string;
+        SessionKey?: string;
+      };
+
+      expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(firstCtx.Provider).toBe("cron-event");
+      expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
+      expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
+    });
+  });
+
   it("stays stable for wake re-entry when the configured base key already ends with :heartbeat", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg = makeNamedIsolatedHeartbeatConfig(tmpDir, storePath, "alerts:heartbeat");
@@ -227,6 +289,51 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(alreadyIsolatedKey);
+    });
+  });
+
+  it("classifies hook:wake exec events when they are queued on the active isolated session", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [isolatedSessionKey]: {
+            sessionId: "sid",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+      enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey: isolatedSessionKey });
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "Handled internally" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        reason: "hook:wake",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        SessionKey?: string;
+        Provider?: string;
+        ForceSenderIsOwnerFalse?: boolean;
+      };
+      expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
     });
   });
 
