@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import {
@@ -22,6 +24,7 @@ export type CronRunLogEntry = {
   action: "finished";
   status?: CronRunStatus;
   error?: string;
+  errorReason?: FailoverReason;
   summary?: string;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
@@ -303,12 +306,17 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         obj.usage && typeof obj.usage === "object"
           ? (obj.usage as Record<string, unknown>)
           : undefined;
+      const normalizedError = typeof obj.error === "string" ? obj.error : undefined;
       const entry: CronRunLogEntry = {
         ts: obj.ts,
         jobId: obj.jobId,
         action: "finished",
         status: obj.status,
-        error: obj.error,
+        error: normalizedError,
+        errorReason:
+          typeof obj.errorReason === "string"
+            ? obj.errorReason
+            : (resolveFailoverReasonFromError(normalizedError) ?? undefined),
         summary: obj.summary,
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
@@ -406,6 +414,7 @@ export async function readCronRunLogEntriesPage(
       [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.errorReason ?? "",
         entry.jobId,
         entry.delivery?.intended?.channel ?? "",
         entry.delivery?.resolved?.channel ?? "",
@@ -470,6 +479,7 @@ export async function readCronRunLogEntriesPageAll(
       return [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.errorReason ?? "",
         entry.jobId,
         jobName,
         entry.delivery?.intended?.channel ?? "",
