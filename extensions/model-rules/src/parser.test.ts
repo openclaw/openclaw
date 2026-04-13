@@ -178,4 +178,22 @@ describe("readModelsFile", () => {
     const second = await readModelsFile(tmpDir);
     expect(first).toBe(second);
   });
+
+  it("caches multiple workspaces independently", async () => {
+    const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "model-rules-a-"));
+    const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "model-rules-b-"));
+    try {
+      await fs.writeFile(path.join(dirA, "MODELS.md"), "## MODEL: a\n\nRules A.\n");
+      await fs.writeFile(path.join(dirB, "MODELS.md"), "## MODEL: b\n\nRules B.\n");
+      const resultA = await readModelsFile(dirA);
+      const resultB = await readModelsFile(dirB);
+      expect(resultA).toContain("Rules A.");
+      expect(resultB).toContain("Rules B.");
+      const resultA2 = await readModelsFile(dirA);
+      expect(resultA2).toContain("Rules A.");
+    } finally {
+      await fs.rm(dirA, { recursive: true, force: true });
+      await fs.rm(dirB, { recursive: true, force: true });
+    }
+  });
 });

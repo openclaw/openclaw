@@ -28,7 +28,7 @@ export default definePluginEntry({
       (pluginConfig.disabledModels ?? []).map((id) => id.toLowerCase()),
     );
 
-    let defaultEnsured = false;
+    const seededWorkspaces = new Set<string>();
 
     api.on("before_prompt_build", async (_event, ctx) => {
       try {
@@ -38,9 +38,9 @@ export default definePluginEntry({
           return undefined;
         }
 
-        if (!defaultEnsured) {
+        if (!seededWorkspaces.has(workspaceDir)) {
           await ensureDefaultModelsFile(workspaceDir, modelsFilename);
-          defaultEnsured = true;
+          seededWorkspaces.add(workspaceDir);
         }
 
         const modelRef = ctx.modelProviderId ? `${ctx.modelProviderId}/${modelId}` : modelId;

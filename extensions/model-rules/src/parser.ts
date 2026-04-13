@@ -1,13 +1,11 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-let cachedContent: string | null = null;
-let cachedMtimeMs = 0;
-let cachedFilePath = "";
+const fileCache = new Map<string, { content: string; mtimeMs: number }>();
 
 /**
  * Read MODELS.md from the workspace directory with mtime-based caching.
- * Only re-reads from disk when the file has been modified.
+ * Supports multiple concurrent workspaces without cache thrashing.
  */
 export async function readModelsFile(
   workspaceDir: string,
@@ -16,31 +14,22 @@ export async function readModelsFile(
   const filePath = join(workspaceDir, filename);
   try {
     const fileStat = await stat(filePath);
-    if (
-      cachedContent !== null &&
-      cachedFilePath === filePath &&
-      fileStat.mtimeMs === cachedMtimeMs
-    ) {
-      return cachedContent;
+    const cached = fileCache.get(filePath);
+    if (cached && fileStat.mtimeMs === cached.mtimeMs) {
+      return cached.content;
     }
     const content = await readFile(filePath, "utf-8");
-    cachedContent = content;
-    cachedMtimeMs = fileStat.mtimeMs;
-    cachedFilePath = filePath;
+    fileCache.set(filePath, { content, mtimeMs: fileStat.mtimeMs });
     return content;
   } catch {
-    cachedContent = null;
-    cachedMtimeMs = 0;
-    cachedFilePath = "";
+    fileCache.delete(filePath);
     return null;
   }
 }
 
 /** Reset the file cache (for testing). */
 export function resetFileCache(): void {
-  cachedContent = null;
-  cachedMtimeMs = 0;
-  cachedFilePath = "";
+  fileCache.clear();
 }
 
 const HEADING_PREFIX = "## MODEL:";
@@ -50,11 +39,10 @@ const HEADING_PREFIX_LOWER = HEADING_PREFIX.toLowerCase();
  * Extract a single model section from MODELS.md content by exact model ID.
  * Uses indexOf for the common case, regex fallback for case-insensitive.
  */
-export function extractSection(
-  content: string,
-  modelId: string,
-): string | null {
-  if (!modelId) return null;
+export function extractSection(content: string, modelId: string): string | null {
+  if (!modelId) {
+    return null;
+  }
 
   const target = `${HEADING_PREFIX} ${modelId}`;
   let headingEnd = findHeadingEnd(content, target);
@@ -63,7 +51,9 @@ export function extractSection(
     const targetLower = target.toLowerCase();
     const contentLower = content.toLowerCase();
     headingEnd = findHeadingEnd(contentLower, targetLower);
-    if (headingEnd === -1) return null;
+    if (headingEnd === -1) {
+      return null;
+    }
   }
 
   const rest = content.slice(headingEnd);
@@ -82,7 +72,9 @@ function findHeadingEnd(content: string, target: string): number {
   let pos = 0;
   while (true) {
     const idx = content.indexOf(target, pos);
-    if (idx === -1) return -1;
+    if (idx === -1) {
+      return -1;
+    }
 
     if (idx > 0 && content[idx - 1] !== "\n") {
       pos = idx + 1;
@@ -108,19 +100,18 @@ function findHeadingEnd(content: string, target: string): number {
   }
 }
 
-/** Find the start of the next `## MODEL:` heading in `rest`. */
+/** Find the start of the next `## MODEL:` heading in `rest` (case-insensitive). */
 function findNextHeading(rest: string): number {
+  const restLower = rest.toLowerCase();
   let pos = 0;
   while (true) {
-    const idx = rest.indexOf(HEADING_PREFIX, pos);
+    const idx = restLower.indexOf(HEADING_PREFIX_LOWER, pos);
     if (idx === -1) {
-      const idxLower = rest.toLowerCase().indexOf(HEADING_PREFIX_LOWER, pos);
-      if (idxLower === -1) return -1;
-      if (idxLower === 0 || rest[idxLower - 1] === "\n") return idxLower;
-      pos = idxLower + 1;
-      continue;
+      return -1;
     }
-    if (idx === 0 || rest[idx - 1] === "\n") return idx;
+    if (idx === 0 || rest[idx - 1] === "\n") {
+      return idx;
+    }
     pos = idx + 1;
   }
 }
@@ -152,15 +143,14 @@ export function parseModelRef(modelRef: string): {
  * 2. Bare model ID (e.g., `gpt-5.4`)
  * 3. No match -> null (zero tokens injected)
  */
-export function findModelSection(
-  content: string,
-  modelRef: string,
-): string | null {
+export function findModelSection(content: string, modelRef: string): string | null {
   const { fullRef, bareId } = parseModelRef(modelRef);
 
   if (fullRef !== bareId) {
     const fullMatch = extractSection(content, fullRef);
-    if (fullMatch) return fullMatch;
+    if (fullMatch) {
+      return fullMatch;
+    }
   }
 
   return extractSection(content, bareId);

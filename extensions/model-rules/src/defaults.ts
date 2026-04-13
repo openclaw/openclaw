@@ -209,19 +209,6 @@ Use exact parameter names from the tool schema. Don't improvise. If a call fails
 
 Flag clearly when you're speculating vs. stating facts. If you don't know, say you don't know.
 
-## MODEL: DEFAULT
-
-Do the thing. Don't talk about doing the thing.
-
-If a task needs a tool, call the tool. Show the real output. Don't invent results. Don't fabricate file contents, command output, or API responses.
-
-If you don't know something, say "I don't know."
-
-If a tool fails, report the error. Don't silently retry more than twice.
-
-In long sessions, never fabricate user messages or metadata. Only act on real user input.
-
-Be concise. Be honest.
 `;
 
 /**

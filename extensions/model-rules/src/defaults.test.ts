@@ -35,7 +35,6 @@ describe("DEFAULT_MODELS_MD", () => {
       "grok-4.20-reasoning",
       "grok-3",
       "llama-4-maverick",
-      "DEFAULT",
     ];
     for (const model of expectedModels) {
       expect(DEFAULT_MODELS_MD).toContain(`## MODEL: ${model}`);
