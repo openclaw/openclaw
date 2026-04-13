@@ -35,6 +35,7 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
@@ -79,6 +80,15 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".tox",
   "__pycache__",
 ]);
+
+function buildQmdProcessPath(rawPath: string | undefined): string {
+  const nodeBinDir = path.dirname(process.execPath);
+  const entries = rawPath?.split(path.delimiter).filter(Boolean) ?? [];
+  if (entries.includes(nodeBinDir)) {
+    return rawPath ?? nodeBinDir;
+  }
+  return [...entries, nodeBinDir].join(path.delimiter);
+}
 
 type McporterState = {
   coldStartWarned: boolean;
@@ -307,6 +317,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
     this.env = {
       ...process.env,
+      PATH: buildQmdProcessPath(process.env.PATH),
       XDG_CONFIG_HOME: this.xdgConfigHome,
       // QMD resolves index.yml relative to QMD_CONFIG_DIR rather than XDG_CONFIG_HOME.
       // Point it at the nested qmd config directory so per-agent collections are visible.
@@ -884,7 +895,13 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   async search(
     query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+    },
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
       this.logScopeDenied(opts?.sessionKey);
@@ -906,7 +923,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
     }
-    const qmdSearchCommand = this.qmd.searchMode;
+    const qmdSearchCommand = opts?.qmdSearchModeOverride ?? this.qmd.searchMode;
+    let effectiveSearchMode: "query" | "search" | "vsearch" = qmdSearchCommand;
+    let searchFallbackReason: string | undefined;
     const explicitSearchTool = this.qmd.searchTool;
     const mcporterEnabled = this.qmd.mcporter.enabled;
     const runSearchAttempt = async (
@@ -986,6 +1005,8 @@ export class QmdMemoryManager implements MemorySearchManager {
           qmdSearchCommand !== "query" &&
           this.isUnsupportedQmdOptionError(err)
         ) {
+          effectiveSearchMode = "query";
+          searchFallbackReason = "unsupported-search-flags";
           log.warn(
             `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
           );
@@ -1045,6 +1066,12 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
+    opts?.onDebug?.({
+      backend: "qmd",
+      configuredMode: qmdSearchCommand,
+      effectiveMode: effectiveSearchMode,
+      fallback: searchFallbackReason,
+    });
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
   }
 

@@ -2,7 +2,7 @@ import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js"
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { isRestartEnabled } from "../config/commands.js";
+import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";

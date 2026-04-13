@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type {
@@ -17,8 +16,8 @@ import type { ModelProviderRequestTransportOverrides } from "../agents/provider-
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -91,6 +90,11 @@ import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type {
+  ProviderApplyConfigDefaultsContext,
+  ProviderNormalizeConfigContext,
+  ProviderResolveConfigApiKeyContext,
+} from "./provider-config-context.types.js";
+import type {
   ProviderExternalAuthProfile,
   ProviderExternalOAuthProfile,
   ProviderResolveExternalAuthProfilesContext,
@@ -99,6 +103,7 @@ import type {
   ProviderSyntheticAuthResult,
 } from "./provider-external-auth.types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingPolicyContext,
@@ -184,6 +189,7 @@ export type {
   WebSearchProviderToolDefinition,
   WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
+export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -362,17 +368,6 @@ export type ProviderPluginCatalog = {
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
 };
 
-/**
- * Fully-resolved runtime model shape used by the embedded runner.
- *
- * Catalog hooks publish config-time `models.providers` entries.
- * Runtime hooks below operate on the final `pi-ai` model object after
- * discovery/override merging, just before inference runs.
- */
-export type ProviderRuntimeModel = Model<Api> & {
-  contextTokens?: number;
-};
-
 export type ProviderRuntimeProviderConfig = {
   baseUrl?: string;
   api?: ModelProviderConfig["api"];
@@ -442,16 +437,11 @@ export type ProviderNormalizeModelIdContext = {
   modelId: string;
 };
 
-/**
- * Provider-owned config normalization for `models.providers.<id>` entries.
- *
- * Use this for provider-specific config cleanup that should stay with the
- * plugin rather than in core config-policy tables.
- */
-export type ProviderNormalizeConfigContext = {
-  provider: string;
-  providerConfig: ModelProviderConfig;
-};
+export type {
+  ProviderApplyConfigDefaultsContext,
+  ProviderNormalizeConfigContext,
+  ProviderResolveConfigApiKeyContext,
+} from "./provider-config-context.types.js";
 
 /**
  * Provider-owned transport normalization for arbitrary provider/model config.
@@ -464,17 +454,6 @@ export type ProviderNormalizeTransportContext = {
   provider: string;
   api?: string | null;
   baseUrl?: string;
-};
-
-/**
- * Provider-owned env/config auth marker resolution for `models.providers`.
- *
- * Use this when a provider resolves auth from env vars that do not follow the
- * generic API-key conventions.
- */
-export type ProviderResolveConfigApiKeyContext = {
-  provider: string;
-  env: NodeJS.ProcessEnv;
 };
 
 /**
@@ -808,18 +787,6 @@ export type ProviderFailoverErrorContext = {
   provider?: string;
   modelId?: string;
   errorMessage: string;
-};
-
-/**
- * Provider-owned config-default application input.
- *
- * Use this when a provider needs to add global config defaults that depend on
- * provider auth mode or provider-specific model families.
- */
-export type ProviderApplyConfigDefaultsContext = {
-  provider: string;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
 };
 
 /**
@@ -1743,7 +1710,9 @@ export type OpenClawPluginCommandDefinition = {
    * `default` applies to all native providers unless a provider-specific
    * override exists.
    */
-  nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
+  nativeProgressMessages?: Partial<Record<string, string>> & {
+    default?: string;
+  };
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */

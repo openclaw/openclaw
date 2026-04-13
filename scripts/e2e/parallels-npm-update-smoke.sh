@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-macos-common.sh"
 
 MACOS_VM="macOS Tahoe"
 WINDOWS_VM="Windows 11"
@@ -456,6 +457,41 @@ function Wait-GatewayRpcReady {
   }
 }
 
+function Stop-OpenClawGatewayProcesses {
+  Write-ProgressLog 'update.stop-old-gateway'
+  $patterns = @(
+    'openclaw-gateway',
+    'openclaw.*gateway --port 18789',
+    'openclaw.*gateway run',
+    'openclaw\.mjs gateway',
+    'dist\\index\.js gateway --port 18789'
+  )
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $commandLine = $_.CommandLine
+      if (-not $commandLine) {
+        $false
+      } else {
+        $matched = $false
+        foreach ($pattern in $patterns) {
+          if ($commandLine -match $pattern) {
+            $matched = $true
+            break
+          }
+        }
+        $matched
+      }
+    } |
+    ForEach-Object {
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+  Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+    }
+  Start-Sleep -Seconds 2
+}
+
 function Restart-GatewayWithRecovery {
   param(
     [Parameter(Mandatory = $true)][string]$OpenClawPath
@@ -511,6 +547,7 @@ try {
   Write-ProgressLog 'update.start'
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Stop-OpenClawGatewayProcesses
   Write-ProgressLog 'update.openclaw-update'
   Invoke-Logged 'openclaw update' { & $openclaw update --tag $UpdateTarget --yes --json }
   Write-ProgressLog 'update.verify-version'
@@ -719,55 +756,8 @@ raise SystemExit(completed.returncode)
 PY
 }
 
-resolve_macos_desktop_user() {
-  local user
-  user="$(prlctl exec "$MACOS_VM" /usr/bin/stat -f '%Su' /dev/console 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
-  if [[ "$user" =~ ^[A-Za-z0-9._-]+$ && "$user" != "root" && "$user" != "loginwindow" ]]; then
-    printf '%s\n' "$user"
-    return 0
-  fi
-  prlctl exec "$MACOS_VM" /usr/bin/dscl . -list /Users NFSHomeDirectory 2>/dev/null \
-    | tr -d '\r' \
-    | awk '$2 ~ /^\/Users\// && $1 !~ /^_/ && $1 != "Shared" && $1 != ".localized" { print $1; exit }'
-}
-
-resolve_macos_desktop_home() {
-  local user="$1"
-  local home
-  home="$(
-    prlctl exec "$MACOS_VM" /usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null \
-      | tr -d '\r' \
-      | awk '/NFSHomeDirectory:/ { print $2; exit }'
-  )"
-  if [[ -n "$home" ]]; then
-    printf '%s\n' "$home"
-  else
-    printf '/Users/%s\n' "$user"
-  fi
-}
-
-macos_current_user_available() {
-  prlctl exec "$MACOS_VM" --current-user /usr/bin/whoami >/dev/null 2>&1
-}
-
 macos_desktop_user_exec() {
-  if macos_current_user_available; then
-    prlctl exec "$MACOS_VM" --current-user /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" "$@"
-    return
-  fi
-
-  local user home
-  user="$(resolve_macos_desktop_user)"
-  [[ -n "$user" ]] || die "unable to resolve macOS desktop user for sudo fallback"
-  home="$(resolve_macos_desktop_home "$user")"
-  warn "macOS --current-user unavailable; using root sudo fallback for $user"
-  prlctl exec "$MACOS_VM" /usr/bin/sudo -u "$user" /usr/bin/env \
-    "HOME=$home" \
-    "USER=$user" \
-    "LOGNAME=$user" \
-    "PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    "$API_KEY_ENV=$API_KEY_VALUE" \
-    "$@"
+  parallels_macos_desktop_user_exec "$MACOS_VM" "$API_KEY_ENV" "$API_KEY_VALUE" "$@"
 }
 
 guest_powershell_poll() {
@@ -927,7 +917,22 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
   exit 1
 fi
 cd "\$HOME"
+stop_openclaw_gateway_processes() {
+  /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
+  /usr/bin/pkill -9 -f openclaw-gateway || true
+  /usr/bin/pkill -9 -f 'openclaw gateway run' || true
+  /usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
+  for pid in \$(/usr/sbin/lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true); do
+    /bin/kill -9 "\$pid" 2>/dev/null || true
+  done
+}
+# Stop the pre-update gateway before replacing the package. Otherwise the old
+# host can observe new plugin metadata mid-update and abort config validation.
+stop_openclaw_gateway_processes
 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
+# Same-guest npm upgrades can leave the old gateway process holding the old
+# bundled plugin host version. Stop it before post-update config commands.
+stop_openclaw_gateway_processes
 version="\$(/opt/homebrew/bin/openclaw --version)"
 printf '%s\n' "\$version"
 if [ -n "$expected_needle" ]; then
@@ -943,13 +948,31 @@ fi
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
 # Same-guest npm upgrades can leave launchd holding the old gateway process or
 # module graph briefly; wait for a fresh RPC-ready restart before the agent turn.
-/opt/homebrew/bin/openclaw gateway restart
+# Fresh npm installs may not have a launchd service yet, so fall back to the
+# same manual gateway launch used by the fresh macOS lane.
+/opt/homebrew/bin/openclaw gateway restart || true
+gateway_ready=0
 for _ in 1 2 3 4 5 6 7 8; do
   if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+    gateway_ready=1
     break
   fi
   sleep 2
 done
+if [ "\$gateway_ready" != "1" ]; then
+  stop_openclaw_gateway_processes
+  /opt/homebrew/bin/openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-npm-update-macos-gateway.log 2>&1 </dev/null &
+  for _ in 1 2 3 4 5 6 7 8; do
+    if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+      gateway_ready=1
+      break
+    fi
+    sleep 2
+  done
+fi
+if [ "\$gateway_ready" != "1" ]; then
+  tail -n 120 /tmp/openclaw-parallels-npm-update-macos-gateway.log 2>/dev/null || true
+fi
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
 /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
@@ -977,7 +1000,27 @@ run_linux_update() {
 set -euo pipefail
 export HOME=/root
 cd "\$HOME"
+stop_openclaw_gateway_processes() {
+  openclaw gateway stop >/dev/null 2>&1 || true
+  pkill -9 -f openclaw-gateway || true
+  pkill -9 -f 'openclaw gateway run' || true
+  pkill -9 -f 'openclaw.mjs gateway' || true
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k 18789/tcp >/dev/null 2>&1 || true
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    for pid in \$(lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true); do
+      kill -9 "\$pid" 2>/dev/null || true
+    done
+  fi
+}
+# Stop the pre-update manual gateway before replacing the package. Otherwise
+# the old host can observe new plugin metadata mid-update and abort validation.
+stop_openclaw_gateway_processes
 openclaw update --tag "$update_target" --yes --json
+# The fresh Linux lane starts a manual gateway; stop the old process before
+# post-update config validation sees mixed old-host/new-plugin metadata.
+stop_openclaw_gateway_processes
 version="\$(openclaw --version)"
 printf '%s\n' "\$version"
 if [ -n "$expected_needle" ]; then
