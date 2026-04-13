@@ -99,7 +99,7 @@ function buildSlackManifest(botName: string) {
 
 export function buildSlackSetupLines(botName = "OpenClaw"): string[] {
   return [
-    "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
+    "1) Slack API -> Create App -> From scratch or From manifest",
     "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
     "3) Install App to workspace to get the xoxb- bot token",
     "4) Enable Event Subscriptions (socket) for message events",
@@ -107,9 +107,17 @@ export function buildSlackSetupLines(botName = "OpenClaw"): string[] {
     "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
     `Docs: ${formatDocsLink("/slack", "slack")}`,
     "",
-    "Manifest (JSON):",
-    buildSlackManifest(botName),
+    "The app manifest JSON will be printed below this box for easy copying.",
   ];
+}
+
+/**
+ * Return the Slack app manifest JSON string for the given bot name.
+ * Consumers can print this outside a framed note so users can copy
+ * the raw JSON without accidentally grabbing ASCII box characters.
+ */
+export function getSlackManifestJson(botName = "OpenClaw"): string {
+  return buildSlackManifest(botName);
 }
 
 export function setSlackChannelAllowlist(

@@ -24,6 +24,7 @@ import { inspectSlackAccount } from "./account-inspect.js";
 import { resolveSlackAccount } from "./accounts.js";
 import {
   buildSlackSetupLines,
+  getSlackManifestJson,
   SLACK_CHANNEL as channel,
   isSlackSetupAccountConfigured,
   setSlackChannelAllowlist,
@@ -176,6 +177,16 @@ export function createSlackSetupWizardBase(handlers: {
       lines: buildSlackSetupLines(),
       shouldShow: ({ cfg, accountId }) =>
         !isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId })),
+    },
+    prepare: async ({ cfg, accountId }) => {
+      // Print the manifest JSON outside the framed note so users can
+      // copy-paste it without picking up ASCII box characters (#65751).
+      if (!isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId }))) {
+        const manifest = getSlackManifestJson();
+        console.log("\nSlack App Manifest (copy this JSON):\n");
+        console.log(manifest);
+        console.log();
+      }
     },
     envShortcut: {
       prompt: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
