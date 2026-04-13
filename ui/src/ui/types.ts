@@ -721,6 +721,14 @@ export type ToolCatalogGroup =
   import("../../../src/gateway/protocol/schema/types.js").ToolCatalogGroup;
 export type ToolsCatalogResult =
   import("../../../src/gateway/protocol/schema/types.js").ToolsCatalogResult;
+export type PlanRecord = import("../../../src/gateway/protocol/schema/types.js").PlanRecord;
+export type PlanRegistrySummary =
+  import("../../../src/gateway/protocol/schema/types.js").PlanRegistrySummary;
+export type PlansListResult =
+  import("../../../src/gateway/protocol/schema/types.js").PlansListResult;
+export type PlansGetResult = import("../../../src/gateway/protocol/schema/types.js").PlansGetResult;
+export type PlansUpdateStatusResult =
+  import("../../../src/gateway/protocol/schema/types.js").PlansUpdateStatusResult;
 export type ToolsEffectiveEntry =
   import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveEntry;
 export type ToolsEffectiveGroup =

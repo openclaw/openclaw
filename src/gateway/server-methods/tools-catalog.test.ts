@@ -14,7 +14,18 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
 }));
 
-const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
+const pluginToolMetaState = new Map<
+  string,
+  {
+    pluginId: string;
+    optional: boolean;
+    activationMode?: "always" | "optional" | "deferred";
+    bindableToSubagent?: boolean;
+    operatorVisibility?: "normal" | "advanced" | "internal";
+    policyHints?: string[];
+    category?: string;
+  }
+>();
 
 vi.mock("../../plugins/tools.js", () => ({
   resolvePluginTools: vi.fn(() => [
@@ -50,8 +61,23 @@ function createInvokeParams(params: Record<string, unknown>) {
 describe("tools.catalog handler", () => {
   beforeEach(() => {
     pluginToolMetaState.clear();
-    pluginToolMetaState.set("voice_call", { pluginId: "voice-call", optional: true });
-    pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
+    pluginToolMetaState.set("voice_call", {
+      pluginId: "voice-call",
+      optional: true,
+      activationMode: "optional",
+      bindableToSubagent: true,
+      operatorVisibility: "advanced",
+      policyHints: ["plugin_optional", "voice"],
+      category: "calling",
+    });
+    pluginToolMetaState.set("matrix_room", {
+      pluginId: "matrix",
+      optional: false,
+      activationMode: "always",
+      bindableToSubagent: true,
+      operatorVisibility: "normal",
+      category: "chat",
+    });
   });
 
   it("rejects invalid params", async () => {
@@ -83,14 +109,29 @@ describe("tools.catalog handler", () => {
           groups: Array<{
             id: string;
             source: "core" | "plugin";
-            tools: Array<{ id: string; source: "core" | "plugin" }>;
+            tools: Array<{
+              id: string;
+              source: "core" | "plugin";
+              activationMode: "always" | "optional" | "deferred";
+              executionScope: "session" | "subagent" | "gateway" | "unknown";
+              operatorVisibility: "normal" | "advanced" | "internal";
+            }>;
           }>;
         }
       | undefined;
     expect(payload?.agentId).toBe("main");
     expect(payload?.groups.some((group) => group.source === "plugin")).toBe(false);
     const media = payload?.groups.find((group) => group.id === "media");
-    expect(media?.tools.some((tool) => tool.id === "tts" && tool.source === "core")).toBe(true);
+    expect(
+      media?.tools.some(
+        (tool) =>
+          tool.id === "tts" &&
+          tool.source === "core" &&
+          tool.activationMode === "always" &&
+          tool.executionScope === "unknown" &&
+          tool.operatorVisibility === "normal",
+      ),
+    ).toBe(true);
   });
 
   it("includes plugin groups with plugin metadata", async () => {
@@ -108,6 +149,12 @@ describe("tools.catalog handler", () => {
               source: "core" | "plugin";
               pluginId?: string;
               optional?: boolean;
+              activationMode: "always" | "optional" | "deferred";
+              executionScope: "session" | "subagent" | "gateway" | "unknown";
+              operatorVisibility: "normal" | "advanced" | "internal";
+              bindableToSubagent?: boolean;
+              policyHints?: string[];
+              category?: string;
             }>;
           }>;
         }
@@ -121,6 +168,12 @@ describe("tools.catalog handler", () => {
       source: "plugin",
       pluginId: "voice-call",
       optional: true,
+      activationMode: "optional",
+      executionScope: "subagent",
+      operatorVisibility: "advanced",
+      bindableToSubagent: true,
+      policyHints: ["plugin_optional", "voice"],
+      category: "calling",
     });
   });
 

@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   sessionsInspectCommand: vi.fn(),
   sessionsControlCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
+  plansListCommand: vi.fn(),
+  plansShowCommand: vi.fn(),
+  plansSetStatusCommand: vi.fn(),
   tasksListCommand: vi.fn(),
   tasksAuditCommand: vi.fn(),
   tasksMaintenanceCommand: vi.fn(),
@@ -32,6 +35,9 @@ const sessionsCommand = mocks.sessionsCommand;
 const sessionsInspectCommand = mocks.sessionsInspectCommand;
 const sessionsControlCommand = mocks.sessionsControlCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
+const plansListCommand = mocks.plansListCommand;
+const plansShowCommand = mocks.plansShowCommand;
+const plansSetStatusCommand = mocks.plansSetStatusCommand;
 const tasksListCommand = mocks.tasksListCommand;
 const tasksAuditCommand = mocks.tasksAuditCommand;
 const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
@@ -56,6 +62,12 @@ vi.mock("../../commands/sessions.js", () => ({
   sessionsCommand: mocks.sessionsCommand,
   sessionsInspectCommand: mocks.sessionsInspectCommand,
   sessionsControlCommand: mocks.sessionsControlCommand,
+}));
+
+vi.mock("../../commands/plans.js", () => ({
+  plansListCommand: mocks.plansListCommand,
+  plansShowCommand: mocks.plansShowCommand,
+  plansSetStatusCommand: mocks.plansSetStatusCommand,
 }));
 
 vi.mock("../../commands/sessions-cleanup.js", () => ({
@@ -101,6 +113,9 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsInspectCommand.mockResolvedValue(undefined);
     sessionsControlCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    plansListCommand.mockResolvedValue(undefined);
+    plansShowCommand.mockResolvedValue(undefined);
+    plansSetStatusCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
     tasksAuditCommand.mockResolvedValue(undefined);
     tasksMaintenanceCommand.mockResolvedValue(undefined);
@@ -405,6 +420,54 @@ describe("registerStatusHealthSessionsCommands", () => {
       }),
       runtime,
     );
+  });
+
+  it("runs plans list from the parent command", async () => {
+    await runCli(["plans", "--json", "--status", "ready_for_review"]);
+
+    expect(plansListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        status: "ready_for_review",
+      }),
+      runtime,
+    );
+  });
+
+  it("runs plans show subcommand with lookup forwarding", async () => {
+    await runCli(["plans", "show", "plan-123", "--json"]);
+
+    expect(plansShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "plan-123",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs plans set-status subcommand with lookup forwarding", async () => {
+    await runCli(["plans", "set-status", "plan-123", "approved"]);
+
+    expect(plansSetStatusCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "plan-123",
+        status: "approved",
+      }),
+      runtime,
+    );
+  });
+
+  it("surfaces plans subcommands in help text", () => {
+    const program = new Command();
+    registerStatusHealthSessionsCommands(program);
+    const plans = program.commands.find((command) => command.name() === "plans");
+
+    expect(plans).toBeDefined();
+    const help = plans?.helpInformation() ?? "";
+    expect(help).toContain("Inspect orchestration plan artifacts");
+    expect(help).toContain("show [options] <lookup>");
+    expect(help).toContain("set-status <lookup> <status>");
   });
 
   it("runs tasks cancel subcommand with lookup forwarding", async () => {

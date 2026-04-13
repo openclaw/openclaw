@@ -34,6 +34,8 @@ vi.mock("./register.status-health-sessions.js", () => ({
     program.command("sessions");
     const tasks = program.command("tasks");
     tasks.command("show");
+    const plans = program.command("plans");
+    plans.command("show");
   },
 }));
 
@@ -80,6 +82,7 @@ describe("command-registry", () => {
     expect(names).toContain("mcp");
     expect(names).toContain("sessions");
     expect(names).toContain("tasks");
+    expect(names).toContain("plans");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");
@@ -123,6 +126,7 @@ describe("command-registry", () => {
     const names = namesOf(program);
     expect(names).toContain("doctor");
     expect(names).toContain("status");
+    expect(names).toContain("plans");
     expect(names.length).toBeGreaterThan(1);
   });
 
@@ -152,6 +156,7 @@ describe("command-registry", () => {
     expect(names).toContain("health");
     expect(names).toContain("sessions");
     expect(names).toContain("tasks");
+    expect(names).toContain("plans");
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

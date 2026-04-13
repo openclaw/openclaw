@@ -118,8 +118,8 @@ export function createPluginApprovalHandlers(
         request: record.request,
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
-        routeStatus: "pending-route" as const,
-        recoverability: "reconnect-recoverable" as const,
+        routeStatus: "pending-route",
+        recoverability: "reconnect-recoverable",
       };
       let routeStatus: "pending-route" | "delivered" | "delivery-failed" = "pending-route";
 

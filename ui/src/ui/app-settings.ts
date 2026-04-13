@@ -35,6 +35,7 @@ import {
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
+import { refreshPlansOverview, type PlansState } from "./controllers/plans.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
@@ -102,6 +103,7 @@ type SettingsAppHost = SettingsHost &
   LogsState &
   NodesState &
   PresenceState &
+  PlansState &
   SessionsState &
   SkillsState &
   UsageState & {
@@ -307,6 +309,9 @@ export async function refreshActiveTab(host: SettingsHost) {
       return;
     case "overview":
       await loadOverview(host);
+      return;
+    case "plans":
+      await refreshPlansOverview(app);
       return;
     case "channels":
       await loadChannelsTab(host);
@@ -572,6 +577,7 @@ export async function loadOverview(host: SettingsHost) {
     loadDebug(app),
     loadSkills(app),
     loadUsage(app),
+    refreshPlansOverview(app),
     loadOverviewLogs(app),
   ]);
   buildAttentionItems(app);

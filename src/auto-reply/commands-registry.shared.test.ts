@@ -13,4 +13,17 @@ describe("buildBuiltinChatCommands", () => {
       }),
     );
   });
+
+  it("includes the /plans command", () => {
+    const commands = buildBuiltinChatCommands();
+    expect(commands).toContainEqual(
+      expect.objectContaining({
+        key: "plans",
+        nativeName: "plans",
+        textAliases: ["/plans"],
+        acceptsArgs: true,
+        category: "status",
+      }),
+    );
+  });
 });
