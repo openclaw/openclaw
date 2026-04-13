@@ -149,6 +149,8 @@ describe("qa scenario catalog", () => {
           workspaceFiles?: Record<string, string>;
           prompt?: string;
           expectedReplyAll?: string[];
+          expectedArtifactAll?: string[];
+          expectedArtifactAny?: string[];
         }
       | undefined;
 
@@ -159,6 +161,8 @@ describe("qa scenario catalog", () => {
     );
     expect(config?.prompt).toContain("Repo contract followthrough check.");
     expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
+    expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
+    expect(config?.expectedArtifactAny).toContain("evidence path");
     expect(scenario.title).toBe("Instruction followthrough repo contract");
   });
 
