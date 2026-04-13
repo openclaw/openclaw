@@ -76,6 +76,9 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
 ]);
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
+// Allow one immediate continuation plus one follow-up continuation before
+// surfacing the existing incomplete-turn error path.
+export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "ok",
   "okay",
@@ -240,7 +243,8 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     params.attempt.clientToolCall ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
+    params.attempt.lastToolError ||
+    params.attempt.replayMetadata.hadPotentialSideEffects
   ) {
     return null;
   }
