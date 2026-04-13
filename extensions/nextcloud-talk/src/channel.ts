@@ -76,7 +76,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         reactions: true,
         threads: false,
         media: true,
-        nativeCommands: false,
+        nativeCommands: true,
         blockStreaming: true,
       },
       reload: { configPrefixes: ["channels.nextcloud-talk"] },

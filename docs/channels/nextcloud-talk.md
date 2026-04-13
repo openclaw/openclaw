@@ -100,14 +100,14 @@ Minimal config:
 
 ## Capabilities
 
-| Feature         | Status        |
-| --------------- | ------------- |
-| Direct messages | Supported     |
-| Rooms           | Supported     |
-| Threads         | Not supported |
-| Media           | URL-only      |
-| Reactions       | Supported     |
-| Native commands | Not supported |
+| Feature         | Status                                                            |
+| --------------- | ----------------------------------------------------------------- |
+| Direct messages | Supported                                                         |
+| Rooms           | Supported                                                         |
+| Threads         | Not supported                                                     |
+| Media           | URL-only                                                          |
+| Reactions       | Supported                                                         |
+| Native commands | Supported (text commands via bot webhook; no client autocomplete) |
 
 ## Configuration reference (Nextcloud Talk)
 
