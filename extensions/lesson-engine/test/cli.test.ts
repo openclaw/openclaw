@@ -3,10 +3,38 @@ import * as path from "node:path";
 import { describe, expect, test } from "vitest";
 import { main } from "../cli/lesson-engine.js";
 import type { DedupeResult } from "../src/dedupe.js";
+import { MockProvider, readCandidatesFile, type DistillLLMProvider } from "../src/distill.js";
+import { writeSeedsAppend } from "../src/error-scanner.js";
 import type { ForgetResult } from "../src/forget.js";
 import type { MigrateResult } from "../src/migrate.js";
-import type { MaintenanceState } from "../src/types.js";
+import type { ErrorSeed, MaintenanceState } from "../src/types.js";
 import { makeFixture, writeLessons } from "./helpers.js";
+
+const MOCK_LLM_RESPONSE = JSON.stringify({
+  title: "Avoid reading protected files",
+  category: "filesystem",
+  tags: ["permissions", "security"],
+  context: "When the agent tries to read system files",
+  mistake: "Attempting to read files without proper permissions",
+  lesson: "Always check file permissions before reading",
+  fix: "Use stat to check permissions before reading system files",
+  severity: "high",
+  confidence: 0.85,
+});
+
+function makeCLISeed(agent: string, fingerprint: string, sessionKey: string): ErrorSeed {
+  return {
+    sessionKey,
+    agent,
+    tool: "Bash",
+    errorClass: "Permission denied",
+    errorMessage: "Permission denied",
+    fingerprint,
+    domainTags: [],
+    timestamp: new Date().toISOString(),
+    sessionTimestamp: new Date().toISOString(),
+  };
+}
 
 describe("CLI", () => {
   test("rejects unknown agent with exit code 1", async () => {
@@ -182,6 +210,63 @@ describe("CLI", () => {
       expect(r.active).toBe(1);
       expect(r.stale).toBe(1);
       expect(r.archive).toBe(1);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("distill --agent builder only generates candidates for builder seeds", async () => {
+    const fx = makeFixture();
+    try {
+      const builderSeeds = [
+        makeCLISeed("builder", "fp-builder", "sess-b1"),
+        makeCLISeed("builder", "fp-builder", "sess-b2"),
+      ];
+      const chiefSeeds = [
+        makeCLISeed("chief", "fp-chief", "sess-c1"),
+        makeCLISeed("chief", "fp-chief", "sess-c2"),
+      ];
+      writeSeedsAppend([...builderSeeds, ...chiefSeeds], fx.root);
+      const { stdout, exitCode } = await main(
+        ["distill", "--agent", "builder", "--apply", "--root", fx.root],
+        { llm: new MockProvider(MOCK_LLM_RESPONSE) },
+      );
+      expect(exitCode).toBe(0);
+      expect((stdout as any).newCandidates).toBe(1);
+      const file = readCandidatesFile(fx.root);
+      expect(file.candidates).toHaveLength(1);
+      expect(file.candidates[0].agent).toBe("builder");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("distill --all invokes LLM with correct agent context per cluster", async () => {
+    const fx = makeFixture();
+    try {
+      const builderSeeds = [
+        makeCLISeed("builder", "fp-b", "sess-b1"),
+        makeCLISeed("builder", "fp-b", "sess-b2"),
+      ];
+      const chiefSeeds = [
+        makeCLISeed("chief", "fp-c", "sess-c1"),
+        makeCLISeed("chief", "fp-c", "sess-c2"),
+      ];
+      writeSeedsAppend([...builderSeeds, ...chiefSeeds], fx.root);
+      const captured: string[] = [];
+      const cap: DistillLLMProvider = {
+        async complete(p) {
+          captured.push(p);
+          return MOCK_LLM_RESPONSE;
+        },
+      };
+      const { stdout, exitCode } = await main(["distill", "--all", "--apply", "--root", fx.root], {
+        llm: cap,
+      });
+      expect(exitCode).toBe(0);
+      expect(captured.some((p) => p.includes('"builder"'))).toBe(true);
+      expect(captured.some((p) => p.includes('"chief"'))).toBe(true);
+      expect((stdout as any).newCandidates).toBe(2);
     } finally {
       fx.cleanup();
     }

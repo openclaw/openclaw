@@ -216,6 +216,46 @@ describe("gate", () => {
     }
   });
 
+  test("promoted lesson includes date field in YYYY-MM-DD format", () => {
+    const fx = makeFixture();
+    try {
+      const filePath = writeLessons(fx, "builder", makeFile([]));
+      const candidate = makeCandidate({
+        confidence: 0.9,
+        title: "Unique lesson for date field test",
+        category: "operations",
+        tags: ["date-test"],
+      });
+      writeCandidatesFile(
+        {
+          version: 1,
+          promptVersion: "p1.distill.v1",
+          updatedAt: "",
+          candidates: [candidate],
+        },
+        fx.root,
+      );
+
+      const now = new Date("2026-04-13T12:00:00Z");
+      const result = gateCandidates({
+        root: fx.root,
+        agents: ["builder"],
+        dryRun: false,
+        now,
+      });
+      expect(result.promoted).toBe(1);
+
+      const lessonsFile = readJson<LessonsFile>(filePath);
+      expect(lessonsFile.lessons).toHaveLength(1);
+      const lesson = lessonsFile.lessons[0];
+      expect(lesson.date).toBeDefined();
+      expect(lesson.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(lesson.date).toBe("2026-04-13");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
   test("respects custom confidence threshold", () => {
     const fx = makeFixture();
     try {

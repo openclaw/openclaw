@@ -326,6 +326,29 @@ export function writeSeedsAppend(seeds: ErrorSeed[], root?: string, now?: Date):
   return file;
 }
 
+/** Read all persisted error seeds from the error-seeds/ directory. */
+export function readPersistedSeeds(root?: string): ErrorSeed[] {
+  const dir = errorSeedsDir(root);
+  if (!fs.existsSync(dir)) return [];
+  const files = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith(".jsonl"))
+    .sort();
+  const seeds: ErrorSeed[] = [];
+  for (const file of files) {
+    const raw = fs.readFileSync(path.join(dir, file), "utf8");
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        seeds.push(JSON.parse(line) as ErrorSeed);
+      } catch {
+        /* skip malformed */
+      }
+    }
+  }
+  return seeds;
+}
+
 function readScannerStateOrEmpty(root?: string): ScannerState {
   const filePath = scannerStatePath(root);
   if (!fs.existsSync(filePath)) return ensureState();

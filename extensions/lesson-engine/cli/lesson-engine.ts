@@ -14,14 +14,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { dedupeFile, type DedupeResult } from "../src/dedupe.js";
 import {
-  ClaudeCliProvider,
   DEFAULT_MIN_CLUSTER_SIZE,
   type DistillLLMProvider,
+  NativeProvider,
   distillAll,
   readCandidatesFile,
   writeCandidatesFile,
 } from "../src/distill.js";
 import {
+  readPersistedSeeds,
   readScannerState,
   scanAll,
   writeScannerState,
@@ -373,43 +374,53 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
       };
     }
     case "distill": {
-      // First gather seeds (in-memory; do not modify scanner state here).
+      // Read persisted seeds written by a prior `scan --apply` invocation.
       const agents = args.all ? [...VALID_AGENTS] : resolveAgents(args);
-      const { seeds } = scanAll({
-        agents,
-        root: args.root,
-        state: readScannerState(args.root),
-        now,
-      });
-      const llm = opts.llm ?? new ClaudeCliProvider();
-      const existing = readCandidatesFile(args.root);
-      const { candidates, skipped } = await distillAll({
-        seeds,
-        llm,
-        root: args.root,
-        minClusterSize: args.minCluster,
-        existing,
-        now,
-      });
+      const allSeeds = readPersistedSeeds(args.root);
+      const freshExisting = readCandidatesFile(args.root);
+      let runExisting = freshExisting;
+      const allNewCandidates: LessonCandidate[] = [];
+      let totalSkipped = 0;
+      for (const agent of agents) {
+        const agentSeeds = allSeeds.filter((s) => s.agent === agent);
+        const llm = opts.llm ?? new NativeProvider(agent);
+        const { candidates, skipped } = await distillAll({
+          seeds: agentSeeds,
+          llm,
+          root: args.root,
+          minClusterSize: args.minCluster,
+          existing: runExisting,
+          now,
+        });
+        allNewCandidates.push(...candidates);
+        totalSkipped += skipped;
+        // Update runExisting so next agent sees already-generated distillKeys.
+        if (candidates.length > 0) {
+          runExisting = {
+            ...runExisting,
+            candidates: [...runExisting.candidates, ...candidates],
+          };
+        }
+      }
       let candidatesPath: string | undefined;
-      if (!dryRun && candidates.length > 0) {
+      if (!dryRun && allNewCandidates.length > 0) {
         const next = {
-          ...existing,
+          ...freshExisting,
           updatedAt: nowIso(now),
-          candidates: [...existing.candidates, ...candidates],
+          candidates: [...freshExisting.candidates, ...allNewCandidates],
         };
         candidatesPath = writeCandidatesFile(next, args.root);
       }
       stderr.push(
-        `[distill] ${candidates.length} new candidate(s), ${skipped} skipped (${dryRun ? "dry-run" : "applied"})`,
+        `[distill] ${allNewCandidates.length} new candidate(s), ${totalSkipped} skipped (${dryRun ? "dry-run" : "applied"})`,
       );
-      const candidateIds = candidates.map((c: LessonCandidate) => c.id);
+      const candidateIds = allNewCandidates.map((c: LessonCandidate) => c.id);
       return {
         stdout: {
           command: "distill",
           dryRun,
-          newCandidates: candidates.length,
-          skipped,
+          newCandidates: allNewCandidates.length,
+          skipped: totalSkipped,
           candidateIds,
           candidatesPath,
         },

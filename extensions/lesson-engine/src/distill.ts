@@ -40,6 +40,39 @@ export class ClaudeCliProvider implements DistillLLMProvider {
   }
 }
 
+/** OpenClaw-native provider using the agent runtime. */
+export class NativeProvider implements DistillLLMProvider {
+  constructor(private readonly agentId: string = "builder") {}
+
+  async complete(prompt: string): Promise<string> {
+    const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
+    const { prepareSimpleCompletionModelForAgent, completeWithPreparedSimpleCompletionModel } =
+      await import("openclaw/plugin-sdk/agent-runtime");
+
+    const cfg = loadConfig();
+    const prepared = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId: this.agentId,
+    });
+    if ("error" in prepared) {
+      throw new Error(`NativeProvider: ${prepared.error}`);
+    }
+    const result = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model,
+      auth: prepared.auth,
+      context: {
+        messages: [{ role: "user" as const, content: prompt, timestamp: Date.now() }],
+      },
+    });
+    // Extract text from AssistantMessage.content
+    const texts: string[] = [];
+    for (const c of result.content) {
+      if (c.type === "text") texts.push(c.text);
+    }
+    return texts.join("\n");
+  }
+}
+
 /** Test/mocking provider that returns a canned response (or via fn). */
 export class MockProvider implements DistillLLMProvider {
   constructor(private readonly responder: string | ((prompt: string) => string)) {}

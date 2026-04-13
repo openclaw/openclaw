@@ -31,6 +31,7 @@ function candidateToLesson(c: LessonCandidate, now: Date): Lesson {
   const id = `lesson-${y}${m}${d}-${hash}`;
   return {
     id,
+    date: `${y}-${m}-${d}`,
     title: c.title,
     category: c.category,
     tags: [...c.tags],

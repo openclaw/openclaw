@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import {
   classifyError,
   deriveDomainTags,
+  readPersistedSeeds,
   readScannerState,
   scanSession,
   writeScannerState,
@@ -265,6 +266,94 @@ describe("scanner state", () => {
       writeScannerState(state, fx.root);
       const loaded = readScannerState(fx.root);
       expect(loaded).toEqual(state);
+    } finally {
+      fx.cleanup();
+    }
+  });
+});
+
+describe("readPersistedSeeds", () => {
+  test("reads seeds from .jsonl files in error-seeds directory", () => {
+    const fx = makeFixture();
+    try {
+      const seedsDir = path.join(fx.root, "shared", "lessons", "error-seeds");
+      fs.mkdirSync(seedsDir, { recursive: true });
+      const seed1: ErrorSeed = {
+        sessionKey: "sess-1",
+        agent: "builder",
+        tool: "Bash",
+        errorClass: "Permission denied",
+        errorMessage: "Permission denied: /etc/shadow",
+        fingerprint: "abcdef0123456789",
+        domainTags: ["shell", "cli", "error-capture"],
+        timestamp: "2026-04-13T10:00:00Z",
+        sessionTimestamp: "2026-04-13T09:00:00Z",
+      };
+      const seed2: ErrorSeed = {
+        sessionKey: "sess-2",
+        agent: "architect",
+        tool: "Read",
+        errorClass: "File not found",
+        errorMessage: "ENOENT: no such file or directory",
+        fingerprint: "1234567890abcdef",
+        domainTags: ["filesystem", "error-capture"],
+        timestamp: "2026-04-13T11:00:00Z",
+        sessionTimestamp: "2026-04-13T10:30:00Z",
+      };
+      fs.writeFileSync(
+        path.join(seedsDir, "2026-04-13.jsonl"),
+        JSON.stringify(seed1) + "\n" + JSON.stringify(seed2) + "\n",
+        "utf8",
+      );
+
+      const seeds = readPersistedSeeds(fx.root);
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0].sessionKey).toBe("sess-1");
+      expect(seeds[0].agent).toBe("builder");
+      expect(seeds[0].tool).toBe("Bash");
+      expect(seeds[1].sessionKey).toBe("sess-2");
+      expect(seeds[1].agent).toBe("architect");
+      expect(seeds[1].tool).toBe("Read");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("returns empty array when error-seeds dir does not exist", () => {
+    const fx = makeFixture();
+    try {
+      const seeds = readPersistedSeeds(fx.root);
+      expect(seeds).toEqual([]);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("skips malformed lines", () => {
+    const fx = makeFixture();
+    try {
+      const seedsDir = path.join(fx.root, "shared", "lessons", "error-seeds");
+      fs.mkdirSync(seedsDir, { recursive: true });
+      const validSeed: ErrorSeed = {
+        sessionKey: "sess-1",
+        agent: "builder",
+        tool: "Bash",
+        errorClass: "Timeout",
+        errorMessage: "Request timed out",
+        fingerprint: "aabb001122334455",
+        domainTags: ["error-capture"],
+        timestamp: "2026-04-13T10:00:00Z",
+        sessionTimestamp: "2026-04-13T09:00:00Z",
+      };
+      fs.writeFileSync(
+        path.join(seedsDir, "2026-04-13.jsonl"),
+        "NOT VALID JSON\n" + JSON.stringify(validSeed) + "\n",
+        "utf8",
+      );
+
+      const seeds = readPersistedSeeds(fx.root);
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0].errorClass).toBe("Timeout");
     } finally {
       fx.cleanup();
     }
