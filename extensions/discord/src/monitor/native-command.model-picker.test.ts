@@ -1,25 +1,23 @@
 import { ChannelType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as commandRegistryModule from "../../../../src/auto-reply/commands-registry.js";
-import type {
-  ChatCommandDefinition,
-  CommandArgsParsing,
-} from "../../../../src/auto-reply/commands-registry.types.js";
-import type { ModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
-import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import * as globalsModule from "../../../../src/globals.js";
-import * as timeoutModule from "../../../../src/utils/with-timeout.js";
+import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
+import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
+import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
-} from "./native-command.js";
+  replyWithDiscordModelPickerProviders,
+  type DispatchDiscordCommandInteraction,
+} from "./native-command-ui.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
-type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0];
+type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0]["ctx"];
 type PickerButton = ReturnType<typeof createDiscordModelPickerFallbackButton>;
 type PickerSelect = ReturnType<typeof createDiscordModelPickerFallbackSelect>;
 type PickerButtonInteraction = Parameters<PickerButton["run"]>[0];
@@ -29,8 +27,8 @@ type PickerSelectData = Parameters<PickerSelect["run"]>[1];
 
 type MockInteraction = {
   user: { id: string; username: string; globalName: string };
-  channel: { type: ChannelType; id: string };
-  guild: null;
+  channel: { type: ChannelType; id: string; name?: string; parentId?: string };
+  guild: { id: string } | null;
   rawData: { id: string; member: { roles: string[] } };
   values?: string[];
   reply: ReturnType<typeof vi.fn>;
@@ -156,12 +154,43 @@ function createModelsViewSubmitData(): PickerButtonData {
   };
 }
 
+async function safeInteractionCall<T>(_label: string, fn: () => Promise<T>): Promise<T | null> {
+  return await fn();
+}
+
+function createDispatchSpy() {
+  return vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue();
+}
+
+function createModelPickerFallbackButton(
+  context: ModelPickerContext,
+  dispatchCommandInteraction: DispatchDiscordCommandInteraction = createDispatchSpy(),
+) {
+  return createDiscordModelPickerFallbackButton({
+    ctx: context,
+    safeInteractionCall,
+    dispatchCommandInteraction,
+  });
+}
+
+function createModelPickerFallbackSelect(
+  context: ModelPickerContext,
+  dispatchCommandInteraction: DispatchDiscordCommandInteraction = createDispatchSpy(),
+) {
+  return createDiscordModelPickerFallbackSelect({
+    ctx: context,
+    safeInteractionCall,
+    dispatchCommandInteraction,
+  });
+}
+
 async function runSubmitButton(params: {
   context: ModelPickerContext;
   data: PickerButtonData;
+  dispatchCommandInteraction?: DispatchDiscordCommandInteraction;
   userId?: string;
 }) {
-  const button = createDiscordModelPickerFallbackButton(params.context);
+  const button = createModelPickerFallbackButton(params.context, params.dispatchCommandInteraction);
   const submitInteraction = createInteraction({ userId: params.userId ?? "owner" });
   await button.run(submitInteraction as unknown as PickerButtonInteraction, params.data);
   return submitInteraction;
@@ -170,10 +199,11 @@ async function runSubmitButton(params: {
 async function runModelSelect(params: {
   context: ModelPickerContext;
   data?: PickerSelectData;
+  dispatchCommandInteraction?: DispatchDiscordCommandInteraction;
   userId?: string;
   values?: string[];
 }) {
-  const select = createDiscordModelPickerFallbackSelect(params.context);
+  const select = createModelPickerFallbackSelect(params.context, params.dispatchCommandInteraction);
   const selectInteraction = createInteraction({
     userId: params.userId ?? "owner",
     values: params.values ?? ["gpt-4o"],
@@ -186,22 +216,12 @@ async function runModelSelect(params: {
 }
 
 function expectDispatchedModelSelection(params: {
-  dispatchSpy: { mock: { calls: Array<[unknown]> } };
+  dispatchSpy: ReturnType<typeof createDispatchSpy>;
   model: string;
-  requireTargetSessionKey?: boolean;
 }) {
-  const dispatchCall = params.dispatchSpy.mock.calls[0]?.[0] as {
-    ctx?: {
-      CommandBody?: string;
-      CommandArgs?: { values?: { model?: string } };
-      CommandTargetSessionKey?: string;
-    };
-  };
-  expect(dispatchCall.ctx?.CommandBody).toBe(`/model ${params.model}`);
-  expect(dispatchCall.ctx?.CommandArgs?.values?.model).toBe(params.model);
-  if (params.requireTargetSessionKey) {
-    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBeDefined();
-  }
+  const dispatchCall = params.dispatchSpy.mock.calls[0]?.[0];
+  expect(dispatchCall?.prompt).toBe(`/model ${params.model}`);
+  expect(dispatchCall?.commandArgs?.values?.model).toBe(params.model);
 }
 
 function createBoundThreadBindingManager(params: {
@@ -237,22 +257,32 @@ function createBoundThreadBindingManager(params: {
 
 describe("Discord model picker interactions", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {
     const context = createModelPickerContext();
-    const button = createDiscordModelPickerFallbackButton(context);
-    const select = createDiscordModelPickerFallbackSelect(context);
+    const button = createModelPickerFallbackButton(context);
+    const select = createModelPickerFallbackSelect(context);
 
     expect(button.customId).not.toBe(select.customId);
-    expect(button.customId.split(":")[0]).toBe(select.customId.split(":")[0]);
+    expect(button.customId.split(":")[0]).toBe(
+      modelPickerModule.DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
+    );
+    expect(select.customId.split(":")[0]).toBe(
+      modelPickerModule.DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
+    );
   });
 
   it("ignores interactions from users other than the picker owner", async () => {
     const context = createModelPickerContext();
     const loadSpy = vi.spyOn(modelPickerModule, "loadDiscordModelPickerData");
-    const button = createDiscordModelPickerFallbackButton(context);
+    const button = createModelPickerFallbackButton(context);
     const interaction = createInteraction({ userId: "intruder" });
 
     const data: PickerButtonData = {
@@ -278,11 +308,12 @@ describe("Discord model picker interactions", () => {
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
     mockModelCommandPipeline(modelCommand);
 
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
+    const dispatchSpy = createDispatchSpy();
 
-    const selectInteraction = await runModelSelect({ context });
+    const selectInteraction = await runModelSelect({
+      context,
+      dispatchCommandInteraction: dispatchSpy,
+    });
 
     expect(selectInteraction.update).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).not.toHaveBeenCalled();
@@ -290,6 +321,7 @@ describe("Discord model picker interactions", () => {
     const submitInteraction = await runSubmitButton({
       context,
       data: createModelsViewSubmitData(),
+      dispatchCommandInteraction: dispatchSpy,
     });
 
     expect(submitInteraction.update).toHaveBeenCalledTimes(1);
@@ -297,7 +329,6 @@ describe("Discord model picker interactions", () => {
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "openai/gpt-4o",
-      requireTargetSessionKey: true,
     });
   });
 
@@ -312,16 +343,14 @@ describe("Discord model picker interactions", () => {
     const recordRecentSpy = vi
       .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
       .mockResolvedValue();
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
+    const dispatchSpy = createDispatchSpy();
     const withTimeoutSpy = vi
-      .spyOn(timeoutModule, "withTimeout")
+      .spyOn(commandTextModule, "withTimeout")
       .mockRejectedValue(new Error("timeout"));
 
-    await runModelSelect({ context });
+    await runModelSelect({ context, dispatchCommandInteraction: dispatchSpy });
 
-    const button = createDiscordModelPickerFallbackButton(context);
+    const button = createModelPickerFallbackButton(context, dispatchSpy);
     const submitInteraction = createInteraction({ userId: "owner" });
     const submitData = createModelsViewSubmitData();
 
@@ -351,7 +380,7 @@ describe("Discord model picker interactions", () => {
       "anthropic/claude-sonnet-4-5",
     ]);
 
-    const button = createDiscordModelPickerFallbackButton(context);
+    const button = createModelPickerFallbackButton(context);
     const interaction = createInteraction({ userId: "owner" });
 
     const data: PickerButtonData = {
@@ -367,8 +396,12 @@ describe("Discord model picker interactions", () => {
 
     expect(interaction.update).toHaveBeenCalledTimes(1);
     const updatePayload = interaction.update.mock.calls[0]?.[0];
-    expect(updatePayload).toBeDefined();
-    expect(updatePayload.components).toBeDefined();
+    if (!updatePayload) {
+      throw new Error("recents button did not emit an update payload");
+    }
+    const updateText = JSON.stringify(updatePayload);
+    expect(updateText).toContain("gpt-4o");
+    expect(updateText).toContain("claude-sonnet-4-5");
   });
 
   it("clicking recents model button applies model through /model pipeline", async () => {
@@ -383,9 +416,7 @@ describe("Discord model picker interactions", () => {
     ]);
     mockModelCommandPipeline(modelCommand);
 
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
+    const dispatchSpy = createDispatchSpy();
 
     // rs=2 -> first deduped recent (default is anthropic/claude-sonnet-4-5, so openai/gpt-4o remains)
     const submitInteraction = await runSubmitButton({
@@ -398,6 +429,7 @@ describe("Discord model picker interactions", () => {
         pg: "1",
         rs: "2",
       },
+      dispatchCommandInteraction: dispatchSpy,
     });
 
     expect(submitInteraction.update).toHaveBeenCalledTimes(1);
@@ -418,10 +450,10 @@ describe("Discord model picker interactions", () => {
 
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
     mockModelCommandPipeline(modelCommand);
-    vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({} as never);
+    const dispatchSpy = createDispatchSpy();
     const verboseSpy = vi.spyOn(globalsModule, "logVerbose").mockImplementation(() => {});
 
-    const select = createDiscordModelPickerFallbackSelect(context);
+    const select = createModelPickerFallbackSelect(context, dispatchSpy);
     const selectInteraction = createInteraction({
       userId: "owner",
       values: ["gpt-4o"],
@@ -433,7 +465,7 @@ describe("Discord model picker interactions", () => {
     const selectData = createModelsViewSelectData();
     await select.run(selectInteraction as unknown as PickerSelectInteraction, selectData);
 
-    const button = createDiscordModelPickerFallbackButton(context);
+    const button = createModelPickerFallbackButton(context, dispatchSpy);
     const submitInteraction = createInteraction({ userId: "owner" });
     submitInteraction.channel = {
       type: ChannelType.PublicThread,
@@ -447,5 +479,39 @@ describe("Discord model picker interactions", () => {
       String(call[0] ?? "").includes("model picker override mismatch"),
     )?.[0];
     expect(mismatchLog).toContain("session key agent:worker:subagent:bound");
+  });
+
+  it("loads model picker data from the effective bound route", async () => {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const loadSpy = vi
+      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
+      .mockResolvedValue(createDefaultModelPickerData());
+    const interaction = createInteraction({ userId: "owner" });
+    interaction.guild = { id: "guild-1" };
+    interaction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+      name: "bound-thread",
+      parentId: "parent-1",
+    };
+
+    await replyWithDiscordModelPickerProviders({
+      interaction: interaction as never,
+      cfg: context.cfg,
+      command: "model",
+      userId: "owner",
+      accountId: context.accountId,
+      threadBindings: context.threadBindings,
+      preferFollowUp: false,
+      safeInteractionCall: async (_label, fn) => await fn(),
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker");
   });
 });

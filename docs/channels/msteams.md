@@ -1,27 +1,25 @@
 ---
 summary: "Microsoft Teams bot support status, capabilities, and configuration"
 read_when:
-  - Working on MS Teams channel features
+  - Working on Microsoft Teams channel features
 title: "Microsoft Teams"
 ---
 
-# Microsoft Teams (plugin)
+# Microsoft Teams
 
 > "Abandon all hope, ye who enter here."
 
-Updated: 2026-01-21
+Updated: 2026-03-25
 
-Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards.
+Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
-## Plugin required
+## Bundled plugin
 
-Microsoft Teams ships as a plugin and is not bundled with the core install.
+Microsoft Teams ships as a bundled plugin in current OpenClaw releases, so no
+separate install is required in the normal packaged build.
 
-**Breaking change (2026.1.15):** MS Teams moved out of core. If you use it, you must install the plugin.
-
-Explainable: keeps core installs lighter and lets MS Teams dependencies update independently.
-
-Install via CLI (npm registry):
+If you are on an older build or a custom install that excludes bundled Teams,
+install it manually:
 
 ```bash
 openclaw plugins install @openclaw/msteams
@@ -30,23 +28,22 @@ openclaw plugins install @openclaw/msteams
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/msteams
+openclaw plugins install ./path/to/local/msteams-plugin
 ```
-
-If you choose Teams during setup and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Install the Microsoft Teams plugin.
+1. Ensure the Microsoft Teams plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create an **Azure Bot** (App ID + client secret + tenant ID).
 3. Configure OpenClaw with those credentials.
 4. Expose `/api/messages` (port 3978 by default) via a public URL or tunnel.
 5. Install the Teams app package and start the gateway.
 
-Minimal config:
+Minimal config (client secret):
 
 ```json5
 {
@@ -61,6 +58,8 @@ Minimal config:
   },
 }
 ```
+
+For production deployments, consider using [federated authentication](#federated-authentication-certificate--managed-identity) (certificate or managed identity) instead of client secrets.
 
 Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom` (or use `groupPolicy: "open"` to allow any member, mention-gated).
 
@@ -141,7 +140,9 @@ Example:
 
 ## How it works
 
-1. Install the Microsoft Teams plugin.
+1. Ensure the Microsoft Teams plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create an **Azure Bot** (App ID + secret + tenant ID).
 3. Build a **Teams app package** that references the bot and includes the RSC permissions below.
 4. Upload/install the Teams app into a team (or personal scope for DMs).
@@ -190,6 +191,148 @@ Before configuring OpenClaw, you need to create an Azure Bot resource.
 1. In Azure Bot → **Channels**
 2. Click **Microsoft Teams** → Configure → Save
 3. Accept the Terms of Service
+
+## Federated Authentication (Certificate + Managed Identity)
+
+> Added in 2026.3.24
+
+For production deployments, OpenClaw supports **federated authentication** as a more secure alternative to client secrets. Two methods are available:
+
+### Option A: Certificate-based authentication
+
+Use a PEM certificate registered with your Entra ID app registration.
+
+**Setup:**
+
+1. Generate or obtain a certificate (PEM format with private key).
+2. In Entra ID → App Registration → **Certificates & secrets** → **Certificates** → Upload the public certificate.
+
+**Config:**
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      appId: "<APP_ID>",
+      tenantId: "<TENANT_ID>",
+      authType: "federated",
+      certificatePath: "/path/to/cert.pem",
+      webhook: { port: 3978, path: "/api/messages" },
+    },
+  },
+}
+```
+
+**Env vars:**
+
+- `MSTEAMS_AUTH_TYPE=federated`
+- `MSTEAMS_CERTIFICATE_PATH=/path/to/cert.pem`
+
+### Option B: Azure Managed Identity
+
+Use Azure Managed Identity for passwordless authentication. This is ideal for deployments on Azure infrastructure (AKS, App Service, Azure VMs) where a managed identity is available.
+
+**How it works:**
+
+1. The bot pod/VM has a managed identity (system-assigned or user-assigned).
+2. A **federated identity credential** links the managed identity to the Entra ID app registration.
+3. At runtime, OpenClaw uses `@azure/identity` to acquire tokens from the Azure IMDS endpoint (`169.254.169.254`).
+4. The token is passed to the Teams SDK for bot authentication.
+
+**Prerequisites:**
+
+- Azure infrastructure with managed identity enabled (AKS workload identity, App Service, VM)
+- Federated identity credential created on the Entra ID app registration
+- Network access to IMDS (`169.254.169.254:80`) from the pod/VM
+
+**Config (system-assigned managed identity):**
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      appId: "<APP_ID>",
+      tenantId: "<TENANT_ID>",
+      authType: "federated",
+      useManagedIdentity: true,
+      webhook: { port: 3978, path: "/api/messages" },
+    },
+  },
+}
+```
+
+**Config (user-assigned managed identity):**
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      appId: "<APP_ID>",
+      tenantId: "<TENANT_ID>",
+      authType: "federated",
+      useManagedIdentity: true,
+      managedIdentityClientId: "<MI_CLIENT_ID>",
+      webhook: { port: 3978, path: "/api/messages" },
+    },
+  },
+}
+```
+
+**Env vars:**
+
+- `MSTEAMS_AUTH_TYPE=federated`
+- `MSTEAMS_USE_MANAGED_IDENTITY=true`
+- `MSTEAMS_MANAGED_IDENTITY_CLIENT_ID=<client-id>` (only for user-assigned)
+
+### AKS Workload Identity Setup
+
+For AKS deployments using workload identity:
+
+1. **Enable workload identity** on your AKS cluster.
+2. **Create a federated identity credential** on the Entra ID app registration:
+
+   ```bash
+   az ad app federated-credential create --id <APP_OBJECT_ID> --parameters '{
+     "name": "my-bot-workload-identity",
+     "issuer": "<AKS_OIDC_ISSUER_URL>",
+     "subject": "system:serviceaccount:<NAMESPACE>:<SERVICE_ACCOUNT>",
+     "audiences": ["api://AzureADTokenExchange"]
+   }'
+   ```
+
+3. **Annotate the Kubernetes service account** with the app client ID:
+
+   ```yaml
+   apiVersion: v1
+   kind: ServiceAccount
+   metadata:
+     name: my-bot-sa
+     annotations:
+       azure.workload.identity/client-id: "<APP_CLIENT_ID>"
+   ```
+
+4. **Label the pod** for workload identity injection:
+
+   ```yaml
+   metadata:
+     labels:
+       azure.workload.identity/use: "true"
+   ```
+
+5. **Ensure network access** to IMDS (`169.254.169.254`) — if using NetworkPolicy, add an egress rule allowing traffic to `169.254.169.254/32` on port 80.
+
+### Auth type comparison
+
+| Method               | Config                                         | Pros                               | Cons                                  |
+| -------------------- | ---------------------------------------------- | ---------------------------------- | ------------------------------------- |
+| **Client secret**    | `appPassword`                                  | Simple setup                       | Secret rotation required, less secure |
+| **Certificate**      | `authType: "federated"` + `certificatePath`    | No shared secret over network      | Certificate management overhead       |
+| **Managed Identity** | `authType: "federated"` + `useManagedIdentity` | Passwordless, no secrets to manage | Azure infrastructure required         |
+
+**Default behavior:** When `authType` is not set, OpenClaw defaults to client secret authentication. Existing configurations continue to work without changes.
 
 ## Local Development (Tunneling)
 
@@ -240,9 +383,11 @@ This is often easier than hand-editing JSON manifests.
 
 ## Setup (minimal text-only)
 
-1. **Install the Microsoft Teams plugin**
-   - From npm: `openclaw plugins install @openclaw/msteams`
-   - From a local checkout: `openclaw plugins install ./extensions/msteams`
+1. **Ensure the Microsoft Teams plugin is available**
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually:
+     - From npm: `openclaw plugins install @openclaw/msteams`
+     - From a local checkout: `openclaw plugins install ./path/to/local/msteams-plugin`
 
 2. **Bot registration**
    - Create an Azure Bot (see above) and note:
@@ -260,15 +405,17 @@ This is often easier than hand-editing JSON manifests.
 
 4. **Configure OpenClaw**
 
-   ```json
+   ```json5
    {
-     "msteams": {
-       "enabled": true,
-       "appId": "<APP_ID>",
-       "appPassword": "<APP_PASSWORD>",
-       "tenantId": "<TENANT_ID>",
-       "webhook": { "port": 3978, "path": "/api/messages" }
-     }
+     channels: {
+       msteams: {
+         enabled: true,
+         appId: "<APP_ID>",
+         appPassword: "<APP_PASSWORD>",
+         tenantId: "<TENANT_ID>",
+         webhook: { port: 3978, path: "/api/messages" },
+       },
+     },
    }
    ```
 
@@ -276,18 +423,37 @@ This is often easier than hand-editing JSON manifests.
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
+   - `MSTEAMS_AUTH_TYPE` (optional: `"secret"` or `"federated"`)
+   - `MSTEAMS_CERTIFICATE_PATH` (federated + certificate)
+   - `MSTEAMS_CERTIFICATE_THUMBPRINT` (optional, not required for auth)
+   - `MSTEAMS_USE_MANAGED_IDENTITY` (federated + managed identity)
+   - `MSTEAMS_MANAGED_IDENTITY_CLIENT_ID` (user-assigned MI only)
 
 5. **Bot endpoint**
    - Set the Azure Bot Messaging Endpoint to:
      - `https://<host>:3978/api/messages` (or your chosen path/port).
 
 6. **Run the gateway**
-   - The Teams channel starts automatically when the plugin is installed and `msteams` config exists with credentials.
+   - The Teams channel starts automatically when the bundled or manually installed plugin is available and `msteams` config exists with credentials.
+
+## Member info action
+
+OpenClaw exposes a Graph-backed `member-info` action for Microsoft Teams so agents and automations can resolve channel member details (display name, email, role) directly from Microsoft Graph.
+
+Requirements:
+
+- `Member.Read.Group` RSC permission (already in the recommended manifest)
+- For cross-team lookups: `User.Read.All` Graph Application permission with admin consent
+
+The action is gated by `channels.msteams.actions.memberInfo` (default: enabled when Graph credentials are available).
 
 ## History context
 
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt.
 - Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
+- Fetched thread history is filtered by sender allowlists (`allowFrom` / `groupAllowFrom`), so thread context seeding only includes messages from allowed senders.
+- Quoted attachment context (`ReplyTo*` derived from Teams reply HTML) is currently passed as received.
+- In other words, allowlists gate who can trigger the agent; only specific supplemental context paths are filtered today.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## Current Teams RSC Permissions (Manifest)
@@ -312,49 +478,49 @@ These are the **existing resourceSpecific permissions** in our Teams app manifes
 
 Minimal, valid example with the required fields. Replace IDs and URLs.
 
-```json
+```json5
 {
-  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
-  "manifestVersion": "1.23",
-  "version": "1.0.0",
-  "id": "00000000-0000-0000-0000-000000000000",
-  "name": { "short": "OpenClaw" },
-  "developer": {
-    "name": "Your Org",
-    "websiteUrl": "https://example.com",
-    "privacyUrl": "https://example.com/privacy",
-    "termsOfUseUrl": "https://example.com/terms"
+  $schema: "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
+  manifestVersion: "1.23",
+  version: "1.0.0",
+  id: "00000000-0000-0000-0000-000000000000",
+  name: { short: "OpenClaw" },
+  developer: {
+    name: "Your Org",
+    websiteUrl: "https://example.com",
+    privacyUrl: "https://example.com/privacy",
+    termsOfUseUrl: "https://example.com/terms",
   },
-  "description": { "short": "OpenClaw in Teams", "full": "OpenClaw in Teams" },
-  "icons": { "outline": "outline.png", "color": "color.png" },
-  "accentColor": "#5B6DEF",
-  "bots": [
+  description: { short: "OpenClaw in Teams", full: "OpenClaw in Teams" },
+  icons: { outline: "outline.png", color: "color.png" },
+  accentColor: "#5B6DEF",
+  bots: [
     {
-      "botId": "11111111-1111-1111-1111-111111111111",
-      "scopes": ["personal", "team", "groupChat"],
-      "isNotificationOnly": false,
-      "supportsCalling": false,
-      "supportsVideo": false,
-      "supportsFiles": true
-    }
+      botId: "11111111-1111-1111-1111-111111111111",
+      scopes: ["personal", "team", "groupChat"],
+      isNotificationOnly: false,
+      supportsCalling: false,
+      supportsVideo: false,
+      supportsFiles: true,
+    },
   ],
-  "webApplicationInfo": {
-    "id": "11111111-1111-1111-1111-111111111111"
+  webApplicationInfo: {
+    id: "11111111-1111-1111-1111-111111111111",
   },
-  "authorization": {
-    "permissions": {
-      "resourceSpecific": [
-        { "name": "ChannelMessage.Read.Group", "type": "Application" },
-        { "name": "ChannelMessage.Send.Group", "type": "Application" },
-        { "name": "Member.Read.Group", "type": "Application" },
-        { "name": "Owner.Read.Group", "type": "Application" },
-        { "name": "ChannelSettings.Read.Group", "type": "Application" },
-        { "name": "TeamMember.Read.Group", "type": "Application" },
-        { "name": "TeamSettings.Read.Group", "type": "Application" },
-        { "name": "ChatMessage.Read.Chat", "type": "Application" }
-      ]
-    }
-  }
+  authorization: {
+    permissions: {
+      resourceSpecific: [
+        { name: "ChannelMessage.Read.Group", type: "Application" },
+        { name: "ChannelMessage.Send.Group", type: "Application" },
+        { name: "Member.Read.Group", type: "Application" },
+        { name: "Owner.Read.Group", type: "Application" },
+        { name: "ChannelSettings.Read.Group", type: "Application" },
+        { name: "TeamMember.Read.Group", type: "Application" },
+        { name: "TeamSettings.Read.Group", type: "Application" },
+        { name: "ChatMessage.Read.Chat", type: "Application" },
+      ],
+    },
+  },
 }
 ```
 
@@ -474,6 +640,12 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `toolsBySender` keys should use explicit prefixes:
   `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
+- `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
+- `channels.msteams.authType`: authentication type — `"secret"` (default) or `"federated"`.
+- `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).
+- `channels.msteams.certificateThumbprint`: certificate thumbprint (optional, not required for auth).
+- `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
+- `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
 ## Routing & Sessions
@@ -500,20 +672,22 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 **Solution:** Configure `replyStyle` per-channel based on how the channel is set up:
 
-```json
+```json5
 {
-  "msteams": {
-    "replyStyle": "thread",
-    "teams": {
-      "19:abc...@thread.tacv2": {
-        "channels": {
-          "19:xyz...@thread.tacv2": {
-            "replyStyle": "top-level"
-          }
-        }
-      }
-    }
-  }
+  channels: {
+    msteams: {
+      replyStyle: "thread",
+      teams: {
+        "19:abc...@thread.tacv2": {
+          channels: {
+            "19:xyz...@thread.tacv2": {
+              replyStyle: "top-level",
+            },
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -523,6 +697,7 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 - **DMs:** Images and file attachments work via Teams bot file APIs.
 - **Channels/groups:** Attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
+- For explicit file-first sends, use `action=upload-file` with `media` / `filePath` / `path`; optional `message` becomes the accompanying text/comment, and `filename` overrides the uploaded name.
 
 Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
 By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).
@@ -616,16 +791,16 @@ The `card` parameter accepts an Adaptive Card JSON object. When `card` is provid
 
 **Agent tool:**
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "user:<id>",
-  "card": {
-    "type": "AdaptiveCard",
-    "version": "1.5",
-    "body": [{ "type": "TextBlock", "text": "Hello!" }]
-  }
+  action: "send",
+  channel: "msteams",
+  target: "user:<id>",
+  card: {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [{ type: "TextBlock", text: "Hello!" }],
+  },
 }
 ```
 
@@ -669,25 +844,25 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 
 **Agent tool examples:**
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "user:John Smith",
-  "message": "Hello!"
+  action: "send",
+  channel: "msteams",
+  target: "user:John Smith",
+  message: "Hello!",
 }
 ```
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "conversation:19:abc...@thread.tacv2",
-  "card": {
-    "type": "AdaptiveCard",
-    "version": "1.5",
-    "body": [{ "type": "TextBlock", "text": "Hello" }]
-  }
+  action: "send",
+  channel: "msteams",
+  target: "conversation:19:abc...@thread.tacv2",
+  card: {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [{ type: "TextBlock", text: "Hello" }],
+  },
 }
 ```
 
@@ -774,3 +949,11 @@ Bots have limited support in private channels:
 - [RSC permissions reference](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
 - [Teams bot file handling](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4) (channel/group requires Graph)
 - [Proactive messaging](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

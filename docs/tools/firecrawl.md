@@ -28,20 +28,22 @@ which helps with JS-heavy sites or pages that block plain HTTP fetches.
 
 ```json5
 {
-  plugins: {
-    entries: {
-      firecrawl: {
-        enabled: true,
-      },
-    },
-  },
   tools: {
     web: {
       search: {
         provider: "firecrawl",
-        firecrawl: {
-          apiKey: "FIRECRAWL_API_KEY_HERE",
-          baseUrl: "https://api.firecrawl.dev",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      firecrawl: {
+        enabled: true,
+        config: {
+          webSearch: {
+            apiKey: "FIRECRAWL_API_KEY_HERE",
+            baseUrl: "https://api.firecrawl.dev",
+          },
         },
       },
     },
@@ -54,6 +56,8 @@ Notes:
 - Choosing Firecrawl in onboarding or `openclaw configure --section web` enables the bundled Firecrawl plugin automatically.
 - `web_search` with Firecrawl supports `query` and `count`.
 - For Firecrawl-specific controls like `sources`, `categories`, or result scraping, use `firecrawl_search`.
+- `baseUrl` overrides must stay on `https://api.firecrawl.dev`.
+- `FIRECRAWL_BASE_URL` is the shared env fallback for Firecrawl search and scrape base URLs.
 
 ## Configure Firecrawl scrape + web_fetch fallback
 
@@ -63,18 +67,14 @@ Notes:
     entries: {
       firecrawl: {
         enabled: true,
-      },
-    },
-  },
-  tools: {
-    web: {
-      fetch: {
-        firecrawl: {
-          apiKey: "FIRECRAWL_API_KEY_HERE",
-          baseUrl: "https://api.firecrawl.dev",
-          onlyMainContent: true,
-          maxAgeMs: 172800000,
-          timeoutSeconds: 60,
+        config: {
+          webFetch: {
+            apiKey: "FIRECRAWL_API_KEY_HERE",
+            baseUrl: "https://api.firecrawl.dev",
+            onlyMainContent: true,
+            maxAgeMs: 172800000,
+            timeoutSeconds: 60,
+          },
         },
       },
     },
@@ -84,11 +84,12 @@ Notes:
 
 Notes:
 
-- `firecrawl.enabled` defaults to `true` unless explicitly set to `false`.
-- Firecrawl fallback attempts run only when an API key is available (`tools.web.fetch.firecrawl.apiKey` or `FIRECRAWL_API_KEY`).
+- Firecrawl fallback attempts run only when an API key is available (`plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY`).
 - `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
+- Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
+- Firecrawl scrape/base URL overrides are restricted to `https://api.firecrawl.dev`.
 
-`firecrawl_scrape` reuses the same `tools.web.fetch.firecrawl.*` settings and env vars.
+`firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars.
 
 ## Firecrawl plugin tools
 
@@ -132,7 +133,15 @@ than basic-only scraping.
 `web_fetch` extraction order:
 
 1. Readability (local)
-2. Firecrawl (if configured)
+2. Firecrawl (if selected or auto-detected as the active web-fetch fallback)
 3. Basic HTML cleanup (last fallback)
 
-See [Web tools](/tools/web) for the full web tool setup.
+The selection knob is `tools.web.fetch.provider`. If you omit it, OpenClaw
+auto-detects the first ready web-fetch provider from available credentials.
+Today the bundled provider is Firecrawl.
+
+## Related
+
+- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Web Fetch](/tools/web-fetch) -- web_fetch tool with Firecrawl fallback
+- [Tavily](/tools/tavily) -- search + extract tools

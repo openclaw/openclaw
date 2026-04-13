@@ -1,107 +1,70 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
-import { runMessageAction } from "./message-action-runner.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import {
+  directOutbound,
+  runDryAction,
+  runDrySend,
+  slackConfig,
+  slackTestPlugin,
+  telegramTestPlugin,
+  whatsappConfig,
+  whatsappTestPlugin,
+} from "./message-action-runner.test-helpers.js";
 
-const slackConfig = {
-  channels: {
-    slack: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
+const imessageTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "imessage",
+    label: "iMessage",
+    docsPath: "/channels/imessage",
+    capabilities: { chatTypes: ["direct", "group"], media: true },
+  }),
+  meta: {
+    id: "imessage",
+    label: "iMessage",
+    selectionLabel: "iMessage (imsg)",
+    docsPath: "/channels/imessage",
+    blurb: "iMessage test stub.",
+    aliases: ["imsg"],
+  },
+  outbound: directOutbound,
+  messaging: {
+    normalizeTarget: (raw) => raw.trim() || undefined,
+    targetResolver: {
+      looksLikeId: (raw) => raw.trim().length > 0,
+      hint: "<handle|chat_id:ID>",
     },
   },
-} as OpenClawConfig;
-
-const whatsappConfig = {
-  channels: {
-    whatsapp: {
-      allowFrom: ["*"],
-    },
-  },
-} as OpenClawConfig;
-
-const runDryAction = (params: {
-  cfg: OpenClawConfig;
-  action: "send" | "thread-reply" | "broadcast";
-  actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-  abortSignal?: AbortSignal;
-  sandboxRoot?: string;
-}) =>
-  runMessageAction({
-    cfg: params.cfg,
-    action: params.action,
-    params: params.actionParams as never,
-    toolContext: params.toolContext as never,
-    dryRun: true,
-    abortSignal: params.abortSignal,
-    sandboxRoot: params.sandboxRoot,
-  });
-
-const runDrySend = (params: {
-  cfg: OpenClawConfig;
-  actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-  abortSignal?: AbortSignal;
-  sandboxRoot?: string;
-}) =>
-  runDryAction({
-    ...params,
-    action: "send",
-  });
-
-let createPluginRuntime: typeof import("../../plugins/runtime/index.js").createPluginRuntime;
-let setSlackRuntime: typeof import("../../../extensions/slack/src/runtime.js").setSlackRuntime;
-let setTelegramRuntime: typeof import("../../../extensions/telegram/src/runtime.js").setTelegramRuntime;
-let setWhatsAppRuntime: typeof import("../../../extensions/whatsapp/src/runtime.js").setWhatsAppRuntime;
-
-function installChannelRuntimes(params?: { includeTelegram?: boolean; includeWhatsApp?: boolean }) {
-  const runtime = createPluginRuntime();
-  setSlackRuntime(runtime);
-  if (params?.includeTelegram !== false) {
-    setTelegramRuntime(runtime);
-  }
-  if (params?.includeWhatsApp !== false) {
-    setWhatsAppRuntime(runtime);
-  }
-}
+};
 
 describe("runMessageAction context isolation", () => {
-  beforeAll(async () => {
-    ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
-    ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
-    ({ setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js"));
-    ({ setWhatsAppRuntime } = await import("../../../extensions/whatsapp/src/runtime.js"));
-  });
-
   beforeEach(() => {
-    installChannelRuntimes();
     setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "slack",
           source: "test",
-          plugin: slackPlugin,
+          plugin: slackTestPlugin,
         },
         {
           pluginId: "whatsapp",
           source: "test",
-          plugin: whatsappPlugin,
+          plugin: whatsappTestPlugin,
         },
         {
           pluginId: "telegram",
           source: "test",
-          plugin: telegramPlugin,
+          plugin: telegramTestPlugin,
         },
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin(),
+          plugin: imessageTestPlugin,
         },
       ]),
     );
@@ -171,101 +134,6 @@ describe("runMessageAction context isolation", () => {
     });
 
     expect(result.kind).toBe("send");
-  });
-
-  it("requires message when no media hint is provided", async () => {
-    await expect(
-      runDrySend({
-        cfg: slackConfig,
-        actionParams: {
-          channel: "slack",
-          target: "#C12345678",
-        },
-        toolContext: { currentChannelId: "C12345678" },
-      }),
-    ).rejects.toThrow(/message required/i);
-  });
-
-  it("allows send when only shared interactive payloads are provided", async () => {
-    const result = await runDrySend({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "telegram-test",
-          },
-        },
-      } as OpenClawConfig,
-      actionParams: {
-        channel: "telegram",
-        target: "123456",
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Approve", value: "approve" }],
-            },
-          ],
-        },
-      },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("allows send when only Slack blocks are provided", async () => {
-    const result = await runDrySend({
-      cfg: slackConfig,
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        blocks: [{ type: "divider" }],
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it.each([
-    {
-      name: "structured poll params",
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        message: "hi",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No"],
-      },
-    },
-    {
-      name: "string-encoded poll params",
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        message: "hi",
-        pollDurationSeconds: "60",
-        pollPublic: "true",
-      },
-    },
-    {
-      name: "snake_case poll params",
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        message: "hi",
-        poll_question: "Ready?",
-        poll_option: ["Yes", "No"],
-        poll_public: "true",
-      },
-    },
-  ])("rejects send actions that include $name", async ({ actionParams }) => {
-    await expect(
-      runDrySend({
-        cfg: slackConfig,
-        actionParams,
-        toolContext: { currentChannelId: "C12345678" },
-      }),
-    ).rejects.toThrow(/use action "poll" instead of "send"/i);
   });
 
   it.each([
@@ -412,6 +280,7 @@ describe("runMessageAction context isolation", () => {
   it.each([
     {
       name: "blocks cross-provider sends by default",
+      action: "send" as const,
       cfg: slackConfig,
       actionParams: {
         channel: "telegram",
@@ -423,6 +292,7 @@ describe("runMessageAction context isolation", () => {
     },
     {
       name: "blocks same-provider cross-context when disabled",
+      action: "send" as const,
       cfg: {
         ...slackConfig,
         tools: {
@@ -441,10 +311,42 @@ describe("runMessageAction context isolation", () => {
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
       message: /Cross-context messaging denied/,
     },
-  ])("$name", async ({ cfg, actionParams, toolContext, message }) => {
+    {
+      name: "blocks same-provider cross-context uploads when disabled",
+      action: "upload-file" as const,
+      cfg: {
+        ...slackConfig,
+        tools: {
+          message: {
+            crossContext: {
+              allowWithinProvider: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      actionParams: {
+        channel: "slack",
+        target: "channel:C99999999",
+        filePath: "/tmp/report.png",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "rejects channel ids that resolve to user targets",
+      action: "channel-info" as const,
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        channelId: "U12345678",
+      },
+      message: 'Channel id "U12345678" resolved to a user target.',
+    },
+  ])("$name", async ({ action, cfg, actionParams, toolContext, message }) => {
     await expect(
-      runDrySend({
+      runDryAction({
         cfg,
+        action,
         actionParams,
         toolContext,
       }),

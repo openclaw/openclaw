@@ -3,7 +3,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveConversationLabel } from "./conversation-label.js";
 
 describe("resolveConversationLabel", () => {
-  const cases: Array<{ name: string; ctx: MsgContext; expected: string }> = [
+  it.each([
     {
       name: "prefers ConversationLabel when present",
       ctx: { ConversationLabel: "Pinned Label", ChatType: "group" },
@@ -15,23 +15,23 @@ describe("resolveConversationLabel", () => {
         ThreadLabel: "Thread Alpha",
         ChatType: "group",
         GroupSubject: "Ops",
-        From: "telegram:group:42",
+        From: "demo-channel:group:42",
       },
       expected: "Thread Alpha",
     },
     {
       name: "uses SenderName for direct chats when available",
-      ctx: { ChatType: "direct", SenderName: "Ada", From: "telegram:99" },
+      ctx: { ChatType: "direct", SenderName: "Ada", From: "demo-channel:99" },
       expected: "Ada",
     },
     {
       name: "falls back to From for direct chats when SenderName is missing",
-      ctx: { ChatType: "direct", From: "telegram:99" },
-      expected: "telegram:99",
+      ctx: { ChatType: "direct", From: "demo-channel:99" },
+      expected: "demo-channel:99",
     },
     {
-      name: "derives Telegram-like group labels with numeric id suffix",
-      ctx: { ChatType: "group", GroupSubject: "Ops", From: "telegram:group:42" },
+      name: "derives numeric-id group labels",
+      ctx: { ChatType: "group", GroupSubject: "Ops", From: "demo-channel:group:42" },
       expected: "Ops id:42",
     },
     {
@@ -61,11 +61,10 @@ describe("resolveConversationLabel", () => {
       },
       expected: "Family id:123@g.us",
     },
-  ];
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(resolveConversationLabel(testCase.ctx)).toBe(testCase.expected);
-    });
-  }
+  ] satisfies Array<{ name: string; ctx: MsgContext; expected: string }>)(
+    "$name",
+    ({ ctx, expected }) => {
+      expect(resolveConversationLabel(ctx)).toBe(expected);
+    },
+  );
 });

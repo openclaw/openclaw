@@ -1,20 +1,18 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import {
-  buildBytePlusCodingProvider,
-  buildBytePlusProvider,
-} from "../../src/agents/models-config.providers.static.js";
-import { ensureModelAllowlistEntry } from "../../src/commands/model-allowlist.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
+import { BYTEPLUS_CODING_MODEL_CATALOG, BYTEPLUS_MODEL_CATALOG } from "./models.js";
+import { buildBytePlusCodingProvider, buildBytePlusProvider } from "./provider-catalog.js";
+import { buildBytePlusVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "byteplus";
 const BYTEPLUS_DEFAULT_MODEL_REF = "byteplus-plan/ark-code-latest";
 
-const byteplusPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "BytePlus Provider",
   description: "Bundled BytePlus provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "BytePlus",
@@ -61,8 +59,26 @@ const byteplusPlugin = {
           };
         },
       },
+      augmentModelCatalog: () => {
+        const byteplusModels = BYTEPLUS_MODEL_CATALOG.map((entry) => ({
+          provider: "byteplus",
+          id: entry.id,
+          name: entry.name,
+          reasoning: entry.reasoning,
+          input: [...entry.input],
+          contextWindow: entry.contextWindow,
+        }));
+        const byteplusPlanModels = BYTEPLUS_CODING_MODEL_CATALOG.map((entry) => ({
+          provider: "byteplus-plan",
+          id: entry.id,
+          name: entry.name,
+          reasoning: entry.reasoning,
+          input: [...entry.input],
+          contextWindow: entry.contextWindow,
+        }));
+        return [...byteplusModels, ...byteplusPlanModels];
+      },
     });
+    api.registerVideoGenerationProvider(buildBytePlusVideoGenerationProvider());
   },
-};
-
-export default byteplusPlugin;
+});

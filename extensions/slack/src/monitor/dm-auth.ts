@@ -1,8 +1,8 @@
-import { formatAllowlistMatchMeta } from "../../../../src/channels/allowlist-match.js";
-import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
-import { upsertChannelPairingRequest } from "../../../../src/pairing/pairing-store.js";
+import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { resolveSlackAllowListMatch } from "./allow-list.js";
 import type { SlackMonitorContext } from "./context.js";
+import { upsertChannelPairingRequest } from "./conversation.runtime.js";
 
 export async function authorizeSlackDirectMessage(params: {
   ctx: SlackMonitorContext;
@@ -37,11 +37,8 @@ export async function authorizeSlackDirectMessage(params: {
   }
 
   if (params.ctx.dmPolicy === "pairing") {
-    await issuePairingChallenge({
+    await createChannelPairingChallengeIssuer({
       channel: "slack",
-      senderId: params.senderId,
-      senderIdLine: `Your Slack user id: ${params.senderId}`,
-      meta: { name: senderName },
       upsertPairingRequest: async ({ id, meta }) =>
         await upsertChannelPairingRequest({
           channel: "slack",
@@ -49,6 +46,10 @@ export async function authorizeSlackDirectMessage(params: {
           accountId: params.accountId,
           meta,
         }),
+    })({
+      senderId: params.senderId,
+      senderIdLine: `Your Slack user id: ${params.senderId}`,
+      meta: { name: senderName },
       sendPairingReply: params.sendPairingReply,
       onCreated: () => {
         params.log(

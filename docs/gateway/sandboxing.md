@@ -32,8 +32,8 @@ and process access when the model does something dumb.
 Not sandboxed:
 
 - The Gateway process itself.
-- Any tool explicitly allowed to run on the host (e.g. `tools.elevated`).
-  - **Elevated exec runs on the host and bypasses sandboxing.**
+- Any tool explicitly allowed to run outside the sandbox (e.g. `tools.elevated`).
+  - **Elevated exec bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).**
   - If sandboxing is off, `tools.elevated` does not change execution (already on host). See [Elevated Mode](/tools/elevated).
 
 ## Modes
@@ -50,8 +50,8 @@ Not sandboxed:
 
 `agents.defaults.sandbox.scope` controls **how many containers** are created:
 
-- `"session"` (default): one container per session.
-- `"agent"`: one container per agent.
+- `"agent"` (default): one container per agent.
+- `"session"`: one container per session.
 - `"shared"`: one container shared by all sandboxed sessions.
 
 ## Backend
@@ -64,6 +64,18 @@ Not sandboxed:
 
 SSH-specific config lives under `agents.defaults.sandbox.ssh`.
 OpenShell-specific config lives under `plugins.entries.openshell.config`.
+
+### Choosing a backend
+
+|                     | Docker                           | SSH                            | OpenShell                                           |
+| ------------------- | -------------------------------- | ------------------------------ | --------------------------------------------------- |
+| **Where it runs**   | Local container                  | Any SSH-accessible host        | OpenShell managed sandbox                           |
+| **Setup**           | `scripts/sandbox-setup.sh`       | SSH key + target host          | OpenShell plugin enabled                            |
+| **Workspace model** | Bind-mount or copy               | Remote-canonical (seed once)   | `mirror` or `remote`                                |
+| **Network control** | `docker.network` (default: none) | Depends on remote host         | Depends on OpenShell                                |
+| **Browser sandbox** | Supported                        | Not supported                  | Not supported yet                                   |
+| **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                                                 |
+| **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
 
 ### SSH backend
 
@@ -120,6 +132,18 @@ Important consequences:
 - Browser sandboxing is not supported on the SSH backend.
 - `sandbox.docker.*` settings do not apply to the SSH backend.
 
+### OpenShell backend
+
+Use `backend: "openshell"` when you want OpenClaw to sandbox tools in an
+OpenShell-managed remote environment. For the full setup guide, configuration
+reference, and workspace mode comparison, see the dedicated
+[OpenShell page](/gateway/openshell).
+
+OpenShell reuses the same core SSH transport and remote filesystem bridge as the
+generic SSH backend, and adds OpenShell-specific lifecycle
+(`sandbox create/get/delete`, `sandbox ssh-config`) plus the optional `mirror`
+workspace mode.
+
 ```json5
 {
   agents: {
@@ -153,9 +177,6 @@ OpenShell modes:
 - `mirror` (default): local workspace stays canonical. OpenClaw syncs local files into OpenShell before exec and syncs the remote workspace back after exec.
 - `remote`: OpenShell workspace is canonical after the sandbox is created. OpenClaw seeds the remote workspace once from the local workspace, then file tools and exec run directly against the remote sandbox without syncing changes back.
 
-OpenShell reuses the same core SSH transport and remote filesystem bridge as the generic SSH backend.
-The plugin adds OpenShell-specific lifecycle (`sandbox create/get/delete`, `sandbox ssh-config`) and the optional `mirror` mode.
-
 Remote transport details:
 
 - OpenClaw asks OpenShell for sandbox-specific SSH config via `openshell sandbox ssh-config <name>`.
@@ -168,11 +189,11 @@ Current OpenShell limitations:
 - `sandbox.docker.binds` is not supported on the OpenShell backend
 - Docker-specific runtime knobs under `sandbox.docker.*` still apply only to the Docker backend
 
-## OpenShell workspace modes
+#### Workspace modes
 
 OpenShell has two workspace models. This is the part that matters most in practice.
 
-### `mirror`
+##### `mirror`
 
 Use `plugins.entries.openshell.config.mode: "mirror"` when you want the **local workspace to stay canonical**.
 
@@ -192,7 +213,7 @@ Tradeoff:
 
 - extra sync cost before and after exec
 
-### `remote`
+##### `remote`
 
 Use `plugins.entries.openshell.config.mode: "remote"` when you want the **OpenShell workspace to become canonical**.
 
@@ -219,7 +240,7 @@ Use this when:
 Choose `mirror` if you think of the sandbox as a temporary execution environment.
 Choose `remote` if you think of the sandbox as the real workspace.
 
-## OpenShell lifecycle
+#### OpenShell lifecycle
 
 OpenShell sandboxes are still managed through the normal sandbox lifecycle:
 
@@ -297,6 +318,10 @@ Security notes:
 
 - Binds bypass the sandbox filesystem: they expose host paths with whatever mode you set (`:ro` or `:rw`).
 - OpenClaw blocks dangerous bind sources (for example: `docker.sock`, `/etc`, `/proc`, `/sys`, `/dev`, and parent mounts that would expose them).
+- OpenClaw also blocks common home-directory credential roots such as `~/.aws`, `~/.cargo`, `~/.config`, `~/.docker`, `~/.gnupg`, `~/.netrc`, `~/.npm`, and `~/.ssh`.
+- Bind validation is not just string matching. OpenClaw normalizes the source path, then resolves it again through the deepest existing ancestor before re-checking blocked paths and allowed roots.
+- That means symlink-parent escapes still fail closed even when the final leaf does not exist yet. Example: `/workspace/run-link/new-file` still resolves as `/var/run/...` if `run-link` points there.
+- Allowed source roots are canonicalized the same way, so a path that only looks inside the allowlist before symlink resolution is still rejected as `outside allowed roots`.
 - Sensitive mounts (secrets, SSH keys, service credentials) should be `:ro` unless absolutely required.
 - Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
@@ -378,10 +403,10 @@ Security defaults:
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
 
-For Docker gateway deployments, `docker-setup.sh` can bootstrap sandbox config.
+For Docker gateway deployments, `scripts/docker/setup.sh` can bootstrap sandbox config.
 Set `OPENCLAW_SANDBOX=1` (or `true`/`yes`/`on`) to enable that path. You can
 override socket location with `OPENCLAW_DOCKER_SOCKET`. Full setup and env
-reference: [Docker](/install/docker#enable-agent-sandbox-for-docker-gateway-opt-in).
+reference: [Docker](/install/docker#agent-sandbox).
 
 ## setupCommand (one-time container setup)
 
@@ -407,7 +432,7 @@ Common pitfalls:
 Tool allow/deny policies still apply before sandbox rules. If a tool is denied
 globally or per-agent, sandboxing doesn’t bring it back.
 
-`tools.elevated` is an explicit escape hatch that runs `exec` on the host.
+`tools.elevated` is an explicit escape hatch that runs `exec` outside the sandbox (`gateway` by default, or `node` when the exec target is `node`).
 `/exec` directives only apply for authorized senders and persist per session; to hard-disable
 `exec`, use tool policy deny (see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
 
@@ -441,6 +466,8 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 
 ## Related docs
 
-- [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
-- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools)
+- [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
+- [Sandbox Configuration](/gateway/configuration-reference#agentsdefaultssandbox)
+- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
+- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Security](/gateway/security)

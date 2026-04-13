@@ -1,17 +1,17 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
-  type ChatCommandDefinition,
-  type CommandArgs,
-} from "../../../../src/auto-reply/commands-registry.js";
-import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
-import { resolveNativeCommandSessionTargets } from "../../../../src/channels/native-command-session-targets.js";
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveNativeCommandSessionTargets,
+} from "openclaw/plugin-sdk/command-auth";
+import { type ChatCommandDefinition, type CommandArgs } from "openclaw/plugin-sdk/command-auth";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
-} from "../../../../src/config/commands.js";
-import { danger, logVerbose } from "../../../../src/globals.js";
-import { chunkItems } from "../../../../src/utils/chunk-items.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { chunkItems, normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
@@ -513,7 +513,6 @@ export async function registerSlackMonitorSlashCommands(params: {
       const channelName = channelInfo?.name;
       const roomLabel = channelName ? `#${channelName}` : `#${command.channel_id}`;
       const {
-        createReplyPrefixOptions,
         deliverSlackSlashReplies,
         dispatchReplyWithDispatcher,
         finalizeInboundContext,
@@ -573,7 +572,7 @@ export async function registerSlackMonitorSlashCommands(params: {
                 : `slack:group:${command.channel_id}`,
           }) ?? (isDirectMessage ? senderName : roomLabel),
         GroupSubject: isRoomish ? roomLabel : undefined,
-        GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
+        GroupSystemPrompt: groupSystemPrompt,
         UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
         SenderName: senderName,
         SenderId: command.user_id,
@@ -600,7 +599,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           runtime.error?.(danger(`slack slash: failed updating session meta: ${String(err)}`)),
       });
 
-      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
         agentId: route.agentId,
         channel: "slack",
@@ -626,7 +625,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         ctx: ctxPayload,
         cfg,
         dispatcherOptions: {
-          ...prefixOptions,
+          ...replyPipeline,
           deliver: async (payload) => deliverSlashPayloads([payload]),
           onError: (err, info) => {
             runtime.error?.(danger(`slack slash ${info.kind} reply failed: ${String(err)}`));
@@ -770,9 +769,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         await ack({ options: [] });
         return;
       }
-      const query = typedBody.value?.trim().toLowerCase() ?? "";
+      const query = normalizeLowercaseStringOrEmpty(typedBody.value);
       const options = entry.choices
-        .filter((choice) => !query || choice.label.toLowerCase().includes(query))
+        .filter((choice) => !query || normalizeLowercaseStringOrEmpty(choice.label).includes(query))
         .slice(0, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX)
         .map((choice) => ({
           text: { type: "plain_text", text: choice.label.slice(0, 75) },

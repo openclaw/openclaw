@@ -1,13 +1,14 @@
 import { withReplyDispatcher } from "../auto-reply/dispatch.js";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import {
   dispatchReplyFromConfig,
   type DispatchFromConfigResult,
 } from "../auto-reply/reply/dispatch-from-config.js";
-import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
+import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import type { GetReplyOptions } from "../auto-reply/types.js";
-import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
@@ -15,8 +16,6 @@ type ReplyOptionsWithoutModelSelected = Omit<
   "onModelSelected"
 >;
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
-type DispatchReplyWithBufferedBlockDispatcherFn =
-  typeof import("../auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
 
 type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
 
@@ -27,6 +26,7 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
   dispatcher: ReplyDispatcher;
   onSettled: () => void | Promise<void>;
   replyOptions?: ReplyDispatchFromConfigOptions;
+  configOverride?: OpenClawConfig;
 }): Promise<DispatchFromConfigResult> {
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
@@ -37,6 +37,7 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
         cfg: params.cfg,
         dispatcher: params.dispatcher,
         replyOptions: params.replyOptions,
+        configOverride: params.configOverride,
       }),
   });
 }
@@ -58,7 +59,7 @@ export function buildInboundReplyDispatchBase(params: {
         recordInboundSession: RecordInboundSessionFn;
       };
       reply: {
-        dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcherFn;
+        dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
       };
     };
   };
@@ -110,7 +111,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSessionFn;
-  dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcherFn;
+  dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   deliver: (payload: OutboundReplyPayload) => Promise<void>;
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
@@ -123,7 +124,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
     onRecordError: params.onRecordError,
   });
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,
@@ -135,7 +136,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
     ctx: params.ctxPayload,
     cfg: params.cfg,
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       deliver,
       onError: params.onDispatchError,
     },

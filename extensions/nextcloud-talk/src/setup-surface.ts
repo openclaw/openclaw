@@ -1,127 +1,42 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
-  mergeAllowFromEntries,
-  resolveSetupAccountId,
+  createStandardChannelSetupStatus,
+  formatDocsLink,
   setSetupChannelEnabled,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupInput } from "../../../src/channels/plugins/types.core.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
-import {
-  listNextcloudTalkAccountIds,
-  resolveDefaultNextcloudTalkAccountId,
-  resolveNextcloudTalkAccount,
-} from "./accounts.js";
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveNextcloudTalkAccount } from "./accounts.js";
 import {
   clearNextcloudTalkAccountFields,
+  nextcloudTalkDmPolicy,
   nextcloudTalkSetupAdapter,
   normalizeNextcloudTalkBaseUrl,
   setNextcloudTalkAccountConfig,
   validateNextcloudTalkBaseUrl,
 } from "./setup-core.js";
-import type { CoreConfig, DmPolicy } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const channel = "nextcloud-talk" as const;
 const CONFIGURE_API_FLAG = "__nextcloudTalkConfigureApiCredentials";
 
-function setNextcloudTalkDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConfig {
-  return setTopLevelChannelDmPolicyWithAllowFrom({
-    cfg,
-    channel,
-    dmPolicy,
-  }) as CoreConfig;
-}
-
-async function promptNextcloudTalkAllowFrom(params: {
-  cfg: CoreConfig;
-  prompter: WizardPrompter;
-  accountId: string;
-}): Promise<CoreConfig> {
-  const resolved = resolveNextcloudTalkAccount({ cfg: params.cfg, accountId: params.accountId });
-  const existingAllowFrom = resolved.config.allowFrom ?? [];
-  await params.prompter.note(
-    [
-      "1) Check the Nextcloud admin panel for user IDs",
-      "2) Or look at the webhook payload logs when someone messages",
-      "3) User IDs are typically lowercase usernames in Nextcloud",
-      `Docs: ${formatDocsLink("/channels/nextcloud-talk", "channels/nextcloud-talk")}`,
-    ].join("\n"),
-    "Nextcloud Talk user id",
-  );
-
-  let resolvedIds: string[] = [];
-  while (resolvedIds.length === 0) {
-    const entry = await params.prompter.text({
-      message: "Nextcloud Talk allowFrom (user id)",
-      placeholder: "username",
-      initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-    });
-    resolvedIds = String(entry)
-      .split(/[\n,;]+/g)
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean);
-    if (resolvedIds.length === 0) {
-      await params.prompter.note("Please enter at least one valid user ID.", "Nextcloud Talk");
-    }
-  }
-
-  return setNextcloudTalkAccountConfig(params.cfg, params.accountId, {
-    dmPolicy: "allowlist",
-    allowFrom: mergeAllowFromEntries(
-      existingAllowFrom.map((value) => String(value).trim().toLowerCase()),
-      resolvedIds,
-    ),
-  });
-}
-
-async function promptNextcloudTalkAllowFromForAccount(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<OpenClawConfig> {
-  const accountId = resolveSetupAccountId({
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultNextcloudTalkAccountId(params.cfg as CoreConfig),
-  });
-  return await promptNextcloudTalkAllowFrom({
-    cfg: params.cfg as CoreConfig,
-    prompter: params.prompter,
-    accountId,
-  });
-}
-
-const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
-  label: "Nextcloud Talk",
-  channel,
-  policyKey: "channels.nextcloud-talk.dmPolicy",
-  allowFromKey: "channels.nextcloud-talk.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.["nextcloud-talk"]?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) => setNextcloudTalkDmPolicy(cfg as CoreConfig, policy as DmPolicy),
-  promptAllowFrom: promptNextcloudTalkAllowFromForAccount,
-};
-
 export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
   channel,
   stepOrder: "text-first",
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Nextcloud Talk",
     configuredLabel: "configured",
     unconfiguredLabel: "needs setup",
     configuredHint: "configured",
     unconfiguredHint: "self-hosted chat",
     configuredScore: 1,
     unconfiguredScore: 5,
-    resolveConfigured: ({ cfg }) =>
-      listNextcloudTalkAccountIds(cfg as CoreConfig).some((accountId) => {
-        const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
-        return Boolean(account.secret && account.baseUrl);
-      }),
-  },
+    resolveConfigured: ({ cfg, accountId }) => {
+      const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
+      return Boolean(account.secret && account.baseUrl);
+    },
+  }),
   introNote: {
     title: "Nextcloud Talk bot setup",
     lines: [
@@ -149,7 +64,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
       initialValue: hasApiCredentials,
     });
     if (!configureApiCredentials) {
-      return;
+      return undefined;
     }
     return {
       credentialValues: {
@@ -179,7 +94,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
           resolvedValue: resolvedAccount.secret || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim() || undefined
+              ? normalizeOptionalString(process.env.NEXTCLOUD_TALK_BOT_SECRET)
               : undefined,
         };
       },

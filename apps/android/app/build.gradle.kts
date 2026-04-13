@@ -65,11 +65,26 @@ android {
         applicationId = "ai.openclaw.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 2026031400
-        versionName = "2026.3.14"
+        versionCode = 2026041201
+        versionName = "2026.4.12-beta.1"
         ndk {
             // Support all major ABIs — native libs are tiny (~47 KB per ABI)
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+        }
+    }
+
+    flavorDimensions += "store"
+
+    productFlavors {
+        create("play") {
+            dimension = "store"
+            buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "false")
+            buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "false")
+        }
+        create("thirdParty") {
+            dimension = "store"
+            buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "true")
+            buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "true")
         }
     }
 
@@ -140,8 +155,13 @@ androidComponents {
             .forEach { output ->
                 val versionName = output.versionName.orNull ?: "0"
                 val buildType = variant.buildType
-
-                val outputFileName = "openclaw-$versionName-$buildType.apk"
+                val flavorName = variant.flavorName?.takeIf { it.isNotBlank() }
+                val outputFileName =
+                    if (flavorName == null) {
+                        "openclaw-$versionName-$buildType.apk"
+                    } else {
+                        "openclaw-$versionName-$flavorName-$buildType.apk"
+                    }
                 output.outputFileName = outputFileName
             }
     }
@@ -219,44 +239,52 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
-val stripReleaseDnsjavaServiceDescriptor =
-    tasks.register("stripReleaseDnsjavaServiceDescriptor") {
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val variantName = variant.name
+        val variantNameCapitalized = variantName.replaceFirstChar(Char::titlecase)
+        val stripTaskName = "strip${variantNameCapitalized}DnsjavaServiceDescriptor"
+        val mergeTaskName = "merge${variantNameCapitalized}JavaResource"
+        val minifyTaskName = "minify${variantNameCapitalized}WithR8"
         val mergedJar =
             layout.buildDirectory.file(
-                "intermediates/merged_java_res/release/mergeReleaseJavaResource/base.jar",
+                "intermediates/merged_java_res/$variantName/$mergeTaskName/base.jar",
             )
 
-        inputs.file(mergedJar)
-        outputs.file(mergedJar)
+        val stripTask =
+            tasks.register(stripTaskName) {
+                inputs.file(mergedJar)
+                outputs.file(mergedJar)
 
-        doLast {
-            val jarFile = mergedJar.get().asFile
-            if (!jarFile.exists()) {
-                return@doLast
+                doLast {
+                    val jarFile = mergedJar.get().asFile
+                    if (!jarFile.exists()) {
+                        return@doLast
+                    }
+
+                    val unpackDir = temporaryDir.resolve("merged-java-res")
+                    delete(unpackDir)
+                    copy {
+                        from(zipTree(jarFile))
+                        into(unpackDir)
+                        exclude(dnsjavaInetAddressResolverService)
+                    }
+                    delete(jarFile)
+                    ant.invokeMethod(
+                        "zip",
+                        mapOf(
+                            "destfile" to jarFile.absolutePath,
+                            "basedir" to unpackDir.absolutePath,
+                        ),
+                    )
+                }
             }
 
-            val unpackDir = temporaryDir.resolve("merged-java-res")
-            delete(unpackDir)
-            copy {
-                from(zipTree(jarFile))
-                into(unpackDir)
-                exclude(dnsjavaInetAddressResolverService)
-            }
-            delete(jarFile)
-            ant.invokeMethod(
-                "zip",
-                mapOf(
-                    "destfile" to jarFile.absolutePath,
-                    "basedir" to unpackDir.absolutePath,
-                ),
-            )
+        tasks.matching { it.name == mergeTaskName }.configureEach {
+            finalizedBy(stripTask)
+        }
+        tasks.matching { it.name == minifyTaskName }.configureEach {
+            dependsOn(stripTask)
         }
     }
-
-tasks.matching { it.name == "stripReleaseDnsjavaServiceDescriptor" }.configureEach {
-    dependsOn("mergeReleaseJavaResource")
-}
-
-tasks.matching { it.name == "minifyReleaseWithR8" }.configureEach {
-    dependsOn(stripReleaseDnsjavaServiceDescriptor)
 }

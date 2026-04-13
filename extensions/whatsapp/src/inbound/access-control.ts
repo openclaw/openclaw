@@ -1,18 +1,18 @@
-import { loadConfig } from "../../../../src/config/config.js";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../../../../src/config/runtime-group-policy.js";
-import { logVerbose } from "../../../../src/globals.js";
-import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
-import { upsertChannelPairingRequest } from "../../../../src/pairing/pairing-store.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
-} from "../../../../src/security/dm-policy-shared.js";
-import { isSelfChatMode, normalizeE164 } from "../../../../src/utils.js";
+} from "openclaw/plugin-sdk/security-runtime";
 import { resolveWhatsAppAccount } from "../accounts.js";
+import { resolveWhatsAppRuntimeGroupPolicy } from "../runtime-group-policy.js";
+import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
 
 export type InboundAccessControlResult = {
   allowed: boolean;
@@ -22,21 +22,6 @@ export type InboundAccessControlResult = {
 };
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
-
-function resolveWhatsAppRuntimeGroupPolicy(params: {
-  providerConfigPresent: boolean;
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  defaultGroupPolicy?: "open" | "allowlist" | "disabled";
-}): {
-  groupPolicy: "open" | "allowlist" | "disabled";
-  providerMissingFallbackApplied: boolean;
-} {
-  return resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-  });
-}
 
 export async function checkInboundAccessControl(params: {
   accountId: string;
@@ -117,7 +102,7 @@ export async function checkInboundAccessControl(params: {
       }
       const normalizedEntrySet = new Set(
         allowEntries
-          .map((entry) => normalizeE164(String(entry)))
+          .map((entry) => normalizeE164(entry))
           .filter((entry): entry is string => Boolean(entry)),
       );
       if (!params.group && isSamePhone) {
@@ -171,11 +156,8 @@ export async function checkInboundAccessControl(params: {
       if (suppressPairingReply) {
         logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
       } else {
-        await issuePairingChallenge({
+        await createChannelPairingChallengeIssuer({
           channel: "whatsapp",
-          senderId: candidate,
-          senderIdLine: `Your WhatsApp phone number: ${candidate}`,
-          meta: { name: (params.pushName ?? "").trim() || undefined },
           upsertPairingRequest: async ({ id, meta }) =>
             await upsertChannelPairingRequest({
               channel: "whatsapp",
@@ -183,6 +165,10 @@ export async function checkInboundAccessControl(params: {
               accountId: account.accountId,
               meta,
             }),
+        })({
+          senderId: candidate,
+          senderIdLine: `Your WhatsApp phone number: ${candidate}`,
+          meta: { name: (params.pushName ?? "").trim() || undefined },
           onCreated: () => {
             logVerbose(
               `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,

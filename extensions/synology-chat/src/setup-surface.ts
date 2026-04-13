@@ -1,13 +1,17 @@
 import {
+  createAllowFromSection,
+  createStandardChannelSetupStatus,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
   mergeAllowFromEntries,
+  normalizeAccountId,
   setSetupChannelEnabled,
   splitSetupEntries,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  type ChannelSetupAdapter,
+  type ChannelSetupWizard,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
@@ -69,11 +73,8 @@ function patchSynologyChatAccountConfig(params: {
     };
   }
 
-  const nextAccounts = { ...(channelConfig.accounts ?? {}) } as Record<
-    string,
-    Record<string, unknown>
-  >;
-  const nextAccountConfig = { ...(nextAccounts[params.accountId] ?? {}) };
+  const nextAccounts = { ...channelConfig.accounts } as Record<string, Record<string, unknown>>;
+  const nextAccountConfig = { ...nextAccounts[params.accountId] };
   for (const field of params.clearFields ?? []) {
     delete nextAccountConfig[field];
   }
@@ -126,12 +127,24 @@ function parseSynologyUserId(value: string): string | null {
   return /^\d+$/.test(cleaned) ? cleaned : null;
 }
 
+function normalizeSynologyAllowedUserId(value: unknown): string {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return `${value}`.trim();
+  }
+  return "";
+}
+
 function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): string[] {
   const raw = getRawAccountConfig(cfg, accountId).allowedUserIds;
   if (Array.isArray(raw)) {
-    return raw.map((value) => String(value).trim()).filter(Boolean);
+    return raw.map(normalizeSynologyAllowedUserId).filter(Boolean);
   }
-  return String(raw ?? "")
+  return normalizeSynologyAllowedUserId(raw)
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
@@ -174,20 +187,23 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
 
 export const synologyChatSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Synology Chat",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token + incoming webhook",
     configuredHint: "configured",
     unconfiguredHint: "needs token + incoming webhook",
     configuredScore: 1,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) =>
-      listAccountIds(cfg).some((accountId) => isSynologyChatConfigured(cfg, accountId)),
-    resolveStatusLines: ({ cfg, configured }) => [
-      `Synology Chat: ${configured ? "configured" : "needs token + incoming webhook"}`,
-      `Accounts: ${listAccountIds(cfg).length || 0}`,
-    ],
-  },
+    includeStatusLine: true,
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? isSynologyChatConfigured(cfg, accountId)
+        : listAccountIds(cfg).some((candidateAccountId) =>
+            isSynologyChatConfigured(cfg, candidateAccountId),
+          ),
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length || 0}`],
+  }),
   introNote: {
     title: "Synology Chat webhook setup",
     lines: SYNOLOGY_SETUP_HELP_LINES,
@@ -209,11 +225,11 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         const raw = getRawAccountConfig(cfg, accountId);
         return {
           accountConfigured: isSynologyChatConfigured(cfg, accountId),
-          hasConfiguredValue: Boolean(raw.token?.trim()),
-          resolvedValue: account.token.trim() || undefined,
+          hasConfiguredValue: Boolean(normalizeOptionalString(raw.token)),
+          resolvedValue: normalizeOptionalString(account.token),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.SYNOLOGY_CHAT_TOKEN?.trim() || undefined
+              ? normalizeOptionalString(process.env.SYNOLOGY_CHAT_TOKEN)
               : undefined,
         };
       },
@@ -280,7 +296,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         }),
     },
   ],
-  allowFrom: {
+  allowFrom: createAllowFromSection({
     helpTitle: "Synology Chat allowlist",
     helpLines: SYNOLOGY_ALLOW_FROM_HELP_LINES,
     message: "Allowed Synology Chat user ids",
@@ -288,15 +304,6 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     invalidWithoutCredentialNote: "Synology Chat user ids must be numeric.",
     parseInputs: splitSetupEntries,
     parseId: parseSynologyUserId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseSynologyUserId(entry);
-        return {
-          input: entry,
-          resolved: Boolean(id),
-          id,
-        };
-      }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchSynologyChatAccountConfig({
         cfg,
@@ -310,7 +317,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
           ),
         },
       }),
-  },
+  }),
   completionNote: {
     title: "Synology Chat access control",
     lines: [

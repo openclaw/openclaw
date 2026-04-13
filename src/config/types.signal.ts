@@ -6,6 +6,8 @@ export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
 export type SignalGroupConfig = {
   requireMention?: boolean;
+  /** Emit internal message hooks for mention-skipped group messages. */
+  ingest?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
@@ -60,3 +62,9 @@ export type SignalConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & SignalAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    signal?: SignalConfig;
+  }
+}

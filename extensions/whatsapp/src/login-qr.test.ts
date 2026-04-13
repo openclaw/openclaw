@@ -7,7 +7,8 @@ import {
   waitForWaConnection,
 } from "./session.js";
 
-vi.mock("./session.js", () => {
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   const createWaSocket = vi.fn(
     async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
       const sock = { ws: { close: vi.fn() } };
@@ -30,6 +31,7 @@ vi.mock("./session.js", () => {
   const logoutWeb = vi.fn(async () => true);
   const waitForCredsSaveQueueWithTimeout = vi.fn(async () => {});
   return {
+    ...actual,
     createWaSocket,
     waitForWaConnection,
     formatError,
@@ -88,5 +90,40 @@ describe("login-qr", () => {
     expect(result.connected).toBe(true);
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     expect(logoutWebMock).not.toHaveBeenCalled();
+  });
+
+  it("clears auth and reports a relink message when WhatsApp is logged out", async () => {
+    waitForWaConnectionMock.mockRejectedValueOnce({
+      output: { statusCode: 401 },
+    });
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000 });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
+
+    const result = await waitForWebLogin({ timeoutMs: 5000 });
+
+    expect(result).toEqual({
+      connected: false,
+      message:
+        "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.",
+    });
+    expect(logoutWebMock).toHaveBeenCalledOnce();
+  });
+
+  it("turns unexpected login cleanup failures into a normal login error", async () => {
+    waitForWaConnectionMock.mockRejectedValueOnce({
+      output: { statusCode: 401 },
+    });
+    logoutWebMock.mockRejectedValueOnce(new Error("cleanup failed"));
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000 });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
+
+    const result = await waitForWebLogin({ timeoutMs: 5000 });
+
+    expect(result).toEqual({
+      connected: false,
+      message: "WhatsApp login failed: cleanup failed",
+    });
   });
 });

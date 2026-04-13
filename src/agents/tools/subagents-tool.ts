@@ -2,9 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import {
-  buildSubagentList,
   DEFAULT_RECENT_MINUTES,
-  isActiveSubagentRun,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   listControlledSubagentRuns,
@@ -13,8 +11,12 @@ import {
   resolveControlledSubagentTarget,
   resolveSubagentController,
   steerControlledSubagentRun,
-  createPendingDescendantCounter,
 } from "../subagent-control.js";
+import {
+  buildSubagentList,
+  createPendingDescendantCounter,
+  isActiveSubagentRun,
+} from "../subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 

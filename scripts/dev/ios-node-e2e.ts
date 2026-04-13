@@ -1,5 +1,17 @@
 import { createArgReader, createGatewayWsClient, resolveGatewayUrl } from "./gateway-ws-client.ts";
 
+function writeStdoutLine(message = ""): void {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeStdoutJson(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 type NodeListPayload = {
   ts?: number;
   nodes?: Array<{
@@ -24,8 +36,7 @@ const dangerous = hasFlag("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS =
 const jsonOut = hasFlag("--json");
 
 if (!urlRaw || !token) {
-  // eslint-disable-next-line no-console
-  console.error(
+  writeStderrLine(
     "Usage: bun scripts/dev/ios-node-e2e.ts --url <wss://host[:port]> --token <gateway.auth.token> [--node <id|name-substring>] [--dangerous] [--json]\n" +
       "Or set env: OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN",
   );
@@ -105,24 +116,21 @@ async function main() {
   });
 
   if (!connectRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("connect failed:", connectRes.error);
+    writeStderrLine(`connect failed: ${String(connectRes.error)}`);
     close();
     process.exit(2);
   }
 
   const healthRes = await request("health");
   if (!healthRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("health failed:", healthRes.error);
+    writeStderrLine(`health failed: ${String(healthRes.error)}`);
     close();
     process.exit(3);
   }
 
   const nodesRes = await request("node.list");
   if (!nodesRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("node.list failed:", nodesRes.error);
+    writeStderrLine(`node.list failed: ${String(nodesRes.error)}`);
     close();
     process.exit(4);
   }
@@ -142,8 +150,7 @@ async function main() {
     }
   }
   if (!node) {
-    // eslint-disable-next-line no-console
-    console.error("No connected iOS nodes found. (Is the iOS app connected to the gateway?)");
+    writeStderrLine("No connected iOS nodes found. (Is the iOS app connected to the gateway?)");
     close();
     process.exit(5);
   }
@@ -235,23 +242,16 @@ async function main() {
   }
 
   if (jsonOut) {
-    // eslint-disable-next-line no-console
-    console.log(
-      JSON.stringify(
-        {
-          gateway: url.toString(),
-          node: {
-            nodeId: node.nodeId,
-            displayName: node.displayName,
-            platform: node.platform,
-          },
-          dangerous,
-          results,
-        },
-        null,
-        2,
-      ),
-    );
+    writeStdoutJson({
+      gateway: url.toString(),
+      node: {
+        nodeId: node.nodeId,
+        displayName: node.displayName,
+        platform: node.platform,
+      },
+      dangerous,
+      results,
+    });
   } else {
     const pad = (s: string, n: number) => (s.length >= n ? s : s + " ".repeat(n - s.length));
     const rows = results.map((r) => ({
@@ -260,15 +260,11 @@ async function main() {
       note: r.ok ? "" : formatErr(r.error ?? "error"),
     }));
     const width = Math.min(64, Math.max(12, ...rows.map((r) => r.cmd.length)));
-    // eslint-disable-next-line no-console
-    console.log(`node: ${node.displayName ?? node.nodeId} (${node.platform ?? "unknown"})`);
-    // eslint-disable-next-line no-console
-    console.log(`dangerous: ${dangerous ? "on" : "off"}`);
-    // eslint-disable-next-line no-console
-    console.log("");
+    writeStdoutLine(`node: ${node.displayName ?? node.nodeId} (${node.platform ?? "unknown"})`);
+    writeStdoutLine(`dangerous: ${dangerous ? "on" : "off"}`);
+    writeStdoutLine();
     for (const r of rows) {
-      // eslint-disable-next-line no-console
-      console.log(`${pad(r.cmd, width)}  ${pad(r.ok, 4)}  ${r.note}`);
+      writeStdoutLine(`${pad(r.cmd, width)}  ${pad(r.ok, 4)}  ${r.note}`);
     }
   }
 

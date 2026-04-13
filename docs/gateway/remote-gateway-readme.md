@@ -4,6 +4,8 @@ read_when: "Connecting the macOS app to a remote gateway over SSH"
 title: "Remote Gateway Setup"
 ---
 
+> This content has been merged into [Remote Access](/gateway/remote#macos-persistent-ssh-tunnel-via-launchagent). See that page for the current guide.
+
 # Running OpenClaw.app with a Remote Gateway
 
 OpenClaw.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
@@ -55,11 +57,15 @@ Copy your public key to the remote machine (enter password once):
 ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
 ```
 
-### Step 3: Set Gateway Token
+### Step 3: Configure Remote Gateway Auth
 
 ```bash
-launchctl setenv OPENCLAW_GATEWAY_TOKEN "<your-token>"
+openclaw config set gateway.remote.token "<your-token>"
 ```
+
+Use `gateway.remote.password` instead if your remote gateway uses password auth.
+`OPENCLAW_GATEWAY_TOKEN` is still valid as a shell-level override, but the durable
+remote-client setup is `gateway.remote.token` / `gateway.remote.password`.
 
 ### Step 4: Start SSH Tunnel
 

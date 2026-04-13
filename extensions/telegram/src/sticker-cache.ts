@@ -1,159 +1,31 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveApiKeyForProvider } from "../../../src/agents/model-auth.js";
-import type { ModelCatalogEntry } from "../../../src/agents/model-catalog.js";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/agent-runtime";
+import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
-} from "../../../src/agents/model-catalog.js";
-import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { STATE_DIR } from "../../../src/config/paths.js";
-import { logVerbose } from "../../../src/globals.js";
-import { loadJsonFile, saveJsonFile } from "../../../src/infra/json-file.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
 import {
-  AUTO_IMAGE_KEY_PROVIDERS,
-  DEFAULT_IMAGE_MODELS,
-} from "../../../src/media-understanding/defaults.js";
-import { resolveAutoImageModel } from "../../../src/media-understanding/runner.js";
-
-const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
-const CACHE_VERSION = 1;
-
-export interface CachedSticker {
-  fileId: string;
-  fileUniqueId: string;
-  emoji?: string;
-  setName?: string;
-  description: string;
-  cachedAt: string;
-  receivedFrom?: string;
-}
-
-interface StickerCache {
-  version: number;
-  stickers: Record<string, CachedSticker>;
-}
-
-function loadCache(): StickerCache {
-  const data = loadJsonFile(CACHE_FILE);
-  if (!data || typeof data !== "object") {
-    return { version: CACHE_VERSION, stickers: {} };
-  }
-  const cache = data as StickerCache;
-  if (cache.version !== CACHE_VERSION) {
-    // Future: handle migration if needed
-    return { version: CACHE_VERSION, stickers: {} };
-  }
-  return cache;
-}
-
-function saveCache(cache: StickerCache): void {
-  saveJsonFile(CACHE_FILE, cache);
-}
-
-/**
- * Get a cached sticker by its unique ID.
- */
-export function getCachedSticker(fileUniqueId: string): CachedSticker | null {
-  const cache = loadCache();
-  return cache.stickers[fileUniqueId] ?? null;
-}
-
-/**
- * Add or update a sticker in the cache.
- */
-export function cacheSticker(sticker: CachedSticker): void {
-  const cache = loadCache();
-  cache.stickers[sticker.fileUniqueId] = sticker;
-  saveCache(cache);
-}
-
-/**
- * Search cached stickers by text query (fuzzy match on description + emoji + setName).
- */
-export function searchStickers(query: string, limit = 10): CachedSticker[] {
-  const cache = loadCache();
-  const queryLower = query.toLowerCase();
-  const results: Array<{ sticker: CachedSticker; score: number }> = [];
-
-  for (const sticker of Object.values(cache.stickers)) {
-    let score = 0;
-    const descLower = sticker.description.toLowerCase();
-
-    // Exact substring match in description
-    if (descLower.includes(queryLower)) {
-      score += 10;
-    }
-
-    // Word-level matching
-    const queryWords = queryLower.split(/\s+/).filter(Boolean);
-    const descWords = descLower.split(/\s+/);
-    for (const qWord of queryWords) {
-      if (descWords.some((dWord) => dWord.includes(qWord))) {
-        score += 5;
-      }
-    }
-
-    // Emoji match
-    if (sticker.emoji && query.includes(sticker.emoji)) {
-      score += 8;
-    }
-
-    // Set name match
-    if (sticker.setName?.toLowerCase().includes(queryLower)) {
-      score += 3;
-    }
-
-    if (score > 0) {
-      results.push({ sticker, score });
-    }
-  }
-
-  return results
-    .toSorted((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((r) => r.sticker);
-}
-
-/**
- * Get all cached stickers (for debugging/listing).
- */
-export function getAllCachedStickers(): CachedSticker[] {
-  const cache = loadCache();
-  return Object.values(cache.stickers);
-}
-
-/**
- * Get cache statistics.
- */
-export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: string } {
-  const cache = loadCache();
-  const stickers = Object.values(cache.stickers);
-  if (stickers.length === 0) {
-    return { count: 0 };
-  }
-  const sorted = [...stickers].toSorted(
-    (a, b) => new Date(a.cachedAt).getTime() - new Date(b.cachedAt).getTime(),
-  );
-  return {
-    count: stickers.length,
-    oldestAt: sorted[0]?.cachedAt,
-    newestAt: sorted[sorted.length - 1]?.cachedAt,
-  };
-}
+  resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModel,
+} from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { getTelegramRuntime } from "./runtime.js";
+export {
+  cacheSticker,
+  getAllCachedStickers,
+  getCachedSticker,
+  getCacheStats,
+  searchStickers,
+  type CachedSticker,
+} from "./sticker-cache-store.js";
 
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
-let imageRuntimePromise: Promise<
-  typeof import("../../../src/media-understanding/providers/image-runtime.js")
-> | null = null;
-
-function loadImageRuntime() {
-  imageRuntimePromise ??= import("../../../src/media-understanding/providers/image-runtime.js");
-  return imageRuntimePromise;
-}
 
 export interface DescribeStickerParams {
   imagePath: string;
@@ -193,15 +65,25 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     }
   };
 
+  const autoProviders = resolveAutoMediaKeyProviders({
+    cfg,
+    capability: "image",
+  });
+
   const selectCatalogModel = (provider: string) => {
     const entries = catalog.filter(
       (entry) =>
-        entry.provider.toLowerCase() === provider.toLowerCase() && modelSupportsVision(entry),
+        normalizeLowercaseStringOrEmpty(entry.provider) ===
+          normalizeLowercaseStringOrEmpty(provider) && modelSupportsVision(entry),
     );
     if (entries.length === 0) {
       return undefined;
     }
-    const defaultId = DEFAULT_IMAGE_MODELS[provider];
+    const defaultId = resolveDefaultMediaModel({
+      cfg,
+      providerId: provider,
+      capability: "image",
+    });
     const preferred = entries.find((entry) => entry.id === defaultId);
     return preferred ?? entries[0];
   };
@@ -209,16 +91,14 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   let resolved = null as { provider: string; model?: string } | null;
   if (
     activeModel &&
-    AUTO_IMAGE_KEY_PROVIDERS.includes(
-      activeModel.provider as (typeof AUTO_IMAGE_KEY_PROVIDERS)[number],
-    ) &&
+    autoProviders.includes(activeModel.provider) &&
     (await hasProviderKey(activeModel.provider))
   ) {
     resolved = activeModel;
   }
 
   if (!resolved) {
-    for (const provider of AUTO_IMAGE_KEY_PROVIDERS) {
+    for (const provider of autoProviders) {
       if (!(await hasProviderKey(provider))) {
         continue;
       }
@@ -247,22 +127,18 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
-    const buffer = await fs.readFile(imagePath);
-    // Lazy import to avoid circular dependency
-    const { describeImageWithModel } = await loadImageRuntime();
-    const result = await describeImageWithModel({
-      buffer,
-      fileName: "sticker.webp",
+    const result = await getTelegramRuntime().mediaUnderstanding.describeImageFileWithModel({
+      filePath: imagePath,
       mime: "image/webp",
-      prompt: STICKER_DESCRIPTION_PROMPT,
       cfg,
-      agentDir: agentDir ?? "",
+      agentDir,
       provider,
       model,
+      prompt: STICKER_DESCRIPTION_PROMPT,
       maxTokens: 150,
-      timeoutMs: 30000,
+      timeoutMs: 30_000,
     });
-    return result.text;
+    return result.text ?? null;
   } catch (err) {
     logVerbose(`telegram: failed to describe sticker: ${String(err)}`);
     return null;

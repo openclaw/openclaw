@@ -1,3 +1,34 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
+export type {
+  AllowlistMatch,
+  AllowlistMatchSource,
+  CompiledAllowlist,
+} from "../channels/allowlist-match.js";
+export type { AllowlistUserResolutionLike } from "../channels/allowlists/resolve-utils.js";
+export {
+  compileAllowlist,
+  formatAllowlistMatchMeta,
+  resolveAllowlistCandidates,
+  resolveAllowlistMatchByCandidates,
+  resolveAllowlistMatchSimple,
+  resolveCompiledAllowlistMatch,
+} from "../channels/allowlist-match.js";
+export {
+  firstDefined,
+  isSenderIdAllowed,
+  mergeDmAllowFromSources,
+  resolveGroupAllowFromSources,
+} from "../channels/allow-from.js";
+export {
+  addAllowlistUserEntriesFromConfigEntry,
+  buildAllowlistResolutionSummary,
+  canonicalizeAllowlistWithResolvedIds,
+  mergeAllowlist,
+  patchAllowlistUsersInConfigEntries,
+  summarizeMapping,
+} from "../channels/allowlists/resolve-utils.js";
+
 /** Lowercase and optionally strip prefixes from allowlist entries before sender comparisons. */
 export function formatAllowFromLowercase(params: {
   allowFrom: Array<string | number>;
@@ -7,7 +38,8 @@ export function formatAllowFromLowercase(params: {
     .map((entry) => String(entry).trim())
     .filter(Boolean)
     .map((entry) => (params.stripPrefixRe ? entry.replace(params.stripPrefixRe, "") : entry))
-    .map((entry) => entry.toLowerCase());
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 /** Normalize allowlist entries through a channel-provided parser or canonicalizer. */
@@ -38,8 +70,8 @@ export function isNormalizedSenderAllowed(params: {
   if (normalizedAllow.includes("*")) {
     return true;
   }
-  const sender = String(params.senderId).trim().toLowerCase();
-  return normalizedAllow.includes(sender);
+  const sender = normalizeOptionalLowercaseString(String(params.senderId));
+  return sender ? normalizedAllow.includes(sender) : false;
 }
 
 type ParsedChatAllowTarget =
@@ -95,4 +127,37 @@ export function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>
     }
   }
   return false;
+}
+
+export type BasicAllowlistResolutionEntry = {
+  input: string;
+  resolved: boolean;
+  id?: string;
+  name?: string;
+  note?: string;
+};
+
+/** Clone allowlist resolution entries into a plain serializable shape for UI and docs output. */
+export function mapBasicAllowlistResolutionEntries(
+  entries: BasicAllowlistResolutionEntry[],
+): BasicAllowlistResolutionEntry[] {
+  return entries.map((entry) => ({
+    input: entry.input,
+    resolved: entry.resolved,
+    id: entry.id,
+    name: entry.name,
+    note: entry.note,
+  }));
+}
+
+/** Map allowlist inputs sequentially so resolver side effects stay ordered and predictable. */
+export async function mapAllowlistResolutionInputs<T>(params: {
+  inputs: string[];
+  mapInput: (input: string) => Promise<T> | T;
+}): Promise<T[]> {
+  const results: T[] = [];
+  for (const input of params.inputs) {
+    results.push(await params.mapInput(input));
+  }
+  return results;
 }

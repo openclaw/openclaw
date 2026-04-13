@@ -1,15 +1,19 @@
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
+import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   DEFAULT_ACCOUNT_ID,
-  hasConfiguredSecretInput,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/mattermost";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { resolveMattermostAccount, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
-import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
+} from "./runtime-api.js";
+import {
+  resolveMattermostAccount,
+  type ResolvedMattermostAccount,
+} from "./setup.accounts.runtime.js";
+import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
+import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
 
 const channel = "mattermost" as const;
 
@@ -36,20 +40,30 @@ export const mattermostSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ accountId, input }) => {
-    const token = input.botToken ?? input.token;
-    const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "Mattermost env vars can only be used for the default account.";
-    }
-    if (!input.useEnv && (!token || !baseUrl)) {
-      return "Mattermost requires --bot-token and --http-url (or --use-env).";
-    }
-    if (input.httpUrl && !baseUrl) {
-      return "Mattermost --http-url must include a valid base URL.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    defaultAccountOnlyEnvError: "Mattermost env vars can only be used for the default account.",
+    whenNotUseEnv: [
+      {
+        someOf: ["botToken", "token"],
+        message: "Mattermost requires --bot-token and --http-url (or --use-env).",
+      },
+      {
+        someOf: ["httpUrl"],
+        message: "Mattermost requires --bot-token and --http-url (or --use-env).",
+      },
+    ],
+    validate: ({ input }) => {
+      const token = input.botToken ?? input.token;
+      const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
+      if (!input.useEnv && (!token || !baseUrl)) {
+        return "Mattermost requires --bot-token and --http-url (or --use-env).";
+      }
+      if (input.httpUrl && !baseUrl) {
+        return "Mattermost --http-url must include a valid base URL.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const token = input.botToken ?? input.token;
     const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);

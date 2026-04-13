@@ -6,26 +6,37 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderXHighThinking: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
-  resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
-  resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
-}));
-import {
-  listThinkingLevelLabels,
-  listThinkingLevels,
-  normalizeReasoningLevel,
-  normalizeThinkLevel,
-  resolveThinkingDefaultForModel,
-} from "./thinking.js";
+let listThinkingLevelLabels: typeof import("./thinking.js").listThinkingLevelLabels;
+let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
+let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
+let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
+let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
 
-beforeEach(() => {
+async function loadFreshThinkingModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../plugins/provider-thinking.js", () => ({
+    resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
+    resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
+  }));
+  return await import("./thinking.js");
+}
+
+beforeEach(async () => {
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
   providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
+
+  ({
+    listThinkingLevelLabels,
+    listThinkingLevels,
+    normalizeReasoningLevel,
+    normalizeThinkLevel,
+    resolveThinkingDefaultForModel,
+  } = await loadFreshThinkingModuleForTest());
 });
 
 describe("normalizeThinkLevel", () => {
@@ -72,25 +83,23 @@ describe("listThinkingLevels", () => {
 
   it("includes xhigh for provider-advertised models", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      (provider === "openai" && ["gpt-5.2", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
+      (provider === "openai" && ["gpt-5.4", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
       (provider === "openai-codex" &&
-        ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"].includes(
-          context.modelId,
-        )) ||
-      (provider === "github-copilot" && ["gpt-5.2", "gpt-5.2-codex"].includes(context.modelId))
+        ["gpt-5.4", "gpt-5.4", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
+      (provider === "github-copilot" && ["gpt-5.4", "gpt-5.4"].includes(context.modelId))
         ? true
         : undefined,
     );
 
-    expect(listThinkingLevels("openai-codex", "gpt-5.2-codex")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.3-codex")).toContain("xhigh");
+    expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai-codex", "gpt-5.3-codex-spark")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.2")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
     expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("github-copilot", "gpt-5.2")).toContain("xhigh");
-    expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
+    expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
   });
 
   it("excludes xhigh for non-codex models", () => {
@@ -116,6 +125,11 @@ describe("listThinkingLevelLabels", () => {
     );
 
     expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
+  });
+
+  it("does not assume binary thinking without provider runtime", () => {
+    expect(listThinkingLevelLabels("zai", "glm-4.7")).toContain("low");
+    expect(listThinkingLevelLabels("zai", "glm-4.7")).not.toContain("on");
   });
 
   it("returns full levels for non-ZAI", () => {
@@ -155,6 +169,15 @@ describe("resolveThinkingDefaultForModel", () => {
     expect(
       resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
     ).toBe("adaptive");
+  });
+
+  it("does not assume adaptive defaults without provider runtime", () => {
+    expect(
+      resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
+    ).toBe("off");
+    expect(
+      resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
+    ).toBe("off");
   });
 
   it("defaults reasoning-capable catalog models to low", () => {

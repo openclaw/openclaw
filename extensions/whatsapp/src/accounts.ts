@@ -1,17 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  DmPolicy,
-  GroupPolicy,
-  OpenClawConfig,
-  WhatsAppAccountConfig,
-} from "openclaw/plugin-sdk/whatsapp";
-import { createAccountListHelpers } from "../../../src/channels/plugins/account-helpers.js";
-import { resolveOAuthDir } from "../../../src/config/paths.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { resolveUserPath } from "../../../src/utils.js";
-import { hasWebCredsSync } from "./auth-store.js";
+import {
+  createAccountListHelpers,
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveUserPath,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-core";
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
+import type { WhatsAppAccountConfig } from "./account-types.js";
+import { hasWebCredsSync } from "./creds-files.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
@@ -19,6 +20,7 @@ export type ResolvedWhatsAppAccount = {
   enabled: boolean;
   sendReadReceipts: boolean;
   messagePrefix?: string;
+  defaultTo?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
@@ -31,6 +33,7 @@ export type ResolvedWhatsAppAccount = {
   mediaMaxMb?: number;
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
+  reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
 };
@@ -71,13 +74,6 @@ export function hasAnyWhatsAppAuth(cfg: OpenClawConfig): boolean {
   return listWhatsAppAuthDirs(cfg).some((authDir) => hasWebCredsSync(authDir));
 }
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): WhatsAppAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.whatsapp?.accounts, accountId);
-}
-
 function resolveDefaultAuthDir(accountId: string): string {
   return path.join(resolveOAuthDir(), "whatsapp", normalizeAccountId(accountId));
 }
@@ -100,7 +96,7 @@ export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId:
   isLegacy: boolean;
 } {
   const accountId = params.accountId.trim() || DEFAULT_ACCOUNT_ID;
-  const account = resolveAccountConfig(params.cfg, accountId);
+  const account = resolveMergedWhatsAppAccountConfig({ cfg: params.cfg, accountId });
   const configured = account?.authDir?.trim();
   if (configured) {
     return { authDir: resolveUserPath(configured), isLegacy: false };
@@ -121,35 +117,38 @@ export function resolveWhatsAppAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedWhatsAppAccount {
-  const rootCfg = params.cfg.channels?.whatsapp;
-  const accountId = params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
-  const accountCfg = resolveAccountConfig(params.cfg, accountId);
-  const enabled = accountCfg?.enabled !== false;
+  const merged = resolveMergedWhatsAppAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg),
+  });
+  const accountId = merged.accountId;
+  const enabled = merged.enabled !== false;
   const { authDir, isLegacy } = resolveWhatsAppAuthDir({
     cfg: params.cfg,
     accountId,
   });
   return {
     accountId,
-    name: accountCfg?.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     enabled,
-    sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
-    messagePrefix:
-      accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    sendReadReceipts: merged.sendReadReceipts ?? true,
+    messagePrefix: merged.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    defaultTo: merged.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,
-    selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,
-    dmPolicy: accountCfg?.dmPolicy ?? rootCfg?.dmPolicy,
-    allowFrom: accountCfg?.allowFrom ?? rootCfg?.allowFrom,
-    groupAllowFrom: accountCfg?.groupAllowFrom ?? rootCfg?.groupAllowFrom,
-    groupPolicy: accountCfg?.groupPolicy ?? rootCfg?.groupPolicy,
-    textChunkLimit: accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit,
-    chunkMode: accountCfg?.chunkMode ?? rootCfg?.chunkMode,
-    mediaMaxMb: accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb,
-    blockStreaming: accountCfg?.blockStreaming ?? rootCfg?.blockStreaming,
-    ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
-    groups: accountCfg?.groups ?? rootCfg?.groups,
-    debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
+    selfChatMode: merged.selfChatMode,
+    dmPolicy: merged.dmPolicy,
+    allowFrom: merged.allowFrom,
+    groupAllowFrom: merged.groupAllowFrom,
+    groupPolicy: merged.groupPolicy,
+    textChunkLimit: merged.textChunkLimit,
+    chunkMode: merged.chunkMode,
+    mediaMaxMb: merged.mediaMaxMb,
+    blockStreaming: merged.blockStreaming,
+    ackReaction: merged.ackReaction,
+    reactionLevel: merged.reactionLevel,
+    groups: merged.groups,
+    debounceMs: merged.debounceMs,
   };
 }
 

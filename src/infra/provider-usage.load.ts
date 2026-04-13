@@ -15,6 +15,21 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+async function fetchProviderUsageSnapshotFallback(params: {
+  auth: ProviderAuth;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+}): Promise<ProviderUsageSnapshot> {
+  void params.timeoutMs;
+  void params.fetchFn;
+  return {
+    provider: params.auth.provider,
+    displayName: PROVIDER_LABELS[params.auth.provider] ?? params.auth.provider,
+    windows: [],
+    error: "Unsupported provider",
+  };
+}
+
 type UsageSummaryOptions = {
   now?: number;
   timeoutMs?: number;
@@ -56,12 +71,11 @@ async function fetchProviderUsageSnapshot(params: {
   if (pluginSnapshot) {
     return pluginSnapshot;
   }
-  return {
-    provider: params.auth.provider,
-    displayName: PROVIDER_LABELS[params.auth.provider],
-    windows: [],
-    error: "Unsupported provider",
-  };
+  return await fetchProviderUsageSnapshotFallback({
+    auth: params.auth,
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+  });
 }
 
 export async function loadProviderUsageSummary(
@@ -80,6 +94,8 @@ export async function loadProviderUsageSummary(
     providers: opts.providers ?? usageProviders,
     auth: opts.auth,
     agentDir: opts.agentDir,
+    config,
+    env,
   });
   if (auths.length === 0) {
     return { updatedAt: now, providers: [] };

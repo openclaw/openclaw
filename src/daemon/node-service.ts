@@ -45,6 +45,9 @@ export function resolveNodeService(): GatewayService {
   const base = resolveGatewayService();
   return {
     ...base,
+    stage: async (args) => {
+      return base.stage(withNodeInstallEnv(args));
+    },
     install: async (args) => {
       return base.install(withNodeInstallEnv(args));
     },

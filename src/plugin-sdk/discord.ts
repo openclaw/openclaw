@@ -1,28 +1,16 @@
-export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
-export type { OpenClawConfig } from "../config/config.js";
-export type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
-export * from "./channel-plugin-common.js";
+// Manual facade. Keep loader boundary explicit.
+type FacadeModule = typeof import("@openclaw/discord/contract-api.js");
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
-export {
-  projectCredentialSnapshotFields,
-  resolveConfiguredFromCredentialStatuses,
-} from "../channels/account-snapshot-fields.js";
-export {
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
+function loadFacadeModule(): FacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+    dirName: "discord",
+    artifactBasename: "contract-api.js",
+  });
+}
 
-export {
-  resolveDefaultGroupPolicy,
-  resolveOpenProviderRuntimeGroupPolicy,
-} from "../config/runtime-group-policy.js";
-export {
-  resolveDiscordGroupRequireMention,
-  resolveDiscordGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
-export { DiscordConfigSchema } from "../config/zod-schema.providers-core.js";
-
-export {
-  buildComputedAccountStatusSnapshot,
-  buildTokenChannelStatusSummary,
-} from "./status-helpers.js";
+export const collectDiscordSecurityAuditFindings: FacadeModule["collectDiscordSecurityAuditFindings"] =
+  ((...args) =>
+    loadFacadeModule().collectDiscordSecurityAuditFindings(
+      ...args,
+    )) as FacadeModule["collectDiscordSecurityAuditFindings"];

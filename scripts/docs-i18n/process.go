@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,37 +12,37 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, error) {
+func processFile(ctx context.Context, translator docsTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	frontMatter, body := splitFrontMatter(string(content))
 	frontData := map[string]any{}
 	if frontMatter != "" {
 		if err := yaml.Unmarshal([]byte(frontMatter), &frontData); err != nil {
-			return false, fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
+			return false, "", fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
 		}
 	}
 
 	if err := translateFrontMatter(ctx, translator, tm, frontData, relPath, srcLang, tgtLang); err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	body, err = translateHTMLBlocks(ctx, translator, body, srcLang, tgtLang)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	segments, err := extractSegments(body, relPath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	namespace := cacheNamespace()
@@ -54,7 +55,7 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 		}
 		translated, err := translator.Translate(ctx, seg.Text, srcLang, tgtLang)
 		if err != nil {
-			return false, fmt.Errorf("translate failed (%s): %w", relPath, err)
+			return false, "", fmt.Errorf("translate failed (%s): %w", relPath, err)
 		}
 		seg.Translated = translated
 		entry := TMEntry{
@@ -76,16 +77,16 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 	translatedBody := applyTranslations(body, segments)
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	outputPath := filepath.Join(docsRoot, tgtLang, relPath)
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	output := updatedFront + translatedBody
-	return false, os.WriteFile(outputPath, []byte(output), 0o644)
+	return false, outputPath, os.WriteFile(outputPath, []byte(output), 0o644)
 }
 
 func splitFrontMatter(content string) (string, string) {
@@ -133,21 +134,33 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 	return fmt.Sprintf("---\n%s---\n\n", string(encoded)), nil
 }
 
-func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, data map[string]any, relPath, srcLang, tgtLang string) error {
+func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *TranslationMemory, data map[string]any, relPath, srcLang, tgtLang string) error {
 	if len(data) == 0 {
 		return nil
 	}
 	if summary, ok := data["summary"].(string); ok {
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter start %s field=summary bytes=%d", relPath, len(summary))
+		}
 		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:summary", summary, srcLang, tgtLang)
 		if err != nil {
 			return err
 		}
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter done %s field=summary out_bytes=%d", relPath, len(translated))
+		}
 		data["summary"] = translated
 	}
 	if title, ok := data["title"].(string); ok {
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter start %s field=title bytes=%d", relPath, len(title))
+		}
 		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:title", title, srcLang, tgtLang)
 		if err != nil {
 			return err
+		}
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter done %s field=title out_bytes=%d", relPath, len(translated))
 		}
 		data["title"] = translated
 	}
@@ -159,9 +172,15 @@ func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *Tra
 				translated = append(translated, item)
 				continue
 			}
+			if docsI18nVerboseLogs() {
+				log.Printf("docs-i18n: frontmatter start %s field=read_when[%d] bytes=%d", relPath, idx, len(textValue))
+			}
 			value, err := translateSnippet(ctx, translator, tm, fmt.Sprintf("%s:frontmatter:read_when:%d", relPath, idx), textValue, srcLang, tgtLang)
 			if err != nil {
 				return err
+			}
+			if docsI18nVerboseLogs() {
+				log.Printf("docs-i18n: frontmatter done %s field=read_when[%d] out_bytes=%d", relPath, idx, len(value))
 			}
 			translated = append(translated, value)
 		}
@@ -170,7 +189,20 @@ func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *Tra
 	return nil
 }
 
-func translateSnippet(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {
+func docsI18nVerboseLogs() bool {
+	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_VERBOSE_LOGS"))
+	if value == "" {
+		return false
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on", "debug", "verbose":
+		return true
+	default:
+		return false
+	}
+}
+
+func translateSnippet(ctx context.Context, translator docsTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {
 	if strings.TrimSpace(textValue) == "" {
 		return textValue, nil
 	}
@@ -183,6 +215,12 @@ func translateSnippet(ctx context.Context, translator *PiTranslator, tm *Transla
 	translated, err := translator.Translate(ctx, textValue, srcLang, tgtLang)
 	if err != nil {
 		return "", err
+	}
+	shouldCache := true
+	if validationErr := validateFrontmatterScalarTranslation(textValue, translated); validationErr != nil {
+		log.Printf("docs-i18n: frontmatter fallback %s reason=%v", segmentID, validationErr)
+		translated = textValue
+		shouldCache = false
 	}
 	entry := TMEntry{
 		CacheKey:   ck,
@@ -197,6 +235,45 @@ func translateSnippet(ctx context.Context, translator *PiTranslator, tm *Transla
 		TgtLang:    tgtLang,
 		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
-	tm.Put(entry)
+	if shouldCache {
+		tm.Put(entry)
+	}
 	return translated, nil
+}
+
+func validateFrontmatterScalarTranslation(source, translated string) error {
+	trimmed := strings.TrimSpace(translated)
+	if trimmed == "" {
+		return fmt.Errorf("empty translation")
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "<frontmatter>") || strings.Contains(lower, "</frontmatter>") || strings.Contains(lower, "<body>") || strings.Contains(lower, "</body>") {
+		return fmt.Errorf("tagged document wrapper detected")
+	}
+	if strings.Contains(trimmed, "[[[FM_") {
+		return fmt.Errorf("frontmatter marker leaked into scalar translation")
+	}
+	if strings.Contains(trimmed, "\n---\n") || strings.HasPrefix(trimmed, "---\n") {
+		return fmt.Errorf("yaml document boundary detected")
+	}
+	if !strings.Contains(source, "\n") && strings.Count(trimmed, "\n") >= 3 {
+		return fmt.Errorf("unexpected multiline expansion")
+	}
+	sourceLen := len(strings.TrimSpace(source))
+	translatedLen := len(trimmed)
+	if sourceLen > 0 {
+		limit := sourceLen*8 + 256
+		if limit < 512 {
+			limit = 512
+		}
+		if translatedLen > limit {
+			return fmt.Errorf("unexpected size expansion source=%d translated=%d", sourceLen, translatedLen)
+		}
+	}
+	for _, key := range []string{"title:", "summary:", "read_when:"} {
+		if strings.Contains(lower, "\n"+key) || strings.HasPrefix(lower, key) {
+			return fmt.Errorf("frontmatter key leaked into scalar translation")
+		}
+	}
+	return nil
 }

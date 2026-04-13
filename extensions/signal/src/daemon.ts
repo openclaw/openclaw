@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 export type SignalDaemonOpts = {
   cliPath: string;
@@ -27,7 +27,7 @@ export type SignalDaemonExitEvent = {
 };
 
 export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
-  return `signal daemon exited (source=${exit.source} code=${String(exit.code ?? "null")} signal=${String(exit.signal ?? "null")})`;
+  return `signal daemon exited (source=${exit.source} code=${exit.code ?? "null"} signal=${exit.signal ?? "null"})`;
 }
 
 export function classifySignalCliLogLine(line: string): "log" | "error" | null {

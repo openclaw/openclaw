@@ -1,72 +1,36 @@
+import { exec } from "node:child_process";
 import {
+  createTopLevelChannelAllowFromSetter,
+  createTopLevelChannelDmPolicy,
+  createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  setTopLevelChannelGroupPolicy,
   splitSetupEntries,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DmPolicy, MSTeamsTeamConfig } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type OpenClawConfig,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import type { MSTeamsTeamConfig } from "../runtime-api.js";
+import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { normalizeSecretInputString } from "./secret-input.js";
-import { msteamsSetupAdapter } from "./setup-core.js";
-import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
+import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const channel = "msteams" as const;
-
-function setMSTeamsDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
-  return setTopLevelChannelDmPolicyWithAllowFrom({
-    cfg,
-    channel,
-    dmPolicy,
-  });
-}
-
-function setMSTeamsAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
-  return setTopLevelChannelAllowFrom({
-    cfg,
-    channel,
-    allowFrom,
-  });
-}
+const setMSTeamsAllowFrom = createTopLevelChannelAllowFromSetter({
+  channel,
+});
+const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
+  channel,
+  enabled: true,
+});
 
 function looksLikeGuid(value: string): boolean {
   return /^[0-9a-fA-F-]{16,}$/.test(value);
-}
-
-async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
-  appId: string;
-  appPassword: string;
-  tenantId: string;
-}> {
-  const appId = String(
-    await prompter.text({
-      message: "Enter MS Teams App ID",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  const appPassword = String(
-    await prompter.text({
-      message: "Enter MS Teams App Password",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  const tenantId = String(
-    await prompter.text({
-      message: "Enter MS Teams Tenant ID",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  return { appId, appPassword, tenantId };
 }
 
 async function promptMSTeamsAllowFrom(params: {
@@ -90,10 +54,10 @@ async function promptMSTeamsAllowFrom(params: {
     const entry = await params.prompter.text({
       message: "MS Teams allowFrom (usernames or ids)",
       placeholder: "alex@example.com, Alex Johnson",
-      initialValue: existing[0] ? String(existing[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      initialValue: existing[0] ? existing[0] : undefined,
+      validate: (value) => (value.trim() ? undefined : "Required"),
     });
-    const parts = splitSetupEntries(String(entry));
+    const parts = splitSetupEntries(entry);
     if (parts.length === 0) {
       await params.prompter.note("Enter at least one user.", "MS Teams allowlist");
       continue;
@@ -130,31 +94,6 @@ async function promptMSTeamsAllowFrom(params: {
     const unique = mergeAllowFromEntries(existing, ids);
     return setMSTeamsAllowFrom(params.cfg, unique);
   }
-}
-
-async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void> {
-  await prompter.note(
-    [
-      "1) Azure Bot registration -> get App ID + Tenant ID",
-      "2) Add a client secret (App Password)",
-      "3) Set webhook URL + messaging endpoint",
-      "Tip: you can also set MSTEAMS_APP_ID / MSTEAMS_APP_PASSWORD / MSTEAMS_TENANT_ID.",
-      `Docs: ${formatDocsLink("/channels/msteams", "msteams")}`,
-    ].join("\n"),
-    "MS Teams credentials",
-  );
-}
-
-function setMSTeamsGroupPolicy(
-  cfg: OpenClawConfig,
-  groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
-  return setTopLevelChannelGroupPolicy({
-    cfg,
-    channel,
-    groupPolicy,
-    enabled: true,
-  });
 }
 
 function setMSTeamsTeamsAllowlist(
@@ -260,7 +199,7 @@ async function resolveMSTeamsGroupAllowlist(params: {
     return resolvedEntries;
   } catch (err) {
     await params.prompter.note(
-      `Channel lookup failed; keeping entries as typed. ${String(err)}`,
+      `Channel lookup failed; keeping entries as typed. ${formatUnknownError(err)}`,
       "MS Teams channels",
     );
     return resolvedEntries;
@@ -280,106 +219,85 @@ const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
     setMSTeamsTeamsAllowlist(cfg, resolved as Array<{ teamKey: string; channelKey?: string }>),
 };
 
-const msteamsDmPolicy: ChannelSetupDmPolicy = {
+const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   label: "MS Teams",
   channel,
   policyKey: "channels.msteams.dmPolicy",
   allowFromKey: "channels.msteams.allowFrom",
   getCurrent: (cfg) => cfg.channels?.msteams?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) => setMSTeamsDmPolicy(cfg, policy),
   promptAllowFrom: promptMSTeamsAllowFrom,
-};
+});
 
 export { msteamsSetupAdapter } from "./setup-core.js";
 
+const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
+
 export const msteamsSetupWizard: ChannelSetupWizard = {
-  channel,
-  resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
-  resolveShouldPromptAccountIds: () => false,
-  status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs app credentials",
-    configuredHint: "configured",
-    unconfiguredHint: "needs app creds",
-    configuredScore: 2,
-    unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) => {
-      return (
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams)
-      );
-    },
-    resolveStatusLines: ({ cfg }) => {
-      const configured =
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
-      return [`MS Teams: ${configured ? "configured" : "needs app credentials"}`];
-    },
-  },
-  credentials: [],
-  finalize: async ({ cfg, prompter }) => {
-    const resolved = resolveMSTeamsCredentials(cfg.channels?.msteams);
-    const hasConfigCreds = hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
-    const canUseEnv = Boolean(
-      !hasConfigCreds &&
-      normalizeSecretInputString(process.env.MSTEAMS_APP_ID) &&
-      normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD) &&
-      normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID),
-    );
-
-    let next = cfg;
-    let appId: string | null = null;
-    let appPassword: string | null = null;
-    let tenantId: string | null = null;
-
-    if (!resolved && !hasConfigCreds) {
-      await noteMSTeamsCredentialHelp(prompter);
-    }
-
-    if (canUseEnv) {
-      const keepEnv = await prompter.confirm({
-        message:
-          "MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID detected. Use env vars?",
-        initialValue: true,
+  ...msteamsSetupWizardBase,
+  // Override finalize to layer on the optional delegated-auth bootstrap after
+  // the base wizard collects app credentials. This preserves main's shared
+  // setup-core flow while keeping the delegated OAuth step from this PR.
+  finalize: async (params) => {
+    // setup-core always provides a finalize; the type is optional only because
+    // ChannelSetupWizard.finalize is generally optional. Fall back to the
+    // incoming cfg if the base ever returns void for forward-compat.
+    const baseFinalize = msteamsSetupWizardBase.finalize;
+    const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
+    let next = baseResult?.cfg ?? params.cfg;
+    const finalCreds = resolveMSTeamsCredentials(next.channels?.msteams);
+    if (finalCreds?.type === "secret") {
+      const enableDelegated = await params.prompter.confirm({
+        message: "Enable delegated auth? (required for reactions and write operations)",
+        initialValue: false,
       });
-      if (keepEnv) {
-        next = msteamsSetupAdapter.applyAccountConfig({
-          cfg: next,
-          accountId: DEFAULT_ACCOUNT_ID,
-          input: {},
-        });
-      } else {
-        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-      }
-    } else if (hasConfigCreds) {
-      const keep = await prompter.confirm({
-        message: "MS Teams credentials already configured. Keep them?",
-        initialValue: true,
-      });
-      if (!keep) {
-        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-      }
-    } else {
-      ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-    }
-
-    if (appId && appPassword && tenantId) {
-      next = {
-        ...next,
-        channels: {
-          ...next.channels,
-          msteams: {
-            ...next.channels?.msteams,
-            enabled: true,
-            appId,
-            appPassword,
-            tenantId,
+      if (enableDelegated) {
+        next = {
+          ...next,
+          channels: {
+            ...next.channels,
+            msteams: {
+              ...next.channels?.msteams,
+              delegatedAuth: { enabled: true },
+            },
           },
-        },
-      };
+        };
+        try {
+          const { loginMSTeamsDelegated } = await import("./oauth.js");
+          const { saveDelegatedTokens } = await import("./token.js");
+          const { shouldUseManualOAuthFlow } = await import("./oauth.flow.js");
+          const isRemote = Boolean(process.env.SSH_TTY || process.env.SSH_CONNECTION);
+          const progress = params.prompter.progress("MSTeams Delegated OAuth");
+          const tokens = await loginMSTeamsDelegated(
+            {
+              isRemote: shouldUseManualOAuthFlow(isRemote),
+              openUrl: (url) =>
+                new Promise<void>((resolve, reject) => {
+                  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+                  exec(`${cmd} ${JSON.stringify(url)}`, (err) => (err ? reject(err) : resolve()));
+                }),
+              log: (msg) => params.prompter.note(msg),
+              note: (msg, title) => params.prompter.note(msg, title),
+              prompt: (msg) => params.prompter.text({ message: msg }),
+              progress,
+            },
+            {
+              tenantId: finalCreds.tenantId,
+              clientId: finalCreds.appId,
+              clientSecret: finalCreds.appPassword,
+            },
+          );
+          saveDelegatedTokens(tokens);
+          progress.stop("Delegated auth configured");
+        } catch (err) {
+          await params.prompter.note(
+            `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
+              "You can retry later via the setup wizard.",
+            "MS Teams delegated auth",
+          );
+        }
+      }
     }
-
-    return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };
+    return { ...baseResult, cfg: next };
   },
   dmPolicy: msteamsDmPolicy,
   groupAccess: msteamsGroupAccess,

@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   checkDepsStatus,
   checkUpdateStatus,
   compareSemverStrings,
   fetchNpmLatestVersion,
+  fetchNpmPackageTargetStatus,
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveNpmChannelTag,
@@ -47,7 +48,10 @@ describe("resolveNpmChannelTag", () => {
         return {
           ok: version != null,
           status: version != null ? 200 : 404,
-          json: async () => ({ version }),
+          json: async () => ({
+            version,
+            engines: version != null ? { node: ">=22.14.0" } : undefined,
+          }),
         } as Response;
       }),
     );
@@ -96,6 +100,13 @@ describe("resolveNpmChannelTag", () => {
   it("exposes tag fetch helpers for success and http failures", async () => {
     versionByTag.latest = "1.0.4";
 
+    await expect(
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: "1.0.4",
+      nodeEngine: ">=22.14.0",
+    });
     await expect(fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000 })).resolves.toEqual({
       tag: "latest",
       version: "1.0.4",
@@ -164,42 +175,42 @@ describe("formatGitInstallLabel", () => {
 
 describe("checkDepsStatus", () => {
   it("reports unknown, missing, stale, and ok states from lockfile markers", async () => {
-    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
+    await withTempDir({ prefix: "openclaw-update-check-" }, async (base) => {
+      await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
+        manager: "unknown",
+        status: "unknown",
+        lockfilePath: null,
+        markerPath: null,
+        reason: "unknown package manager",
+      });
 
-    await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
-      manager: "unknown",
-      status: "unknown",
-      lockfilePath: null,
-      markerPath: null,
-      reason: "unknown package manager",
-    });
+      await fs.writeFile(path.join(base, "pnpm-lock.yaml"), "lock", "utf8");
+      await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
+        manager: "pnpm",
+        status: "missing",
+        reason: "node_modules marker missing",
+      });
 
-    await fs.writeFile(path.join(base, "pnpm-lock.yaml"), "lock", "utf8");
-    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-      manager: "pnpm",
-      status: "missing",
-      reason: "node_modules marker missing",
-    });
+      const markerPath = path.join(base, "node_modules", ".modules.yaml");
+      await fs.mkdir(path.dirname(markerPath), { recursive: true });
+      await fs.writeFile(markerPath, "marker", "utf8");
+      const staleDate = new Date(Date.now() - 10_000);
+      const freshDate = new Date();
+      await fs.utimes(markerPath, staleDate, staleDate);
+      await fs.utimes(path.join(base, "pnpm-lock.yaml"), freshDate, freshDate);
 
-    const markerPath = path.join(base, "node_modules", ".modules.yaml");
-    await fs.mkdir(path.dirname(markerPath), { recursive: true });
-    await fs.writeFile(markerPath, "marker", "utf8");
-    const staleDate = new Date(Date.now() - 10_000);
-    const freshDate = new Date();
-    await fs.utimes(markerPath, staleDate, staleDate);
-    await fs.utimes(path.join(base, "pnpm-lock.yaml"), freshDate, freshDate);
+      await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
+        manager: "pnpm",
+        status: "stale",
+        reason: "lockfile newer than install marker",
+      });
 
-    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-      manager: "pnpm",
-      status: "stale",
-      reason: "lockfile newer than install marker",
-    });
-
-    const newerMarker = new Date(Date.now() + 2_000);
-    await fs.utimes(markerPath, newerMarker, newerMarker);
-    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-      manager: "pnpm",
-      status: "ok",
+      const newerMarker = new Date(Date.now() + 2_000);
+      await fs.utimes(markerPath, newerMarker, newerMarker);
+      await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
+        manager: "pnpm",
+        status: "ok",
+      });
     });
   });
 });
@@ -217,26 +228,27 @@ describe("checkUpdateStatus", () => {
   });
 
   it("detects package installs for non-git roots", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ packageManager: "npm@10.0.0" }),
-      "utf8",
-    );
-    await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
-    await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+    await withTempDir({ prefix: "openclaw-update-check-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ packageManager: "npm@10.0.0" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
 
-    await expect(
-      checkUpdateStatus({ root, includeRegistry: false, fetchGit: false, timeoutMs: 1000 }),
-    ).resolves.toMatchObject({
-      root,
-      installKind: "package",
-      packageManager: "npm",
-      git: undefined,
-      registry: undefined,
-      deps: {
-        manager: "npm",
-      },
+      await expect(
+        checkUpdateStatus({ root, includeRegistry: false, fetchGit: false, timeoutMs: 1000 }),
+      ).resolves.toMatchObject({
+        root,
+        installKind: "package",
+        packageManager: "npm",
+        git: undefined,
+        registry: undefined,
+        deps: {
+          manager: "npm",
+        },
+      });
     });
   });
 });

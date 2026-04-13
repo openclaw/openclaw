@@ -1,21 +1,39 @@
 import {
-  resolvePayloadMediaUrls,
-  sendPayloadMediaSequence,
-  sendTextMediaPayload,
-} from "../../../src/channels/plugins/outbound/direct-text-media.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import type { OutboundIdentity } from "../../../src/infra/outbound/identity.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+  attachChannelToResult,
+  type ChannelOutboundAdapter,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import {
   resolveInteractiveTextFallback,
   type InteractiveReply,
-} from "../../../src/interactive/payload.js";
-import { getGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
+} from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundIdentity,
+} from "openclaw/plugin-sdk/outbound-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequenceAndFinalize,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
-import { sendMessageSlack, type SlackSendIdentity } from "./send.js";
+import { compileSlackInteractiveReplies } from "./interactive-replies.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
+import type { SlackSendIdentity } from "./send.js";
 
 const SLACK_MAX_BLOCKS = 50;
+type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
+
+let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undefined;
+
+async function loadSlackSendRuntime() {
+  slackSendRuntimePromise ??= import("./send.runtime.js");
+  return await slackSendRuntimePromise;
+}
 
 function resolveRenderedInteractiveBlocks(
   interactive?: InteractiveReply,
@@ -31,9 +49,9 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   if (!identity) {
     return undefined;
   }
-  const username = identity.name?.trim() || undefined;
-  const iconUrl = identity.avatarUrl?.trim() || undefined;
-  const rawEmoji = identity.emoji?.trim();
+  const username = normalizeOptionalString(identity.name);
+  const iconUrl = normalizeOptionalString(identity.avatarUrl);
+  const rawEmoji = normalizeOptionalString(identity.emoji);
   const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;
@@ -42,6 +60,7 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
 }
 
 async function applySlackMessageSendingHooks(params: {
+  cfg: NonNullable<NonNullable<Parameters<SlackSendFn>[2]>["cfg"]>;
   to: string;
   text: string;
   threadTs?: string;
@@ -52,6 +71,10 @@ async function applySlackMessageSendingHooks(params: {
   if (!hookRunner?.hasHooks("message_sending")) {
     return { cancelled: false, text: params.text };
   }
+  const account = resolveSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const hookResult = await hookRunner.runMessageSending(
     {
       to: params.to,
@@ -62,7 +85,7 @@ async function applySlackMessageSendingHooks(params: {
         ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
       },
     },
-    { channelId: "slack", accountId: params.accountId ?? undefined },
+    { channelId: "slack", accountId: account.accountId },
   );
   if (hookResult?.cancel) {
     return { cancelled: true, text: params.text };
@@ -71,12 +94,17 @@ async function applySlackMessageSendingHooks(params: {
 }
 
 async function sendSlackOutboundMessage(params: {
-  cfg: NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"];
+  cfg: NonNullable<NonNullable<Parameters<SlackSendFn>[2]>["cfg"]>;
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
-  blocks?: NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  blocks?: NonNullable<Parameters<SlackSendFn>[2]>["blocks"];
   accountId?: string | null;
   deps?: { [channelId: string]: unknown } | null;
   replyToId?: string | null;
@@ -84,10 +112,12 @@ async function sendSlackOutboundMessage(params: {
   identity?: OutboundIdentity;
 }) {
   const send =
-    resolveOutboundSendDep<typeof sendMessageSlack>(params.deps, "slack") ?? sendMessageSlack;
+    resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
+    (await loadSlackSendRuntime()).sendMessageSlack;
   const threadTs =
     params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined);
   const hookResult = await applySlackMessageSendingHooks({
+    cfg: params.cfg,
     to: params.to,
     text: params.text,
     threadTs,
@@ -96,7 +126,6 @@ async function sendSlackOutboundMessage(params: {
   });
   if (hookResult.cancelled) {
     return {
-      channel: "slack" as const,
       messageId: "cancelled-by-hook",
       channelId: params.to,
       meta: { cancelled: true },
@@ -109,12 +138,17 @@ async function sendSlackOutboundMessage(params: {
     threadTs,
     accountId: params.accountId ?? undefined,
     ...(params.mediaUrl
-      ? { mediaUrl: params.mediaUrl, mediaLocalRoots: params.mediaLocalRoots }
+      ? {
+          mediaUrl: params.mediaUrl,
+          mediaAccess: params.mediaAccess,
+          mediaLocalRoots: params.mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
+        }
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
   });
-  return { channel: "slack" as const, ...result };
+  return result;
 }
 
 function resolveSlackBlocks(payload: {
@@ -144,7 +178,8 @@ function resolveSlackBlocks(payload: {
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
-  textChunkLimit: 4000,
+  textChunkLimit: SLACK_TEXT_LIMIT,
+  normalizePayload: ({ payload }) => compileSlackInteractiveReplies(payload),
   sendPayload: async (ctx) => {
     const payload = {
       ...ctx.payload,
@@ -166,85 +201,84 @@ export const slackOutbound: ChannelOutboundAdapter = {
       });
     }
     const mediaUrls = resolvePayloadMediaUrls(payload);
-    if (mediaUrls.length === 0) {
-      return await sendSlackOutboundMessage({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        text: payload.text ?? "",
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        blocks,
-        accountId: ctx.accountId,
-        deps: ctx.deps,
-        replyToId: ctx.replyToId,
-        threadId: ctx.threadId,
-        identity: ctx.identity,
-      });
-    }
-    await sendPayloadMediaSequence({
-      text: "",
-      mediaUrls,
-      send: async ({ text, mediaUrl }) =>
-        await sendSlackOutboundMessage({
-          cfg: ctx.cfg,
-          to: ctx.to,
-          text,
-          mediaUrl,
-          mediaLocalRoots: ctx.mediaLocalRoots,
-          accountId: ctx.accountId,
-          deps: ctx.deps,
-          replyToId: ctx.replyToId,
-          threadId: ctx.threadId,
-          identity: ctx.identity,
-        }),
-    });
-    return await sendSlackOutboundMessage({
-      cfg: ctx.cfg,
-      to: ctx.to,
-      text: payload.text ?? "",
-      mediaLocalRoots: ctx.mediaLocalRoots,
-      blocks,
-      accountId: ctx.accountId,
-      deps: ctx.deps,
-      replyToId: ctx.replyToId,
-      threadId: ctx.threadId,
-      identity: ctx.identity,
-    });
+    return attachChannelToResult(
+      "slack",
+      await sendPayloadMediaSequenceAndFinalize({
+        text: "",
+        mediaUrls,
+        send: async ({ text, mediaUrl }) =>
+          await sendSlackOutboundMessage({
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text,
+            mediaUrl,
+            mediaAccess: ctx.mediaAccess,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
+            accountId: ctx.accountId,
+            deps: ctx.deps,
+            replyToId: ctx.replyToId,
+            threadId: ctx.threadId,
+            identity: ctx.identity,
+          }),
+        finalize: async () =>
+          await sendSlackOutboundMessage({
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text: payload.text ?? "",
+            mediaAccess: ctx.mediaAccess,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
+            blocks,
+            accountId: ctx.accountId,
+            deps: ctx.deps,
+            replyToId: ctx.replyToId,
+            threadId: ctx.threadId,
+            identity: ctx.identity,
+          }),
+      }),
+    );
   },
-  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) => {
-    return await sendSlackOutboundMessage({
-      cfg,
-      to,
-      text,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      identity,
-    });
-  },
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    mediaLocalRoots,
-    accountId,
-    deps,
-    replyToId,
-    threadId,
-    identity,
-  }) => {
-    return await sendSlackOutboundMessage({
+  ...createAttachedChannelResultAdapter({
+    channel: "slack",
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) =>
+      await sendSlackOutboundMessage({
+        cfg,
+        to,
+        text,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        identity,
+      }),
+    sendMedia: async ({
       cfg,
       to,
       text,
       mediaUrl,
+      mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       deps,
       replyToId,
       threadId,
       identity,
-    });
-  },
+    }) =>
+      await sendSlackOutboundMessage({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        mediaAccess,
+        mediaLocalRoots,
+        mediaReadFile,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        identity,
+      }),
+  }),
 };

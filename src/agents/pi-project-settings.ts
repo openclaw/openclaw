@@ -1,13 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SettingsManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
+import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import { applyPiCompactionSettingsFromConfig } from "./pi-settings.js";
 
 const log = createSubsystemLogger("embedded-pi-settings");
@@ -17,7 +22,9 @@ export const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as 
 
 export type EmbeddedPiProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
-type PiSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]>;
+type PiSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]> & {
+  mcpServers?: Record<string, BundleMcpServerConfig>;
+};
 
 function sanitizePiSettingsSnapshot(settings: PiSettingsSnapshot): PiSettingsSnapshot {
   const sanitized = { ...settings };
@@ -86,13 +93,13 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
     if (record.format !== "bundle" || settingsFiles.length === 0) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
     for (const relativePath of settingsFiles) {
@@ -105,6 +112,19 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
       }
       snapshot = applyMergePatch(snapshot, bundleSettings) as PiSettingsSnapshot;
     }
+  }
+
+  const embeddedPiMcp = loadEmbeddedPiMcpConfig({
+    workspaceDir,
+    cfg: params.cfg,
+  });
+  for (const diagnostic of embeddedPiMcp.diagnostics) {
+    log.warn(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
+  }
+  if (Object.keys(embeddedPiMcp.mcpServers).length > 0) {
+    snapshot = applyMergePatch(snapshot, {
+      mcpServers: embeddedPiMcp.mcpServers,
+    }) as PiSettingsSnapshot;
   }
 
   return snapshot;

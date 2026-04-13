@@ -1,13 +1,15 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { generateSecureInt } from "../../infra/secure-random.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-export type ReplyDispatchKind = "tool" | "block" | "final";
+export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
 
@@ -37,13 +39,13 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   if (max <= min) {
     return min;
   }
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return min + generateSecureInt(max - min + 1);
 }
 
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
-  enableSlackInteractiveReplies?: boolean;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
   /** Dynamic context provider for response prefix template interpolation.
@@ -74,22 +76,13 @@ type ReplyDispatcherWithTypingResult = {
   markRunComplete: () => void;
 };
 
-export type ReplyDispatcher = {
-  sendToolResult: (payload: ReplyPayload) => boolean;
-  sendBlockReply: (payload: ReplyPayload) => boolean;
-  sendFinalReply: (payload: ReplyPayload) => boolean;
-  waitForIdle: () => Promise<void>;
-  getQueuedCounts: () => Record<ReplyDispatchKind, number>;
-  markComplete: () => void;
-};
-
 type NormalizeReplyPayloadInternalOptions = Pick<
   ReplyDispatcherOptions,
   | "responsePrefix"
-  | "enableSlackInteractiveReplies"
   | "responsePrefixContext"
   | "responsePrefixContextProvider"
   | "onHeartbeatStrip"
+  | "transformReplyPayload"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -103,9 +96,9 @@ function normalizeReplyPayloadInternal(
 
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
-    enableSlackInteractiveReplies: opts.enableSlackInteractiveReplies,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
+    transformReplyPayload: opts.transformReplyPayload,
     onSkip: opts.onSkip,
   });
 }
@@ -125,6 +118,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const failedCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -135,9 +133,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
-      enableSlackInteractiveReplies: options.enableSlackInteractiveReplies,
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
+      transformReplyPayload: options.transformReplyPayload,
       onHeartbeatStrip: options.onHeartbeatStrip,
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
@@ -167,6 +165,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(normalized, { kind });
       })
       .catch((err) => {
+        failedCounts[kind] += 1;
         options.onError?.(err, { kind });
       })
       .finally(() => {
@@ -213,6 +212,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
   };
 }

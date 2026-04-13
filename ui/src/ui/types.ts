@@ -321,7 +321,7 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
-export type ChatModelOverride = import("./chat-model-ref.ts").ChatModelOverride;
+export type ChatModelOverride = import("./chat-model-ref.types.ts").ChatModelOverride;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
@@ -367,6 +367,35 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+
+export type SessionCompactionCheckpointReason =
+  | "manual"
+  | "auto-threshold"
+  | "overflow-retry"
+  | "timeout-retry";
+
+export type SessionCompactionTranscriptReference = {
+  sessionId: string;
+  sessionFile?: string;
+  leafId?: string;
+  entryId?: string;
+};
+
+export type SessionCompactionCheckpoint = {
+  checkpointId: string;
+  sessionKey: string;
+  sessionId: string;
+  createdAt: number;
+  reason: SessionCompactionCheckpointReason;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  summary?: string;
+  firstKeptEntryId?: string;
+  preCompaction: SessionCompactionTranscriptReference;
+  postCompaction: SessionCompactionTranscriptReference;
+};
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
@@ -389,12 +418,55 @@ export type GatewaySessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  totalTokensFresh?: boolean;
+  status?: SessionRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+  childSessions?: string[];
   model?: string;
   modelProvider?: string;
   contextTokens?: number;
+  compactionCheckpointCount?: number;
+  latestCompactionCheckpoint?: SessionCompactionCheckpoint;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
+
+export type SessionsCompactionListResult = {
+  ok: true;
+  key: string;
+  checkpoints: SessionCompactionCheckpoint[];
+};
+
+export type SessionsCompactionGetResult = {
+  ok: true;
+  key: string;
+  checkpoint: SessionCompactionCheckpoint;
+};
+
+export type SessionsCompactionBranchResult = {
+  ok: true;
+  sourceKey: string;
+  key: string;
+  sessionId: string;
+  checkpoint: SessionCompactionCheckpoint;
+  entry: {
+    sessionId: string;
+    updatedAt: number;
+  } & Record<string, unknown>;
+};
+
+export type SessionsCompactionRestoreResult = {
+  ok: true;
+  key: string;
+  sessionId: string;
+  checkpoint: SessionCompactionCheckpoint;
+  entry: {
+    sessionId: string;
+    updatedAt: number;
+  } & Record<string, unknown>;
+};
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
@@ -635,9 +707,10 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   provider: string;
+  alias?: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: Array<"text" | "image" | "document">;
 };
 
 export type ToolCatalogProfile =
@@ -648,6 +721,12 @@ export type ToolCatalogGroup =
   import("../../../src/gateway/protocol/schema/types.js").ToolCatalogGroup;
 export type ToolsCatalogResult =
   import("../../../src/gateway/protocol/schema/types.js").ToolsCatalogResult;
+export type ToolsEffectiveEntry =
+  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveEntry;
+export type ToolsEffectiveGroup =
+  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveGroup;
+export type ToolsEffectiveResult =
+  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveResult;
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 

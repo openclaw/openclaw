@@ -1,48 +1,38 @@
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  ProviderPlugin,
-  WebSearchProviderPlugin,
-} from "../plugins/types.js";
+import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
+import type { OpenClawPluginApi, ProviderPlugin } from "../plugins/types.js";
 
-export type CapturedPluginRegistration = {
-  api: OpenClawPluginApi;
-  providers: ProviderPlugin[];
-  webSearchProviders: WebSearchProviderPlugin[];
-  tools: AnyAgentTool[];
+export { createCapturedPluginRegistration };
+
+type RegistrablePlugin = {
+  register(api: OpenClawPluginApi): void | Promise<void>;
 };
 
-export function createCapturedPluginRegistration(): CapturedPluginRegistration {
-  const providers: ProviderPlugin[] = [];
-  const webSearchProviders: WebSearchProviderPlugin[] = [];
-  const tools: AnyAgentTool[] = [];
-
-  return {
-    providers,
-    webSearchProviders,
-    tools,
-    api: {
-      registerProvider(provider: ProviderPlugin) {
-        providers.push(provider);
-      },
-      registerWebSearchProvider(provider: WebSearchProviderPlugin) {
-        webSearchProviders.push(provider);
-      },
-      registerTool(tool: AnyAgentTool) {
-        tools.push(tool);
-      },
-    } as OpenClawPluginApi,
-  };
-}
-
-export function registerSingleProviderPlugin(params: {
-  register(api: OpenClawPluginApi): void;
-}): ProviderPlugin {
+export async function registerSingleProviderPlugin(params: {
+  register(api: OpenClawPluginApi): void | Promise<void>;
+}): Promise<ProviderPlugin> {
   const captured = createCapturedPluginRegistration();
-  params.register(captured.api);
+  await params.register(captured.api);
   const provider = captured.providers[0];
   if (!provider) {
     throw new Error("provider registration missing");
+  }
+  return provider;
+}
+
+export async function registerProviderPlugins(
+  ...plugins: RegistrablePlugin[]
+): Promise<ProviderPlugin[]> {
+  const captured = createCapturedPluginRegistration();
+  for (const plugin of plugins) {
+    await plugin.register(captured.api);
+  }
+  return captured.providers;
+}
+
+export function requireRegisteredProvider(providers: ProviderPlugin[], providerId: string) {
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (!provider) {
+    throw new Error(`provider ${providerId} missing`);
   }
   return provider;
 }

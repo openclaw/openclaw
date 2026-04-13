@@ -1,41 +1,32 @@
-import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { callGateway } from "../../gateway/call.js";
-import { sleepWithAbort } from "../../infra/backoff.js";
+import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import {
-  deliverOutboundPayloads,
-  type OutboundDeliveryResult,
-} from "../../infra/outbound/deliver.js";
-import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
-import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { logWarn } from "../../logger.js";
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+} from "../../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { logWarn, logError } from "../../logger.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
-import type { RunCronAgentTurnResult } from "./run.js";
-import {
-  expectsSubagentFollowup,
-  isLikelyInterimCronMessage,
-  readDescendantSubagentFallbackReply,
-  waitForDescendantSubagentSummary,
-} from "./subagent-followup.js";
+import type { RunCronAgentTurnResult } from "./run.types.js";
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
-  const channelLower = channel.trim().toLowerCase();
   const toTrimmed = to.trim();
-  if (channelLower === "feishu" || channelLower === "lark") {
-    const lowered = toTrimmed.toLowerCase();
-    if (lowered.startsWith("user:")) {
-      return toTrimmed.slice("user:".length).trim();
-    }
-    if (lowered.startsWith("chat:")) {
-      return toTrimmed.slice("chat:".length).trim();
-    }
-  }
-  return toTrimmed;
+  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
 export function matchesMessagingToolDeliveryTarget(
@@ -45,8 +36,8 @@ export function matchesMessagingToolDeliveryTarget(
   if (!delivery.channel || !delivery.to || !target.to) {
     return false;
   }
-  const channel = delivery.channel.trim().toLowerCase();
-  const provider = target.provider?.trim().toLowerCase();
+  const channel = normalizeLowercaseStringOrEmpty(delivery.channel);
+  const provider = normalizeOptionalLowercaseString(target.provider);
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
@@ -61,13 +52,7 @@ export function matchesMessagingToolDeliveryTarget(
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
-  if (typeof job.delivery?.bestEffort === "boolean") {
-    return job.delivery.bestEffort;
-  }
-  if (job.payload.kind === "agentTurn" && typeof job.payload.bestEffortDeliver === "boolean") {
-    return job.payload.bestEffortDeliver;
-  }
-  return false;
+  return job.delivery?.bestEffort === true;
 }
 
 export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -128,18 +113,48 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unknown channel/i,
   /chat not found/i,
   /user not found/i,
+  /bot.*not.*member/i,
   /bot was blocked by the user/i,
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
 ];
 
+const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
+
 type CompletedDirectCronDelivery = {
   ts: number;
   results: OutboundDeliveryResult[];
 };
 
+let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime.js")> | undefined;
+let deliveryOutboundRuntimePromise:
+  | Promise<typeof import("./delivery-outbound.runtime.js")>
+  | undefined;
+let subagentFollowupRuntimePromise:
+  | Promise<typeof import("./subagent-followup.runtime.js")>
+  | undefined;
+
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
+
+async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
+  gatewayCallRuntimePromise ??= import("../../gateway/call.runtime.js");
+  return await gatewayCallRuntimePromise;
+}
+
+async function loadDeliveryOutboundRuntime(): Promise<
+  typeof import("./delivery-outbound.runtime.js")
+> {
+  deliveryOutboundRuntimePromise ??= import("./delivery-outbound.runtime.js");
+  return await deliveryOutboundRuntimePromise;
+}
+
+async function loadSubagentFollowupRuntime(): Promise<
+  typeof import("./subagent-followup.runtime.js")
+> {
+  subagentFollowupRuntimePromise ??= import("./subagent-followup.runtime.js");
+  return await subagentFollowupRuntimePromise;
+}
 
 function cloneDeliveryResults(
   results: readonly OutboundDeliveryResult[],
@@ -172,6 +187,19 @@ function pruneCompletedDirectCronDeliveries(now: number) {
     }
     COMPLETED_DIRECT_CRON_DELIVERIES.delete(oldest[0]);
   }
+}
+
+function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
+  const scheduledAt = params.job.state?.nextRunAtMs;
+  return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
+}
+
+function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {
+  return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
+}
+
+function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
+  return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
 }
 
 function rememberCompletedDirectCronDelivery(
@@ -209,6 +237,51 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+}
+
+function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
+  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs keep
+  // their existing behavior, and best-effort sends may only partially deliver.
+  return job.sessionTarget === "isolated" && !deliveryBestEffort;
+}
+
+function resolveCronAwarenessMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): string {
+  return params.cfg.session?.scope === "global"
+    ? resolveMainSessionKey(params.cfg)
+    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+}
+
+async function queueCronAwarenessSystemEvent(params: {
+  cfg: OpenClawConfig;
+  jobId: string;
+  agentId: string;
+  deliveryIdempotencyKey: string;
+  outputText?: string;
+  synthesizedText?: string;
+}): Promise<void> {
+  const text =
+    normalizeOptionalString(params.outputText) ?? normalizeOptionalString(params.synthesizedText);
+  if (!text) {
+    return;
+  }
+
+  try {
+    const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
+    enqueueSystemEvent(text, {
+      sessionKey: resolveCronAwarenessMainSessionKey({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }),
+      contextKey: params.deliveryIdempotencyKey,
+    });
+  } catch (err) {
+    logWarn(
+      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${formatErrorMessage(err)}`,
+    );
+  }
 }
 
 export function resetCompletedDirectCronDeliveriesForTests() {
@@ -303,31 +376,101 @@ export async function dispatchCronDelivery(
       deliveryAttempted,
       ...params.telemetry,
     });
+  const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
+    if (!params.job.deleteAfterRun) {
+      return;
+    }
+    try {
+      const { callGateway } = await loadGatewayCallRuntime();
+      await callGateway({
+        method: "sessions.delete",
+        params: {
+          key: params.agentSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        },
+        timeoutMs: 10_000,
+      });
+    } catch {
+      // Best-effort; direct delivery result should still be returned.
+    }
+  };
+  const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
+    deliveryAttempted = true;
+    await cleanupDirectCronSessionIfNeeded();
+    return params.withRunSession({
+      status: "ok",
+      summary,
+      outputText,
+      delivered: false,
+      deliveryAttempted: true,
+      ...params.telemetry,
+    });
+  };
 
   const deliverViaDirect = async (
     delivery: SuccessfulDeliveryTarget,
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
+    const {
+      buildOutboundSessionContext,
+      createOutboundSendDeps,
+      deliverOutboundPayloads,
+      resolveAgentOutboundIdentity,
+    } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       runSessionId: params.runSessionId,
       delivery,
     });
     try {
-      const payloadsForDelivery =
+      const rawPayloads =
         deliveryPayloads.length > 0
           ? deliveryPayloads
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
+      // Suppress NO_REPLY sentinel so it never leaks to external channels.
+      const payloadsForDelivery = rawPayloads.filter(
+        (p) => !isSilentReplyText(p.text, SILENT_REPLY_TOKEN),
+      );
       if (payloadsForDelivery.length === 0) {
-        return null;
+        return await finishSilentReplyDelivery();
       }
       if (params.isAborted()) {
         return params.withRunSession({
           status: "error",
           error: params.abortReason(),
           deliveryAttempted,
+          ...params.telemetry,
+        });
+      }
+      if (
+        params.deliveryRequested &&
+        isStaleCronDelivery({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        })
+      ) {
+        deliveryAttempted = true;
+        const nowMs = Date.now();
+        const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        const startDelayMs = resolveCronDeliveryStartDelayMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        logWarn(
+          `[cron:${params.job.id}] skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`,
+        );
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted,
+          delivered: false,
           ...params.telemetry,
         });
       }
@@ -343,6 +486,19 @@ export async function dispatchCronDelivery(
         agentId: params.agentId,
         sessionKey: params.agentSessionKey,
       });
+
+      // Track bestEffort partial failures so we can log them and avoid
+      // marking the job as delivered when payloads were silently dropped.
+      let hadPartialFailure = false;
+      const onError = params.deliveryBestEffort
+        ? (err: unknown, _payload: unknown) => {
+            hadPartialFailure = true;
+            logError(
+              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
+            );
+          }
+        : undefined;
+
       const runDelivery = async () =>
         await deliverOutboundPayloads({
           cfg: params.cfgWithAgentDefaults,
@@ -356,6 +512,7 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          onError,
           // Isolated cron direct delivery uses its own transient retry loop.
           // Keep all attempts out of the write-ahead delivery queue so a
           // late-successful first send cannot leave behind a failed queue
@@ -370,7 +527,21 @@ export async function dispatchCronDelivery(
             run: runDelivery,
           })
         : await runDelivery();
-      delivered = deliveryResults.length > 0;
+      // Only mark delivered when ALL payloads succeeded (no partial failure).
+      delivered = deliveryResults.length > 0 && !hadPartialFailure;
+      // Intentionally leave partial success uncached: replay may duplicate the
+      // successful subset, but caching it here would permanently drop the
+      // failed payloads by converting the replay into delivered=true.
+      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
+        await queueCronAwarenessSystemEvent({
+          cfg: params.cfgWithAgentDefaults,
+          jobId: params.job.id,
+          agentId: params.agentId,
+          deliveryIdempotencyKey,
+          outputText,
+          synthesizedText,
+        });
+      }
       if (delivered) {
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
       }
@@ -386,6 +557,7 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
+      logError(`[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`);
       return null;
     }
   };
@@ -393,46 +565,33 @@ export async function dispatchCronDelivery(
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-      if (!params.job.deleteAfterRun) {
-        return;
-      }
-      try {
-        await callGateway({
-          method: "sessions.delete",
-          params: {
-            key: params.agentSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort; direct delivery result should still be returned.
-      }
-    };
-
     if (!synthesizedText) {
       return null;
     }
     const initialSynthesizedText = synthesizedText.trim();
     let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
+    const shouldCheckCompletedDescendants =
+      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
+    const needsSubagentFollowupRuntime =
+      shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
+    const subagentFollowupRuntime = needsSubagentFollowupRuntime
+      ? await loadSubagentFollowupRuntime()
+      : undefined;
     // Also check for already-completed descendants. If the subagent finished
     // before delivery-dispatch runs, activeSubagentRuns is 0 and
     // expectedSubagentFollowup may be false (e.g. cron said "on it" which
     // doesn't match the narrow hint list). We still need to use the
     // descendant's output instead of the interim cron text.
-    const completedDescendantReply =
-      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText)
-        ? await readDescendantSubagentFallbackReply({
-            sessionKey: params.agentSessionKey,
-            runStartedAt: params.runStartedAt,
-          })
-        : undefined;
+    const completedDescendantReply = shouldCheckCompletedDescendants
+      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+          sessionKey: params.agentSessionKey,
+          runStartedAt: params.runStartedAt,
+        })
+      : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
-      let finalReply = await waitForDescendantSubagentSummary({
+      let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
         sessionKey: params.agentSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
@@ -440,7 +599,7 @@ export async function dispatchCronDelivery(
       });
       activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
       if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await readDescendantSubagentFallbackReply({
+        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
           sessionKey: params.agentSessionKey,
           runStartedAt: params.runStartedAt,
         });
@@ -476,7 +635,7 @@ export async function dispatchCronDelivery(
       hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
-      initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
+      !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
     ) {
       // Descendants existed but no post-orchestration synthesis arrived AND
       // no descendant fallback reply was available. Suppress stale parent
@@ -491,14 +650,8 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        delivered: true,
-        ...params.telemetry,
-      });
+    if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
+      return await finishSilentReplyDelivery();
     }
     if (params.isAborted()) {
       return params.withRunSession({

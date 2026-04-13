@@ -1,14 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
+import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
+  loadGatewaySessionRow: vi.fn(),
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
+  getLatestSubagentRunByChildSessionKey: vi.fn(),
+  replaceSubagentRunAfterSteer: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
@@ -17,6 +26,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: mocks.loadSessionEntry,
+    loadGatewaySessionRow: mocks.loadGatewaySessionRow,
   };
 });
 
@@ -55,11 +65,21 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
+  resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
+    cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
+}));
+
+vi.mock("../../agents/subagent-registry-read.js", () => ({
+  getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
+}));
+
+vi.mock("../session-subagent-reactivation.runtime.js", () => ({
+  replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
 }));
 
 vi.mock("../session-reset-service.js", () => ({
@@ -86,6 +106,8 @@ const makeContext = (): GatewayRequestContext =>
     dedupe: new Map(),
     addChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(),
   }) as unknown as GatewayRequestContext;
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
@@ -93,6 +115,26 @@ type AgentParams = AgentHandlerArgs["params"];
 
 type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
+
+async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
+  vi.useFakeTimers();
+  try {
+    let lastError: unknown;
+    for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
+      try {
+        assertion();
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(stepMs);
+    }
+    throw lastError ?? new Error("assertion did not pass in time");
+  } finally {
+    vi.useRealTimers();
+  }
+}
 
 function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string, unknown> = {}) {
   mocks.loadSessionEntry.mockReturnValue({
@@ -107,33 +149,12 @@ function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string
   });
 }
 
-function captureUpdatedMainEntry() {
-  let capturedEntry: Record<string, unknown> | undefined;
-  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-    const store: Record<string, unknown> = {};
-    await updater(store);
-    capturedEntry = store["agent:main:main"] as Record<string, unknown>;
-  });
-  return () => capturedEntry;
-}
-
 function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: "existing-session-id",
     updatedAt: Date.now(),
     ...overrides,
   };
-}
-
-async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
-  const getCapturedEntry = captureUpdatedMainEntry();
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
-  await runMainAgent("test", idempotencyKey);
-  expect(mocks.updateSessionStore).toHaveBeenCalled();
-  return getCapturedEntry();
 }
 
 function setupNewYorkTimeConfig(isoDate: string) {
@@ -155,7 +176,7 @@ function resetTimeConfig() {
 }
 
 async function expectResetCall(expectedMessage: string) {
-  await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+  await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
   expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
   const call = readLastAgentCommandCall();
   expect(call?.message).toBe(expectedMessage);
@@ -186,6 +207,27 @@ async function runMainAgent(message: string, idempotencyKey: string) {
     { respond, reqId: idempotencyKey },
   );
   return respond;
+}
+
+async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
+  const loaded = mocks.loadSessionEntry();
+  const canonicalKey = loaded?.canonicalKey ?? "agent:main:main";
+  const existingEntry = structuredClone(loaded?.entry ?? buildExistingMainStoreEntry());
+  let capturedEntry: Record<string, unknown> | undefined;
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    const store: Record<string, unknown> = {
+      [canonicalKey]: existingEntry,
+    };
+    const result = await updater(store);
+    capturedEntry = result as Record<string, unknown>;
+    return result;
+  });
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+  await runMainAgent("hi", idempotencyKey);
+  return capturedEntry;
 }
 
 function readLastAgentCommandCall():
@@ -267,6 +309,15 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  afterEach(() => {
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    resetTaskRegistryForTests();
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",
@@ -303,6 +354,107 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
+  it("forwards provider and model overrides for admin-scoped callers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override",
+      },
+      {
+        reqId: "test-idem-model-override",
+        client: {
+          connect: {
+            scopes: ["operator.admin"],
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      }),
+    );
+  });
+
+  it("rejects provider and model overrides for write-scoped callers", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override-write",
+      },
+      {
+        reqId: "test-idem-model-override-write",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+        } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "provider/model overrides are not authorized for this caller.",
+      }),
+    );
+  });
+
+  it("forwards provider and model overrides when internal override authorization is set", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override-internal",
+      },
+      {
+        reqId: "test-idem-model-override-internal",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+          internal: {
+            allowModelOverride: true,
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        senderIsOwner: false,
+      }),
+    );
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
@@ -316,6 +468,178 @@ describe("gateway agent handler", () => {
     expect(capturedEntry).toBeDefined();
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+  });
+  it("reactivates completed subagent sessions and broadcasts send updates", async () => {
+    const childSessionKey = "agent:main:subagent:followup";
+    const completedRun = {
+      runId: "run-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep" as const,
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" as const },
+    };
+
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "sess-followup",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: childSessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [childSessionKey]: {
+          sessionId: "sess-followup",
+          updatedAt: Date.now(),
+        },
+      };
+      return await updater(store);
+    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
+    mocks.loadGatewaySessionRow.mockReturnValueOnce({
+      status: "running",
+      startedAt: 123,
+      endedAt: undefined,
+      runtimeMs: 10,
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "follow-up",
+        sessionKey: childSessionKey,
+        idempotencyKey: "run-new",
+      },
+      {
+        respond,
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "run-new",
+        status: "accepted",
+      }),
+      undefined,
+      { runId: "run-new" },
+    );
+    expectSubagentFollowupReactivation({
+      replaceSubagentRunAfterSteerMock: mocks.replaceSubagentRunAfterSteer,
+      broadcastToConnIds,
+      completedRun,
+      childSessionKey,
+    });
+  });
+
+  it("includes live session setting metadata in agent send events", async () => {
+    mockMainSessionEntry({
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      fastMode: true,
+      sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          fastMode: true,
+          sendPolicy: "deny",
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.loadGatewaySessionRow.mockReturnValue({
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      fastMode: true,
+      sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+      totalTokens: 12,
+      status: "running",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "test",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-live-settings",
+      },
+      {
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "send",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        fastMode: true,
+        sendPolicy: "deny",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
+        totalTokens: 12,
+        status: "running",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
   });
 
   it("injects a timestamp into the message passed to agentCommand", async () => {
@@ -334,7 +658,7 @@ describe("gateway agent handler", () => {
     );
 
     // Wait for the async agentCommand call
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
 
     const callArgs = mocks.agentCommand.mock.calls[0][0];
     expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
@@ -375,7 +699,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
@@ -400,9 +724,51 @@ describe("gateway agent handler", () => {
       { reqId: "strict-1" },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(callArgs.bestEffortDeliver).toBe(false);
+  });
+
+  it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const respond = vi.fn();
+    const logInfo = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "best effort delivery fallback",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        bestEffortDeliver: true,
+        idempotencyKey: "test-best-effort-delivery-fallback",
+      },
+      {
+        reqId: "best-effort-delivery-fallback",
+        respond,
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: logInfo, error: vi.fn() },
+          broadcastToConnIds: vi.fn(),
+          getSessionEventSubscriberConnIds: () => new Set(),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const accepted = respond.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
+    );
+    expect(accepted).toBeDefined();
+    const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
+    expect(rejected).toBeUndefined();
+    expect(logInfo).toHaveBeenCalledTimes(1);
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.stringContaining("agent delivery downgraded to session-only (bestEffortDeliver)"),
+    );
   });
 
   it("rejects public spawned-run metadata fields", async () => {
@@ -431,6 +797,85 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("accepts music generation internal events", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "music generation finished",
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA: https://example.test/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        idempotencyKey: "music-generation-event",
+      },
+      { reqId: "music-generation-event-1", respond },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
+  it("does not create task rows for inter-session completion wakes", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: [
+          "[Mon 2026-04-06 02:42 GMT+1] <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+        ].join("\n"),
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA:/tmp/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "music_generate:task-123",
+          sourceChannel: "internal",
+          sourceTool: "music_generate",
+        },
+        idempotencyKey: "music-generation-event-inter-session",
+      },
+      { reqId: "music-generation-event-inter-session" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(findTaskByRunId("music-generation-event-inter-session")).toBeUndefined();
+  });
+
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({
@@ -456,7 +901,7 @@ describe("gateway agent handler", () => {
       },
       { reqId: "workspace-forwarded-1" },
     );
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const spawnedCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
     expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
   });
@@ -498,7 +943,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
       channel?: string;
       messageChannel?: string;
@@ -507,6 +952,29 @@ describe("gateway agent handler", () => {
     expect(callArgs.channel).toBe("telegram");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
+  it("tracks async gateway agent runs in the shared task registry", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run",
+        },
+        { reqId: "task-registry-agent-run" },
+      );
+
+      expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
+        runtime: "cli",
+        childSessionKey: "agent:main:main",
+        status: "running",
+      });
+    });
   });
 
   it("handles missing cliSessionIds gracefully", async () => {
@@ -518,7 +986,6 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
     expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
   });
-
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {
@@ -575,17 +1042,62 @@ describe("gateway agent handler", () => {
         sessionKey: "agent:main:main",
         idempotencyKey: "test-idem-new",
       },
-      { reqId: "4" },
+      {
+        reqId: "4",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
     // Message is now dynamically built with current date — check key substrings
-    expect(call?.message).toContain("Run your Session Startup sequence");
+    expect(call?.message).toContain(
+      "If runtime-provided startup context is included for this first turn",
+    );
     expect(call?.message).toContain("Current time:");
     expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.sessionId).toBe("reset-session-id");
+  });
+
+  it("prepends runtime-loaded startup memory to bare /new agent runs", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-reset-startup-" }, async (workspaceDir) => {
+      await fs.mkdir(`${workspaceDir}/memory`, { recursive: true });
+      await fs.writeFile(`${workspaceDir}/memory/2026-01-28.md`, "today gateway note", "utf-8");
+      await fs.writeFile(`${workspaceDir}/memory/2026-01-27.md`, "yesterday gateway note", "utf-8");
+      setupNewYorkTimeConfig("2026-01-28T20:30:00.000Z");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: {
+            userTimezone: "America/New_York",
+            workspace: workspaceDir,
+          },
+        },
+      };
+      mockSessionResetSuccess({ reason: "new" });
+      primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
+
+      await invokeAgent(
+        {
+          message: "/new",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "test-idem-new-startup-context",
+        },
+        {
+          reqId: "4-startup",
+          client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        },
+      );
+
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = readLastAgentCommandCall();
+      expect(call?.message).toContain("[Startup context loaded by runtime]");
+      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-28.md]");
+      expect(call?.message).toContain("today gateway note");
+      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-27.md]");
+      expect(call?.message).toContain("yesterday gateway note");
+      resetTimeConfig();
+    });
   });
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
@@ -603,7 +1115,10 @@ describe("gateway agent handler", () => {
         sessionKey: "agent:main:main",
         idempotencyKey: "test-idem-reset-suffix",
       },
-      { reqId: "4b" },
+      {
+        reqId: "4b",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
     );
 
     const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
@@ -629,6 +1144,34 @@ describe("gateway agent handler", () => {
       undefined,
       expect.objectContaining({
         message: expect.stringContaining("malformed session key"),
+      }),
+    );
+  });
+
+  it("rejects /reset for write-scoped gateway callers", async () => {
+    mockMainSessionEntry({ sessionId: "existing-session-id" });
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-reset-write-scope",
+      },
+      {
+        reqId: "4c",
+        client: { connect: { scopes: ["operator.write"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.performGatewaySessionReset).not.toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "missing scope: operator.admin",
       }),
     );
   });

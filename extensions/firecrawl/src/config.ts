@@ -1,6 +1,8 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { normalizeResolvedSecretInputString } from "../../../src/config/types.secrets.js";
-import { normalizeSecretInput } from "../../../src/utils/normalize-secret-input.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 export const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;
@@ -26,6 +28,22 @@ type FirecrawlSearchConfig =
     }
   | undefined;
 
+type PluginEntryConfig =
+  | {
+      webSearch?: {
+        apiKey?: unknown;
+        baseUrl?: string;
+      };
+      webFetch?: {
+        apiKey?: unknown;
+        baseUrl?: string;
+        onlyMainContent?: boolean;
+        maxAgeMs?: number;
+        timeoutSeconds?: number;
+      };
+    }
+  | undefined;
+
 type FirecrawlFetchConfig =
   | {
       apiKey?: unknown;
@@ -41,7 +59,7 @@ function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   if (!search || typeof search !== "object") {
     return undefined;
   }
-  return search as WebSearchConfig;
+  return search;
 }
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
@@ -49,10 +67,15 @@ function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   if (!fetch || typeof fetch !== "object") {
     return undefined;
   }
-  return fetch as WebFetchConfig;
+  return fetch;
 }
 
 export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig {
+  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
+  const pluginWebSearch = pluginConfig?.webSearch;
+  if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
+    return pluginWebSearch;
+  }
   const search = resolveSearchConfig(cfg);
   if (!search || typeof search !== "object") {
     return undefined;
@@ -65,6 +88,11 @@ export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSea
 }
 
 export function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig {
+  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
+  const pluginWebFetch = pluginConfig?.webFetch;
+  if (pluginWebFetch && typeof pluginWebFetch === "object" && !Array.isArray(pluginWebFetch)) {
+    return pluginWebFetch;
+  }
   const fetch = resolveFetchConfig(cfg);
   if (!fetch || typeof fetch !== "object") {
     return undefined;
@@ -86,9 +114,18 @@ function normalizeConfiguredSecret(value: unknown, path: string): string | undef
 }
 
 export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
+  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const search = resolveFirecrawlSearchConfig(cfg);
   const fetch = resolveFirecrawlFetchConfig(cfg);
   return (
+    normalizeConfiguredSecret(
+      pluginConfig?.webFetch?.apiKey,
+      "plugins.entries.firecrawl.config.webFetch.apiKey",
+    ) ||
+    normalizeConfiguredSecret(
+      search?.apiKey,
+      "plugins.entries.firecrawl.config.webSearch.apiKey",
+    ) ||
     normalizeConfiguredSecret(search?.apiKey, "tools.web.search.firecrawl.apiKey") ||
     normalizeConfiguredSecret(fetch?.apiKey, "tools.web.fetch.firecrawl.apiKey") ||
     normalizeSecretInput(process.env.FIRECRAWL_API_KEY) ||

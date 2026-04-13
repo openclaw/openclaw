@@ -1,9 +1,10 @@
-import { reduceInteractiveReply } from "../../../src/channels/plugins/outbound/interactive.js";
+import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   normalizeInteractiveReply,
   type InteractiveReply,
   type InteractiveReplyButton,
-} from "../../../src/interactive/payload.js";
+} from "openclaw/plugin-sdk/interactive-runtime";
+import { sanitizeTelegramCallbackData } from "./approval-callback-data.js";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
@@ -28,11 +29,19 @@ function chunkInteractiveButtons(
   rows: TelegramInlineButton[][],
 ) {
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
-    const row = buttons.slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE).map((button) => ({
-      text: button.label,
-      callback_data: button.value,
-      style: toTelegramButtonStyle(button.style),
-    }));
+    const row = buttons.slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE).flatMap((button) => {
+      const callbackData = sanitizeTelegramCallbackData(button.value);
+      if (!callbackData) {
+        return [];
+      }
+      return [
+        {
+          text: button.label,
+          callback_data: callbackData,
+          style: toTelegramButtonStyle(button.style),
+        },
+      ];
+    });
     if (row.length > 0) {
       rows.push(row);
     }

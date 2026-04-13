@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -102,6 +106,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
     sessions: MemoryQmdSessionSchema.optional(),
@@ -155,16 +160,19 @@ const PluginEntrySchema = z
       })
       .strict()
       .optional(),
+    subagent: z
+      .object({
+        allowModelOverride: z.boolean().optional(),
+        allowedModels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
 const TalkProviderEntrySchema = z
   .object({
-    voiceId: z.string().optional(),
-    voiceAliases: z.record(z.string(), z.string()).optional(),
-    modelId: z.string().optional(),
-    outputFormat: z.string().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
   })
   .catchall(z.unknown());
@@ -173,17 +181,12 @@ const TalkSchema = z
   .object({
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
-    voiceId: z.string().optional(),
-    voiceAliases: z.record(z.string(), z.string()).optional(),
-    modelId: z.string().optional(),
-    outputFormat: z.string().optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
   })
   .strict()
   .superRefine((talk, ctx) => {
-    const provider = talk.provider?.trim().toLowerCase();
+    const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
     const providers = talk.providers ? Object.keys(talk.providers) : [];
 
     if (provider && providers.length > 0 && !(provider in talk.providers!)) {
@@ -202,6 +205,30 @@ const TalkSchema = z
       });
     }
   });
+
+const McpServerSchema = z
+  .object({
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    cwd: z.string().optional(),
+    workingDirectory: z.string().optional(),
+    url: HttpUrlSchema.optional(),
+    headers: z
+      .record(
+        z.string(),
+        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+      )
+      .optional(),
+  })
+  .catchall(z.unknown());
+
+const McpConfigSchema = z
+  .object({
+    servers: z.record(z.string(), McpServerSchema).optional(),
+  })
+  .strict()
+  .optional();
 
 export const OpenClawSchema = z
   .object({
@@ -343,7 +370,6 @@ export const OpenClawSchema = z
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
         ssrfPolicy: z
           .object({
-            allowPrivateNetwork: z.boolean().optional(),
             dangerouslyAllowPrivateNetwork: z.boolean().optional(),
             allowedHostnames: z.array(z.string()).optional(),
             hostnameAllowlist: z.array(z.string()).optional(),
@@ -359,6 +385,7 @@ export const OpenClawSchema = z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
+                userDataDir: z.string().optional(),
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
@@ -371,7 +398,10 @@ export const OpenClawSchema = z
                 {
                   message: "Profile must set cdpPort or cdpUrl",
                 },
-              ),
+              )
+              .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
+                message: 'Profile userDataDir is only supported with driver="existing-session"',
+              }),
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
@@ -402,6 +432,7 @@ export const OpenClawSchema = z
                 provider: z.string(),
                 mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
                 email: z.string().optional(),
+                displayName: z.string().optional(),
               })
               .strict(),
           )
@@ -412,7 +443,12 @@ export const OpenClawSchema = z
             billingBackoffHours: z.number().positive().optional(),
             billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
             billingMaxHours: z.number().positive().optional(),
+            authPermanentBackoffMinutes: z.number().positive().optional(),
+            authPermanentMaxMinutes: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
+            overloadedProfileRotations: z.number().int().nonnegative().optional(),
+            overloadedBackoffMs: z.number().int().nonnegative().optional(),
+            rateLimitedProfileRotations: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),
@@ -535,7 +571,9 @@ export const OpenClawSchema = z
       .superRefine((val, ctx) => {
         if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
           try {
-            parseDurationMs(String(val.sessionRetention).trim(), { defaultUnit: "h" });
+            parseDurationMs(normalizeStringifiedOptionalString(val.sessionRetention) ?? "", {
+              defaultUnit: "h",
+            });
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -546,7 +584,9 @@ export const OpenClawSchema = z
         }
         if (val.runLog?.maxBytes !== undefined) {
           try {
-            parseByteSize(String(val.runLog.maxBytes).trim(), { defaultUnit: "b" });
+            parseByteSize(normalizeStringifiedOptionalString(val.runLog.maxBytes) ?? "", {
+              defaultUnit: "b",
+            });
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -640,6 +680,10 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             basePath: z.string().optional(),
             root: z.string().optional(),
+            embedSandbox: z
+              .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
+              .optional(),
+            allowExternalEmbedUrls: z.boolean().optional(),
             allowedOrigins: z.array(z.string()).optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
@@ -686,6 +730,12 @@ export const OpenClawSchema = z
           .object({
             deny: z.array(z.string()).optional(),
             allow: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        webchat: z
+          .object({
+            chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
           })
           .strict()
           .optional(),
@@ -847,6 +897,7 @@ export const OpenClawSchema = z
       })
       .optional(),
     memory: MemorySchema,
+    mcp: McpConfigSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

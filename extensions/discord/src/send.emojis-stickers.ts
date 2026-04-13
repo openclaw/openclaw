@@ -1,5 +1,6 @@
 import { Routes } from "discord-api-types/v10";
-import { loadWebMediaRaw } from "../../whatsapp/src/media.js";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { normalizeEmojiName, resolveDiscordRest } from "./send.shared.js";
 import type { DiscordEmojiUpload, DiscordReactOpts, DiscordStickerUpload } from "./send.types.js";
 import { DISCORD_MAX_EMOJI_BYTES, DISCORD_MAX_STICKER_BYTES } from "./send.types.js";
@@ -12,7 +13,7 @@ export async function listGuildEmojisDiscord(guildId: string, opts: DiscordReact
 export async function uploadEmojiDiscord(payload: DiscordEmojiUpload, opts: DiscordReactOpts = {}) {
   const rest = resolveDiscordRest(opts);
   const media = await loadWebMediaRaw(payload.mediaUrl, DISCORD_MAX_EMOJI_BYTES);
-  const contentType = media.contentType?.toLowerCase();
+  const contentType = normalizeOptionalLowercaseString(media.contentType);
   if (
     !contentType ||
     !["image/png", "image/jpeg", "image/jpg", "image/gif"].includes(contentType)
@@ -36,7 +37,7 @@ export async function uploadStickerDiscord(
 ) {
   const rest = resolveDiscordRest(opts);
   const media = await loadWebMediaRaw(payload.mediaUrl, DISCORD_MAX_STICKER_BYTES);
-  const contentType = media.contentType?.toLowerCase();
+  const contentType = normalizeOptionalLowercaseString(media.contentType);
   if (!contentType || !["image/png", "image/apng", "application/json"].includes(contentType)) {
     throw new Error("Discord sticker uploads require a PNG, APNG, or Lottie JSON file");
   }
