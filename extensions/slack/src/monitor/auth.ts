@@ -157,7 +157,8 @@ export type SlackSystemEventAuthResult = {
     | "channel-not-allowed"
     | "dm-disabled"
     | "sender-not-allowlisted"
-    | "sender-not-channel-allowed";
+    | "sender-not-channel-allowed"
+    | "sender-not-authorized";
   channelType?: "im" | "mpim" | "channel" | "group";
   channelName?: string;
 };
@@ -250,6 +251,16 @@ export async function authorizeSlackSystemEventSender(params: {
       }
     }
   } else {
+    const allowFromLower = await resolveAllowFromLower(false);
+    const ownerAllowlistConfigured = allowFromLower.length > 0;
+    const ownerAllowed =
+      ownerAllowlistConfigured &&
+      isSlackSenderAllowListed({
+        allowListLower: allowFromLower,
+        senderId,
+        senderName,
+        allowNameMatching: params.ctx.allowNameMatching,
+      });
     const channelConfig = resolveSlackChannelConfig({
       channelId,
       channelName,
@@ -260,6 +271,13 @@ export async function authorizeSlackSystemEventSender(params: {
     });
     const channelUsersAllowlistConfigured =
       Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
+    if (ownerAllowed) {
+      return {
+        allowed: true,
+        channelType,
+        channelName,
+      };
+    }
     if (channelUsersAllowlistConfigured) {
       const channelUserAllowed = resolveSlackUserAllowed({
         allowList: channelConfig?.users,
@@ -270,11 +288,18 @@ export async function authorizeSlackSystemEventSender(params: {
       if (!channelUserAllowed) {
         return {
           allowed: false,
-          reason: "sender-not-channel-allowed",
+          reason: ownerAllowlistConfigured ? "sender-not-authorized" : "sender-not-channel-allowed",
           channelType,
           channelName,
         };
       }
+    } else if (ownerAllowlistConfigured) {
+      return {
+        allowed: false,
+        reason: "sender-not-allowlisted",
+        channelType,
+        channelName,
+      };
     }
   }
 

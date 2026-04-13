@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 
 const readStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
+let authorizeSlackSystemEventSender: typeof import("./auth.js").authorizeSlackSystemEventSender;
 let clearSlackAllowFromCacheForTest: typeof import("./auth.js").clearSlackAllowFromCacheForTest;
 let resolveSlackEffectiveAllowFrom: typeof import("./auth.js").resolveSlackEffectiveAllowFrom;
 
@@ -24,12 +25,42 @@ function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
   } as unknown as SlackMonitorContext;
 }
 
+function makeAuthorizeCtx(params?: {
+  allowFrom?: string[];
+  channelsConfig?: Record<string, { users?: string[] }>;
+  resolveUserName?: (userId: string) => Promise<{ name?: string }>;
+  resolveChannelName?: (
+    channelId: string,
+  ) => Promise<{ name?: string; type?: "im" | "mpim" | "channel" | "group" }>;
+}) {
+  return {
+    allowFrom: params?.allowFrom ?? [],
+    accountId: "main",
+    dmPolicy: "open",
+    dmEnabled: true,
+    allowNameMatching: false,
+    channelsConfig: params?.channelsConfig ?? {},
+    channelsConfigKeys: Object.keys(params?.channelsConfig ?? {}),
+    defaultRequireMention: true,
+    isChannelAllowed: vi.fn(() => true),
+    resolveUserName: vi.fn(
+      params?.resolveUserName ?? ((_) => Promise.resolve({ name: undefined })),
+    ),
+    resolveChannelName: vi.fn(
+      params?.resolveChannelName ?? ((_) => Promise.resolve({ name: "general", type: "channel" })),
+    ),
+  } as unknown as SlackMonitorContext;
+}
+
 describe("resolveSlackEffectiveAllowFrom", () => {
   const prevTtl = process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
 
   beforeAll(async () => {
-    ({ clearSlackAllowFromCacheForTest, resolveSlackEffectiveAllowFrom } =
-      await import("./auth.js"));
+    ({
+      authorizeSlackSystemEventSender,
+      clearSlackAllowFromCacheForTest,
+      resolveSlackEffectiveAllowFrom,
+    } = await import("./auth.js"));
   });
 
   beforeEach(() => {
@@ -81,5 +112,98 @@ describe("resolveSlackEffectiveAllowFrom", () => {
     await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
 
     expect(readStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("authorizeSlackSystemEventSender", () => {
+  beforeEach(() => {
+    clearSlackAllowFromCacheForTest();
+  });
+
+  it("blocks channel senders outside a configured global allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("allows channel senders who match the global allowFrom even when channel users are configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("uses a combined denial reason when sender matches neither global nor channel allowlists", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-authorized",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("allows channel senders authorized by channel users even when not in global allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ALLOWED",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("keeps channel interactions open when no global or channel allowlists are configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
   });
 });

@@ -771,6 +771,82 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
+  it("blocks channel block actions when sender is outside configured global allowFrom", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext({
+      allowFrom: ["U_OWNER"],
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U_ATTACKER" },
+        channel: { id: "C1" },
+        message: {
+          ts: "250.251",
+          blocks: [{ type: "actions", block_id: "verify_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "verify_block",
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to use this control.",
+      response_type: "ephemeral",
+    });
+  });
+
+  it("allows channel block actions when channel users allowlist authorizes the sender", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext({
+      allowFrom: ["U_OWNER"],
+      channelsConfig: {
+        C1: { users: ["U_ALLOWED"] },
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U_ALLOWED" },
+        channel: { id: "C1" },
+        message: {
+          ts: "260.261",
+          blocks: [{ type: "actions", block_id: "verify_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "verify_block",
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   it("blocks DM block actions when sender is not in allowFrom", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, app, getHandler } = createContext({
