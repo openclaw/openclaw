@@ -109,6 +109,7 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
   }
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+  const resolvedSticker = payload.sticker ?? parsed.sticker;
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:
@@ -122,7 +123,7 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
-    sticker: payload.sticker ?? parsed.sticker,
+    ...(resolvedSticker !== undefined ? { sticker: resolvedSticker } : {}),
   };
   if (!isRenderablePayload(normalizedPayload) && !normalizedPayload.sticker) {
     return null;
