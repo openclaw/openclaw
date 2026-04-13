@@ -9,6 +9,7 @@ import {
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
   parseReleaseVersion as parseReleaseVersionBase,
 } from "./lib/npm-publish-plan.mjs";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./lib/npm-update-compat-sidecars.mjs";
 
 type PackageJson = {
   name?: string;
@@ -463,6 +464,9 @@ function collectPackedTarballErrors(): string[] {
 export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
   const errors: string[] = [];
   for (const packedPath of paths) {
+    if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(packedPath)) {
+      continue;
+    }
     const matchedRule = FORBIDDEN_PACKED_PATH_RULES.find((rule) =>
       packedPath.startsWith(rule.prefix),
     );

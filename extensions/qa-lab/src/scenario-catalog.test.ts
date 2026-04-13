@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
 import {
   listQaScenarioMarkdownPaths,
   readQaBootstrapScenarioCatalog,
@@ -33,6 +34,11 @@ describe("qa scenario catalog", () => {
     expect(catalog.scenarios.some((scenario) => scenario.id === "subagent-fanout-synthesis")).toBe(
       true,
     );
+    expect(
+      QA_AGENTIC_PARITY_SCENARIO_IDS.every((scenarioId) =>
+        catalog.scenarios.some((scenario) => scenario.id === scenarioId),
+      ),
+    ).toBe(true);
   });
 
   it("loads scenario-specific execution config from per-scenario markdown", () => {
@@ -75,6 +81,12 @@ describe("qa scenario catalog", () => {
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
   });
 
+  it("loads scenario-declared gateway runtime options from markdown", () => {
+    const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
+
+    expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
+  });
+
   it("keeps the character eval scenario natural and task-shaped", () => {
     const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
       | {
@@ -112,5 +124,9 @@ describe("qa scenario catalog", () => {
         gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }],
       }),
     ).toThrow(/gracefulFallbackAny entries must be strings/);
+  });
+
+  it("returns undefined execution config for an unknown scenario id", () => {
+    expect(readQaScenarioExecutionConfig("missing-scenario-id")).toBeUndefined();
   });
 });
