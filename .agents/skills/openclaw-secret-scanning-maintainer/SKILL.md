@@ -69,6 +69,7 @@ The `fetch-content` output includes:
 | `issue_comment`               | Comment: delete+recreate |
 | `pull_request_comment`        | Comment: delete+recreate |
 | `pull_request_review_comment` | Comment: delete+recreate |
+| `discussion_comment`          | Discussion comment: delete+recreate (GraphQL) |
 | `issue_body`                  | Body: redact in place    |
 | `pull_request_body`           | Body: redact in place    |
 | `commit`                      | Notify only              |
@@ -100,14 +101,25 @@ node secret-scanning.mjs redact-body <issue|pr> <NUMBER> <redacted-body-file>
 
 ### Comments — Delete and Recreate
 
+For issue/PR comments:
 ```bash
 # Delete original (all edit history gone)
 node secret-scanning.mjs delete-comment <COMMENT_ID>
 
 # Recreate with redacted content
-# Agent prepares the body file with maintainer header + redacted content
 node secret-scanning.mjs recreate-comment <ISSUE_NUMBER> <body-file>
 ```
+
+For discussion comments (uses GraphQL):
+```bash
+# Delete original
+node secret-scanning.mjs delete-discussion-comment <COMMENT_NODE_ID>
+
+# Recreate with redacted content
+node secret-scanning.mjs recreate-discussion-comment <DISCUSSION_NODE_ID> <body-file>
+```
+
+The `fetch-content` output for `discussion_comment` includes `comment_node_id` and `discussion_node_id` for these commands.
 
 The recreated comment should follow this format:
 

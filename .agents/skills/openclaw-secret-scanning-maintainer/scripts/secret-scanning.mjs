@@ -38,8 +38,8 @@ function gh(args, { json = true, allowFailure = false } = {}) {
   }
 }
 
-function ghGraphQL(query) {
-  return gh(["api", "graphql", "-f", `query=${query}`]);
+function ghGraphQL(query, options = {}) {
+  return gh(["api", "graphql", "-f", `query=${query}`], options);
 }
 
 // ─── Commands ───────────────────────────────────────────────────────────────
@@ -93,7 +93,65 @@ function cmdFetchContent(locationJson) {
   const type = location.type;
   const details = location.details;
 
-  if (
+  if (type === "discussion_comment") {
+    // Discussion comments 只能通过 GraphQL 操作
+    const commentUrl = details.discussion_comment_url;
+    if (!commentUrl) fail("No discussion_comment_url in location details");
+
+    // 从 URL 提取 discussion number 和 comment id
+    // 格式: https://github.com/owner/repo/discussions/123#discussioncomment-456
+    const urlMatch = commentUrl.match(/discussions\/(\d+)#discussioncomment-(\d+)/);
+    if (!urlMatch) fail(`Cannot parse discussion comment URL: ${commentUrl}`);
+    const discussionNumber = urlMatch[1];
+    const discussionCommentDbId = urlMatch[2];
+
+    // 用 GraphQL 获取 discussion comment 内容
+    const gql = ghGraphQL(`{
+      repository(owner: "${REPO.split("/")[0]}", name: "${REPO.split("/")[1]}") {
+        discussion(number: ${discussionNumber}) {
+          id
+          url
+          comments(first: 50) {
+            nodes {
+              id
+              databaseId
+              author { login }
+              body
+              url
+            }
+          }
+        }
+      }
+    }`, { allowFailure: true });
+
+    const discussion = gql?.data?.repository?.discussion;
+    if (!discussion) fail(`Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`);
+
+    const comment = discussion.comments.nodes.find(
+      (c) => String(c.databaseId) === discussionCommentDbId,
+    );
+    if (!comment) fail(`Discussion comment #${discussionCommentDbId} not found in discussion #${discussionNumber}`);
+
+    const bodyFile = tmpFile("body.md");
+    fs.writeFileSync(bodyFile, comment.body || "");
+
+    console.log(
+      JSON.stringify(
+        {
+          type,
+          comment_node_id: comment.id,
+          discussion_node_id: discussion.id,
+          discussion_number: Number(discussionNumber),
+          discussion_comment_db_id: Number(discussionCommentDbId),
+          author: comment.author?.login,
+          html_url: comment.url || commentUrl,
+          body_file: bodyFile,
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (
     type === "issue_comment" ||
     type === "pull_request_comment" ||
     type === "pull_request_review_comment"
@@ -279,6 +337,44 @@ function cmdDeleteComment(commentId) {
 }
 
 /**
+ * delete-discussion-comment <node-id>
+ * Delete a discussion comment via GraphQL (and all its edit history).
+ */
+function cmdDeleteDiscussionComment(nodeId) {
+  if (!nodeId) fail("Usage: delete-discussion-comment <node-id>");
+  const result = ghGraphQL(`mutation { deleteDiscussionComment(input: { id: "${nodeId}" }) { comment { id } } }`);
+  if (result?.errors) {
+    fail(`Failed to delete discussion comment: ${JSON.stringify(result.errors)}`);
+  }
+  console.log(JSON.stringify({ ok: true, deleted_node_id: nodeId }));
+}
+
+/**
+ * recreate-discussion-comment <discussion-node-id> <body-file>
+ * Create a new discussion comment via GraphQL.
+ */
+function cmdRecreateDiscussionComment(discussionNodeId, bodyFile) {
+  if (!discussionNodeId || !bodyFile) fail("Usage: recreate-discussion-comment <discussion-node-id> <body-file>");
+  if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
+
+  const body = fs.readFileSync(bodyFile, "utf8");
+  // GraphQL 字符串需要转义
+  const escapedBody = body.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+  const result = ghGraphQL(`mutation { addDiscussionComment(input: { discussionId: "${discussionNodeId}", body: "${escapedBody}" }) { comment { id url } } }`);
+  if (result?.errors) {
+    fail(`Failed to create discussion comment: ${JSON.stringify(result.errors)}`);
+  }
+  const newComment = result?.data?.addDiscussionComment?.comment;
+  console.log(
+    JSON.stringify({
+      ok: true,
+      node_id: newComment?.id,
+      html_url: newComment?.url,
+    }),
+  );
+}
+
+/**
  * recreate-comment <issue-number> <body-file>
  * Create a new comment from a file.
  */
@@ -321,7 +417,8 @@ function cmdNotify(issueNumber, author, locationType, secretTypes) {
   if (
     locationType === "issue_comment" ||
     locationType === "pull_request_comment" ||
-    locationType === "pull_request_review_comment"
+    locationType === "pull_request_review_comment" ||
+    locationType === "discussion_comment"
   ) {
     locationDesc = "your comment";
     actionDesc = "The affected comment has been removed and replaced with a redacted version.";
@@ -508,7 +605,9 @@ const commands = {
   "fetch-content": () => cmdFetchContent(args[0]),
   "redact-body": () => cmdRedactBody(args[0], args[1], args[2]),
   "delete-comment": () => cmdDeleteComment(args[0]),
+  "delete-discussion-comment": () => cmdDeleteDiscussionComment(args[0]),
   "recreate-comment": () => cmdRecreateComment(args[0], args[1]),
+  "recreate-discussion-comment": () => cmdRecreateDiscussionComment(args[0], args[1]),
   notify: () => cmdNotify(args[0], args[1], args[2], args[3]),
   resolve: () => cmdResolve(args[0], args[1], args[2]),
   "list-open": () => cmdListOpen(),
@@ -525,7 +624,9 @@ if (!command || !commands[command]) {
       "  fetch-content '<location-json>'   Fetch content for a location",
       "  redact-body <issue|pr> <n> <file> PATCH body with redacted file",
       "  delete-comment <comment-id>       Delete a comment",
+      "  delete-discussion-comment <node-id> Delete a discussion comment (GraphQL)",
       "  recreate-comment <issue-n> <file> Create replacement comment",
+      "  recreate-discussion-comment <disc-node-id> <file> Create discussion comment (GraphQL)",
       "  notify <n> <author> <type> <types> Post notification",
       "  resolve <n> [resolution] [comment] Close alert",
       "  list-open                          List open alerts",
