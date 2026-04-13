@@ -181,7 +181,7 @@ describe("cli program (nodes basics)", () => {
       }
       if (opts.method === "node.list") {
         return {
-          nodes: [{ nodeId: "n1", paired: true, connected: true }],
+          nodes: [{ nodeId: "n1", connected: true }],
         };
       }
       return { ok: true };

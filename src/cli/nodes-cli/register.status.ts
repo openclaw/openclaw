@@ -113,10 +113,12 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
 
 function canFallbackToPairingList(err: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
+  const hasNodeListContext = message.includes("node.list");
+  const hasScopeContext = message.includes("scope");
   return (
-    message.includes("unauthorized") ||
     message.includes("missing scope") ||
-    (message.includes("node.list") &&
+    (message.includes("unauthorized") && (hasScopeContext || hasNodeListContext)) ||
+    (hasNodeListContext &&
       (message.includes("unknown method") ||
         message.includes("method not found") ||
         message.includes("not implemented") ||
@@ -347,20 +349,20 @@ export function registerNodesStatusCommands(nodes: Command) {
           const pendingRows = hasFilters ? [] : pending;
 
           let knownNodes: NodeListNode[] | null = null;
-          if (hasFilters) {
+          try {
             knownNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
-          } else {
-            try {
-              knownNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
-            } catch (err) {
-              if (!canFallbackToPairingList(err)) {
-                throw err;
-              }
+          } catch (err) {
+            if (hasFilters || !canFallbackToPairingList(err)) {
+              throw err;
             }
           }
 
           const pairedNodes = knownNodes
-            ? knownNodes.filter((node) => Boolean(node.paired))
+            ? knownNodes.filter(
+                (node) =>
+                  node.paired === true ||
+                  (node.paired === undefined && pairedById.has(node.nodeId)),
+              )
             : paired.map((entry) => ({
                 nodeId: entry.nodeId,
                 displayName: entry.displayName,
