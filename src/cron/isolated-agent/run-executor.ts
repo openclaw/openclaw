@@ -120,6 +120,7 @@ export function createCronPromptExecutor(params: {
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: true,
+            operatorScopes: params.job.creatorScopes,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -161,6 +162,7 @@ export function createCronPromptExecutor(params: {
           bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
+          operatorScopes: params.job.creatorScopes,
           runId: params.cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
           disableMessageTool: params.toolPolicy.disableMessageTool,

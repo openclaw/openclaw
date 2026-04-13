@@ -260,11 +260,15 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
-export async function add(state: CronServiceState, input: CronJobCreate) {
+export async function add(
+  state: CronServiceState,
+  input: CronJobCreate,
+  creatorScopes?: readonly import("../../gateway/operator-scopes.js").OperatorScope[],
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
-    const job = createJob(state, input);
+    const job = createJob(state, input, creatorScopes);
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
