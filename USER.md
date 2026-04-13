@@ -32,6 +32,10 @@ Conclusion:
 
 [CODEX COMMENTS RESOLUTION]
 
+- 2026-04-13: Reviewed the latest unresolved thread on `openclaw/openclaw#62006` and confirmed the manifest-missing plugin activation fallback still ignored `plugins.allow`, which let allowlist-only activation of dangerous plugin config slip past the gateway mutation guard.
+- 2026-04-13: Fixed `src/agents/tools/gateway-tool.ts` so the manifest-missing fallback now treats `plugins.allow` as a gating condition alongside `plugins.enabled`, `plugins.deny`, and entry-level disablement.
+- 2026-04-13: Added a regression in `src/agents/openclaw-gateway-tool.test.ts` covering allowlist-based activation of dangerous plugin config when manifests are unavailable, and corrected the overlapping-plugin-id test so it actually activates the plugin under the allowlist gate it was asserting.
+- 2026-04-13: Reran `corepack pnpm test src/agents/openclaw-gateway-tool.test.ts` successfully (`46 passed`), then prepared the remaining Codex review thread for resolution and fresh re-review.
 - 2026-04-10: Fixed the remaining Codex P1 on `src/agents/tools/gateway-tool.ts` by threading shared plugin auto-enable reasons into dangerous-plugin activation checks, so provider-driven auto-enable paths cannot activate pre-existing dangerous plugin config without tripping the gateway mutation guard.
 - 2026-04-10: Added a regression in `src/agents/openclaw-gateway-tool.test.ts` for provider-config auto-enable of dangerous plugin config, mocked the setup-registry seam used by the new activation path, and reran `corepack pnpm test src/agents/openclaw-gateway-tool.test.ts` successfully.
 - 2026-04-10: Read the tracking issue context from `NVIDIA-dev/openclaw-tracking#339`, reviewed `openclaw/openclaw#62006`, and checked live review threads with `gh api graphql`.

@@ -662,6 +662,50 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.patch when an allowlist change activates dangerous plugin config and manifests are unavailable", async () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              allow: ["other-plugin"],
+              entries: {
+                acpx: {
+                  config: {
+                    permissionMode: "approve-all",
+                  },
+                },
+              },
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-allow-dangerous-plugin-without-manifests", {
+        action: "config.patch",
+        raw: '{ plugins: { allow: ["acpx"] } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch when provider config auto-enables dangerous plugin config", async () => {
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
@@ -882,7 +926,7 @@ describe("gateway tool", () => {
     await expect(
       tool.execute("call-enable-overlapping-dangerous-plugin", {
         action: "config.patch",
-        raw: '{ plugins: { entries: { "foo.config": { enabled: true } } } }',
+        raw: '{ plugins: { allow: ["foo", "foo.config"], entries: { "foo.config": { enabled: true } } } }',
       }),
     ).rejects.toThrow(
       "gateway config.patch cannot enable dangerous config flags: plugins.entries.foo.config.config.permissionMode=approve-all",
