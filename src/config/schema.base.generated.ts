@@ -8907,6 +8907,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           },
                           additionalProperties: false,
                         },
+                        allowPrivateNetwork: {
+                          type: "boolean",
+                        },
                       },
                       additionalProperties: false,
                     },
@@ -10224,6 +10227,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         additionalProperties: false,
                       },
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -11505,6 +11511,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
+                            },
+                            allowPrivateNetwork: {
+                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -12863,6 +12872,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
                       },
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Audio Request Allow Private Network",
+                        description:
+                          "Allow audio provider requests to reach private or internal network addresses. Set to true when your transcription backend runs on a private host such as a Docker-internal hostname or RFC1918 address. Requires explicit opt-in because private network access bypasses the default SSRF guard.",
+                      },
                     },
                     additionalProperties: false,
                     title: "Audio Request Overrides",
@@ -14147,6 +14162,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
+                            },
+                            allowPrivateNetwork: {
+                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -15460,6 +15478,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         additionalProperties: false,
                       },
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -16741,6 +16762,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
+                            },
+                            allowPrivateNetwork: {
+                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -23600,6 +23624,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Audio Request TLS",
       help: "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
       tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.allowPrivateNetwork": {
+      label: "Audio Request Allow Private Network",
+      help: "Allow audio provider requests to reach private or internal network addresses. Set to true when your transcription backend runs on a private host such as a Docker-internal hostname or RFC1918 address. Requires explicit opt-in because private network access bypasses the default SSRF guard.",
+      tags: ["access", "media", "tools"],
     },
     "tools.media.video.enabled": {
       label: "Enable Video Understanding",
