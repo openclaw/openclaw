@@ -60,6 +60,18 @@ const ABORT_AWARE_LOCAL_ACT_KINDS = new Set([
   "batch",
 ]);
 
+const LOCAL_TIMEOUT_UNSAFE_PATHS = new Set([
+  "/act",
+  "/download",
+  "/highlight",
+  "/hooks/dialog",
+  "/hooks/file-chooser",
+  "/response/body",
+  "/screenshot",
+  "/snapshot",
+  "/wait/download",
+]);
+
 function isBrowserNode(node: NodeSession) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
@@ -70,7 +82,7 @@ function normalizeNodeKey(value: string) {
   return normalizeLowercaseStringOrEmpty(value).replace(/[^a-z0-9]+/g, "");
 }
 
-function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
+function resolveBrowserNode(nodes: NodeSession[], query: string) {
   const q = normalizeOptionalString(query) ?? "";
   if (!q) {
     return null;
@@ -108,7 +120,7 @@ function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | 
 function resolveBrowserNodeTarget(params: {
   cfg: ReturnType<typeof loadConfig>;
   nodes: NodeSession[];
-}): NodeSession | null {
+}) {
   const policy = params.cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
   if (mode === "off") {
@@ -168,11 +180,19 @@ function shouldWrapLocalBrowserRequestWithTimeout(params: {
   query?: Record<string, unknown>;
   body?: unknown;
 }) {
-  if (resolveRequestedProfileDriver(params) === "existing-session") {
+  const path = normalizeBrowserRequestPath(params.path);
+  let requestedProfileDriver: string | undefined;
+  try {
+    requestedProfileDriver = resolveRequestedProfileDriver(params);
+  } catch {
+    // Preserve the generic local timeout behavior when config resolution fails;
+    // downstream dispatch/setup paths already surface the underlying config error.
+    requestedProfileDriver = undefined;
+  }
+  if (requestedProfileDriver === "existing-session") {
     return false;
   }
-  const path = normalizeBrowserRequestPath(params.path);
-  if (path === "/navigate" || path === "/pdf") {
+  if (!LOCAL_TIMEOUT_UNSAFE_PATHS.has(path)) {
     return true;
   }
   if (path !== "/act" || !params.body || typeof params.body !== "object") {
@@ -227,7 +247,7 @@ export async function handleBrowserGatewayRequest({
   }
 
   const cfg = loadConfig();
-  let nodeTarget: NodeSession | null = null;
+  let nodeTarget = null as ReturnType<typeof resolveBrowserNodeTarget>;
   try {
     nodeTarget = resolveBrowserNodeTarget({
       cfg,
@@ -309,7 +329,7 @@ export async function handleBrowserGatewayRequest({
   try {
     result = shouldApplyLocalTimeout
       ? await withTimeout(
-          async (signal) =>
+          async (signal: AbortSignal) =>
             await dispatcher.dispatch({
               method: methodRaw,
               path,

@@ -99,6 +99,39 @@ describe("pw-tools-core", () => {
       }),
     ).rejects.toThrow(/fullPage is not supported/i);
   });
+  it("disconnects the target when a screenshot is aborted after it starts", async () => {
+    const ctrl = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const pendingScreenshot = new Promise<Buffer>(() => {});
+    setPwToolsCoreCurrentPage({
+      locator: vi.fn(),
+      screenshot: vi.fn(() => {
+        resolveStarted();
+        return pendingScreenshot;
+      }),
+    });
+
+    const promise = mod.takeScreenshotViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      signal: ctrl.signal,
+      type: "png",
+    });
+
+    await started;
+    ctrl.abort(new Error("screenshot aborted"));
+
+    await expect(promise).rejects.toThrow("screenshot aborted");
+    expect(sessionMocks.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+      }),
+    );
+  });
   it("arms the next file chooser and sets files (default timeout)", async () => {
     const uploadPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-upload-${crypto.randomUUID()}.txt`);
     await fs.mkdir(path.dirname(uploadPath), { recursive: true });

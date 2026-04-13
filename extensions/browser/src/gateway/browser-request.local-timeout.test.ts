@@ -166,6 +166,72 @@ describe("browser.request local timeout forwarding", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
+  it("keeps timeoutMs active for local non-act routes that used to inherit the generic wrapper", async () => {
+    let observedSignal: AbortSignal | undefined;
+    dispatcherDispatchMock.mockImplementationOnce(async ({ signal }: { signal?: AbortSignal }) => {
+      observedSignal = signal;
+      return { status: 200, body: { ok: true } };
+    });
+
+    const respond = vi.fn();
+
+    await browserHandlers["browser.request"]({
+      params: {
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+        timeoutMs: 5,
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry: {
+          listConnected: () => [],
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-2b", method: "browser.request" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(observedSignal).toBeDefined();
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
+  });
+
+  it("does not let browser config parse failures escape the timeout gate", async () => {
+    resolveBrowserConfigMock.mockImplementationOnce(() => {
+      throw new Error("invalid browser config");
+    });
+
+    let observedSignal: AbortSignal | undefined;
+    dispatcherDispatchMock.mockImplementationOnce(async ({ signal }: { signal?: AbortSignal }) => {
+      observedSignal = signal;
+      return { status: 200, body: { ok: true } };
+    });
+
+    const respond = vi.fn();
+
+    await browserHandlers["browser.request"]({
+      params: {
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+        timeoutMs: 5,
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry: {
+          listConnected: () => [],
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-2c", method: "browser.request" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(observedSignal).toBeDefined();
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
+  });
+
   it("leaves existing-session profiles on the direct dispatch path", async () => {
     resolveBrowserConfigMock.mockReturnValue({
       enabled: true,
