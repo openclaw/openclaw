@@ -70,7 +70,10 @@ import {
   consumeCompactionSafeguardCancelReason,
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
-import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
+import {
+  createPreparedEmbeddedPiSettingsManager,
+  reloadEmbeddedPiResourceLoader,
+} from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -806,7 +809,11 @@ export async function compactEmbeddedPiSessionDirect(
           settingsManager,
           extensionFactories,
         });
-        await resourceLoader.reload();
+        await reloadEmbeddedPiResourceLoader({
+          resourceLoader,
+          settingsManager,
+          cfg: params.config,
+        });
       }
 
       const { builtInTools, customTools } = splitSdkTools({

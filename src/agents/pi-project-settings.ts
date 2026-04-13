@@ -3,6 +3,7 @@ import path from "node:path";
 import { SettingsManager } from "@mariozechner/pi-coding-agent";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ContextEngineInfo } from "../context-engine/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
@@ -13,7 +14,11 @@ import {
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
-import { applyPiCompactionSettingsFromConfig } from "./pi-settings.js";
+import {
+  applyPiAutoCompactionGuard,
+  applyPiCompactionSettingsFromConfig,
+  type PiSettingsManagerLike,
+} from "./pi-settings.js";
 
 const log = createSubsystemLogger("embedded-pi-settings");
 
@@ -194,4 +199,21 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     cfg: params.cfg,
   });
   return settingsManager;
+}
+
+export async function reloadEmbeddedPiResourceLoader(params: {
+  resourceLoader: { reload: () => Promise<void> };
+  settingsManager: PiSettingsManagerLike;
+  cfg?: OpenClawConfig;
+  contextEngineInfo?: ContextEngineInfo;
+}): Promise<void> {
+  await params.resourceLoader.reload();
+  applyPiCompactionSettingsFromConfig({
+    settingsManager: params.settingsManager,
+    cfg: params.cfg,
+  });
+  applyPiAutoCompactionGuard({
+    settingsManager: params.settingsManager,
+    contextEngineInfo: params.contextEngineInfo,
+  });
 }

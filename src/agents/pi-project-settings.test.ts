@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildEmbeddedPiSettingsSnapshot,
   DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY,
+  reloadEmbeddedPiResourceLoader,
   resolveEmbeddedPiProjectSettingsPolicy,
 } from "./pi-project-settings.js";
+import type { PiSettingsManagerLike } from "./pi-settings.js";
 
 type EmbeddedPiSettingsArgs = Parameters<typeof buildEmbeddedPiSettingsSnapshot>[0];
 
@@ -124,5 +126,116 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
         args: ["/workspace/probe.ts"],
       },
     });
+  });
+});
+
+describe("reloadEmbeddedPiResourceLoader", () => {
+  function createSettingsManager(params?: {
+    keepRecentTokens?: number;
+    reserveTokens?: number;
+    compactionEnabled?: boolean;
+  }): PiSettingsManagerLike & {
+    getCompactionEnabled: () => boolean;
+  } {
+    let reserveTokens = params?.reserveTokens ?? 16_384;
+    let keepRecentTokens = params?.keepRecentTokens ?? 20_000;
+    let compactionEnabled = params?.compactionEnabled ?? true;
+    return {
+      getCompactionReserveTokens: () => reserveTokens,
+      getCompactionKeepRecentTokens: () => keepRecentTokens,
+      applyOverrides: (overrides) => {
+        reserveTokens = overrides.compaction.reserveTokens ?? reserveTokens;
+        keepRecentTokens = overrides.compaction.keepRecentTokens ?? keepRecentTokens;
+      },
+      setCompactionEnabled: (enabled) => {
+        compactionEnabled = enabled;
+      },
+      getCompactionEnabled: () => compactionEnabled,
+    };
+  }
+
+  it("reapplies configured reserveTokens after resource loader reload resets settings", async () => {
+    const settingsManager = createSettingsManager({ reserveTokens: 40_000 });
+    const resourceLoader = {
+      reload: async () => {
+        settingsManager.applyOverrides({ compaction: { reserveTokens: 16_384 } });
+      },
+    };
+
+    await reloadEmbeddedPiResourceLoader({
+      resourceLoader,
+      settingsManager,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokens: 40_000,
+            },
+          },
+        },
+      },
+    });
+
+    expect(settingsManager.getCompactionReserveTokens()).toBe(40_000);
+  });
+
+  it("reapplies the reserveTokens floor after reload", async () => {
+    const settingsManager = createSettingsManager({ reserveTokens: 24_000 });
+    const resourceLoader = {
+      reload: async () => {
+        settingsManager.applyOverrides({ compaction: { reserveTokens: 16_384 } });
+      },
+    };
+
+    await reloadEmbeddedPiResourceLoader({
+      resourceLoader,
+      settingsManager,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 24_000,
+            },
+          },
+        },
+      },
+    });
+
+    expect(settingsManager.getCompactionReserveTokens()).toBe(24_000);
+  });
+
+  it("reapplies the Pi auto-compaction guard after reload", async () => {
+    const settingsManager = createSettingsManager({
+      reserveTokens: 40_000,
+      compactionEnabled: false,
+    });
+    const resourceLoader = {
+      reload: async () => {
+        settingsManager.applyOverrides({ compaction: { reserveTokens: 16_384 } });
+        settingsManager.setCompactionEnabled?.(true);
+      },
+    };
+
+    await reloadEmbeddedPiResourceLoader({
+      resourceLoader,
+      settingsManager,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokens: 40_000,
+            },
+          },
+        },
+      },
+      contextEngineInfo: {
+        id: "pi-context",
+        name: "Pi Context",
+        ownsCompaction: true,
+      },
+    });
+
+    expect(settingsManager.getCompactionReserveTokens()).toBe(40_000);
+    expect(settingsManager.getCompactionEnabled()).toBe(false);
   });
 });
