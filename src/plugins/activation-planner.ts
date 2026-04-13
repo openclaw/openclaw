@@ -18,6 +18,7 @@ export function resolveManifestActivationPluginIds(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  cache?: boolean;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
 }): string[] {
@@ -29,6 +30,7 @@ export function resolveManifestActivationPluginIds(params: {
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
+        cache: params.cache,
       })
         .plugins.filter(
           (plugin) =>
