@@ -1,15 +1,17 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildGatewayConnectionDetails, callGateway } from "../../gateway/call.js";
+import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
-import { isLoopbackHost } from "../../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { readStringParam } from "./common.js";
 
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -21,10 +23,6 @@ export type GatewayCallOptions = {
 };
 
 type GatewayOverrideTarget = "local" | "remote";
-
-function isRemoteAgentToolGatewayUrlSource(urlSource: string): boolean {
-  return urlSource === "config gateway.remote.url" || urlSource === "env OPENCLAW_GATEWAY_URL";
-}
 
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
@@ -64,20 +62,6 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
   return { origin, key };
 }
 
-function readConfiguredRemoteGatewayKey(cfg: ReturnType<typeof loadConfig>): string | undefined {
-  const remoteUrl =
-    typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url.trim() : "";
-  if (!remoteUrl) {
-    return undefined;
-  }
-  try {
-    return canonicalizeToolGatewayWsUrl(remoteUrl).key;
-  } catch {
-    // Ignore misconfigured remote URLs here and fall back to local-only matching.
-    return undefined;
-  }
-}
-
 function validateGatewayUrlOverrideForAgentTools(params: {
   cfg: OpenClawConfig;
   urlOverride: string;
@@ -93,14 +77,23 @@ function validateGatewayUrlOverrideForAgentTools(params: {
     `wss://[::1]:${port}`,
   ]);
 
-  const remoteKey = readConfiguredRemoteGatewayKey(cfg);
+  let remoteKey: string | undefined;
+  const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url) ?? "";
+  if (remoteUrl) {
+    try {
+      const remote = canonicalizeToolGatewayWsUrl(remoteUrl);
+      remoteKey = remote.key;
+    } catch {
+      // ignore: misconfigured remote url; tools should fall back to default resolution.
+    }
+  }
 
   const parsed = canonicalizeToolGatewayWsUrl(params.urlOverride);
-  if (remoteKey && parsed.key === remoteKey) {
-    return { url: parsed.origin, target: "remote" };
-  }
   if (localAllowed.has(parsed.key)) {
     return { url: parsed.origin, target: "local" };
+  }
+  if (remoteKey && parsed.key === remoteKey) {
+    return { url: parsed.origin, target: "remote" };
   }
   throw new Error(
     [
@@ -150,49 +143,6 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
       ? Math.max(1, Math.floor(opts.timeoutMs))
       : 30_000;
   return { url: validatedOverride?.url, token, timeoutMs };
-}
-
-export function isRemoteGatewayTargetForAgentTools(params: {
-  config?: ReturnType<typeof loadConfig>;
-  gatewayUrl?: string;
-}): boolean {
-  // Always load config fresh when not explicitly provided. Using captured opts.config or {}
-  // allows bypasses when gateway.mode or gateway.remote.url changes during a session.
-  const cfg = params.config ?? loadConfig();
-  const override = trimToUndefined(params.gatewayUrl);
-  if (override) {
-    const remoteKey = readConfiguredRemoteGatewayKey(cfg);
-    if (remoteKey) {
-      try {
-        if (canonicalizeToolGatewayWsUrl(override).key === remoteKey) {
-          return true;
-        }
-      } catch {
-        // Let the actual gateway call reject invalid overrides; this helper is only for write guards.
-      }
-    }
-    // In remote mode, loopback URLs may still be SSH or local-port tunnels into a remote gateway.
-    // Treat those as remote so plugin config writes stay blocked when the target host is ambiguous.
-    if (cfg.gateway?.mode === "remote") {
-      return true;
-    }
-    try {
-      return !isLoopbackHost(new URL(override).hostname);
-    } catch {
-      // Let the actual gateway call reject invalid overrides; treat malformed targets as remote
-      // here so write guards stay conservative.
-      return true;
-    }
-  }
-  const connectionDetails = buildGatewayConnectionDetails({ config: cfg });
-  // For mutation-guard purposes, treat OPENCLAW_GATEWAY_URL as remote. Even loopback URLs from
-  // env may be SSH tunnels or port forwards into a remote gateway. The local-vs-remote distinction
-  // for loopback env URLs only applies to read operations; writes to plugin/channel config must be
-  // blocked when the target host is ambiguous.
-  if (connectionDetails.urlSource === "env OPENCLAW_GATEWAY_URL") {
-    return true;
-  }
-  return isRemoteAgentToolGatewayUrlSource(connectionDetails.urlSource);
 }
 
 export async function callGatewayTool<T = Record<string, unknown>>(

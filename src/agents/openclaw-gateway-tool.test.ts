@@ -7,73 +7,16 @@ import "./test-helpers/fast-core-tools.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-const { callGatewayToolMock, readGatewayCallOptionsMock, configState } = vi.hoisted(() => ({
+const { callGatewayToolMock, readGatewayCallOptionsMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(),
   readGatewayCallOptionsMock: vi.fn(() => ({})),
-  configState: { value: {} as Record<string, unknown> },
-}));
-const { resolvePluginConfigContractsByIdMock } = vi.hoisted(() => ({
-  resolvePluginConfigContractsByIdMock: vi.fn(),
-}));
-const { resolvePluginSetupAutoEnableReasonsMock } = vi.hoisted(() => ({
-  resolvePluginSetupAutoEnableReasonsMock: vi.fn(() => []),
-}));
-const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
-  loadPluginManifestRegistryMock: vi.fn(() => ({
-    plugins: [
-      {
-        id: "acpx",
-        origin: "bundled",
-        enabledByDefault: true,
-        autoEnableWhenConfiguredProviders: ["openai"],
-        providers: [],
-        channels: [],
-        legacyPluginIds: [],
-      },
-    ],
-    diagnostics: [],
-  })),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configState.value as ReturnType<typeof actual.loadConfig>,
-  };
-});
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: callGatewayToolMock,
+  readGatewayCallOptions: readGatewayCallOptionsMock,
+}));
 
-vi.mock("./tools/gateway.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./tools/gateway.js")>();
-  return {
-    ...actual,
-    callGatewayTool: callGatewayToolMock,
-    readGatewayCallOptions: readGatewayCallOptionsMock,
-  };
-});
-
-vi.mock("../plugins/config-contracts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/config-contracts.js")>();
-  return {
-    ...actual,
-    resolvePluginConfigContractsById: resolvePluginConfigContractsByIdMock,
-  };
-});
-vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/setup-registry.js")>();
-  return {
-    ...actual,
-    resolvePluginSetupAutoEnableReasons: resolvePluginSetupAutoEnableReasonsMock,
-  };
-});
-
-vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
-  return {
-    ...actual,
-    loadPluginManifestRegistry: loadPluginManifestRegistryMock,
-  };
-});
 function requireGatewayTool(agentSessionKey?: string) {
   return createGatewayTool({
     ...(agentSessionKey ? { agentSessionKey } : {}),
@@ -107,38 +50,6 @@ describe("gateway tool", () => {
   beforeEach(() => {
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
-    resolvePluginConfigContractsByIdMock.mockReset();
-    resolvePluginSetupAutoEnableReasonsMock.mockReset();
-    loadPluginManifestRegistryMock.mockReset();
-    configState.value = {};
-    resolvePluginConfigContractsByIdMock.mockImplementation(
-      ({ pluginIds }: { pluginIds: string[] }) =>
-        new Map(
-          pluginIds.map((pluginId) => [
-            pluginId,
-            {
-              configContracts: {
-                dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
-              },
-            },
-          ]),
-        ),
-    );
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "acpx",
-          origin: "bundled",
-          enabledByDefault: true,
-          autoEnableWhenConfiguredProviders: ["openai"],
-          providers: [],
-          channels: [],
-          legacyPluginIds: [],
-        },
-      ],
-      diagnostics: [],
-    });
-    resolvePluginSetupAutoEnableReasonsMock.mockReturnValue([]);
     callGatewayToolMock.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         return {
@@ -354,62 +265,6 @@ describe("gateway tool", () => {
     });
   });
 
-  it("rejects config.patch when it enables unsafe external content for gmail hooks", async () => {
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-dangerous-hook-patch", {
-        action: "config.patch",
-        raw: "{ hooks: { gmail: { allowUnsafeExternalContent: true } } }",
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: hooks.gmail.allowUnsafeExternalContent=true",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("allows config.patch when it explicitly keeps a dangerous hook flag disabled", async () => {
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    const tool = requireGatewayTool(sessionKey);
-    const raw = "{ hooks: { gmail: { allowUnsafeExternalContent: false } } }";
-
-    await tool.execute("call-safe-hook-patch", {
-      action: "config.patch",
-      raw,
-    });
-
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.patch",
-      raw,
-      sessionKey,
-    });
-  });
-
-  it("rejects config.patch when it weakens workspace-only apply_patch restrictions", async () => {
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-dangerous-apply-patch", {
-        action: "config.patch",
-        raw: "{ tools: { exec: { applyPatch: { workspaceOnly: false } } } }",
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: tools.exec.applyPatch.workspaceOnly=false",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
   it("rejects config.patch when it changes strict inline eval directly", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
@@ -460,657 +315,6 @@ describe("gateway tool", () => {
     );
   });
 
-  it("rejects config.patch when it disables control ui device auth", async () => {
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-dangerous-device-auth", {
-        action: "config.patch",
-        raw: "{ gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } } }",
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: gateway.controlUi.dangerouslyDisableDeviceAuth=true",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when it enables approve-all plugin permission mode", async () => {
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-dangerous-plugin-permissions", {
-        action: "config.patch",
-        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "approve-all" } } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when it activates a disabled plugin with dangerous config", async () => {
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              entries: {
-                acpx: {
-                  enabled: false,
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-enable-dangerous-plugin", {
-        action: "config.patch",
-        raw: "{ plugins: { entries: { acpx: { enabled: true } } } }",
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when it globally re-enables plugins with dangerous config", async () => {
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              enabled: false,
-              entries: {
-                acpx: {
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-enable-dangerous-plugins-globally", {
-        action: "config.patch",
-        raw: "{ plugins: { enabled: true } }",
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when it globally re-enables plugins with dangerous config and manifests are unavailable", async () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              enabled: false,
-              entries: {
-                acpx: {
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-enable-dangerous-plugins-globally-without-manifests", {
-        action: "config.patch",
-        raw: "{ plugins: { enabled: true } }",
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when an allowlist change activates dangerous plugin config", async () => {
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              allow: ["other-plugin"],
-              entries: {
-                acpx: {
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-allow-dangerous-plugin", {
-        action: "config.patch",
-        raw: '{ plugins: { allow: ["acpx"] } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when an allowlist change activates dangerous plugin config and manifests are unavailable", async () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              allow: ["other-plugin"],
-              entries: {
-                acpx: {
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-allow-dangerous-plugin-without-manifests", {
-        action: "config.patch",
-        raw: '{ plugins: { allow: ["acpx"] } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when a normalized allowlist entry activates dangerous plugin config without manifests", async () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              allow: ["other-plugin"],
-              entries: {
-                acpx: {
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-normalized-allow-dangerous-plugin-without-manifests", {
-        action: "config.patch",
-        raw: '{ plugins: { allow: ["ACPX"] } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when empty allowlist is present and manifests are unavailable", async () => {
-    // Regression: empty plugins.allow should be treated as unrestricted (matching
-    // resolvePluginActivationState which checks allow.length > 0), not as "deny all".
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              allow: [],
-              entries: {
-                acpx: {
-                  enabled: true,
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    // The dangerous flag is already active (empty allowlist = unrestricted, plugin enabled),
-    // so a no-op patch that doesn't change anything should be allowed through.
-    // But a patch that newly enables the dangerous flag should be rejected.
-    await expect(
-      tool.execute("call-empty-allowlist-no-manifests", {
-        action: "config.patch",
-        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "approve-all" } } } } }',
-      }),
-    ).resolves.toBeDefined();
-  });
-
-  it("rejects config.patch when empty allowlist and dangerous flag is newly enabled without manifests", async () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              allow: [],
-              entries: {
-                acpx: {
-                  enabled: false,
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-empty-allowlist-newly-dangerous", {
-        action: "config.patch",
-        raw: '{ plugins: { entries: { acpx: { enabled: true, config: { permissionMode: "approve-all" } } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-  });
-
-  it("rejects config.patch when provider config auto-enables dangerous plugin config", async () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "acpx",
-          origin: "bundled",
-          enabledByDefault: false,
-          autoEnableWhenConfiguredProviders: ["openai"],
-          providers: [],
-          channels: [],
-          legacyPluginIds: [],
-        },
-      ],
-      diagnostics: [],
-    });
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              entries: {
-                acpx: {
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-auto-enable-dangerous-plugin", {
-        action: "config.patch",
-        raw: '{ auth: { profiles: { primary: { provider: "openai", mode: "api-key" } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects remote config.patch when it changes plugin config", async () => {
-    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-remote-plugin-config", {
-        action: "config.patch",
-        gatewayUrl: "wss://gateway.example",
-        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects plugin config writes when remote mode uses a loopback tunnel", async () => {
-    // Guard reads live config at assertion time, not captured opts — set configState instead.
-    configState.value = { gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } } };
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-remote-tunnel-plugin-config", {
-        action: "config.patch",
-        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects plugin config writes when remote mode uses a loopback gatewayUrl override", async () => {
-    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "ws://127.0.0.1:18789" });
-    configState.value = { gateway: { mode: "remote", remote: { url: "wss://gateway.example" } } };
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-remote-loopback-override-plugin-config", {
-        action: "config.patch",
-        gatewayUrl: "ws://127.0.0.1:18789",
-        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects tunneled remote config.patch when it changes plugin config", async () => {
-    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "ws://127.0.0.1:18789" });
-    configState.value = { gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } } };
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-tunneled-remote-plugin-config", {
-        action: "config.patch",
-        gatewayUrl: "ws://127.0.0.1:18789",
-        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects remote-mode config.patch when it changes plugin config without a gatewayUrl override", async () => {
-    configState.value = { gateway: { mode: "remote", remote: { url: "wss://gateway.example" } } };
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-configured-remote-plugin-config", {
-        action: "config.patch",
-        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it.each([
-    ["plugins.allow", '{ plugins: { allow: ["acpx"] } }'],
-    ["plugins.slots", '{ plugins: { slots: { memory: "acpx" } } }'],
-    ["plugins.load", '{ plugins: { load: { paths: ["/extra/plugins"] } } }'],
-    ["channels", "{ channels: { telegram: { enabled: true } } }"],
-    ["browser", "{ browser: { enabled: true } }"],
-    ["acp", '{ acp: { backend: "acpx" } }'],
-    ["tools.allow", '{ tools: { allow: ["browser"] } }'],
-    ["tools.alsoAllow", '{ tools: { alsoAllow: ["browser"] } }'],
-    ["tools.web.x_search", '{ tools: { web: { x_search: { provider: "xai" } } } }'],
-  ])("rejects remote config.patch that changes plugin activation via %s", async (_label, raw) => {
-    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute(`call-remote-plugin-activation-${_label}`, {
-        action: "config.patch",
-        gatewayUrl: "wss://gateway.example",
-        raw,
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it.each([
-    ["plugins.enabled=false", "{ plugins: { enabled: false } }"],
-    ["plugins.deny add", '{ plugins: { deny: ["acpx"] } }'],
-  ])("allows remote hardening edits via %s", async (_label, raw) => {
-    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
-    const tool = requireGatewayTool();
-
-    const result = await tool.execute(`call-remote-hardening-${_label}`, {
-      action: "config.patch",
-      gatewayUrl: "wss://gateway.example",
-      raw,
-    });
-    expect(result).toBeDefined();
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects remote config.patch that re-enables plugins via plugins.enabled", async () => {
-    callGatewayToolMock.mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: { enabled: false },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-remote-plugin-reenable", {
-        action: "config.patch",
-        gatewayUrl: "wss://gateway.example",
-        raw: "{ plugins: { enabled: true } }",
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
-    );
-  });
-
-  it("rejects config.patch when overlapping plugin IDs activate a newly dangerous plugin", async () => {
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            plugins: {
-              allow: ["foo"],
-              entries: {
-                foo: {
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-                "foo.config": {
-                  enabled: false,
-                  config: {
-                    permissionMode: "approve-all",
-                  },
-                },
-              },
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-enable-overlapping-dangerous-plugin", {
-        action: "config.patch",
-        raw: '{ plugins: { allow: ["foo", "foo.config"], entries: { "foo.config": { enabled: true } } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: plugins.entries.foo.config.config.permissionMode=approve-all",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
   it("rejects config.patch when a legacy tools.bash alias changes exec security", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
@@ -1127,31 +331,6 @@ describe("gateway tool", () => {
       }),
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: tools.exec.security",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when a legacy tools.bash alias weakens workspace-only apply_patch restrictions", async () => {
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return { hash: "hash-1", config: {} };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-legacy-dangerous-apply-patch", {
-        action: "config.patch",
-        raw: "{ tools: { bash: { applyPatch: { workspaceOnly: false } } } }",
-      }),
-    ).rejects.toThrow(
-      "gateway config.patch cannot enable dangerous config flags: tools.exec.applyPatch.workspaceOnly=false",
     );
     expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
     expect(callGatewayTool).not.toHaveBeenCalledWith(
@@ -1218,321 +397,147 @@ describe("gateway tool", () => {
     );
   });
 
-  it("rejects config.apply when a dangerous hook mapping is swapped for a new identity", async () => {
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            hooks: {
-              mappings: [
-                {
-                  id: "gmail-a",
-                  allowUnsafeExternalContent: true,
-                },
-              ],
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
+  it("rejects config.patch that enables dangerouslyDisableDeviceAuth", async () => {
     const tool = requireGatewayTool();
 
     await expect(
-      tool.execute("call-swap-dangerous-mapping", {
-        action: "config.apply",
-        raw: `{
-          hooks: { mappings: [{ id: "evil-new", allowUnsafeExternalContent: true }] },
-          tools: { exec: { ask: "on-miss", security: "allowlist" } }
-        }`,
+      tool.execute("call-dangerous-device-auth", {
+        action: "config.patch",
+        raw: "{ gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } } }",
       }),
-    ).rejects.toThrow(
-      "gateway config.apply cannot enable dangerous config flags: hooks.mappings[0].allowUnsafeExternalContent=true",
-    );
+    ).rejects.toThrow("cannot enable dangerous config flags");
     expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.apply",
+      "config.patch",
       expect.any(Object),
       expect.anything(),
     );
   });
 
-  it("rejects config.apply when an id-less dangerous hook mapping is swapped for a different mapping at the same index", async () => {
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            hooks: {
-              // No `id` field — index-only legacy mapping
-              mappings: [{ channel: "original-channel", allowUnsafeExternalContent: true }],
-            },
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
-          },
-        };
-      }
-      return { ok: true };
-    });
+  it("rejects config.patch that enables allowUnsafeExternalContent on gmail hooks", async () => {
     const tool = requireGatewayTool();
 
     await expect(
-      tool.execute("call-swap-idless-dangerous-mapping", {
-        action: "config.apply",
-        raw: `{
-          hooks: { mappings: [{ channel: "different-channel", allowUnsafeExternalContent: true }] },
-          tools: { exec: { ask: "on-miss", security: "allowlist" } }
-        }`,
+      tool.execute("call-dangerous-gmail", {
+        action: "config.patch",
+        raw: "{ hooks: { gmail: { allowUnsafeExternalContent: true } } }",
       }),
-    ).rejects.toThrow(
-      "gateway config.apply cannot enable dangerous config flags: hooks.mappings[0].allowUnsafeExternalContent=true",
-    );
+    ).rejects.toThrow("cannot enable dangerous config flags");
     expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.apply",
+      "config.patch",
       expect.any(Object),
       expect.anything(),
     );
   });
 
-  it("allows config.apply when the legacy tools.bash alias is canonicalized to tools.exec", async () => {
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            tools: {
-              bash: { applyPatch: { workspaceOnly: false } },
-              exec: { ask: "on-miss", security: "allowlist" },
-            },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool(sessionKey);
-    const raw = `{
-      tools: { exec: { applyPatch: { workspaceOnly: false }, ask: "on-miss", security: "allowlist" } }
-    }`;
+  it("rejects config.patch that weakens applyPatch.workspaceOnly", async () => {
+    const tool = requireGatewayTool();
 
-    await tool.execute("call-legacy-canonicalize", {
-      action: "config.apply",
-      raw,
-    });
-
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.apply",
-      raw,
-      sessionKey,
-    });
-  });
-  it("allows config.apply when dangerous hook mappings are only reordered", async () => {
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            hooks: {
-              mappings: [
-                {
-                  id: "gmail-a",
-                  allowUnsafeExternalContent: true,
-                },
-              ],
-            },
-            tools: {
-              exec: {
-                ask: "on-miss",
-                security: "allowlist",
-              },
-            },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool(sessionKey);
-    const raw = `{
-      hooks: {
-        mappings: [
-          { id: "safe-new" },
-          { id: "gmail-a", allowUnsafeExternalContent: true }
-        ]
-      },
-      tools: { exec: { ask: "on-miss", security: "allowlist" } }
-    }`;
-
-    await tool.execute("call-reordered-dangerous-mapping", {
-      action: "config.apply",
-      raw,
-    });
-
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.apply",
-      raw,
-      sessionKey,
-    });
+    await expect(
+      tool.execute("call-dangerous-workspace", {
+        action: "config.patch",
+        raw: "{ tools: { exec: { applyPatch: { workspaceOnly: false } } } }",
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
-  it("allows config.apply when a dangerous legacy hook mapping only gains an id", async () => {
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            hooks: {
-              mappings: [
-                {
-                  channel: "gmail",
-                  allowUnsafeExternalContent: true,
-                },
-              ],
-            },
-            tools: {
-              exec: {
-                ask: "on-miss",
-                security: "allowlist",
-              },
-            },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool(sessionKey);
-    const raw = `{
-      hooks: {
-        mappings: [
-          { id: "gmail-a", channel: "gmail", allowUnsafeExternalContent: true }
-        ]
-      },
-      tools: { exec: { ask: "on-miss", security: "allowlist" } }
-    }`;
+  it("rejects config.patch that enables allowInsecureAuth on control UI", async () => {
+    const tool = requireGatewayTool();
 
-    await tool.execute("call-legacy-mapping-add-id", {
-      action: "config.apply",
-      raw,
-    });
-
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.apply",
-      raw,
-      sessionKey,
-    });
+    await expect(
+      tool.execute("call-dangerous-insecure-auth", {
+        action: "config.patch",
+        raw: "{ gateway: { controlUi: { allowInsecureAuth: true } } }",
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
-  it("allows config.apply when a dangerous legacy hook mapping gains an id and changes a non-routing field", async () => {
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: {
-            hooks: {
-              mappings: [
-                {
-                  channel: "gmail",
-                  allowUnsafeExternalContent: true,
-                  textTemplate: "old template",
-                },
-              ],
-            },
-            tools: {
-              exec: {
-                ask: "on-miss",
-                security: "allowlist",
-              },
-            },
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool(sessionKey);
-    const raw = `{
-      hooks: {
-        mappings: [
-          {
-            id: "gmail-a",
-            channel: "gmail",
-            allowUnsafeExternalContent: true,
-            textTemplate: "updated template"
-          }
-        ]
-      },
-      tools: { exec: { ask: "on-miss", security: "allowlist" } }
-    }`;
+  it("rejects config.patch that enables dangerouslyAllowHostHeaderOriginFallback", async () => {
+    const tool = requireGatewayTool();
 
-    await tool.execute("call-legacy-mapping-add-id-and-safe-edit", {
-      action: "config.apply",
-      raw,
-    });
-
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.apply",
-      raw,
-      sessionKey,
-    });
+    await expect(
+      tool.execute("call-dangerous-origin-fallback", {
+        action: "config.patch",
+        raw: "{ gateway: { controlUi: { dangerouslyAllowHostHeaderOriginFallback: true } } }",
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
-  it("allows config.apply when an id-less dangerous hook mapping only changes non-routing fields", async () => {
+  it("allows config.patch that does not enable any dangerous flag", async () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
+
+    const raw = '{ channels: { telegram: { groups: { "*": { requireMention: false } } } } }';
+    await tool.execute("call-safe-patch", {
+      action: "config.patch",
+      raw,
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({ raw: raw.trim() }),
+    );
+  });
+
+  it("allows config.patch when a dangerous flag is already enabled and stays enabled", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
         return {
           hash: "hash-1",
           config: {
-            hooks: {
-              mappings: [
-                {
-                  channel: "gmail",
-                  allowUnsafeExternalContent: true,
-                  textTemplate: "old template",
-                },
-              ],
-            },
-            tools: {
-              exec: {
-                ask: "on-miss",
-                security: "allowlist",
-              },
-            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+            hooks: { gmail: { allowUnsafeExternalContent: true } },
           },
         };
       }
       return { ok: true };
     });
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
-    const raw = `{
-      hooks: {
-        mappings: [
-          {
-            channel: "gmail",
-            allowUnsafeExternalContent: true,
-            textTemplate: "updated template"
-          }
-        ]
-      },
-      tools: { exec: { ask: "on-miss", security: "allowlist" } }
-    }`;
 
-    await tool.execute("call-legacy-mapping-safe-edit", {
-      action: "config.apply",
+    const raw =
+      '{ hooks: { gmail: { allowUnsafeExternalContent: true } }, agents: { defaults: { workspace: "~/test" } } }';
+    await tool.execute("call-keep-dangerous", {
+      action: "config.patch",
       raw,
     });
 
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.apply",
-      raw,
-      sessionKey,
-    });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({ raw: raw.trim() }),
+    );
+  });
+
+  it("rejects config.apply that introduces a dangerous flag", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-apply", {
+        action: "config.apply",
+        raw: '{ tools: { exec: { ask: "on-miss", security: "allowlist", applyPatch: { workspaceOnly: false } } } }',
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("passes update.run through gateway call", async () => {
