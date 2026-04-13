@@ -164,6 +164,13 @@
 - If truncation or compaction is required, prefer mutating newest or tail content first so the cached prefix stays byte-identical for as long as possible.
 - For cache-sensitive changes, require a regression test that proves turn-to-turn prefix stability or deterministic request assembly; helper-local tests alone are not enough.
 
+## Code Quality: Map Before You Code
+
+- **Rule**: before writing or modifying non-trivial logic, map the full graph of states, data flows, error paths, or async lifecycles — not just the happy path. Happy-path-only thinking is a bug factory.
+- Mapping format: plain comments listing every state/transition, input/output step, error mode, or race condition. No UML tools needed.
+- Five dimensions to check: state variable lifecycles, multi-entry idempotency, timer/callback coverage, input sanitization boundaries, timeout/race conditions.
+- If you cannot list all branches before coding, you do not understand the problem well enough to start.
+
 ## Coding Style & Naming Conventions
 
 - Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
