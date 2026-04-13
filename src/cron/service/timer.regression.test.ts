@@ -1237,6 +1237,7 @@ describe("cron service timer regressions", () => {
       state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
     });
     job.delivery = { mode: "announce", channel: "slack", to: "channel:C0AJQHV2GMN" };
+    job.failureAlert = { after: 1 };
     const state = createRunningCronServiceState({
       storePath: "/tmp/cron-timeout-cause-alert.json",
       log: noopLogger,

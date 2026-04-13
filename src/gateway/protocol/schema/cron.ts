@@ -60,11 +60,14 @@ const CronDeliveryStatusSchema = Type.Union([
 ]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
+  Type.Literal("auth_permanent"),
   Type.Literal("format"),
   Type.Literal("rate_limit"),
+  Type.Literal("overloaded"),
   Type.Literal("billing"),
   Type.Literal("timeout"),
   Type.Literal("model_not_found"),
+  Type.Literal("session_expired"),
   Type.Literal("unknown"),
 ]);
 const CronCommonOptionalFields = {
