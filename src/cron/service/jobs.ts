@@ -43,6 +43,10 @@ function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+export function hasScheduledNextRunAtMs(value: unknown): value is number {
+  return isFiniteTimestamp(value) && value > 0;
+}
+
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   if (staggerMs <= 1) {
     return 0;
@@ -372,7 +376,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     return { changed, skip: true };
   }
 
-  if (!isFiniteTimestamp(job.state.nextRunAtMs) && job.state.nextRunAtMs !== undefined) {
+  if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs) && job.state.nextRunAtMs !== undefined) {
     job.state.nextRunAtMs = undefined;
     changed = true;
   }
@@ -442,7 +446,7 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
     // a job that hasn't fired yet (e.g. during restart recovery).
     const nextRun = job.state.nextRunAtMs;
-    const isDueOrMissing = !isFiniteTimestamp(nextRun) || now >= nextRun;
+    const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
     if (isDueOrMissing) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
@@ -468,8 +472,7 @@ export function recomputeNextRunsForMaintenance(
     state,
     ({ job, nowMs: now }) => {
       let changed = false;
-      if (!isFiniteTimestamp(job.state.nextRunAtMs)) {
-        // Missing or invalid nextRunAtMs is always repaired.
+      if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
           changed = true;
         }
@@ -496,17 +499,17 @@ export function recomputeNextRunsForMaintenance(
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && isFiniteTimestamp(j.state.nextRunAtMs));
+  const enabled = jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs));
   if (enabled.length === 0) {
     return undefined;
   }
   const first = enabled[0]?.state.nextRunAtMs;
-  if (!isFiniteTimestamp(first)) {
+  if (!hasScheduledNextRunAtMs(first)) {
     return undefined;
   }
   return enabled.reduce((min, j) => {
     const next = j.state.nextRunAtMs;
-    return isFiniteTimestamp(next) ? Math.min(min, next) : min;
+    return hasScheduledNextRunAtMs(next) ? Math.min(min, next) : min;
   }, first);
 }
 
@@ -840,7 +843,9 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
     return true;
   }
   return (
-    isJobEnabled(job) && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs
+    isJobEnabled(job) &&
+    hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
+    nowMs >= job.state.nextRunAtMs
   );
 }
 

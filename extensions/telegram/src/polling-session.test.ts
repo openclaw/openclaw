@@ -30,6 +30,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 
+type TelegramApiMiddleware = (
+  prev: (...args: unknown[]) => Promise<unknown>,
+  method: string,
+  payload: unknown,
+) => Promise<unknown>;
+type AsyncVoidFn = () => Promise<void>;
+
 function makeBot() {
   return {
     api: {
@@ -41,7 +48,10 @@ function makeBot() {
   };
 }
 
-function installPollingStallWatchdogHarness() {
+function installPollingStallWatchdogHarness(
+  dateNowSequence: readonly number[] = [0, 0],
+  fallbackDateNow = 120_001,
+) {
   let watchdog: (() => void) | undefined;
   const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
     watchdog = fn as () => void;
@@ -53,15 +63,18 @@ function installPollingStallWatchdogHarness() {
     return 1 as unknown as ReturnType<typeof setTimeout>;
   });
   const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
-  const dateNowSpy = vi
-    .spyOn(Date, "now")
-    .mockImplementationOnce(() => 0) // lastGetUpdatesAt init
-    .mockImplementationOnce(() => 0) // lastApiActivityAt init
-    .mockImplementation(() => 120_001);
+  const dateNowSpy = vi.spyOn(Date, "now");
+  for (const value of dateNowSequence) {
+    dateNowSpy.mockImplementationOnce(() => value);
+  }
+  dateNowSpy.mockImplementation(() => fallbackDateNow);
 
   return {
     async waitForWatchdog() {
-      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (watchdog) {
+          break;
+        }
         await Promise.resolve();
       }
       expect(watchdog).toBeTypeOf("function");
@@ -115,6 +128,15 @@ function createPollingSessionWithTransportRestart(params: {
   telegramTransport: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport: () => ReturnType<typeof makeTelegramTransport>;
 }) {
+  return createPollingSession(params);
+}
+
+function createPollingSession(params: {
+  abortSignal: AbortSignal;
+  log?: (message: string) => void;
+  telegramTransport?: ReturnType<typeof makeTelegramTransport>;
+  createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
+}) {
   return new TelegramPollingSession({
     token: "tok",
     config: {},
@@ -125,10 +147,45 @@ function createPollingSessionWithTransportRestart(params: {
     runnerOptions: {},
     getLastUpdateId: () => null,
     persistUpdateId: async () => undefined,
-    log: () => undefined,
+    log: params.log ?? (() => undefined),
     telegramTransport: params.telegramTransport,
-    createTelegramTransport: params.createTelegramTransport,
+    ...(params.createTelegramTransport
+      ? { createTelegramTransport: params.createTelegramTransport }
+      : {}),
   });
+}
+
+function mockBotCapturingApiMiddleware(botStop: AsyncVoidFn) {
+  let apiMiddleware: TelegramApiMiddleware | undefined;
+  createTelegramBotMock.mockReturnValueOnce({
+    api: {
+      deleteWebhook: vi.fn(async () => true),
+      getUpdates: vi.fn(async () => []),
+      config: {
+        use: vi.fn((fn: TelegramApiMiddleware) => {
+          apiMiddleware = fn;
+        }),
+      },
+    },
+    stop: botStop,
+  });
+  return () => apiMiddleware;
+}
+
+function mockLongRunningPollingCycle(runnerStop: AsyncVoidFn) {
+  let firstTaskResolve: (() => void) | undefined;
+  runMock.mockReturnValue({
+    task: () =>
+      new Promise<void>((resolve) => {
+        firstTaskResolve = resolve;
+      }),
+    stop: async () => {
+      await runnerStop();
+      firstTaskResolve?.();
+    },
+    isRunning: () => true,
+  });
+  return () => firstTaskResolve?.();
 }
 
 describe("TelegramPollingSession", () => {
@@ -367,91 +424,28 @@ describe("TelegramPollingSession", () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
-
-    // Capture the API middleware so we can simulate sendMessage calls
-    let apiMiddleware:
-      | ((
-          prev: (...args: unknown[]) => Promise<unknown>,
-          method: string,
-          payload: unknown,
-        ) => Promise<unknown>)
-      | undefined;
-
-    const bot = {
-      api: {
-        deleteWebhook: vi.fn(async () => true),
-        getUpdates: vi.fn(async () => []),
-        config: {
-          use: vi.fn((fn: typeof apiMiddleware) => {
-            apiMiddleware = fn;
-          }),
-        },
-      },
-      stop: botStop,
-    };
-    createTelegramBotMock.mockReturnValue(bot);
-
-    let firstTaskResolve: (() => void) | undefined;
-    const firstTask = new Promise<void>((resolve) => {
-      firstTaskResolve = resolve;
-    });
-    runMock.mockImplementation(() => ({
-      task: () => firstTask,
-      stop: async () => {
-        await runnerStop();
-        firstTaskResolve?.();
-      },
-      isRunning: () => true,
-    }));
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
     // t=0: lastGetUpdatesAt and lastApiActivityAt initialized
     // t=120_001: watchdog fires (getUpdates stale for 120s)
     // But right before watchdog, a sendMessage succeeded at t=120_000
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
-      watchdog = fn as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
-    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
-      void Promise.resolve().then(() => (fn as () => void)());
-      return 1 as unknown as ReturnType<typeof setTimeout>;
-    });
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
-    const dateNowSpy = vi
-      .spyOn(Date, "now")
-      .mockImplementationOnce(() => 0) // lastGetUpdatesAt init
-      .mockImplementationOnce(() => 0) // lastApiActivityAt init
-      // All subsequent calls (sendMessage completion + watchdog check) return
-      // the same value, giving apiIdle = 0 — well below the stall threshold.
-      .mockImplementation(() => 120_001);
+    // All subsequent Date.now calls return the same value, giving apiIdle = 0.
+    const watchdogHarness = installPollingStallWatchdogHarness();
 
-    let watchdog: (() => void) | undefined;
     const log = vi.fn();
-    const session = new TelegramPollingSession({
-      token: "tok",
-      config: {},
-      accountId: "default",
-      runtime: undefined,
-      proxyFetch: undefined,
+    const session = createPollingSession({
       abortSignal: abort.signal,
-      runnerOptions: {},
-      getLastUpdateId: () => null,
-      persistUpdateId: async () => undefined,
       log,
-      telegramTransport: undefined,
     });
 
     try {
       const runPromise = session.runUntilAbort();
-
-      // Wait for watchdog to be captured
-      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
-        await Promise.resolve();
-      }
-      expect(watchdog).toBeTypeOf("function");
+      const watchdog = await watchdogHarness.waitForWatchdog();
 
       // Simulate a sendMessage call through the middleware before watchdog fires.
       // This updates lastApiActivityAt, proving the network is alive.
+      const apiMiddleware = getApiMiddleware();
       if (apiMiddleware) {
         const fakePrev = vi.fn(async () => ({ ok: true }));
         await apiMiddleware(fakePrev, "sendMessage", { chat_id: 123, text: "hello" });
@@ -467,14 +461,10 @@ describe("TelegramPollingSession", () => {
 
       // Clean up: abort to end the session
       abort.abort();
-      firstTaskResolve?.();
+      resolveFirstTask();
       await runPromise;
     } finally {
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
-      setTimeoutSpy.mockRestore();
-      clearTimeoutSpy.mockRestore();
-      dateNowSpy.mockRestore();
+      watchdogHarness.restore();
     }
   });
 
@@ -482,85 +472,26 @@ describe("TelegramPollingSession", () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
-    let apiMiddleware:
-      | ((
-          prev: (...args: unknown[]) => Promise<unknown>,
-          method: string,
-          payload: unknown,
-        ) => Promise<unknown>)
-      | undefined;
-    createTelegramBotMock.mockReturnValueOnce({
-      api: {
-        deleteWebhook: vi.fn(async () => true),
-        getUpdates: vi.fn(async () => []),
-        config: {
-          use: vi.fn((fn: typeof apiMiddleware) => {
-            apiMiddleware = fn;
-          }),
-        },
-      },
-      stop: botStop,
-    });
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0, 60_000]);
 
-    let firstTaskResolve: (() => void) | undefined;
-    runMock.mockReturnValue({
-      task: () =>
-        new Promise<void>((resolve) => {
-          firstTaskResolve = resolve;
-        }),
-      stop: async () => {
-        await runnerStop();
-        firstTaskResolve?.();
-      },
-      isRunning: () => true,
-    });
-
-    // t=0: lastGetUpdatesAt and lastApiActivityAt initialized
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
-      watchdog = fn as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
-    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
-      void Promise.resolve().then(() => (fn as () => void)());
-      return 1 as unknown as ReturnType<typeof setTimeout>;
-    });
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
-    const dateNowSpy = vi
-      .spyOn(Date, "now")
-      .mockImplementationOnce(() => 0) // lastGetUpdatesAt init
-      .mockImplementationOnce(() => 0) // lastApiActivityAt init
-      .mockImplementationOnce(() => 60_000) // sendMessage start
-      .mockImplementation(() => 120_001);
-
-    let watchdog: (() => void) | undefined;
     const log = vi.fn();
-    const session = new TelegramPollingSession({
-      token: "tok",
-      config: {},
-      accountId: "default",
-      runtime: undefined,
-      proxyFetch: undefined,
+    const session = createPollingSession({
       abortSignal: abort.signal,
-      runnerOptions: {},
-      getLastUpdateId: () => null,
-      persistUpdateId: async () => undefined,
       log,
-      telegramTransport: undefined,
     });
 
     try {
       const runPromise = session.runUntilAbort();
 
-      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
-        await Promise.resolve();
-      }
-      expect(watchdog).toBeTypeOf("function");
+      const watchdog = await watchdogHarness.waitForWatchdog();
 
       // Start an in-flight sendMessage that has NOT yet resolved.
       // This simulates a slow delivery where the API call is still pending.
       let resolveSendMessage: ((v: unknown) => void) | undefined;
+      const apiMiddleware = getApiMiddleware();
       if (apiMiddleware) {
         const slowPrev = vi.fn(
           () =>
@@ -586,14 +517,10 @@ describe("TelegramPollingSession", () => {
       }
 
       abort.abort();
-      firstTaskResolve?.();
+      resolveFirstTask();
       await runPromise;
     } finally {
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
-      setTimeoutSpy.mockRestore();
-      clearTimeoutSpy.mockRestore();
-      dateNowSpy.mockRestore();
+      watchdogHarness.restore();
     }
   });
 
@@ -601,82 +528,24 @@ describe("TelegramPollingSession", () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
-    let apiMiddleware:
-      | ((
-          prev: (...args: unknown[]) => Promise<unknown>,
-          method: string,
-          payload: unknown,
-        ) => Promise<unknown>)
-      | undefined;
-    createTelegramBotMock.mockReturnValueOnce({
-      api: {
-        deleteWebhook: vi.fn(async () => true),
-        getUpdates: vi.fn(async () => []),
-        config: {
-          use: vi.fn((fn: typeof apiMiddleware) => {
-            apiMiddleware = fn;
-          }),
-        },
-      },
-      stop: botStop,
-    });
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0, 1]);
 
-    let firstTaskResolve: (() => void) | undefined;
-    runMock.mockReturnValue({
-      task: () =>
-        new Promise<void>((resolve) => {
-          firstTaskResolve = resolve;
-        }),
-      stop: async () => {
-        await runnerStop();
-        firstTaskResolve?.();
-      },
-      isRunning: () => true,
-    });
-
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
-      watchdog = fn as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
-    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
-      void Promise.resolve().then(() => (fn as () => void)());
-      return 1 as unknown as ReturnType<typeof setTimeout>;
-    });
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
-    const dateNowSpy = vi
-      .spyOn(Date, "now")
-      .mockImplementationOnce(() => 0) // lastGetUpdatesAt init
-      .mockImplementationOnce(() => 0) // lastApiActivityAt init
-      .mockImplementationOnce(() => 1) // sendMessage start
-      .mockImplementation(() => 120_001);
-
-    let watchdog: (() => void) | undefined;
     const log = vi.fn();
-    const session = new TelegramPollingSession({
-      token: "tok",
-      config: {},
-      accountId: "default",
-      runtime: undefined,
-      proxyFetch: undefined,
+    const session = createPollingSession({
       abortSignal: abort.signal,
-      runnerOptions: {},
-      getLastUpdateId: () => null,
-      persistUpdateId: async () => undefined,
       log,
-      telegramTransport: undefined,
     });
 
     try {
       const runPromise = session.runUntilAbort();
 
-      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
-        await Promise.resolve();
-      }
-      expect(watchdog).toBeTypeOf("function");
+      const watchdog = await watchdogHarness.waitForWatchdog();
 
       let resolveSendMessage: ((v: unknown) => void) | undefined;
+      const apiMiddleware = getApiMiddleware();
       if (apiMiddleware) {
         const slowPrev = vi.fn(
           () =>
@@ -699,14 +568,10 @@ describe("TelegramPollingSession", () => {
       }
 
       abort.abort();
-      firstTaskResolve?.();
+      resolveFirstTask();
       await runPromise;
     } finally {
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
-      setTimeoutSpy.mockRestore();
-      clearTimeoutSpy.mockRestore();
-      dateNowSpy.mockRestore();
+      watchdogHarness.restore();
     }
   });
 
@@ -714,84 +579,25 @@ describe("TelegramPollingSession", () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
-    let apiMiddleware:
-      | ((
-          prev: (...args: unknown[]) => Promise<unknown>,
-          method: string,
-          payload: unknown,
-        ) => Promise<unknown>)
-      | undefined;
-    createTelegramBotMock.mockReturnValueOnce({
-      api: {
-        deleteWebhook: vi.fn(async () => true),
-        getUpdates: vi.fn(async () => []),
-        config: {
-          use: vi.fn((fn: typeof apiMiddleware) => {
-            apiMiddleware = fn;
-          }),
-        },
-      },
-      stop: botStop,
-    });
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0, 1, 120_000]);
 
-    let firstTaskResolve: (() => void) | undefined;
-    runMock.mockReturnValue({
-      task: () =>
-        new Promise<void>((resolve) => {
-          firstTaskResolve = resolve;
-        }),
-      stop: async () => {
-        await runnerStop();
-        firstTaskResolve?.();
-      },
-      isRunning: () => true,
-    });
-
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
-      watchdog = fn as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
-    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
-      void Promise.resolve().then(() => (fn as () => void)());
-      return 1 as unknown as ReturnType<typeof setTimeout>;
-    });
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
-    const dateNowSpy = vi
-      .spyOn(Date, "now")
-      .mockImplementationOnce(() => 0) // lastGetUpdatesAt init
-      .mockImplementationOnce(() => 0) // lastApiActivityAt init
-      .mockImplementationOnce(() => 1) // first sendMessage start
-      .mockImplementationOnce(() => 120_000) // second sendMessage start
-      .mockImplementation(() => 120_001);
-
-    let watchdog: (() => void) | undefined;
     const log = vi.fn();
-    const session = new TelegramPollingSession({
-      token: "tok",
-      config: {},
-      accountId: "default",
-      runtime: undefined,
-      proxyFetch: undefined,
+    const session = createPollingSession({
       abortSignal: abort.signal,
-      runnerOptions: {},
-      getLastUpdateId: () => null,
-      persistUpdateId: async () => undefined,
       log,
-      telegramTransport: undefined,
     });
 
     try {
       const runPromise = session.runUntilAbort();
 
-      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
-        await Promise.resolve();
-      }
-      expect(watchdog).toBeTypeOf("function");
+      const watchdog = await watchdogHarness.waitForWatchdog();
 
       let resolveFirstSend: ((v: unknown) => void) | undefined;
       let resolveSecondSend: ((v: unknown) => void) | undefined;
+      const apiMiddleware = getApiMiddleware();
       if (apiMiddleware) {
         const firstSendPromise = apiMiddleware(
           vi.fn(
@@ -829,14 +635,10 @@ describe("TelegramPollingSession", () => {
       }
 
       abort.abort();
-      firstTaskResolve?.();
+      resolveFirstTask();
       await runPromise;
     } finally {
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
-      setTimeoutSpy.mockRestore();
-      clearTimeoutSpy.mockRestore();
-      dateNowSpy.mockRestore();
+      watchdogHarness.restore();
     }
   });
 

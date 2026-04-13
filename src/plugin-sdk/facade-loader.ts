@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface-runtime.js";
+import {
+  normalizeBundledPluginArtifactSubpath,
+  resolveBundledPluginPublicSurfacePath,
+} from "../plugins/public-surface-runtime.js";
 import {
   buildPluginLoaderJitiOptions,
   resolvePluginLoaderJitiConfig,
@@ -62,7 +65,8 @@ function resolveSourceFirstPublicSurfacePath(params: {
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  const sourceBaseName = params.artifactBasename.replace(/\.js$/u, "");
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   const sourceRoot =
     params.bundledPluginsDir ?? path.resolve(getOpenClawPackageRoot(), "extensions");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {

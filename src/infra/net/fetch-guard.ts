@@ -1,5 +1,6 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
+import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -36,6 +37,12 @@ export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
   init?: RequestInit;
+  capture?:
+    | false
+    | {
+        flowId?: string;
+        meta?: Record<string, unknown>;
+      };
   maxRedirects?: number;
   /**
    * Allow replaying unsafe request methods and bodies across cross-origin redirects.
@@ -313,17 +320,21 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     try {
       assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
       await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
-      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-        lookupFn: params.lookupFn,
-        policy: params.policy,
-      });
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent();
       } else if (params.pinDns === false) {
+        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
       } else {
+        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
       }
 
@@ -349,6 +360,24 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
+
+      if (params.capture !== false) {
+        captureHttpExchange({
+          url: parsedUrl.toString(),
+          method: currentInit?.method ?? "GET",
+          requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
+          requestBody:
+            (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+          response,
+          transport: "http",
+          flowId: params.capture?.flowId,
+          meta: {
+            captureOrigin: "guarded-fetch",
+            ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+            ...params.capture?.meta,
+          },
+        });
+      }
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");

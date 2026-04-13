@@ -1077,6 +1077,37 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(tc.arguments).toEqual({ arg: "value" });
   });
 
+  it("preserves malformed function-call arguments as the raw string", () => {
+    const response: ResponseObject = {
+      id: "resp_malformed",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.4",
+      output: [
+        {
+          type: "function_call",
+          id: "item_bad_args",
+          call_id: "call_bad",
+          name: "exec",
+          arguments: "not valid json",
+        },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    const tc = msg.content.find((c) => c.type === "toolCall") as {
+      type: string;
+      name: string;
+      arguments: unknown;
+    };
+
+    expect(tc).toBeDefined();
+    expect(tc.name).toBe("exec");
+    expect(tc.arguments).toBe("not valid json");
+  });
+
   it("sets stopReason to 'toolUse' when tool calls are present", () => {
     const response = makeResponseObject("resp_3", undefined, "exec");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
@@ -3044,6 +3075,65 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("defaults response.create reasoning effort to high for reasoning models", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-default");
+    const stream = streamFn(
+      { ...modelStub, reasoning: true } as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      undefined,
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-reason-default", "Default thought"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.reasoning).toEqual({ effort: "high" });
+  });
+
+  it("forwards shared reasoning to response.create reasoning effort", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-shared");
+    const opts = { reasoning: "medium" };
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-reason-shared", "Shared thought"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.reasoning).toEqual({ effort: "medium" });
+  });
+
   it("omits response.create reasoning when reasoningEffort is none", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-none");
     const opts = { reasoningEffort: "none" };
@@ -3368,6 +3458,87 @@ describe("releaseWsSession / hasWsSession", () => {
 
   it("releaseWsSession is a no-op for unknown sessions", () => {
     expect(() => releaseWsSession("nonexistent-session")).not.toThrow();
+  });
+
+  it("recreates the cached manager when request overrides change for the same session", async () => {
+    const sessionId = "registry-test";
+    const firstStreamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId, {
+      managerOptions: {
+        request: {
+          headers: { "x-test": "one" },
+        },
+      },
+    });
+    const firstStream = firstStreamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof firstStreamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Hi") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof firstStreamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const firstManager = MockManager.lastInstance!;
+    firstManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-first", "done"),
+    });
+    for await (const _ of await resolveStream(firstStream)) {
+      // consume
+    }
+
+    const secondStreamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId, {
+      managerOptions: {
+        request: {
+          headers: { "x-test": "two" },
+          allowPrivateNetwork: true,
+        },
+      },
+    });
+    const secondStream = secondStreamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof secondStreamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Again") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof secondStreamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    expect(MockManager.instances).toHaveLength(2);
+    expect(firstManager.closeCallCount).toBe(1);
+    const secondManager = MockManager.lastInstance!;
+    expect(secondManager).not.toBe(firstManager);
+    expect(secondManager.connectCallCount).toBe(1);
+
+    secondManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-second", "done"),
+    });
+    for await (const _ of await resolveStream(secondStream)) {
+      // consume
+    }
   });
 });
 

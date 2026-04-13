@@ -3,28 +3,29 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type {
+  MediaGenerationNormalizationMetadataInput,
+  MediaNormalizationEntry,
+  MediaNormalizationValue,
+} from "./normalization.types.js";
 
 export type ParsedProviderModelRef = {
   provider: string;
   model: string;
 };
-
-export type MediaNormalizationValue = string | number | boolean;
-
-export type MediaNormalizationEntry<TValue extends MediaNormalizationValue> = {
-  requested?: TValue;
-  applied?: TValue;
-  derivedFrom?: string;
-  supportedValues?: readonly TValue[];
-};
+export type {
+  MediaGenerationNormalizationMetadataInput,
+  MediaNormalizationEntry,
+  MediaNormalizationValue,
+} from "./normalization.types.js";
 
 export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
   entry: MediaNormalizationEntry<TValue> | undefined,
@@ -399,6 +400,55 @@ export function normalizeDurationToClosestMax(
     return rounded;
   }
   return Math.min(rounded, Math.max(1, Math.round(maxDurationSeconds)));
+}
+
+export function buildMediaGenerationNormalizationMetadata(params: {
+  normalization?: MediaGenerationNormalizationMetadataInput;
+  requestedSizeForDerivedAspectRatio?: string;
+  includeSupportedDurationSeconds?: boolean;
+}): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  const { normalization } = params;
+  if (normalization?.size?.requested !== undefined && normalization.size.applied !== undefined) {
+    metadata.requestedSize = normalization.size.requested;
+    metadata.normalizedSize = normalization.size.applied;
+  }
+  if (normalization?.aspectRatio?.applied !== undefined) {
+    if (normalization.aspectRatio.requested !== undefined) {
+      metadata.requestedAspectRatio = normalization.aspectRatio.requested;
+    }
+    metadata.normalizedAspectRatio = normalization.aspectRatio.applied;
+    if (
+      normalization.aspectRatio.derivedFrom === "size" &&
+      params.requestedSizeForDerivedAspectRatio
+    ) {
+      metadata.requestedSize = params.requestedSizeForDerivedAspectRatio;
+      metadata.aspectRatioDerivedFromSize = deriveAspectRatioFromSize(
+        params.requestedSizeForDerivedAspectRatio,
+      );
+    }
+  }
+  if (
+    normalization?.resolution?.requested !== undefined &&
+    normalization.resolution.applied !== undefined
+  ) {
+    metadata.requestedResolution = normalization.resolution.requested;
+    metadata.normalizedResolution = normalization.resolution.applied;
+  }
+  if (
+    normalization?.durationSeconds?.requested !== undefined &&
+    normalization.durationSeconds.applied !== undefined
+  ) {
+    metadata.requestedDurationSeconds = normalization.durationSeconds.requested;
+    metadata.normalizedDurationSeconds = normalization.durationSeconds.applied;
+    if (
+      params.includeSupportedDurationSeconds &&
+      normalization.durationSeconds.supportedValues?.length
+    ) {
+      metadata.supportedDurationSeconds = normalization.durationSeconds.supportedValues;
+    }
+  }
+  return metadata;
 }
 
 export function throwCapabilityGenerationFailure(params: {

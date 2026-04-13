@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface-runtime.js";
+import {
+  normalizeBundledPluginArtifactSubpath,
+  resolveBundledPluginPublicSurfacePath,
+} from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync as loadBundledPluginPublicSurfaceModuleSyncLight,
@@ -44,7 +47,8 @@ function resolveSourceFirstPublicSurfacePath(params: {
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  const sourceBaseName = params.artifactBasename.replace(/\.js$/u, "");
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   const sourceRoot = params.bundledPluginsDir ?? path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
     const candidate = path.resolve(sourceRoot, params.dirName, `${sourceBaseName}${ext}`);
@@ -66,7 +70,7 @@ function resolveRegistryPluginModuleLocationFromRegistry(params: {
     (plugin) => path.basename(plugin.rootDir) === params.dirName,
     (plugin) => plugin.channels.includes(params.dirName),
   ];
-  const artifactBasename = params.artifactBasename.replace(/^\.\//u, "");
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const matchFn of tiers) {
     for (const record of params.registry.filter(matchFn)) {

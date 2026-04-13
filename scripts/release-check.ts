@@ -1,7 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync, execSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -10,11 +11,21 @@ import {
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectBundledPluginRootRuntimeMirrorErrors,
+  collectBundledPluginRuntimeDependencySpecs,
+  collectRootDistBundledRuntimeMirrors,
+} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
+export {
+  collectBundledPluginRootRuntimeMirrorErrors,
+  collectRootDistBundledRuntimeMirrors,
+  packageNameFromSpecifier,
+} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
@@ -25,6 +36,7 @@ const requiredPathGroups = [
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs(),
+  ...listRequiredQaScenarioPackPaths(),
   "scripts/npm-runner.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
@@ -48,6 +60,14 @@ const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 
+export function listRequiredQaScenarioPackPaths(): string[] {
+  const scenariosDir = resolve("qa/scenarios");
+  return readdirSync(scenariosDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => `qa/scenarios/${entry.name}`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
   const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
@@ -69,16 +89,6 @@ function collectBundledExtensions(): BundledExtension[] {
   });
 }
 
-function collectRuntimeDependencySpecs(packageJson: {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-}): Map<string, string> {
-  return new Map([
-    ...Object.entries(packageJson.dependencies ?? {}),
-    ...Object.entries(packageJson.optionalDependencies ?? {}),
-  ]);
-}
-
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
@@ -86,11 +96,18 @@ function checkBundledExtensionMetadata() {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
   };
-  const rootRuntimeDeps = collectRuntimeDependencySpecs(rootPackage);
-  const rootMirrorErrors = collectBundledExtensionRootDependencyMirrorErrors(
-    extensions,
-    rootRuntimeDeps,
+  const bundledRuntimeDependencySpecs = collectBundledPluginRuntimeDependencySpecs(
+    resolve("extensions"),
   );
+  const requiredRootMirrors = collectRootDistBundledRuntimeMirrors({
+    bundledRuntimeDependencySpecs,
+    distDir: resolve("dist"),
+  });
+  const rootMirrorErrors = collectBundledPluginRootRuntimeMirrorErrors({
+    bundledRuntimeDependencySpecs,
+    requiredRootMirrors,
+    rootPackageJson: rootPackage,
+  });
   const errors = [...manifestErrors, ...rootMirrorErrors];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
@@ -101,63 +118,6 @@ function checkBundledExtensionMetadata() {
   }
 }
 
-export function collectBundledExtensionRootDependencyMirrorErrors(
-  extensions: BundledExtension[],
-  rootRuntimeDeps: ReadonlyMap<string, string>,
-): string[] {
-  const errors: string[] = [];
-
-  for (const extension of extensions) {
-    const rawReleaseChecks = extension.packageJson.openclaw?.releaseChecks;
-    const allowlist = (rawReleaseChecks as { rootDependencyMirrorAllowlist?: unknown } | undefined)
-      ?.rootDependencyMirrorAllowlist;
-
-    if (allowlist === undefined) {
-      continue;
-    }
-    if (!Array.isArray(allowlist)) {
-      errors.push(
-        `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array`,
-      );
-      continue;
-    }
-
-    const extensionRuntimeDeps = collectRuntimeDependencySpecs(extension.packageJson);
-
-    for (const entry of allowlist) {
-      if (typeof entry !== "string" || entry.trim().length === 0) {
-        errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entries must be non-empty strings`,
-        );
-        continue;
-      }
-
-      const extensionSpec = extensionRuntimeDeps.get(entry);
-      if (!extensionSpec) {
-        errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be declared in extension runtime dependencies`,
-        );
-      }
-      const rootSpec = rootRuntimeDeps.get(entry);
-      if (!rootSpec) {
-        errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
-        );
-      }
-      if (!extensionSpec || !rootSpec) {
-        continue;
-      }
-      if (extensionSpec !== rootSpec) {
-        errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must match root runtime dependency version (extension '${extensionSpec}', root '${rootSpec}')`,
-        );
-      }
-    }
-  }
-
-  return errors;
-}
-
 function runPackDry(): PackResult[] {
   const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
     encoding: "utf8",
@@ -165,6 +125,118 @@ function runPackDry(): PackResult[] {
     maxBuffer: 1024 * 1024 * 100,
   });
   return JSON.parse(raw) as PackResult[];
+}
+
+function runPack(packDestination: string): PackResult[] {
+  const raw = execFileSync(
+    "npm",
+    ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 1024 * 1024 * 100,
+    },
+  );
+  return JSON.parse(raw) as PackResult[];
+}
+
+function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
+  const filenames = results
+    .map((entry) => entry.filename)
+    .filter((filename): filename is string => typeof filename === "string" && filename.length > 0);
+  if (filenames.length !== 1) {
+    throw new Error(
+      `release-check: npm pack produced ${filenames.length} tarballs; expected exactly one.`,
+    );
+  }
+  return resolve(packDestination, filenames[0]);
+}
+
+function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
+  execFileSync(
+    "npm",
+    [
+      "install",
+      "-g",
+      "--prefix",
+      prefixDir,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      tarballPath,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: "inherit",
+    },
+  );
+}
+
+function resolveGlobalRoot(prefixDir: string, cwd: string): string {
+  return execFileSync("npm", ["root", "-g", "--prefix", prefixDir], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function runPackedBundledChannelEntrySmoke(): void {
+  const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
+  try {
+    const packDir = join(tmpRoot, "pack");
+    mkdirSync(packDir);
+
+    const packResults = runPack(packDir);
+    const tarballPath = resolvePackedTarballPath(packDir, packResults);
+    const prefixDir = join(tmpRoot, "prefix");
+    installPackedTarball(prefixDir, tarballPath, tmpRoot);
+
+    const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    execFileSync(
+      process.execPath,
+      [
+        resolve("scripts/test-built-bundled-channel-entry-smoke.mjs"),
+        "--package-root",
+        packageRoot,
+      ],
+      {
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+        },
+      },
+    );
+
+    const homeDir = join(tmpRoot, "home");
+    const stateDir = join(tmpRoot, "state");
+    mkdirSync(homeDir, { recursive: true });
+    execFileSync(
+      process.execPath,
+      [join(packageRoot, "openclaw.mjs"), "completion", "--write-state"],
+      {
+        cwd: packageRoot,
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_SUPPRESS_NOTES: "1",
+          OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+        },
+      },
+    );
+
+    const completionFiles = readdirSync(join(stateDir, "completions")).filter(
+      (entry) => !entry.startsWith("."),
+    );
+    if (completionFiles.length === 0) {
+      throw new Error("release-check: packed completion smoke produced no completion files.");
+    }
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
 }
 
 export function collectMissingPackPaths(paths: Iterable<string>): string[] {
@@ -444,7 +516,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("release-check: npm pack contents look OK.");
+  runPackedBundledChannelEntrySmoke();
+
+  console.log("release-check: npm pack contents and bundled channel entrypoints look OK.");
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

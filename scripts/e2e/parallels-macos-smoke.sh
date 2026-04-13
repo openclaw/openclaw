@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-macos-common.sh"
 
 VM_NAME="macOS Tahoe"
 SNAPSHOT_HINT="macOS 26.3.1 latest"
@@ -32,15 +33,20 @@ GUEST_OPENCLAW_BIN="/opt/homebrew/bin/openclaw"
 GUEST_OPENCLAW_ENTRY="/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs"
 GUEST_NODE_BIN="/opt/homebrew/bin/node"
 GUEST_NPM_BIN="/opt/homebrew/bin/npm"
+GUEST_CURRENT_USER=""
+GUEST_CURRENT_USER_TRANSPORT="prlctl"
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
 PACKED_MAIN_COMMIT_SHORT=""
+TARGET_EXPECT_VERSION=""
 SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
-TIMEOUT_INSTALL_S=900
+TIMEOUT_INSTALL_SITE_S=900
+TIMEOUT_INSTALL_TGZ_S=900
+TIMEOUT_INSTALL_REGISTRY_S=480
 TIMEOUT_UPDATE_DEV_S=1500
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
@@ -49,6 +55,7 @@ TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
 TIMEOUT_DASHBOARD_S=60
 TIMEOUT_SNAPSHOT_S=180
+TIMEOUT_CURRENT_USER_PRLCTL_S=45
 TIMEOUT_DISCORD_S=180
 
 FRESH_MAIN_VERSION="skip"
@@ -68,11 +75,25 @@ say() {
 }
 
 artifact_label() {
+  if target_package_installs_directly; then
+    printf 'target package spec'
+    return
+  fi
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     printf 'target package tgz'
     return
   fi
   printf 'current main tgz'
+}
+
+target_package_installs_directly() {
+  [[ -n "$TARGET_PACKAGE_SPEC" ]] || return 1
+  case "$TARGET_PACKAGE_SPEC" in
+    http://*|https://*|file:*|/*|./*|../*|*.tgz)
+      return 1
+      ;;
+  esac
+  return 0
 }
 
 warn() {
@@ -113,9 +134,9 @@ Options:
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
                              Default: "macOS 26.3.1 latest"
   --mode <fresh|upgrade|both>
-                             fresh   = fresh snapshot -> target package/current main tgz -> onboard smoke
+                             fresh   = fresh snapshot -> target package/current main install artifact -> onboard smoke
                              upgrade = fresh snapshot -> pinned latest stable -> dev channel update -> onboard smoke
-                                       (or latest stable -> target package tgz when --target-package-spec is set)
+                                       (or latest stable -> target package install when --target-package-spec is set)
                              both    = run both lanes
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
@@ -270,12 +291,25 @@ discord_smoke_enabled() {
   [[ -n "$DISCORD_TOKEN_VALUE" && -n "$DISCORD_GUILD_ID" && -n "$DISCORD_CHANNEL_ID" ]]
 }
 
+fresh_uses_host_tgz() {
+  if [[ -z "$TARGET_PACKAGE_SPEC" ]]; then
+    return 0
+  fi
+  ! target_package_installs_directly
+}
+
 upgrade_uses_host_tgz() {
-  [[ -n "$TARGET_PACKAGE_SPEC" ]]
+  [[ -n "$TARGET_PACKAGE_SPEC" ]] && ! target_package_installs_directly
 }
 
 needs_host_tgz() {
-  [[ "$MODE" == "fresh" || "$MODE" == "both" ]] || upgrade_uses_host_tgz
+  if [[ "$MODE" == "fresh" || "$MODE" == "both" ]]; then
+    fresh_uses_host_tgz && return 0
+  fi
+  if [[ "$MODE" == "upgrade" || "$MODE" == "both" ]]; then
+    upgrade_uses_host_tgz && return 0
+  fi
+  return 1
 }
 
 upgrade_summary_label() {
@@ -480,11 +514,54 @@ wait_for_vm_status() {
   return 1
 }
 
+resolve_headless_guest_user() {
+  parallels_macos_resolve_desktop_user "$VM_NAME"
+}
+
+guest_current_user_transport_path() {
+  printf '%s/guest-current-user.tsv\n' "$RUN_DIR"
+}
+
+save_guest_current_user_transport() {
+  printf '%s\t%s\n' "$GUEST_CURRENT_USER" "$GUEST_CURRENT_USER_TRANSPORT" >"$(guest_current_user_transport_path)"
+}
+
+load_guest_current_user_transport() {
+  local transport_path
+  transport_path="$(guest_current_user_transport_path)"
+  if [[ -f "$transport_path" ]]; then
+    IFS=$'\t' read -r GUEST_CURRENT_USER GUEST_CURRENT_USER_TRANSPORT <"$transport_path"
+  fi
+}
+
 wait_for_current_user() {
-  local deadline
+  local deadline prlctl_deadline user_name
   deadline=$((SECONDS + TIMEOUT_SNAPSHOT_S))
+  prlctl_deadline=$((SECONDS + TIMEOUT_CURRENT_USER_PRLCTL_S))
+  while (( SECONDS < prlctl_deadline && SECONDS < deadline )); do
+    if user_name="$(prlctl exec "$VM_NAME" --current-user whoami 2>/dev/null | tr -d '\r' | tail -n 1)" \
+      && [[ "$user_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      GUEST_CURRENT_USER="$user_name"
+      GUEST_CURRENT_USER_TRANSPORT="prlctl"
+      save_guest_current_user_transport
+      return 0
+    fi
+    sleep 2
+  done
+  user_name="$(resolve_headless_guest_user || true)"
+  if [[ -n "$user_name" ]] && prlctl exec "$VM_NAME" /usr/bin/sudo -u "$user_name" /usr/bin/whoami >/dev/null 2>&1; then
+    GUEST_CURRENT_USER="$user_name"
+    GUEST_CURRENT_USER_TRANSPORT="sudo"
+    save_guest_current_user_transport
+    warn "desktop user unavailable via Parallels --current-user; using root sudo fallback for $user_name"
+    return 0
+  fi
   while (( SECONDS < deadline )); do
-    if prlctl exec "$VM_NAME" --current-user whoami >/dev/null 2>&1; then
+    if user_name="$(prlctl exec "$VM_NAME" --current-user whoami 2>/dev/null | tr -d '\r' | tail -n 1)" \
+      && [[ "$user_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      GUEST_CURRENT_USER="$user_name"
+      GUEST_CURRENT_USER_TRANSPORT="prlctl"
+      save_guest_current_user_transport
       return 0
     fi
     sleep 2
@@ -527,7 +604,7 @@ snapshot_switch_with_retry() {
   rc=0
   for attempt in 1 2; do
     set +e
-    host_timeout_exec "$TIMEOUT_SNAPSHOT_S" prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+    host_timeout_exec "$TIMEOUT_SNAPSHOT_S" prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" --skip-resume >/dev/null
     rc=$?
     set -e
     if [[ $rc -eq 0 ]]; then
@@ -550,9 +627,25 @@ snapshot_switch_with_retry() {
 
 GUEST_EXEC_PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+headless_guest_fallback() {
+  load_guest_current_user_transport
+  [[ "$GUEST_CURRENT_USER_TRANSPORT" == "sudo" ]]
+}
+
 guest_current_user_exec_path() {
   local path_value="$1"
   shift
+  if headless_guest_fallback; then
+    local guest_home
+    guest_home="$(parallels_macos_resolve_desktop_home "$VM_NAME" "$GUEST_CURRENT_USER")"
+    prlctl exec "$VM_NAME" /usr/bin/sudo -H -u "$GUEST_CURRENT_USER" /usr/bin/env \
+      "HOME=$guest_home" \
+      "USER=$GUEST_CURRENT_USER" \
+      "LOGNAME=$GUEST_CURRENT_USER" \
+      "PATH=$path_value" \
+      "$@"
+    return
+  fi
   prlctl exec "$VM_NAME" --current-user /usr/bin/env \
     "PATH=$path_value" \
     "$@"
@@ -569,7 +662,7 @@ guest_current_user_node_cli() {
 resolve_guest_current_user_home() {
   local user_name
   user_name="$(guest_current_user_exec /usr/bin/id -un | tr -d '\r')"
-  printf '/Users/%s\n' "$user_name"
+  parallels_macos_resolve_desktop_home "$VM_NAME" "$user_name"
 }
 
 resolve_guest_git_openclaw_entry() {
@@ -642,15 +735,32 @@ EOF
 }
 
 guest_current_user_sh() {
-  local script
+  local script script_path rc
   script=$'set -eu\n'
   script+=$'set -o pipefail\n'
   script+=$'trap "" PIPE\n'
   script+=$'umask 022\n'
-  script+=$'export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"\n'
+  script+=$'export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"\n'
   script+=$'if [ -z "${HOME:-}" ]; then export HOME="/Users/$(id -un)"; fi\n'
   script+=$'cd "$HOME"\n'
   script+="$1"
+  if headless_guest_fallback; then
+    script_path="/tmp/openclaw-prl-${BASHPID:-$$}-$RANDOM.sh"
+    local guest_home
+    guest_home="$(parallels_macos_resolve_desktop_home "$VM_NAME" "$GUEST_CURRENT_USER")"
+    printf '%s' "$script" | /usr/bin/base64 | prlctl exec "$VM_NAME" \
+      /usr/bin/sudo -H -u "$GUEST_CURRENT_USER" /usr/bin/env \
+      "HOME=$guest_home" \
+      "USER=$GUEST_CURRENT_USER" \
+      "LOGNAME=$GUEST_CURRENT_USER" \
+      /usr/bin/base64 -D -o "$script_path"
+    set +e
+    guest_current_user_exec_path "$GUEST_EXEC_PATH" /bin/bash "$script_path"
+    rc=$?
+    set -e
+    guest_current_user_exec /bin/rm -f "$script_path" >/dev/null 2>&1 || true
+    return "$rc"
+  fi
   guest_script current-user "$script"
 }
 
@@ -660,6 +770,83 @@ guest_current_user_tail_file() {
   guest_current_user_exec /usr/bin/tail -n "$lines" "$file_path"
 }
 
+latest_guest_npm_debug_log_path() {
+  local guest_home="$1"
+  guest_current_user_sh "$(cat <<EOF
+/usr/bin/python3 - <<'PY'
+from pathlib import Path
+
+logs = Path($(shell_quote "$guest_home")) / ".npm" / "_logs"
+candidates = sorted(
+    logs.glob("*-debug-0.log"),
+    key=lambda path: path.stat().st_mtime,
+    reverse=True,
+)
+if candidates:
+    print(candidates[0])
+PY
+EOF
+)" | tr -d '\r' | tail -n 1
+}
+
+guest_runner_rc_from_log() {
+  local log_path="$1"
+  guest_current_user_sh "$(cat <<EOF
+/usr/bin/python3 - <<'PY'
+from pathlib import Path
+
+path = Path($(shell_quote "$log_path"))
+if not path.exists():
+    raise SystemExit(1)
+
+markers = [
+    line.strip()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if line.startswith("__OPENCLAW_RC__:")
+]
+if not markers:
+    raise SystemExit(1)
+
+print(markers[-1].split(":", 1)[1])
+PY
+EOF
+)" | tr -d '\r' | tail -n 1
+}
+
+stream_guest_file_delta() {
+  local remote_path="$1"
+  local state_path="$2"
+  local prefix="$3"
+  local content rc
+  [[ -n "$remote_path" ]] || return 0
+  set +e
+  content="$(guest_current_user_exec /bin/cat "$remote_path" 2>/dev/null)"
+  rc=$?
+  set -e
+  [[ $rc -eq 0 ]] || return 0
+  CONTENT="$content" PREFIX="$prefix" python3 - "$state_path" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+previous = state_path.read_text(encoding="utf-8", errors="replace") if state_path.exists() else ""
+current = os.environ["CONTENT"].replace("\r\n", "\n").replace("\r", "\n")
+prefix = os.environ["PREFIX"]
+
+if current.startswith(previous):
+    delta = current[len(previous):]
+else:
+    delta = current
+
+if delta:
+    for line in delta.splitlines():
+        print(f"{prefix}{line}")
+
+state_path.write_text(current, encoding="utf-8")
+PY
+}
+
 run_logged_guest_current_user_sh() {
   local script="$1"
   local log_path="$2"
@@ -667,16 +854,22 @@ run_logged_guest_current_user_sh() {
   local timeout_s="$4"
   local runner_path="$5"
   local deadline rc runner_body write_runner_cmd
+  local guest_home guest_log_state_path latest_npm_log_path latest_npm_log_state_path npm_state_path
   guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path"
   runner_body="$(cat <<EOF
-set -eu
-set -o pipefail
-trap 'status=\$?; printf "%s\n" "\$status" > "$done_path"; exit "\$status"' EXIT
-umask 022
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
-if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
-cd "\$HOME"
-$script
+status=0
+(
+  set -eu
+  set -o pipefail
+  umask 022
+  export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
+  if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
+  cd "\$HOME"
+  $script
+) || status=\$?
+printf '__OPENCLAW_RC__:%s\n' "\$status"
+printf '%s\n' "\$status" > "$done_path"
+exit "\$status"
 EOF
 )"
   write_runner_cmd="/bin/rm -f $(shell_quote "$runner_path")"$'\n'
@@ -684,18 +877,41 @@ EOF
   write_runner_cmd+="$runner_body"$'\n'
   write_runner_cmd+="__OPENCLAW_RUNNER__"$'\n'
   write_runner_cmd+="/bin/chmod +x $(shell_quote "$runner_path")"$'\n'
-  write_runner_cmd+="nohup /bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null &"
+  write_runner_cmd+="(/bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null &) >/dev/null 2>&1"
   guest_current_user_sh "$write_runner_cmd"
+  guest_home="$(resolve_guest_current_user_home)"
+  guest_log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-guest-log-state.XXXXXX")"
+  latest_npm_log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-guest-npm-log-state.XXXXXX")"
+  npm_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-guest-npm-log-path.XXXXXX")"
+  : >"$guest_log_state_path"
+  : >"$latest_npm_log_state_path"
+  : >"$npm_state_path"
   deadline=$((SECONDS + timeout_s))
   while (( SECONDS < deadline )); do
-    if guest_current_user_exec /bin/test -f "$done_path" >/dev/null 2>&1; then
-      rc="$(guest_current_user_exec /bin/cat "$done_path" | tr -d '\r\n')"
+    stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
+    latest_npm_log_path="$(latest_guest_npm_debug_log_path "$guest_home" || true)"
+    if [[ -n "$latest_npm_log_path" ]]; then
+      if [[ "$(cat "$npm_state_path" 2>/dev/null || true)" != "$latest_npm_log_path" ]]; then
+        printf '%s\n' "$latest_npm_log_path" >"$npm_state_path"
+        : >"$latest_npm_log_state_path"
+        printf 'npm-debug: %s\n' "$latest_npm_log_path"
+      fi
+      stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
+    fi
+    rc="$(guest_runner_rc_from_log "$log_path" 2>/dev/null || true)"
+    if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
       guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
+      if [[ -n "$latest_npm_log_path" ]]; then
+        stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
+      fi
+      rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
       [[ -n "$rc" ]] || rc=1
       return "$rc"
     fi
     sleep 2
   done
+  rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
   warn "guest script timed out after ${timeout_s}s"
   guest_current_user_tail_file "$log_path" 120 >&2 || true
   return 124
@@ -703,12 +919,17 @@ EOF
 
 restore_snapshot() {
   local snapshot_id="$1"
+  local status
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
   snapshot_switch_with_retry "$snapshot_id" || die "snapshot switch failed for $VM_NAME"
-  if [[ "$SNAPSHOT_STATE" == "poweroff" ]]; then
+  status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+  if [[ "$SNAPSHOT_STATE" == "poweroff" || "$status" == *" stopped" ]]; then
     wait_for_vm_status "stopped" || die "restored poweroff snapshot did not reach stopped state in $VM_NAME"
-    say "Start restored poweroff snapshot $SNAPSHOT_NAME"
+    say "Start restored snapshot $SNAPSHOT_NAME"
     prlctl start "$VM_NAME" >/dev/null
+  elif [[ "$status" == *" suspended" ]]; then
+    say "Resume restored snapshot $SNAPSHOT_NAME"
+    prlctl resume "$VM_NAME" >/dev/null
   fi
   wait_for_current_user || die "desktop user did not become ready in $VM_NAME"
 }
@@ -797,7 +1018,8 @@ run_dev_channel_update() {
   run_logged_guest_current_user_sh "$(cat <<EOF
 rm -rf $(shell_quote "$update_root")
 export PATH=$(shell_quote "$bootstrap_bin:$GUEST_EXEC_PATH")
-$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY update --channel dev --yes --json
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 \
+  $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY update --channel dev --yes --json
 EOF
 )" "$update_log" "$update_done" "$TIMEOUT_UPDATE_DEV_S" "$update_runner"
   update_rc=$?
@@ -848,6 +1070,12 @@ extract_package_build_commit_from_tgz() {
 
 pack_main_tgz() {
   local short_head pkg packed_commit
+  if target_package_installs_directly; then
+    say "Use direct guest install for target package spec: $TARGET_PACKAGE_SPEC"
+    TARGET_EXPECT_VERSION="$(npm view "$TARGET_PACKAGE_SPEC" version --userconfig "$(mktemp)")"
+    say "Target package version: $TARGET_EXPECT_VERSION"
+    return
+  fi
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
     pkg="$(
@@ -960,30 +1188,75 @@ start_server() {
   kill -0 "$SERVER_PID" >/dev/null 2>&1 || die "failed to start host HTTP server"
 }
 
+install_main_timeout() {
+  if target_package_installs_directly; then
+    printf '%s\n' "$TIMEOUT_INSTALL_REGISTRY_S"
+    return
+  fi
+  printf '%s\n' "$TIMEOUT_INSTALL_TGZ_S"
+}
+
 install_main_tgz() {
   local host_ip="$1"
   local temp_name="$2"
-  local tgz_url_q
+  local install_done install_log install_runner tgz_url_q
+  install_log="/tmp/${temp_name}.log"
+  install_done="/tmp/${temp_name}.done"
+  install_runner="/tmp/${temp_name}.runner.sh"
+  if target_package_installs_directly; then
+    run_logged_guest_current_user_sh "$(cat <<EOF
+printf 'install-source: registry-spec %s\n' $(shell_quote "$TARGET_PACKAGE_SPEC")
+$GUEST_NPM_BIN install -g $(shell_quote "$TARGET_PACKAGE_SPEC")
+$GUEST_OPENCLAW_BIN --version
+EOF
+)" "$install_log" "$install_done" "$(install_main_timeout)" "$install_runner"
+    return
+  fi
   tgz_url_q="$(shell_quote "http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")")"
-  guest_current_user_sh "$(cat <<EOF
+  run_logged_guest_current_user_sh "$(cat <<EOF
+printf 'install-source: host-tgz %s\n' $(shell_quote "$tgz_url_q")
 curl -fsSL $tgz_url_q -o /tmp/$temp_name
 $GUEST_NPM_BIN install -g /tmp/$temp_name
 $GUEST_OPENCLAW_BIN --version
 EOF
-)"
+)" "$install_log" "$install_done" "$(install_main_timeout)" "$install_runner"
 }
 
 verify_bundle_permissions() {
   local npm_q cmd
   npm_q="$(shell_quote "$GUEST_NPM_BIN")"
   cmd="$(cat <<EOF
-root=\$($npm_q root -g); check_path() { local path="\$1"; [ -e "\$path" ] || return 0; local perm perm_oct; perm=\$(/usr/bin/stat -f '%OLp' "\$path"); perm_oct=\$((8#\$perm)); if (( perm_oct & 0002 )); then echo "world-writable install artifact: \$path (\$perm)" >&2; exit 1; fi; }; check_path "\$root/openclaw"; check_path "\$root/openclaw/extensions"; if [ -d "\$root/openclaw/extensions" ]; then while IFS= read -r -d '' extension_dir; do check_path "\$extension_dir"; done < <(/usr/bin/find "\$root/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0); fi
+set -eu
+set -o pipefail
+root=\$($npm_q root -g)
+check_path() {
+  local path="\$1"
+  [ -e "\$path" ] || return 0
+  local perm perm_oct
+  perm=\$(/usr/bin/stat -f '%OLp' "\$path")
+  perm_oct=\$((8#\$perm))
+  if (( perm_oct & 0002 )); then
+    echo "world-writable install artifact: \$path (\$perm)" >&2
+    exit 1
+  fi
+}
+check_path "\$root/openclaw"
+check_path "\$root/openclaw/extensions"
+if [ -d "\$root/openclaw/extensions" ]; then
+  while IFS= read -r -d '' extension_dir; do
+    check_path "\$extension_dir"
+  done < <(/usr/bin/find "\$root/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0)
+fi
 EOF
 )"
   guest_current_user_exec /bin/bash -lc "$cmd"
 }
 
 run_ref_onboard() {
+  local daemon_args=("--install-daemon")
+  if headless_guest_fallback; then
+    daemon_args=("--skip-health")
+  fi
   guest_current_user_cli \
     /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" \
     "$GUEST_OPENCLAW_BIN" onboard \
@@ -993,10 +1266,24 @@ run_ref_onboard() {
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
-    --install-daemon \
+    "${daemon_args[@]}" \
     --skip-skills \
     --accept-risk \
     --json
+}
+
+start_manual_gateway_if_needed() {
+  if ! headless_guest_fallback; then
+    return 0
+  fi
+  guest_current_user_sh "$(cat <<EOF
+pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
+pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
+/usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") \
+  $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY gateway run --bind loopback --port 18789 --force \
+  >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
+EOF
+)"
 }
 
 verify_gateway() {
@@ -1023,7 +1310,7 @@ show_gateway_status_compat() {
 
 verify_turn() {
   guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" models set "$MODEL_ID"
-  guest_current_user_exec /bin/sh -lc "$(cat <<EOF
+  guest_current_user_sh "$(cat <<EOF
 export PATH=$(shell_quote "$GUEST_EXEC_PATH")
 exec /usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") \
   $(shell_quote "$GUEST_NODE_BIN") $(shell_quote "$GUEST_OPENCLAW_ENTRY") agent \
@@ -1050,7 +1337,7 @@ resolve_dashboard_url() {
 }
 
 verify_dashboard_load() {
-  local dashboard_url dashboard_http_url dashboard_url_q dashboard_http_url_q cmd
+  local dashboard_url dashboard_http_url dashboard_url_q dashboard_http_url_q cmd headless_flag
   # `openclaw dashboard --no-open` can hang under the Tahoe Parallels transport
   # even when the dashboard itself is healthy. Probe the local dashboard URL
   # directly so the smoke still validates HTML readiness and browser reachability.
@@ -1058,13 +1345,18 @@ verify_dashboard_load() {
   dashboard_http_url="$dashboard_url"
   dashboard_url_q="$(shell_quote "$dashboard_url")"
   dashboard_http_url_q="$(shell_quote "$dashboard_http_url")"
+  headless_flag=0
+  if headless_guest_fallback; then
+    headless_flag=1
+  fi
   cmd="$(cat <<EOF
 set -eu
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
+export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
 if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
 cd "\$HOME"
 dashboard_url=$dashboard_url_q
 dashboard_http_url=$dashboard_http_url_q
+headless_flag=$(shell_quote "$headless_flag")
 dashboard_port=\$(printf '%s\n' "\$dashboard_http_url" | sed -E 's#^https?://[^:/]+:([0-9]+).*\$#\1#')
 if [ -z "\$dashboard_port" ] || [ "\$dashboard_port" = "\$dashboard_http_url" ]; then
   echo "failed to parse dashboard port from \$dashboard_http_url" >&2
@@ -1073,7 +1365,7 @@ fi
 deadline=\$((SECONDS + 30))
 dashboard_ready=0
 while [ \$SECONDS -lt \$deadline ]; do
-  if curl -fsSL "\$dashboard_http_url" >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
+  if curl -fsSL --connect-timeout 2 --max-time 5 "\$dashboard_http_url" >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
     if grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
       if grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
         dashboard_ready=1
@@ -1089,13 +1381,16 @@ done
 }
 grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null
 grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null
+if [ "\$headless_flag" = "1" ]; then
+  exit 0
+fi
 pkill -x Safari >/dev/null 2>&1 || true
 open -a Safari "\$dashboard_url"
 deadline=\$((SECONDS + 20))
 while [ \$SECONDS -lt \$deadline ]; do
   # Tahoe can hand dashboard sockets to WebKit helpers even after the Safari
   # app process exits, so require a non-node client connection rather than a
-  # long-lived `Safari` process specifically.
+  # long-lived Safari process specifically.
   if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
     | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
     exit 0
@@ -1106,7 +1401,7 @@ echo "Safari did not establish a dashboard client connection on port \$dashboard
 exit 1
 EOF
 )"
-  guest_current_user_exec /bin/sh -lc "$cmd"
+  guest_current_user_sh "$cmd"
 }
 
 configure_discord_smoke() {
@@ -1156,9 +1451,7 @@ $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY channels status --probe --json
 rm -f /tmp/openclaw-discord-token /tmp/openclaw-discord-guilds.json
 EOF
 )"
-  prlctl exec "$VM_NAME" --current-user /usr/bin/env \
-    PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
-    /bin/sh -lc "$script"
+  guest_current_user_sh "$script"
 }
 
 discord_message_id_from_send_log() {
@@ -1429,11 +1722,12 @@ run_fresh_main_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
-  phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
+  phase_run "fresh.install-main" "$(install_main_timeout)" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "fresh.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
+  phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
@@ -1452,7 +1746,7 @@ run_upgrade_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
-  phase_run "upgrade.install-latest" "$TIMEOUT_INSTALL_S" install_latest_release
+  phase_run "upgrade.install-latest" "$TIMEOUT_INSTALL_SITE_S" install_latest_release
   LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-latest)")"
   phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$LATEST_VERSION"
   if [[ "$CHECK_LATEST_REF" -eq 1 ]]; then
@@ -1465,7 +1759,7 @@ run_upgrade_lane() {
     UPGRADE_PRECHECK_STATUS="skipped"
   fi
   if upgrade_uses_host_tgz; then
-    phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
+    phase_run "upgrade.install-main" "$(install_main_timeout)" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
     UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
     phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
     phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
@@ -1475,6 +1769,7 @@ run_upgrade_lane() {
     phase_run "upgrade.verify-dev-channel" "$TIMEOUT_VERIFY_S" verify_dev_channel_update
   fi
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
+  phase_run "upgrade.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
