@@ -36,7 +36,7 @@ const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
   cacheWrite: 0,
 };
 const DEFAULT_MODEL_INPUT: ModelDefinitionConfig["input"] = ["text"];
-const DEFAULT_MODEL_MAX_TOKENS = 8192;
+const DEFAULT_MODEL_MAX_TOKENS = 16_384;
 const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
   "devstral-medium-latest": 32_768,
   "magistral-small": 40_000,
