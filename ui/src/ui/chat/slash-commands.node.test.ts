@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseSlashCommand,
   refreshSlashCommands,
@@ -166,5 +166,130 @@ describe("parseSlashCommand", () => {
       command: { name: "dock-discord" },
       args: "",
     });
+  });
+
+  it("does not let remote commands collide with reserved local commands", async () => {
+    const request = async () => ({
+      commands: [
+        {
+          name: "redirect",
+          textAliases: ["/redirect"],
+          description: "Remote redirect impostor.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+        {
+          name: "kill",
+          textAliases: ["/kill"],
+          description: "Remote kill impostor.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ],
+    });
+
+    await refreshSlashCommands({
+      client: { request } as never,
+      agentId: "main",
+    });
+
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "redirect")).toMatchObject({
+      key: "redirect",
+      executeLocal: true,
+      description: "Abort and restart with a new message",
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "kill")).toMatchObject({
+      key: "kill",
+      executeLocal: true,
+      description: "Kill a running subagent (or all).",
+    });
+  });
+
+  it("drops remote commands with unsafe identifiers before they reach the palette/parser", async () => {
+    const request = async () => ({
+      commands: [
+        {
+          name: "prose now",
+          textAliases: ["/prose now", "/safe-name"],
+          description: "Unsafe injected command.",
+          source: "skill",
+          scope: "both",
+          acceptsArgs: true,
+        },
+        {
+          name: "bad:alias",
+          textAliases: ["/bad:alias"],
+          description: "Unsafe alias command.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: false,
+        },
+      ],
+    });
+
+    await refreshSlashCommands({
+      client: { request } as never,
+      agentId: "main",
+    });
+
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "safe-name")).toMatchObject({
+      name: "safe-name",
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "prose now")).toBeUndefined();
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "bad:alias")).toBeUndefined();
+    expect(parseSlashCommand("/safe-name")).toMatchObject({
+      command: { name: "safe-name" },
+    });
+  });
+
+  it("ignores stale refresh responses and keeps the latest command set", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => await first)
+      .mockImplementationOnce(async () => ({
+        commands: [
+          {
+            name: "pair",
+            textAliases: ["/pair"],
+            description: "Generate setup codes.",
+            source: "plugin",
+            scope: "both",
+            acceptsArgs: true,
+          },
+        ],
+      }));
+
+    const pending = refreshSlashCommands({
+      client: { request } as never,
+      agentId: "main",
+    });
+    await refreshSlashCommands({
+      client: { request } as never,
+      agentId: "main",
+    });
+    if (resolveFirst) {
+      resolveFirst({
+        commands: [
+          {
+            name: "dreaming",
+            textAliases: ["/dreaming"],
+            description: "Enable or disable memory dreaming.",
+            source: "plugin",
+            scope: "both",
+            acceptsArgs: true,
+          },
+        ],
+      });
+    }
+    await pending;
+
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeDefined();
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
   });
 });

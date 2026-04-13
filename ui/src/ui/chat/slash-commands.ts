@@ -37,6 +37,8 @@ type CommandLike = {
   category?: string;
 };
 
+const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
+
 const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   help: "book",
   status: "barChart",
@@ -204,7 +206,10 @@ function mapIcon(command: CommandLike): IconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
 }
 
-function toSlashCommand(command: CommandLike): SlashCommandDef | null {
+function toSlashCommand(
+  command: CommandLike,
+  source: "local" | "remote" = "local",
+): SlashCommandDef | null {
   const name = getPrimarySlashName(command);
   if (!name) {
     return null;
@@ -217,21 +222,70 @@ function toSlashCommand(command: CommandLike): SlashCommandDef | null {
     args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
-    executeLocal: LOCAL_COMMANDS.has(command.key),
+    executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     argOptions: getArgOptions(command),
   };
 }
 
-function normalizeCommandEntry(entry: CommandEntry): CommandLike {
-  const aliases = Array.isArray(entry.textAliases)
-    ? entry.textAliases.filter((alias) => typeof alias === "string")
-    : [];
-  const primaryAlias = aliases.find((alias) => alias.startsWith("/"));
-  const primaryName = primaryAlias ? primaryAlias.slice(1) : entry.name;
+function normalizeSlashIdentifier(raw: string): string | null {
+  const trimmed = raw.trim().replace(/^\//u, "");
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+  if (!normalized || !REMOTE_SLASH_IDENTIFIER_PATTERN.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function buildLocalSlashCommands(): SlashCommandDef[] {
+  const builtins = buildBuiltinChatCommands()
+    .map((command) => ({
+      key: command.key,
+      name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
+      aliases: command.textAliases,
+      description: command.description,
+      args: command.args?.map((arg) => ({
+        name: arg.name,
+        required: arg.required,
+        choices: Array.isArray(arg.choices) ? arg.choices : undefined,
+      })),
+      category: command.category,
+    }))
+    .map((command) => toSlashCommand(command, "local"))
+    .filter((command): command is SlashCommandDef => command !== null);
+  return [...builtins, ...UI_ONLY_COMMANDS];
+}
+
+function buildReservedLocalSlashNames(): Set<string> {
+  const reserved = new Set<string>();
+  for (const command of buildLocalSlashCommands()) {
+    reserved.add(normalizeLowercaseStringOrEmpty(command.name));
+    for (const alias of command.aliases ?? []) {
+      const normalized = normalizeSlashIdentifier(alias);
+      if (normalized) {
+        reserved.add(normalized);
+      }
+    }
+  }
+  return reserved;
+}
+
+function normalizeCommandEntry(
+  entry: CommandEntry,
+  reservedLocalNames: Set<string>,
+): CommandLike | null {
+  const aliases = (Array.isArray(entry.textAliases) ? entry.textAliases : [])
+    .filter((alias): alias is string => typeof alias === "string")
+    .map(normalizeSlashIdentifier)
+    .filter((alias): alias is string => Boolean(alias))
+    .filter((alias) => !reservedLocalNames.has(alias));
+  const primaryName = aliases[0] ?? normalizeSlashIdentifier(entry.name);
+  if (!primaryName || reservedLocalNames.has(primaryName)) {
+    return null;
+  }
   return {
     key: primaryName,
     name: primaryName,
-    aliases,
+    aliases: aliases.map((alias) => `/${alias}`),
     description: entry.description,
     args: entry.args?.map((arg) => ({
       name: arg.name,
@@ -247,12 +301,15 @@ function replaceSlashCommands(next: SlashCommandDef[]) {
 }
 
 function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
+  const local = buildLocalSlashCommands();
+  const reservedLocalNames = buildReservedLocalSlashNames();
   const mapped = entries
-    .map(normalizeCommandEntry)
-    .map(toSlashCommand)
+    .map((entry) => normalizeCommandEntry(entry, reservedLocalNames))
+    .filter((command): command is CommandLike => command !== null)
+    .map((command) => toSlashCommand(command, "remote"))
     .filter((command): command is SlashCommandDef => command !== null);
   const deduped = new Map<string, SlashCommandDef>();
-  for (const command of [...mapped, ...UI_ONLY_COMMANDS]) {
+  for (const command of [...local, ...mapped]) {
     const key = normalizeLowercaseStringOrEmpty(command.name);
     if (!key || deduped.has(key)) {
       continue;
@@ -263,31 +320,7 @@ function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef
 }
 
 function buildFallbackSlashCommands(): SlashCommandDef[] {
-  const builtins = buildBuiltinChatCommands()
-    .map((command) => ({
-      key: command.key,
-      name: command.textAliases[0]?.replace(/^\//, "") ?? command.key,
-      aliases: command.textAliases,
-      description: command.description,
-      args: command.args?.map((arg) => ({
-        name: arg.name,
-        required: arg.required,
-        choices: Array.isArray(arg.choices) ? arg.choices : undefined,
-      })),
-      category: command.category,
-    }))
-    .map(toSlashCommand)
-    .filter((command): command is SlashCommandDef => command !== null);
-  return buildSlashCommandsFromEntries([]).concat(
-    builtins.filter(
-      (command) =>
-        !UI_ONLY_COMMANDS.some(
-          (uiCommand) =>
-            normalizeLowercaseStringOrEmpty(uiCommand.name) ===
-            normalizeLowercaseStringOrEmpty(command.name),
-        ),
-    ),
-  );
+  return buildLocalSlashCommands();
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
@@ -301,6 +334,9 @@ export async function refreshSlashCommands(params: {
   const seq = ++_refreshSeq;
   const agentId = params.agentId?.trim();
   if (!params.client || !agentId) {
+    if (seq !== _refreshSeq) {
+      return;
+    }
     replaceSlashCommands(buildFallbackSlashCommands());
     return;
   }
@@ -310,16 +346,20 @@ export async function refreshSlashCommands(params: {
       includeArgs: true,
       scope: "text",
     });
-    if (seq !== _refreshSeq) return;
+    if (seq !== _refreshSeq) {
+      return;
+    }
     replaceSlashCommands(buildSlashCommandsFromEntries(result?.commands ?? []));
   } catch {
-    if (seq !== _refreshSeq) return;
+    if (seq !== _refreshSeq) {
+      return;
+    }
     replaceSlashCommands(buildFallbackSlashCommands());
   }
 }
-}
 
 export function resetSlashCommandsForTest(): void {
+  _refreshSeq = 0;
   replaceSlashCommands(buildFallbackSlashCommands());
 }
 

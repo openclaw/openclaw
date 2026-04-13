@@ -1,15 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
-const { refreshChatMock, refreshChatAvatarMock, loadChatHistoryMock, loadSessionsMock } =
-  vi.hoisted(() => ({
-    refreshChatMock: vi.fn(),
-    refreshChatAvatarMock: vi.fn(),
-    loadChatHistoryMock: vi.fn(),
-    loadSessionsMock: vi.fn(),
-  }));
+const {
+  refreshChatMock,
+  refreshChatAvatarMock,
+  refreshSlashCommandsMock,
+  loadChatHistoryMock,
+  loadSessionsMock,
+} = vi.hoisted(() => ({
+  refreshChatMock: vi.fn(),
+  refreshChatAvatarMock: vi.fn(),
+  refreshSlashCommandsMock: vi.fn(),
+  loadChatHistoryMock: vi.fn(),
+  loadSessionsMock: vi.fn(),
+}));
 
 vi.mock("./app-chat.ts", () => ({
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
+}));
+
+vi.mock("./chat/slash-commands.ts", () => ({
+  refreshSlashCommands: (...args: unknown[]) => refreshSlashCommandsMock(...args),
 }));
 
 vi.mock("./controllers/chat.ts", () => ({
@@ -393,6 +403,7 @@ describe("switchChatSession", () => {
     } as unknown as AppViewState;
 
     refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
@@ -402,6 +413,10 @@ describe("switchChatSession", () => {
     expect(state.chatSideResult).toBeNull();
     expect(state.chatSideResultTerminalRuns.size).toBe(0);
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
+    expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
+      client: undefined,
+      agentId: "main",
+    });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
       activeMinutes: 0,
