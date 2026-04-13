@@ -11,11 +11,15 @@ export const DEFAULT_MODELS_MD = `# Per-Model Corrective Instructions
 # Works with any provider — cloud, local (Ollama, vLLM), or custom.
 # Example: ## MODEL: my-custom-model
 
-## MODEL: gpt-5.3
+## MODEL: gpt-5.4
 
 [paste rules here]
 
-## MODEL: gpt-5.4
+## MODEL: gpt-5.3-codex
+
+[paste rules here]
+
+## MODEL: claude-opus-4-6
 
 [paste rules here]
 
@@ -23,11 +27,15 @@ export const DEFAULT_MODELS_MD = `# Per-Model Corrective Instructions
 
 [paste rules here]
 
-## MODEL: gemini-2.5-pro
+## MODEL: gemini-3.1-pro-preview
 
 [paste rules here]
 
 ## MODEL: deepseek-r1
+
+[paste rules here]
+
+## MODEL: glm-5.1
 
 [paste rules here]
 
@@ -40,10 +48,6 @@ export const DEFAULT_MODELS_MD = `# Per-Model Corrective Instructions
 [paste rules here]
 
 ## MODEL: MiniMax-M2.5
-
-[paste rules here]
-
-## MODEL: gemma-4-31b-it
 
 [paste rules here]
 `;

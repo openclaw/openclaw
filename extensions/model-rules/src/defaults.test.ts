@@ -7,15 +7,16 @@ import { DEFAULT_MODELS_MD, ensureDefaultModelsFile } from "./defaults.js";
 describe("DEFAULT_MODELS_MD", () => {
   it("contains the expected model headings", () => {
     const expectedModels = [
-      "gpt-5.3",
       "gpt-5.4",
+      "gpt-5.3-codex",
+      "claude-opus-4-6",
       "claude-sonnet-4-6",
-      "gemini-2.5-pro",
+      "gemini-3.1-pro-preview",
       "deepseek-r1",
+      "glm-5.1",
       "qwen3.6-plus",
       "kimi-k2.5",
       "MiniMax-M2.5",
-      "gemma-4-31b-it",
     ];
     for (const model of expectedModels) {
       expect(DEFAULT_MODELS_MD).toContain(`## MODEL: ${model}`);
