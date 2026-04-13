@@ -411,13 +411,13 @@ export async function launchOpenClawChrome(
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
   while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(profile.cdpUrl)) {
+    if (await isChromeReachable(profile.cdpUrl, 1500)) {
       break;
     }
     await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
   }
 
-  if (!(await isChromeReachable(profile.cdpUrl))) {
+  if (!(await isChromeReachable(profile.cdpUrl, 1500))) {
     const stderrOutput =
       normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
     const stderrHint = stderrOutput

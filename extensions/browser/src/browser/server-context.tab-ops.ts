@@ -69,7 +69,7 @@ export function createProfileTabOps({
 }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
-  const getSsrFPolicy = () => state().resolved.ssrfPolicy;
+  const getSsrFPolicy = () => (profile.cdpIsLoopback ? undefined : state().resolved.ssrfPolicy);
 
   const listTabs = async (): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {

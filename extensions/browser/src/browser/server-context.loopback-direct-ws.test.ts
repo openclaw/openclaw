@@ -141,6 +141,48 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
     await openclaw.closeTab("T2");
   });
 
+  it("allows loopback direct WebSocket tab operations even when strict SSRF policy disables private-network access", async () => {
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (u === "http://127.0.0.1:18800/json/list?token=abc") {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "T1",
+              title: "Loopback Tab",
+              url: "chrome://newtab/",
+              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/T1",
+              type: "page",
+            },
+          ],
+        } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    state.resolved.profiles.openclaw = {
+      cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
+      color: "#FF4500",
+    };
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    await expect(openclaw.listTabs()).resolves.toMatchObject([
+      {
+        targetId: "T1",
+        title: "Loopback Tab",
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18800/json/list?token=abc",
+      expect.any(Object),
+    );
+  });
+
   it("blocks direct WebSocket tab operations when strict SSRF policy rejects the cdpUrl", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");

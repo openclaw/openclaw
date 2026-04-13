@@ -78,7 +78,7 @@ export function createProfileAvailability({
       profile.cdpUrl,
       httpTimeoutMs,
       wsTimeoutMs,
-      state().resolved.ssrfPolicy,
+      profile.cdpIsLoopback ? undefined : state().resolved.ssrfPolicy,
     );
   };
 
@@ -87,7 +87,11 @@ export function createProfileAvailability({
       return await isReachable(timeoutMs);
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, state().resolved.ssrfPolicy);
+    return await isChromeReachable(
+      profile.cdpUrl,
+      httpTimeoutMs,
+      profile.cdpIsLoopback ? undefined : state().resolved.ssrfPolicy,
+    );
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
