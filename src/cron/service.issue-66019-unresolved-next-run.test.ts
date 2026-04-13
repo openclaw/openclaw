@@ -111,4 +111,61 @@ describe("#66019 unresolved next-run repro", () => {
       }
     }
   });
+
+  it("preserves the active error backoff floor when maintenance repair later finds a natural next run", async () => {
+    const store = issue66019Fixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-04-13T15:50:00.000Z");
+    let now = scheduledAt;
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "cron-66019-error-backoff-floor",
+      name: "cron-66019-error-backoff-floor",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: scheduledAt - 1_000 },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
+      status: "error",
+      error: "synthetic failure",
+    });
+    const naturalNext = scheduledAt + 5_000;
+    const backoffNext = scheduledAt + 30_000;
+    const nextRunSpy = vi
+      .spyOn(schedule, "computeNextRunAtMs")
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(naturalNext)
+      .mockReturnValue(naturalNext);
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    try {
+      await onTimer(state);
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(state.store?.jobs[0]?.state.nextRunAtMs).toBe(backoffNext);
+
+      now = naturalNext + 1;
+      await onTimer(state);
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+
+      now = backoffNext + 1;
+      await onTimer(state);
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+    } finally {
+      nextRunSpy.mockRestore();
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+    }
+  });
 });
