@@ -379,16 +379,17 @@ async function runDeferredTurnMaintenanceWorker(params: {
     for (;;) {
       while (getQueueSize(sessionLane) > 0) {
         const now = Date.now();
-        if (lastWaitNoticeAt === 0 || now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS) {
+        if (
+          now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS &&
+          now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS
+        ) {
           lastWaitNoticeAt = now;
-          if (now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS) {
-            surfaceMaintenanceUpdate(
-              "Waiting for the session lane to go idle.",
-              surfacedUserNotice
-                ? "Still waiting for the session lane to go idle."
-                : "Deferred maintenance is waiting for the session lane to go idle.",
-            );
-          }
+          surfaceMaintenanceUpdate(
+            "Waiting for the session lane to go idle.",
+            surfacedUserNotice
+              ? "Still waiting for the session lane to go idle."
+              : "Deferred maintenance is waiting for the session lane to go idle.",
+          );
         }
         await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, shutdownAbort.abortSignal);
       }
@@ -538,6 +539,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
       `taskId=${task.taskId} sessionKey=${sessionKey} lane=${resolveDeferredTurnMaintenanceLane(sessionKey)}`,
   );
 
+  const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
   let runPromise: Promise<void>;
   try {
     runPromise = enqueueCommandInLane(resolveDeferredTurnMaintenanceLane(sessionKey), async () =>
@@ -552,6 +554,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
       }),
     );
   } catch (err) {
+    schedulerAbort.dispose();
     markDeferredTurnMaintenanceTaskScheduleFailure({
       sessionKey,
       taskId: task.taskId,
@@ -569,11 +572,14 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
       });
     })
     .finally(() => {
+      schedulerAbort.dispose();
       const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
       if (current !== state) {
         return;
       }
-      const rerunParams = current.rerunRequested ? current.latestParams : undefined;
+      const shutdownTriggered = schedulerAbort.abortSignal?.aborted === true;
+      const rerunParams =
+        current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
       activeDeferredTurnMaintenanceRuns.delete(sessionKey);
       if (rerunParams) {
         scheduleDeferredTurnMaintenance(rerunParams);
