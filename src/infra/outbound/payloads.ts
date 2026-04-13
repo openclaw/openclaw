@@ -19,6 +19,7 @@ export type NormalizedOutboundPayload = {
   audioAsVoice?: boolean;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  sticker?: ReplyPayload["sticker"];
 };
 
 export type OutboundPayloadJson = {
@@ -172,7 +173,8 @@ export function projectOutboundPayloadPlanForOutbound(
       !hasReplyPayloadContent(
         { ...payload, text, mediaUrls: entry.parts.mediaUrls },
         { hasChannelData: entry.hasChannelData },
-      )
+      ) &&
+      !payload.sticker
     ) {
       continue;
     }
@@ -182,6 +184,7 @@ export function projectOutboundPayloadPlanForOutbound(
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
       ...(entry.hasInteractive ? { interactive: payload.interactive } : {}),
       ...(entry.hasChannelData ? { channelData: payload.channelData } : {}),
+      ...(payload.sticker ? { sticker: payload.sticker } : {}),
     });
   }
   return normalizedPayloads;

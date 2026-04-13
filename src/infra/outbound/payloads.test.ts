@@ -441,6 +441,12 @@ describe("normalizeOutboundPayloadsForJson", () => {
 });
 
 describe("normalizeOutboundPayloads", () => {
+  it("keeps sticker-only payloads", () => {
+    expect(normalizeOutboundPayloads([{ sticker: { raw: "446:1988" } }])).toEqual([
+      { text: "", mediaUrls: [], sticker: { raw: "446:1988" } },
+    ]);
+  });
+
   it("keeps channelData-only payloads", () => {
     const channelData = { line: { flexMessage: { altText: "Card", contents: {} } } };
     expect(normalizeOutboundPayloads([{ channelData }])).toEqual([
