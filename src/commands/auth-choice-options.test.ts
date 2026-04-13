@@ -509,6 +509,44 @@ describe("buildAuthChoiceOptions", () => {
     expect(ollamaGroup?.options.some((opt) => opt.value === "ollama")).toBe(true);
   });
 
+  it("uses the direct API key hint for the OpenAI group when api-key auth is the primary setup option", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "oauth",
+        choiceId: "openai-codex",
+        choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        groupHint: "Codex OAuth + API key",
+      },
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        groupHint: "Direct OpenAI API key",
+      },
+    ]);
+
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const openAiGroup = groups.find((group) => group.value === "openai");
+
+    expect(openAiGroup).toBeDefined();
+    expect(openAiGroup?.hint).toBe("Direct OpenAI API key");
+    expect(openAiGroup?.options.map((option) => option.value)).toEqual([
+      "openai-api-key",
+      "openai-codex",
+    ]);
+  });
+
   it("hides image-generation-only providers from the interactive auth picker", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
