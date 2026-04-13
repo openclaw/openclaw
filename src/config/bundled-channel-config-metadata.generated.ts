@@ -7833,6 +7833,22 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         tenantId: {
           type: "string",
         },
+        authType: {
+          type: "string",
+          enum: ["secret", "federated"],
+        },
+        certificatePath: {
+          type: "string",
+        },
+        certificateThumbprint: {
+          type: "string",
+        },
+        useManagedIdentity: {
+          type: "boolean",
+        },
+        managedIdentityClientId: {
+          type: "string",
+        },
         webhook: {
           type: "object",
           properties: {

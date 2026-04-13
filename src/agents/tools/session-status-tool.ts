@@ -54,12 +54,40 @@ const SessionStatusToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
 });
 
-let commandsStatusRuntimePromise: Promise<
-  typeof import("../../auto-reply/reply/commands-status.runtime.js")
-> | null = null;
+type CommandsStatusRuntimeModule = {
+  buildStatusText: (params: {
+    cfg: OpenClawConfig;
+    sessionEntry?: SessionEntry;
+    sessionKey: string;
+    parentSessionKey?: string;
+    sessionScope?: "global" | "per-sender" | "per-thread" | "shared";
+    storePath?: string;
+    statusChannel: string;
+    provider: string;
+    model: string;
+    contextTokens?: number;
+    resolvedThinkLevel?: ThinkLevel;
+    resolvedFastMode?: boolean;
+    resolvedVerboseLevel: VerboseLevel;
+    resolvedReasoningLevel: ReasoningLevel;
+    resolvedElevatedLevel?: ElevatedLevel;
+    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+    isGroup: boolean;
+    defaultGroupActivation: () => "always" | "mention";
+    taskLineOverride?: string;
+    skipDefaultTaskLookup?: boolean;
+    primaryModelLabelOverride?: string;
+    modelAuthOverride?: string;
+    activeModelAuthOverride?: string;
+    includeTranscriptUsage?: boolean;
+  }) => Promise<string>;
+};
 
-function loadCommandsStatusRuntime() {
-  commandsStatusRuntimePromise ??= import("../../auto-reply/reply/commands-status.runtime.js");
+let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
+
+function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
+  commandsStatusRuntimePromise ??=
+    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
   return commandsStatusRuntimePromise;
 }
 

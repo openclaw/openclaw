@@ -58,6 +58,17 @@ function stateIntegrityText(): string {
     .join("\n");
 }
 
+function createAgentDir(agentId: string, includeNestedAgentDir = true) {
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR is not set");
+  }
+  const targetDir = includeNestedAgentDir
+    ? path.join(stateDir, "agents", agentId, "agent")
+    : path.join(stateDir, "agents", agentId);
+  fs.mkdirSync(targetDir, { recursive: true });
+}
+
 const OAUTH_PROMPT_MATCHER = expect.objectContaining({
   message: expect.stringContaining("Create OAuth dir at"),
 });
@@ -81,6 +92,23 @@ function writeSessionStore(
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
   await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock });
   return stateIntegrityText();
+}
+
+async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir: string) {
+  const cfg: OpenClawConfig = {
+    memory: {
+      backend: "qmd",
+      qmd: {
+        sessions: { enabled },
+      },
+    },
+  };
+  setupSessionState(cfg, process.env, homeDir);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => homeDir);
+  fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+  const confirmRuntimeRepair = vi.fn(async () => false);
+  await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+  return confirmRuntimeRepair;
 }
 
 describe("doctor state integrity oauth dir checks", () => {
@@ -144,6 +172,110 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
+  it("warns about orphaned on-disk agent directories missing from agents.list", async () => {
+    createAgentDir("big-brain");
+    createAgentDir("cerebro");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: big-brain, cerebro");
+    expect(text).toContain("config-driven routing, identity, and model selection will ignore them");
+  });
+
+  it("detects orphaned agent dirs even when the on-disk folder casing differs", async () => {
+    createAgentDir("Research");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: Research (id research)");
+  });
+
+  it("ignores configured agent dirs and incomplete agent folders", async () => {
+    createAgentDir("main");
+    createAgentDir("ops");
+    createAgentDir("staging", false);
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples:");
+  });
+
+  it("warns when a case-mismatched agent dir does not resolve to the configured agent path", async () => {
+    createAgentDir("Research");
+
+    const realpathNative = fs.realpathSync.native.bind(fs.realpathSync);
+    const realpathSpy = vi
+      .spyOn(fs.realpathSync, "native")
+      .mockImplementation((target, options) => {
+        const targetPath = String(target);
+        if (targetPath.endsWith(`${path.sep}agents${path.sep}research${path.sep}agent`)) {
+          const error = new Error("ENOENT");
+          (error as NodeJS.ErrnoException).code = "ENOENT";
+          throw error;
+        }
+        return realpathNative(target, options);
+      });
+
+    try {
+      const text = await runStateIntegrityText({
+        agents: {
+          list: [{ id: "main", default: true }, { id: "research" }],
+        },
+      });
+
+      expect(text).toContain("without a matching agents.list entry");
+      expect(text).toContain("Examples: Research (id research)");
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
+  it("does not warn when a case-mismatched dir resolves to the configured agent path", async () => {
+    createAgentDir("Research");
+
+    const realpathNative = fs.realpathSync.native.bind(fs.realpathSync);
+    const resolvedResearchAgentDir = realpathNative(
+      path.join(process.env.OPENCLAW_STATE_DIR ?? "", "agents", "Research", "agent"),
+    );
+    const realpathSpy = vi
+      .spyOn(fs.realpathSync, "native")
+      .mockImplementation((target, options) => {
+        const targetPath = String(target);
+        if (targetPath.endsWith(`${path.sep}agents${path.sep}research${path.sep}agent`)) {
+          return resolvedResearchAgentDir;
+        }
+        return realpathNative(target, options);
+      });
+
+    try {
+      const text = await runStateIntegrityText({
+        agents: {
+          list: [{ id: "main", default: true }, { id: "research" }],
+        },
+      });
+
+      expect(text).not.toContain("without a matching agents.list entry");
+      expect(text).not.toContain("Examples:");
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("detects orphan transcripts and offers archival remediation", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
@@ -167,20 +299,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
-    const cfg: OpenClawConfig = {
-      memory: {
-        backend: "qmd",
-        qmd: {
-          sessions: { enabled: true },
-        },
-      },
-    };
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-
-    const confirmRuntimeRepair = vi.fn(async () => false);
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
 
     expect(stateIntegrityText()).not.toContain(
       "These .jsonl files are no longer referenced by sessions.json",
@@ -189,20 +308,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it("still detects orphan transcripts when QMD sessions are disabled", async () => {
-    const cfg: OpenClawConfig = {
-      memory: {
-        backend: "qmd",
-        qmd: {
-          sessions: { enabled: false },
-        },
-      },
-    };
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-
-    const confirmRuntimeRepair = vi.fn(async () => false);
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(false, tempHome);
 
     expect(stateIntegrityText()).toContain(
       "These .jsonl files are no longer referenced by sessions.json",
