@@ -1,7 +1,7 @@
 {
   "id": "m365",
   "name": "Microsoft 365",
-  "description": "Microsoft 365 Outlook inbox triage with Teams approval-gated replies.",
+  "description": "Microsoft 365 Outlook inbox triage and calendar copilot with Teams approval-gated writes.",
   "providerAuthEnvVars": {
     "m365": ["M365_TENANT_ID", "M365_CLIENT_ID", "M365_CLIENT_SECRET", "M365_MAILBOX_USER_ID"]
   },
@@ -31,6 +31,10 @@
       "label": "Mail Scope Proof Probe Mailbox",
       "help": "A mailbox outside the allowed mailboxes list used at startup to verify app-only scope is denied."
     },
+    "calendarWriteScopeProbeUserId": {
+      "label": "Calendar Scope Proof Probe User",
+      "help": "A calendar user outside the allowed calendars list used at startup to verify app-only scope is denied."
+    },
     "allowedCalendars": {
       "label": "Allowed Calendars",
       "help": "Explicit calendar allowlist for app-only calendar writes."
@@ -54,7 +58,14 @@
     }
   },
   "contracts": {
-    "tools": ["m365_mail_triage", "m365_mail_get_thread", "m365_mail_queue_reply"]
+    "tools": [
+      "m365_mail_triage",
+      "m365_mail_get_thread",
+      "m365_mail_queue_reply",
+      "m365_calendar_agenda",
+      "m365_calendar_free_busy",
+      "m365_calendar_queue_change"
+    ]
   },
   "configSchema": {
     "type": "object",
@@ -193,6 +204,10 @@
         }
       },
       "mailWriteScopeProbeMailboxUserId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "calendarWriteScopeProbeUserId": {
         "type": "string",
         "minLength": 1
       },

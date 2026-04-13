@@ -11,6 +11,7 @@ describe("m365 config", () => {
   it("parses account config without exposing unknown top-level input", () => {
     const parsed = parseM365PluginConfig({
       defaultAccountId: "ops",
+      calendarWriteScopeProbeUserId: "calendar-probe@example.com",
       accounts: {
         ops: {
           mailboxUserId: "ops@example.com",
@@ -21,6 +22,7 @@ describe("m365 config", () => {
     });
 
     expect(parsed.defaultAccountId).toBe("ops");
+    expect(parsed.calendarWriteScopeProbeUserId).toBe("calendar-probe@example.com");
     expect(parsed.accounts?.ops?.mailboxUserId).toBe("ops@example.com");
     expect(parsed.accounts?.ops?.allowedReplyDomains).toEqual(["example.com", "contoso.com"]);
     expect(parsed).not.toHaveProperty("ignored");

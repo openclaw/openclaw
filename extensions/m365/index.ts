@@ -1,7 +1,10 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { registerM365ApprovalInteractiveHandler } from "./src/approval-actions.js";
 import { m365PluginConfigSchema, resolveM365PluginConfig } from "./src/config.js";
-import { verifyM365MailWriteScopeProof } from "./src/runtime-common.js";
+import {
+  verifyM365CalendarWriteScopeProof,
+  verifyM365MailWriteScopeProof,
+} from "./src/runtime-common.js";
 import { registerM365Tools } from "./src/tools-v2.js";
 import { createM365WebhookHandler } from "./src/webhook-subscriptions.js";
 
@@ -44,7 +47,8 @@ async function registerM365WebhookRoute(api: OpenClawPluginApi): Promise<void> {
 export default definePluginEntry({
   id: "m365",
   name: "Microsoft 365",
-  description: "Microsoft 365 Outlook inbox triage with Teams approval-gated replies.",
+  description:
+    "Microsoft 365 Outlook inbox triage and calendar copilot with Teams approval-gated writes.",
   configSchema: m365PluginConfigSchema,
   async register(api) {
     const config = await resolveM365PluginConfig({
@@ -54,6 +58,10 @@ export default definePluginEntry({
       logger: api.logger,
     });
     await verifyM365MailWriteScopeProof({
+      config,
+      deps: { env: process.env },
+    });
+    await verifyM365CalendarWriteScopeProof({
       config,
       deps: { env: process.env },
     });

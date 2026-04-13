@@ -60,6 +60,7 @@ export type M365RawPluginConfig = {
   tokenBaseUrl?: string;
   allowedMailboxes?: string[];
   mailWriteScopeProbeMailboxUserId?: string;
+  calendarWriteScopeProbeUserId?: string;
   allowedCalendars?: string[];
   accounts?: Record<string, M365RawAccountConfig>;
   triage?: {
@@ -109,6 +110,7 @@ export type M365ResolvedPluginConfig = {
   };
   allowedMailboxes: string[];
   mailWriteScopeProbeMailboxUserId?: string;
+  calendarWriteScopeProbeUserId?: string;
   allowedCalendars: string[];
   approval: {
     timeoutMs: number;
@@ -245,6 +247,7 @@ export function parseM365PluginConfig(input: unknown): M365RawPluginConfig {
     tokenBaseUrl: normalizeOptionalString(raw.tokenBaseUrl),
     allowedMailboxes: readStringArray(raw.allowedMailboxes),
     mailWriteScopeProbeMailboxUserId: normalizeOptionalString(raw.mailWriteScopeProbeMailboxUserId),
+    calendarWriteScopeProbeUserId: normalizeOptionalString(raw.calendarWriteScopeProbeUserId),
     allowedCalendars: readStringArray(raw.allowedCalendars),
     accounts,
     triage: isRecord(raw.triage)
@@ -433,6 +436,9 @@ export async function resolveM365PluginConfig(params: {
     allowedMailboxes: readStringArray(raw.allowedMailboxes).map((entry) => entry.toLowerCase()),
     mailWriteScopeProbeMailboxUserId: normalizeOptionalString(
       raw.mailWriteScopeProbeMailboxUserId,
+    )?.toLowerCase(),
+    calendarWriteScopeProbeUserId: normalizeOptionalString(
+      raw.calendarWriteScopeProbeUserId,
     )?.toLowerCase(),
     allowedCalendars: readStringArray(raw.allowedCalendars).map((entry) => entry.toLowerCase()),
     approval: {

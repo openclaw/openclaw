@@ -15,6 +15,19 @@ import {
 import type { PluginInteractiveRegistration } from "openclaw/plugin-sdk/plugin-runtime";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { jsonResult } from "../runtime-api.js";
+import {
+  executeQueuedCalendarChange,
+  findCalendarFreeBusy,
+  getCalendarEvent,
+} from "./calendar/graph.js";
+import { hashCalendarPlan } from "./calendar/plan.js";
+import type {
+  CalendarAvailabilitySchedule,
+  CalendarAttendee,
+  CalendarChangePlan,
+  CalendarDateTime,
+  CalendarEvent,
+} from "./calendar/types.js";
 import type { M365MailMessageDetails, M365EmailRecipient } from "./mail.js";
 import { hasOutlookHumanReplyAfter, sendOutlookReply } from "./mail.js";
 import {
@@ -56,7 +69,32 @@ type M365MailReplySnapshot = {
   idempotencyKey: string;
 };
 
-type M365ApprovalSnapshot = M365MailReplySnapshot;
+type CalendarAvailabilitySummary = {
+  checkedAt: string;
+  unavailableRequiredAttendees: string[];
+  schedules: Array<{
+    scheduleId: string;
+    unavailableStatuses: string[];
+  }>;
+};
+
+type M365CalendarChangeSnapshot = {
+  kind: "m365.calendar.change";
+  accountId: string;
+  identityId: string;
+  calendarUser: string;
+  requestedOperation: "create" | "update" | "cancel" | "reschedule";
+  sendUpdates: "all";
+  plan: CalendarChangePlan;
+  planHash: string;
+  summarySubject?: string;
+  summaryTimeRange?: string;
+  approverTeamsUserIds: string[];
+  riskFlags: string[];
+  availabilitySummary?: CalendarAvailabilitySummary;
+};
+
+type M365ApprovalSnapshot = M365MailReplySnapshot | M365CalendarChangeSnapshot;
 
 function normalizeRecipients(
   recipients: M365EmailRecipient[],
@@ -74,6 +112,30 @@ function normalizeRecipients(
 function mailboxDomain(mailboxUserId: string): string | undefined {
   const atIndex = mailboxUserId.indexOf("@");
   return atIndex >= 0 ? mailboxUserId.slice(atIndex + 1).toLowerCase() : undefined;
+}
+
+function normalizeCalendarAttendees(
+  attendees: CalendarAttendee[],
+): Array<{ email: string; type: "required" | "optional" | "resource"; name?: string }> {
+  return attendees.map((attendee) => ({
+    email: attendee.email.trim().toLowerCase(),
+    type: attendee.type ?? "required",
+    ...(attendee.name?.trim() ? { name: attendee.name.trim() } : {}),
+  }));
+}
+
+function formatCalendarTimeRange(
+  start?: CalendarDateTime,
+  end?: CalendarDateTime,
+): string | undefined {
+  if (!start && !end) {
+    return undefined;
+  }
+  if (start && end) {
+    return `${start.dateTime} ${start.timeZone} to ${end.dateTime} ${end.timeZone}`;
+  }
+  const single = start ?? end;
+  return single ? `${single.dateTime} ${single.timeZone}` : undefined;
 }
 
 function resolveMailRiskFlags(params: {
@@ -100,6 +162,54 @@ function parseMetadataApproverIds(metadata: Record<string, unknown> | undefined)
   return Array.isArray(raw)
     ? raw.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     : [];
+}
+
+function buildCalendarApprovalAction(params: {
+  snapshot: M365CalendarChangeSnapshot;
+  previewChars: number;
+}): ActionApprovalActionMetadata {
+  const unavailable =
+    params.snapshot.availabilitySummary?.unavailableRequiredAttendees.join(", ") ?? "";
+  return {
+    kind: params.snapshot.kind,
+    title: `Approve calendar ${params.snapshot.requestedOperation}`,
+    summary:
+      params.snapshot.summarySubject?.trim() ||
+      `Calendar ${params.snapshot.calendarUser} ${params.snapshot.requestedOperation}`,
+    highRisk: params.snapshot.riskFlags.length > 0,
+    facts: [
+      { title: "Calendar", value: params.snapshot.calendarUser },
+      { title: "Operation", value: params.snapshot.requestedOperation },
+      {
+        title: "When",
+        value:
+          params.snapshot.summaryTimeRange ??
+          formatCalendarTimeRange(params.snapshot.plan.start, params.snapshot.plan.end) ??
+          "Unspecified",
+      },
+      {
+        title: "Attendees",
+        value:
+          params.snapshot.plan.attendees.length > 0
+            ? params.snapshot.plan.attendees.map((attendee) => attendee.email).join(", ")
+            : "None",
+      },
+      {
+        title: "Preview",
+        value:
+          params.snapshot.plan.body && params.snapshot.plan.body.length > params.previewChars
+            ? `${params.snapshot.plan.body.slice(0, params.previewChars).trimEnd()}...`
+            : (params.snapshot.plan.body ?? "No body"),
+      },
+      ...(unavailable ? [{ title: "Unavailable", value: unavailable }] : []),
+    ],
+    metadata: {
+      approverTeamsUserIds: params.snapshot.approverTeamsUserIds,
+      riskFlags: params.snapshot.riskFlags,
+      calendarUser: params.snapshot.calendarUser,
+      planHash: params.snapshot.planHash,
+    },
+  };
 }
 
 function buildMailApprovalAction(params: {
@@ -154,12 +264,12 @@ function buildMailReplyIdempotencyKey(params: {
   return `m365-mail-${createHash("sha256").update(seed).digest("hex")}`;
 }
 
-function findExistingMailApproval(params: {
+function findExistingActionApproval(params: {
   taskFlow: ReturnType<OpenClawPluginApi["runtime"]["taskFlow"]["fromToolContext"]>;
   snapshotHash: string;
 }) {
   for (const flow of params.taskFlow.list()) {
-    const loaded = loadActionApprovalFlow<M365MailReplySnapshot>({
+    const loaded = loadActionApprovalFlow<M365ApprovalSnapshot>({
       taskFlow: params.taskFlow,
       flowId: flow.flowId,
       expectedRevision: flow.revision,
@@ -188,10 +298,83 @@ async function editApprovalCardText(ctx: M365InteractiveContext, text: string): 
   await ctx.respond.editMessage({ text });
 }
 
-async function executeApprovedSnapshot(params: {
+function requiredCalendarAttendeeEmails(plan: CalendarChangePlan): string[] {
+  return normalizeCalendarAttendees(plan.attendees)
+    .filter((attendee) => attendee.type === "required")
+    .map((attendee) => attendee.email);
+}
+
+function unavailableScheduleStatuses(schedule: CalendarAvailabilitySchedule): string[] {
+  const statuses = new Set<string>();
+  for (const item of schedule.items) {
+    const status = item.status.trim().toLowerCase();
+    if (status && status !== "free") {
+      statuses.add(status);
+    }
+  }
+  if (statuses.size === 0 && schedule.availabilityView && /[^0]/.test(schedule.availabilityView)) {
+    statuses.add("busy");
+  }
+  return Array.from(statuses).toSorted();
+}
+
+function summarizeCalendarAvailability(params: {
+  plan: CalendarChangePlan;
+  result: Awaited<ReturnType<typeof findCalendarFreeBusy>>;
+  now: Date;
+}): CalendarAvailabilitySummary {
+  const requiredAttendees = requiredCalendarAttendeeEmails(params.plan);
+  const schedules = requiredAttendees.map((email) => {
+    const schedule = params.result.schedules.find((entry) => entry.scheduleId === email);
+    if (!schedule) {
+      return {
+        scheduleId: email,
+        unavailableStatuses: ["unknown"],
+      };
+    }
+    const unavailableStatuses = unavailableScheduleStatuses(schedule);
+    return {
+      scheduleId: email,
+      unavailableStatuses,
+    };
+  });
+  return {
+    checkedAt: params.now.toISOString(),
+    unavailableRequiredAttendees: schedules
+      .filter((schedule) => schedule.unavailableStatuses.length > 0)
+      .map((schedule) => schedule.scheduleId),
+    schedules,
+  };
+}
+
+function resolveCalendarRiskFlags(params: {
+  snapshot: Pick<M365CalendarChangeSnapshot, "calendarUser" | "requestedOperation" | "plan">;
+  availabilitySummary?: CalendarAvailabilitySummary;
+}): string[] {
+  const flags = new Set<string>();
+  if (params.snapshot.requestedOperation === "cancel") {
+    flags.add("cancel");
+  }
+  if (params.snapshot.requestedOperation === "reschedule") {
+    flags.add("reschedule");
+  }
+  const internalDomain = mailboxDomain(params.snapshot.calendarUser);
+  for (const attendee of normalizeCalendarAttendees(params.snapshot.plan.attendees)) {
+    const [, domain] = attendee.email.split("@");
+    if (domain && internalDomain && domain !== internalDomain) {
+      flags.add("external_attendee");
+    }
+  }
+  if ((params.availabilitySummary?.unavailableRequiredAttendees.length ?? 0) > 0) {
+    flags.add("required_attendee_unavailable");
+  }
+  return Array.from(flags).toSorted();
+}
+
+async function executeApprovedMailSnapshot(params: {
   api: OpenClawPluginApi;
   deps: M365ToolDeps;
-  snapshot: M365ApprovalSnapshot;
+  snapshot: M365MailReplySnapshot;
 }) {
   const config = await resolveM365RuntimeConfig(params.api, params.deps);
   const account = resolveM365RuntimeAccount({
@@ -252,6 +435,105 @@ async function executeApprovedSnapshot(params: {
     ok: true as const,
     result: sent,
   };
+}
+
+async function executeApprovedCalendarSnapshot(params: {
+  api: OpenClawPluginApi;
+  deps: M365ToolDeps;
+  snapshot: M365CalendarChangeSnapshot;
+}) {
+  const config = await resolveM365RuntimeConfig(params.api, params.deps);
+  const account = resolveM365RuntimeAccount({
+    config,
+    identityId: params.snapshot.identityId,
+  });
+  assertM365WriteAllowed({
+    config,
+    account,
+    writeKind: "calendar",
+    targetId: params.snapshot.calendarUser,
+  });
+  const client = createM365JsonGraphClient({
+    config,
+    account,
+    deps: params.deps,
+  });
+  if (params.snapshot.plan.eventId) {
+    const currentEvent = await getCalendarEvent(client, {
+      calendarUser: params.snapshot.calendarUser,
+      eventId: params.snapshot.plan.eventId,
+    });
+    if (!currentEvent) {
+      return {
+        ok: false as const,
+        blockedSummary: "The calendar event no longer exists.",
+      };
+    }
+    if (
+      params.snapshot.plan.changeKey &&
+      currentEvent.changeKey &&
+      currentEvent.changeKey !== params.snapshot.plan.changeKey
+    ) {
+      return {
+        ok: false as const,
+        blockedSummary: "The calendar event changed after the approval was queued.",
+      };
+    }
+  }
+  const requiredAttendees = requiredCalendarAttendeeEmails(params.snapshot.plan);
+  if (
+    params.snapshot.requestedOperation !== "cancel" &&
+    params.snapshot.plan.start &&
+    params.snapshot.plan.end &&
+    requiredAttendees.length > 0
+  ) {
+    const availability = await findCalendarFreeBusy(client, {
+      calendarUser: params.snapshot.calendarUser,
+      schedules: requiredAttendees,
+      start: params.snapshot.plan.start.dateTime,
+      end: params.snapshot.plan.end.dateTime,
+      timeZone: params.snapshot.plan.start.timeZone,
+    });
+    const summary = summarizeCalendarAvailability({
+      plan: params.snapshot.plan,
+      result: availability,
+      now: params.deps.now?.() ?? new Date(),
+    });
+    if (summary.unavailableRequiredAttendees.length > 0) {
+      return {
+        ok: false as const,
+        blockedSummary: `Required attendees became unavailable: ${summary.unavailableRequiredAttendees.join(", ")}`,
+      };
+    }
+  }
+  const result = await executeQueuedCalendarChange(
+    client,
+    params.snapshot.plan,
+    params.snapshot.planHash,
+  );
+  return {
+    ok: true as const,
+    result,
+  };
+}
+
+async function executeApprovedSnapshot(params: {
+  api: OpenClawPluginApi;
+  deps: M365ToolDeps;
+  snapshot: M365ApprovalSnapshot;
+}) {
+  if (params.snapshot.kind === "m365.mail.reply") {
+    return await executeApprovedMailSnapshot({
+      api: params.api,
+      deps: params.deps,
+      snapshot: params.snapshot,
+    });
+  }
+  return await executeApprovedCalendarSnapshot({
+    api: params.api,
+    deps: params.deps,
+    snapshot: params.snapshot,
+  });
 }
 
 export async function queueM365MailReplyApproval(params: {
@@ -320,7 +602,7 @@ export async function queueM365MailReplyApproval(params: {
   });
   const taskFlow = params.api.runtime.taskFlow.fromToolContext(params.toolContext);
   const snapshotHash = hashActionApprovalSnapshot(snapshot);
-  const existing = findExistingMailApproval({
+  const existing = findExistingActionApproval({
     taskFlow,
     snapshotHash,
   });
@@ -372,6 +654,151 @@ export async function queueM365MailReplyApproval(params: {
     snapshotHash: created.snapshotHash,
     approverTeamsUserIds,
     riskFlags: snapshot.riskFlags,
+  });
+}
+
+export async function queueM365CalendarChangeApproval(params: {
+  api: OpenClawPluginApi;
+  deps: M365ToolDeps;
+  toolContext: OpenClawPluginToolContext;
+  identityId: string;
+  plan: CalendarChangePlan;
+  requestedOperation: "create" | "update" | "cancel" | "reschedule";
+  sourceEvent?: CalendarEvent;
+  sendUpdates: "all";
+}): Promise<ReturnType<typeof jsonResult>> {
+  const config = await resolveM365RuntimeConfig(params.api, params.deps);
+  const account = resolveM365RuntimeAccount({
+    config,
+    identityId: params.identityId,
+  });
+  assertM365WriteAllowed({
+    config,
+    account,
+    writeKind: "calendar",
+    targetId: params.plan.calendarUser,
+  });
+  const approverTeamsUserIds = resolveApproverTeamsUserIds({
+    config,
+  });
+  if (approverTeamsUserIds.length === 0) {
+    throw new Error("M365 calendar approvals require explicit Teams approver ids.");
+  }
+  let availabilitySummary: CalendarAvailabilitySummary | undefined;
+  const requiredAttendees = requiredCalendarAttendeeEmails(params.plan);
+  if (
+    params.requestedOperation !== "cancel" &&
+    params.plan.start &&
+    params.plan.end &&
+    requiredAttendees.length > 0
+  ) {
+    const client = createM365JsonGraphClient({
+      config,
+      account,
+      deps: params.deps,
+    });
+    const availability = await findCalendarFreeBusy(client, {
+      calendarUser: params.plan.calendarUser,
+      schedules: requiredAttendees,
+      start: params.plan.start.dateTime,
+      end: params.plan.end.dateTime,
+      timeZone: params.plan.start.timeZone,
+    });
+    availabilitySummary = summarizeCalendarAvailability({
+      plan: params.plan,
+      result: availability,
+      now: params.deps.now?.() ?? new Date(),
+    });
+  }
+  const snapshot: M365CalendarChangeSnapshot = {
+    kind: "m365.calendar.change",
+    accountId: account.accountId,
+    identityId: account.identityId,
+    calendarUser: params.plan.calendarUser,
+    requestedOperation: params.requestedOperation,
+    sendUpdates: params.sendUpdates,
+    plan: params.plan,
+    planHash: hashCalendarPlan(params.plan),
+    ...((params.plan.subject ?? params.sourceEvent?.subject)
+      ? { summarySubject: params.plan.subject ?? params.sourceEvent?.subject }
+      : {}),
+    ...(formatCalendarTimeRange(params.plan.start, params.plan.end)
+      ? { summaryTimeRange: formatCalendarTimeRange(params.plan.start, params.plan.end) }
+      : {}),
+    approverTeamsUserIds,
+    riskFlags: resolveCalendarRiskFlags({
+      snapshot: {
+        calendarUser: params.plan.calendarUser,
+        requestedOperation: params.requestedOperation,
+        plan: params.plan,
+      },
+      availabilitySummary,
+    }),
+    ...(availabilitySummary ? { availabilitySummary } : {}),
+  };
+  const action = buildCalendarApprovalAction({
+    snapshot,
+    previewChars: config.approval.previewChars,
+  });
+  const taskFlow = params.api.runtime.taskFlow.fromToolContext(params.toolContext);
+  const snapshotHash = hashActionApprovalSnapshot(snapshot);
+  const existing = findExistingActionApproval({
+    taskFlow,
+    snapshotHash,
+  });
+  if (existing) {
+    return jsonResult({
+      queued: true,
+      deduped: true,
+      flowId: existing.flowId,
+      expectedRevision: existing.expectedRevision,
+      snapshotHash: existing.snapshotHash,
+      approverTeamsUserIds,
+      riskFlags: snapshot.riskFlags,
+      planHash: snapshot.planHash,
+    });
+  }
+  const created = createWaitingActionApprovalFlow({
+    taskFlow,
+    controllerId: "extensions/m365/calendar-approval",
+    goal: `Approve calendar ${params.requestedOperation} for ${params.plan.calendarUser}`,
+    currentStep: "queue-calendar-change",
+    waitingStep: "awaiting-approval",
+    action,
+    snapshot,
+    expiresAt: (params.deps.now?.() ?? new Date()).getTime() + config.approval.timeoutMs,
+  });
+  const card = buildTeamsActionApprovalCard({
+    namespace: M365_APPROVAL_NAMESPACE,
+    ownerSessionKey: taskFlow.sessionKey,
+    flowId: created.flow.flowId,
+    expectedRevision: created.expectedRevision,
+    snapshotHash: created.snapshotHash,
+    action,
+  });
+  const deliverApprovalCard = params.deps.deliverApprovalCard ?? deliverTeamsActionApprovalCard;
+  for (const approverId of approverTeamsUserIds) {
+    await deliverApprovalCard({
+      cfg: params.api.config,
+      to: `user:${approverId}`,
+      card,
+      requesterSenderId: params.toolContext.requesterSenderId,
+      sessionKey: params.toolContext.sessionKey,
+      sessionId: params.toolContext.sessionId,
+      agentId: params.toolContext.agentId,
+    });
+  }
+  return jsonResult({
+    queued: true,
+    flowId: created.flow.flowId,
+    expectedRevision: created.expectedRevision,
+    snapshotHash: created.snapshotHash,
+    approverTeamsUserIds,
+    riskFlags: snapshot.riskFlags,
+    planHash: snapshot.planHash,
+    ...(availabilitySummary
+      ? { unavailableRequiredAttendees: availabilitySummary.unavailableRequiredAttendees }
+      : {}),
   });
 }
 

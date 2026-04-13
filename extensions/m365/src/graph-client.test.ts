@@ -145,6 +145,11 @@ describe("m365 graph auth and client", () => {
     expect(store.save).toHaveBeenCalledWith(
       expect.objectContaining({ accessToken: "fresh-token" }),
     );
+    const refreshCalls = fetchImpl.mock.calls as unknown as Array<
+      [string, RequestInit | undefined]
+    >;
+    const refreshBody = refreshCalls[0]?.[1]?.body as URLSearchParams;
+    expect(refreshBody.get("scope")).toContain("Calendars.ReadWrite");
   });
 
   it("adds bearer auth to Graph requests", async () => {

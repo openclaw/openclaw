@@ -77,7 +77,7 @@ function resolveTools(
   return tools;
 }
 
-describe("m365 mail tools", () => {
+describe("m365 tools", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -86,19 +86,21 @@ describe("m365 mail tools", () => {
     resetTaskFlowRegistryForTests({ persist: false });
   });
 
-  it("registers only the Outlook PR1 tool surface", () => {
+  it("registers the Outlook and calendar tool surface", () => {
     const { api, factories } = createApi();
     registerM365Tools(api);
 
     const tools = resolveTools(factories, createContext());
 
     expect(Array.from(tools.keys()).toSorted()).toEqual([
+      "m365_calendar_agenda",
+      "m365_calendar_free_busy",
+      "m365_calendar_queue_change",
       "m365_mail_get_thread",
       "m365_mail_queue_reply",
       "m365_mail_triage",
     ]);
     expect(tools.has("m365_outlook_send_queued_reply")).toBe(false);
-    expect(tools.has("m365_calendar_queue_change")).toBe(false);
   });
 
   it("triages mailbox messages into reply, action, and fyi groups", async () => {
@@ -266,5 +268,69 @@ describe("m365 mail tools", () => {
     expect(result.details).toMatchObject({
       riskFlags: expect.arrayContaining(["reply_all", "external_recipient"]),
     });
+  });
+
+  it("queues calendar reschedules with the current change key and approval flow", async () => {
+    const { api, factories, taskFlow } = createApi();
+    const deliverApprovalCard = vi.fn(async () => ({ ok: true }));
+    const requestJson = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: "event-1",
+        changeKey: "ck-1",
+        subject: "Planning",
+        start: { dateTime: "2026-04-14T10:00:00", timeZone: "UTC" },
+        end: { dateTime: "2026-04-14T10:30:00", timeZone: "UTC" },
+        attendees: [{ emailAddress: { address: "alice@example.com" } }],
+      })
+      .mockResolvedValueOnce({
+        value: [
+          {
+            scheduleId: "alice@example.com",
+            availabilityView: "0",
+            scheduleItems: [],
+          },
+        ],
+      });
+    registerM365Tools(api, {
+      graphClientFactory: () => ({
+        requestJson: requestJson as unknown as M365GraphJsonClient["requestJson"],
+      }),
+      deliverApprovalCard,
+    });
+
+    const context = createContext();
+    const tools = resolveTools(factories, context);
+    const result = await tools.get("m365_calendar_queue_change")!.execute!("call-1", {
+      operation: "reschedule",
+      eventId: "event-1",
+      startIso: "2026-04-14T11:00:00",
+      endIso: "2026-04-14T11:30:00",
+      timezone: "UTC",
+    });
+
+    expect(result.details).toMatchObject({
+      identityId: "assistant@example.com",
+      calendarUser: "assistant@example.com",
+      operation: "reschedule",
+      queued: true,
+      approverTeamsUserIds: ["approver-aad"],
+    });
+    const flow = taskFlow
+      .fromToolContext(context)
+      .get((result.details as { flowId: string }).flowId);
+    expect(flow?.stateJson).toMatchObject({
+      snapshot: {
+        kind: "m365.calendar.change",
+        requestedOperation: "reschedule",
+        plan: {
+          changeKey: "ck-1",
+          eventId: "event-1",
+          start: { dateTime: "2026-04-14T11:00:00", timeZone: "UTC" },
+          end: { dateTime: "2026-04-14T11:30:00", timeZone: "UTC" },
+        },
+      },
+    });
+    expect(deliverApprovalCard).toHaveBeenCalledTimes(1);
   });
 });

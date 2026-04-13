@@ -5,9 +5,11 @@ import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-ru
 import { createRuntimeTaskFlow } from "../../../test/helpers/plugins/runtime-taskflow.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import {
+  queueM365CalendarChangeApproval,
   queueM365MailReplyApproval,
   registerM365ApprovalInteractiveHandler,
 } from "./approval-actions.js";
+import { queueCalendarChange } from "./calendar/plan.js";
 import type { M365GraphJsonClient } from "./graph-client.js";
 
 type InteractiveRegistration = {
@@ -279,5 +281,144 @@ describe("m365 approval actions", () => {
 
     expect(requestJson).not.toHaveBeenCalled();
     expect(editMessage).toHaveBeenCalledWith({ text: "Denied." });
+  });
+
+  it("approves a calendar create exactly once and blocks replay", async () => {
+    const { api, getInteractiveRegistration } = createApi();
+    const deliverApprovalCard = vi.fn(async () => ({ ok: true }));
+    const requestJson = vi.fn(async () => ({
+      id: "event-1",
+      subject: "Planning",
+    }));
+    registerM365ApprovalInteractiveHandler(api, {
+      graphClientFactory: () => ({
+        requestJson: requestJson as unknown as M365GraphJsonClient["requestJson"],
+      }),
+    });
+    const registration = getInteractiveRegistration();
+    if (!registration) {
+      throw new Error("interactive handler not registered");
+    }
+    const queued = queueCalendarChange({
+      operation: "create",
+      calendarUser: "assistant@example.com",
+      subject: "Planning",
+      start: { dateTime: "2026-04-14T10:00:00", timeZone: "UTC" },
+      end: { dateTime: "2026-04-14T10:30:00", timeZone: "UTC" },
+      attendees: [],
+      idempotencyKey: "calendar-1",
+    });
+
+    await queueM365CalendarChangeApproval({
+      api,
+      deps: { deliverApprovalCard },
+      toolContext: createToolContext(),
+      identityId: "assistant@example.com",
+      plan: queued.plan,
+      requestedOperation: "create",
+      sendUpdates: "all",
+    });
+
+    const deliveredCalls = deliverApprovalCard.mock.calls as unknown as Array<
+      [{ card?: Record<string, unknown> }]
+    >;
+    const card = deliveredCalls[0]?.[0]?.card;
+    if (!card) {
+      throw new Error("approval card was not delivered");
+    }
+    const approvePayload = extractInteractivePayload(card, 0);
+    const editMessage = vi.fn(async () => undefined);
+
+    await registration.handler({
+      senderId: "approver-aad",
+      interaction: { payload: approvePayload },
+      respond: {
+        reply: vi.fn(async () => undefined),
+        editMessage,
+      },
+    });
+    await registration.handler({
+      senderId: "approver-aad",
+      interaction: { payload: approvePayload },
+      respond: {
+        reply: vi.fn(async () => undefined),
+        editMessage,
+      },
+    });
+
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(editMessage).toHaveBeenNthCalledWith(1, { text: "Approved and executed." });
+    expect(editMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: expect.stringContaining("Approval could not be applied"),
+      }),
+    );
+  });
+
+  it("fails calendar approvals safely when the event revision changed", async () => {
+    const { api, getInteractiveRegistration } = createApi();
+    const deliverApprovalCard = vi.fn(async () => ({ ok: true }));
+    const requestJson = vi.fn(async () => ({
+      id: "event-1",
+      changeKey: "ck-2",
+      subject: "Planning",
+      start: { dateTime: "2026-04-14T10:00:00", timeZone: "UTC" },
+      end: { dateTime: "2026-04-14T10:30:00", timeZone: "UTC" },
+    }));
+    registerM365ApprovalInteractiveHandler(api, {
+      graphClientFactory: () => ({
+        requestJson: requestJson as unknown as M365GraphJsonClient["requestJson"],
+      }),
+    });
+    const registration = getInteractiveRegistration();
+    if (!registration) {
+      throw new Error("interactive handler not registered");
+    }
+    const queued = queueCalendarChange({
+      operation: "update",
+      calendarUser: "assistant@example.com",
+      eventId: "event-1",
+      changeKey: "ck-1",
+      subject: "Planning moved",
+      start: { dateTime: "2026-04-14T11:00:00", timeZone: "UTC" },
+      end: { dateTime: "2026-04-14T11:30:00", timeZone: "UTC" },
+      attendees: [],
+    });
+
+    await queueM365CalendarChangeApproval({
+      api,
+      deps: { deliverApprovalCard },
+      toolContext: createToolContext(),
+      identityId: "assistant@example.com",
+      plan: queued.plan,
+      requestedOperation: "update",
+      sendUpdates: "all",
+    });
+
+    const deliveredCalls = deliverApprovalCard.mock.calls as unknown as Array<
+      [{ card?: Record<string, unknown> }]
+    >;
+    const card = deliveredCalls[0]?.[0]?.card;
+    if (!card) {
+      throw new Error("approval card was not delivered");
+    }
+    const approvePayload = extractInteractivePayload(card, 0);
+    const editMessage = vi.fn(async () => undefined);
+
+    await registration.handler({
+      senderId: "approver-aad",
+      interaction: { payload: approvePayload },
+      respond: {
+        reply: vi.fn(async () => undefined),
+        editMessage,
+      },
+    });
+
+    expect(editMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Approval failed safely"),
+      }),
+    );
   });
 });

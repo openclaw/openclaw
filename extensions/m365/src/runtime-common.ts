@@ -190,3 +190,56 @@ export async function verifyM365MailWriteScopeProof(params: {
     }
   }
 }
+
+export async function verifyM365CalendarWriteScopeProof(params: {
+  config: M365ResolvedPluginConfig;
+  deps: M365ToolDeps;
+}): Promise<void> {
+  const appOnlyAccounts = Object.values(params.config.accounts).filter(
+    (account) => account.authMode === "app-only",
+  );
+  if (appOnlyAccounts.length === 0 || params.config.allowedCalendars.length === 0) {
+    return;
+  }
+  const probeUserId = params.config.calendarWriteScopeProbeUserId;
+  if (!probeUserId) {
+    throw new Error(
+      "M365 app-only calendar writes require plugins.entries.m365.config.calendarWriteScopeProbeUserId.",
+    );
+  }
+  const normalizedProbe = probeUserId.trim().toLowerCase();
+  if (params.config.allowedCalendars.includes(normalizedProbe)) {
+    throw new Error(
+      "M365 calendar scope proof probe user must be outside the allowedCalendars list.",
+    );
+  }
+  for (const account of appOnlyAccounts) {
+    const client = createM365JsonGraphClient({
+      config: params.config,
+      account,
+      deps: params.deps,
+    });
+    try {
+      await client.requestJson(`/users/${encodeGraphPathSegment(probeUserId)}/events`, {
+        query: {
+          $top: 1,
+          $select: "id",
+        },
+      });
+      throw new Error(
+        `M365 calendar scope proof failed for "${account.accountId}": out-of-scope calendar user "${probeUserId}" was accessible.`,
+      );
+    } catch (error) {
+      if (error instanceof M365GraphApiError && error.status === 403) {
+        continue;
+      }
+      if (error instanceof Error) {
+        throw new Error(
+          `M365 calendar scope proof failed for "${account.accountId}": ${error.message}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+}

@@ -33,6 +33,15 @@ type TokenResponse = {
   scope?: unknown;
 };
 
+const M365_DELEGATED_REFRESH_SCOPES = [
+  "offline_access",
+  "Calendars.Read",
+  "Calendars.ReadWrite",
+  "Mail.Read",
+  "Mail.Send",
+  "User.Read",
+].join(" ");
+
 function requireConfigured(value: string | undefined, label: string): string {
   if (!value?.trim()) {
     throw new Error(`${label} required for M365 Graph auth`);
@@ -132,7 +141,7 @@ async function requestDelegatedRefreshToken(params: {
     client_id: clientId,
     grant_type: "refresh_token",
     refresh_token: params.refreshToken,
-    scope: "offline_access Mail.Read Mail.Send User.Read",
+    scope: M365_DELEGATED_REFRESH_SCOPES,
   });
   if (params.account.clientSecret) {
     body.set("client_secret", params.account.clientSecret);

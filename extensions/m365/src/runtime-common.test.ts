@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { M365ResolvedPluginConfig } from "./config.js";
 import { M365GraphApiError } from "./graph-client.js";
 import type { M365GraphJsonClient } from "./graph-client.js";
-import { verifyM365MailWriteScopeProof } from "./runtime-common.js";
+import {
+  verifyM365CalendarWriteScopeProof,
+  verifyM365MailWriteScopeProof,
+} from "./runtime-common.js";
 
 function config(overrides: Partial<M365ResolvedPluginConfig> = {}): M365ResolvedPluginConfig {
   return {
@@ -28,6 +31,7 @@ function config(overrides: Partial<M365ResolvedPluginConfig> = {}): M365Resolved
     triage: { limit: 10, sinceMinutes: 60, unreadOnly: true },
     allowedMailboxes: ["assistant@example.com"],
     mailWriteScopeProbeMailboxUserId: "outside-probe@example.com",
+    calendarWriteScopeProbeUserId: "outside-calendar@example.com",
     allowedCalendars: [],
     approval: { timeoutMs: 300000, previewChars: 1200, teamsUserIds: ["approver-aad"] },
     webhook: {
@@ -86,5 +90,37 @@ describe("m365 runtime-common", () => {
         },
       }),
     ).rejects.toThrow("scope proof failed");
+  });
+
+  it("passes calendar scope proof when the out-of-scope calendar user is denied with 403", async () => {
+    const graphClientFactory = vi.fn(() => ({
+      requestJson: vi.fn(async () => {
+        throw new M365GraphApiError("forbidden", {
+          status: 403,
+          responseText: "forbidden",
+        });
+      }),
+    }));
+
+    await expect(
+      verifyM365CalendarWriteScopeProof({
+        config: config({
+          allowedCalendars: ["assistant@example.com"],
+        }),
+        deps: { graphClientFactory },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails closed when calendar writes are enabled without a calendar scope proof probe", async () => {
+    await expect(
+      verifyM365CalendarWriteScopeProof({
+        config: config({
+          allowedCalendars: ["assistant@example.com"],
+          calendarWriteScopeProbeUserId: undefined,
+        }),
+        deps: {},
+      }),
+    ).rejects.toThrow("calendarWriteScopeProbeUserId");
   });
 });
