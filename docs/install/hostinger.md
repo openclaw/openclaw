@@ -27,6 +27,7 @@ The fastest way to get started. Hostinger handles infrastructure, Docker, and au
     <Note>
     During checkout you can select **Ready-to-Use AI** credits that are pre-purchased and integrated instantly inside OpenClaw -- no external accounts or API keys from other providers needed. You can start chatting right away. Alternatively, provide your own key from Anthropic, OpenAI, Google Gemini, or xAI during setup.
     </Note>
+
   </Step>
 
   <Step title="Select a messaging channel">
@@ -34,6 +35,7 @@ The fastest way to get started. Hostinger handles infrastructure, Docker, and au
 
     - **WhatsApp** -- scan the QR code shown in the setup wizard.
     - **Telegram** -- paste the bot token from [BotFather](https://t.me/BotFather).
+
   </Step>
 
   <Step title="Complete installation">
@@ -53,6 +55,7 @@ More control over your server. Hostinger deploys OpenClaw via Docker on your VPS
     <Note>
     You can select **Ready-to-Use AI** credits during checkout -- these are pre-purchased and integrated instantly inside OpenClaw, so you can start chatting without any external accounts or API keys from other providers.
     </Note>
+
   </Step>
 
   <Step title="Configure OpenClaw">
@@ -62,6 +65,7 @@ More control over your server. Hostinger deploys OpenClaw via Docker on your VPS
     - **WhatsApp number** -- your number with country code (optional).
     - **Telegram bot token** -- from [BotFather](https://t.me/BotFather) (optional).
     - **API keys** -- only needed if you did not select Ready-to-Use AI credits during checkout.
+
   </Step>
 
   <Step title="Start OpenClaw">
