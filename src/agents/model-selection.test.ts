@@ -10,6 +10,7 @@ import {
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
+  normalizeProviderCatalogFamilyId,
   normalizeProviderId,
   normalizeProviderIdForAuth,
   modelKey,
@@ -124,6 +125,16 @@ describe("model-selection", () => {
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
+    });
+  });
+
+  describe("normalizeProviderCatalogFamilyId", () => {
+    it("collapses provider plan variants only for catalog-family matching", () => {
+      expect(normalizeProviderCatalogFamilyId("volcengine")).toBe("volcengine");
+      expect(normalizeProviderCatalogFamilyId("volcengine-plan")).toBe("volcengine");
+      expect(normalizeProviderCatalogFamilyId("byteplus")).toBe("byteplus");
+      expect(normalizeProviderCatalogFamilyId("byteplus-plan")).toBe("byteplus");
+      expect(normalizeProviderCatalogFamilyId("z.ai")).toBe("zai");
     });
   });
 

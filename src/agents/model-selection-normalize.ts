@@ -2,6 +2,7 @@ import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./mo
 import {
   findNormalizedProviderKey,
   findNormalizedProviderValue,
+  normalizeProviderCatalogFamilyId,
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "./provider-id.js";
@@ -30,6 +31,7 @@ export function legacyModelKey(provider: string, model: string): string | null {
 export {
   findNormalizedProviderKey,
   findNormalizedProviderValue,
+  normalizeProviderCatalogFamilyId,
   normalizeProviderId,
   normalizeProviderIdForAuth,
 };

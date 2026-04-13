@@ -27,6 +27,24 @@ export function normalizeProviderId(provider: string): string {
   return normalized;
 }
 
+/**
+ * Normalize provider IDs for catalog-family matching.
+ *
+ * Keep this separate from `normalizeProviderId()`: plan variants remain distinct
+ * provider identities in the wider runtime, but they should match their base
+ * providers when a surface is selecting catalog rows for a configured provider.
+ */
+export function normalizeProviderCatalogFamilyId(provider: string): string {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "volcengine-plan") {
+    return "volcengine";
+  }
+  if (normalized === "byteplus-plan") {
+    return "byteplus";
+  }
+  return normalized;
+}
+
 /** Normalize provider ID before manifest-owned auth alias lookup. */
 export function normalizeProviderIdForAuth(provider: string): string {
   return normalizeProviderId(provider);
