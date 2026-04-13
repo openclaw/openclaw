@@ -116,7 +116,7 @@ export async function buildCodexProviderCatalog(
   const models = (discovered.length > 0 ? discovered : FALLBACK_CODEX_MODELS).map(
     codexModelToDefinition,
   );
-  const resolvedApiKey = options.resolveProviderApiKey?.(PROVIDER_ID).apiKey;
+  const resolvedApiKey = options.resolveProviderApiKey?.(PROVIDER_ID)?.apiKey;
   return {
     provider: {
       baseUrl: CODEX_BASE_URL,
