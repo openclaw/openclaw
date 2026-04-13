@@ -798,7 +798,7 @@ describe("QmdMemoryManager", () => {
     expect(legacyCollections.has("memory-root")).toBe(false);
     expect(legacyCollections.has("memory-dir")).toBe(false);
     expect(legacyCollections.has("memory-alt-main")).toBe(false);
-    expect(legacyCollections.has("memory-alt")).toBe(true);
+    expect(legacyCollections.has("memory-alt")).toBe(false);
   });
 
   it("rebinds conflicting collection name when path+pattern slot is already occupied", async () => {
