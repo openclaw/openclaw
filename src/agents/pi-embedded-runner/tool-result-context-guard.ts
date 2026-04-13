@@ -197,6 +197,7 @@ export function installContextEngineLoopHook(params: {
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
+  getPrePromptMessageCount?: () => number;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
@@ -210,26 +211,52 @@ export function installContextEngineLoopHook(params: {
       : messages;
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
 
-    if (lastSeenLength === null) {
-      lastSeenLength = sourceMessages.length;
-    }
+    // Seed the loop fence from the attempt's pre-prompt message count when available.
+    // This keeps the first real post-tool-call iteration eligible for compaction even
+    // if the hook's first observed call happens after tool results were appended.
+    const prePromptMessageCount = Math.max(
+      0,
+      Math.min(
+        sourceMessages.length,
+        lastSeenLength ?? params.getPrePromptMessageCount?.() ?? sourceMessages.length,
+      ),
+    );
+    lastSeenLength = prePromptMessageCount;
 
-    const hasNewMessages = sourceMessages.length > lastSeenLength;
+    const hasNewMessages = sourceMessages.length > prePromptMessageCount;
     if (!hasNewMessages) {
       return lastAssembledView ?? sourceMessages;
     }
 
     try {
       if (typeof contextEngine.afterTurn === "function") {
-        const prePromptCount = lastSeenLength;
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
           sessionFile,
           messages: sourceMessages,
-          prePromptMessageCount: prePromptCount,
+          prePromptMessageCount,
           tokenBudget,
         });
+      } else {
+        const newMessages = sourceMessages.slice(prePromptMessageCount);
+        if (newMessages.length > 0) {
+          if (typeof contextEngine.ingestBatch === "function") {
+            await contextEngine.ingestBatch({
+              sessionId,
+              sessionKey,
+              messages: newMessages,
+            });
+          } else {
+            for (const message of newMessages) {
+              await contextEngine.ingest({
+                sessionId,
+                sessionKey,
+                message,
+              });
+            }
+          }
+        }
       }
       lastSeenLength = sourceMessages.length;
       const assembled = await contextEngine.assemble({

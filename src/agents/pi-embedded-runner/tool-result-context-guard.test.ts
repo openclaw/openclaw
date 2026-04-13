@@ -245,6 +245,8 @@ describe("installToolResultContextGuard", () => {
 type MockedEngine = ContextEngine & {
   afterTurn: ReturnType<typeof vi.fn>;
   assemble: ReturnType<typeof vi.fn>;
+  ingest: ReturnType<typeof vi.fn>;
+  ingestBatch?: ReturnType<typeof vi.fn>;
 };
 
 function makeMockEngine(
@@ -254,6 +256,11 @@ function makeMockEngine(
     ) => Promise<{ messages: AgentMessage[]; estimatedTokens: number }>;
     afterTurn?: (params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => Promise<void>;
     omitAfterTurn?: boolean;
+    ingest?: (params: Parameters<ContextEngine["ingest"]>[0]) => Promise<{ ingested: boolean }>;
+    ingestBatch?: (
+      params: Parameters<NonNullable<ContextEngine["ingestBatch"]>>[0],
+    ) => Promise<{ ingestedCount: number }>;
+    omitIngestBatch?: boolean;
   } = {},
 ): MockedEngine {
   const defaultAfterTurn = vi.fn(async () => {});
@@ -261,12 +268,24 @@ function makeMockEngine(
     messages: params.messages,
     estimatedTokens: 0,
   }));
+  const defaultIngest = vi.fn(async () => ({ ingested: true }));
+  const defaultIngestBatch = vi.fn(
+    async (params: Parameters<NonNullable<ContextEngine["ingestBatch"]>>[0]) => ({
+      ingestedCount: params.messages.length,
+    }),
+  );
   const afterTurn = overrides.omitAfterTurn
     ? undefined
     : overrides.afterTurn
       ? vi.fn(overrides.afterTurn)
       : defaultAfterTurn;
   const assemble = overrides.assemble ? vi.fn(overrides.assemble) : defaultAssemble;
+  const ingest = overrides.ingest ? vi.fn(overrides.ingest) : defaultIngest;
+  const ingestBatch = overrides.omitIngestBatch
+    ? undefined
+    : overrides.ingestBatch
+      ? vi.fn(overrides.ingestBatch)
+      : defaultIngestBatch;
   const engine = {
     info: {
       id: "test-engine",
@@ -274,8 +293,9 @@ function makeMockEngine(
       version: "0.0.1",
       ownsCompaction: true,
     },
-    ingest: async () => ({ ingested: true }),
+    ingest,
     assemble,
+    ...(ingestBatch ? { ingestBatch } : {}),
     ...(afterTurn ? { afterTurn } : {}),
   } as unknown as MockedEngine;
   return engine;
@@ -298,6 +318,7 @@ describe("installContextEngineLoopHook", () => {
   function installHook(
     agent: ReturnType<typeof makeGuardableAgent>,
     engine: MockedEngine,
+    prePromptCount?: number,
   ): () => void {
     return installContextEngineLoopHook({
       agent,
@@ -307,13 +328,14 @@ describe("installContextEngineLoopHook", () => {
       sessionFile,
       tokenBudget,
       modelId,
+      ...(prePromptCount !== undefined ? { getPrePromptMessageCount: () => prePromptCount } : {}),
     });
   }
 
-  it("returns early on the first call without calling afterTurn or assemble", async () => {
+  it("returns early when the current messages match the pre-prompt baseline", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();
-    installHook(agent, engine);
+    installHook(agent, engine, 2);
 
     const messages = [makeUser("first"), makeToolResult("call_1", "result")];
     const transformed = await callTransform(agent, messages);
@@ -321,6 +343,22 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(messages);
     expect(engine.afterTurn).not.toHaveBeenCalled();
     expect(engine.assemble).not.toHaveBeenCalled();
+  });
+
+  it("processes the first call when messages already exceed the pre-prompt baseline", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 1);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
+      prePromptMessageCount: 1,
+      messages,
+    });
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
   it("calls afterTurn and assemble when new messages are appended after the first call", async () => {
@@ -442,7 +480,7 @@ describe("installContextEngineLoopHook", () => {
     expect(sourceMessages).toEqual(sourceCopy);
   });
 
-  it("still calls assemble when engine lacks afterTurn but new messages arrive", async () => {
+  it("ingests new messages in batches when afterTurn is absent", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine({ omitAfterTurn: true });
     installHook(agent, engine);
@@ -456,7 +494,31 @@ describe("installContextEngineLoopHook", () => {
     const batch2 = [...batch1, makeUser("third"), makeToolResult("call_3", "r3")];
     await callTransform(agent, batch2);
 
+    expect(engine.ingestBatch).toHaveBeenCalledTimes(2);
+    expect(engine.ingestBatch?.mock.calls[0]?.[0]).toMatchObject({
+      messages: [makeUser("second"), makeToolResult("call_2", "r2")],
+    });
+    expect(engine.ingestBatch?.mock.calls[1]?.[0]).toMatchObject({
+      messages: [makeUser("third"), makeToolResult("call_3", "r3")],
+    });
     expect(engine.assemble).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to per-message ingest when ingestBatch is absent", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({ omitAfterTurn: true, omitIngestBatch: true });
+    installHook(agent, engine, 1);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "r1")];
+    await callTransform(agent, messages);
+
+    expect(engine.ingest).toHaveBeenCalledTimes(1);
+    expect(engine.ingest.mock.calls[0]?.[0]).toMatchObject({
+      sessionId,
+      sessionKey,
+      message: makeToolResult("call_1", "r1"),
+    });
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
   it("falls through to source messages when engine.afterTurn throws", async () => {
