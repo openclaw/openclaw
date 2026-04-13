@@ -779,11 +779,14 @@ async function executeGatewayRequestWithScopes<T>(params: {
             timeoutMs: opts.timeoutMs,
           });
           ignoreClose = true;
+          // Wait for the gateway connection to close cleanly before resolving.
+          // client.stop() is fire-and-forget; client.stopAndWait() ensures the
+          // socket/session teardown settles so the CLI process can exit promptly.
+          await client.stopAndWait().catch(() => {});
           stop(undefined, result);
-          client.stop();
         } catch (err) {
           ignoreClose = true;
-          client.stop();
+          await client.stopAndWait().catch(() => {});
           stop(err as Error);
         }
       },
@@ -792,14 +795,14 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        client.stop();
+        void client.stopAndWait().catch(() => {});
         stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
-      client.stop();
+      void client.stopAndWait().catch(() => {});
       stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
     }, safeTimerTimeoutMs);
 
