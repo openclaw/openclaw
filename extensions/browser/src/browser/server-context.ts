@@ -1,3 +1,7 @@
+import {
+  resolveCdpControlPolicy,
+  resolveCdpReachabilityPolicy,
+} from "./cdp-reachability-policy.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
@@ -86,7 +90,7 @@ function createProfileContext(
   const { ensureTabAvailable, focusTab, closeTab } = createProfileSelectionOps({
     profile,
     getProfileState,
-    getSsrFPolicy: () => state().resolved.ssrfPolicy,
+    getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
     ensureBrowserAvailable,
     listTabs,
     openTab,
@@ -189,7 +193,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
           const reachable = await isChromeReachable(
             profile.cdpUrl,
             200,
-            current.resolved.ssrfPolicy,
+            resolveCdpReachabilityPolicy(profile, current.resolved.ssrfPolicy),
           );
           if (reachable) {
             running = true;

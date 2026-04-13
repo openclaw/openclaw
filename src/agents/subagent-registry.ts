@@ -324,6 +324,9 @@ async function emitSubagentEndedHookForRun(params: {
   sendFarewell?: boolean;
   accountId?: string;
 }) {
+  if (params.entry.endedHookEmittedAt) {
+    return;
+  }
   const cfg = subagentRegistryDeps.loadConfig();
   await ensureSubagentRegistryPluginRuntimeLoaded({
     config: cfg,

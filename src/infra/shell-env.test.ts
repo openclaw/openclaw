@@ -187,6 +187,40 @@ describe("shell env fallback", () => {
     expect(exec2).not.toHaveBeenCalled();
   });
 
+  it("reuses the cached login-shell env probe across repeated fallback reads", () => {
+    resetShellPathCacheForTests();
+    const env: NodeJS.ProcessEnv = {};
+    const exec = vi.fn(() =>
+      Buffer.from("OPENAI_API_KEY=from-shell\0ANTHROPIC_API_KEY=from-shell-anthropic\0"),
+    );
+
+    expect(
+      loadShellEnvFallback({
+        enabled: true,
+        env,
+        expectedKeys: ["OPENAI_API_KEY"],
+        exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      }),
+    ).toEqual({
+      ok: true,
+      applied: ["OPENAI_API_KEY"],
+    });
+
+    expect(
+      loadShellEnvFallback({
+        enabled: true,
+        env,
+        expectedKeys: ["ANTHROPIC_API_KEY"],
+        exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      }),
+    ).toEqual({
+      ok: true,
+      applied: ["ANTHROPIC_API_KEY"],
+    });
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
   it("tracks last applied keys across success, skip, and failure paths", () => {
     const successEnv: NodeJS.ProcessEnv = {};
     const successExec = vi.fn(() =>

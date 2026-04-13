@@ -82,10 +82,11 @@ import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import {
   buildErrorAgentMeta,
-  resolveFinalAssistantVisibleText,
   buildUsageAgentMetaFields,
   createCompactionDiagId,
   resolveActiveErrorContext,
+  resolveFinalAssistantRawText,
+  resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
@@ -112,7 +113,11 @@ import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
 } from "./tool-result-truncation.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import type {
+  EmbeddedPiAgentMeta,
+  EmbeddedPiRunResult,
+  EmbeddedRunLivenessState,
+} from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -750,6 +755,7 @@ export async function runEmbeddedPiAgent(
           const activeErrorContext = resolveActiveErrorContext({
             provider,
             model: modelId,
+            assistant: currentAttemptAssistant ?? sessionLastAssistant,
           });
           const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
             accumulatedReplayState.replayInvalid ||
@@ -1262,6 +1268,8 @@ export async function runEmbeddedPiAgent(
               profileFailureReason: promptProfileFailureReason,
               provider,
               model: modelId,
+              sourceProvider: provider,
+              sourceModel: modelId,
               profileId: failedPromptProfileId,
               fallbackConfigured,
               aborted,
@@ -1380,6 +1388,8 @@ export async function runEmbeddedPiAgent(
             profileFailureReason: assistantProfileFailureReason,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            sourceProvider: assistantForFailover?.provider ?? provider,
+            sourceModel: assistantForFailover?.model ?? modelId,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
             timedOut,
@@ -1493,6 +1503,7 @@ export async function runEmbeddedPiAgent(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
+          const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
@@ -1552,6 +1563,7 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                finalAssistantRawText,
                 replayInvalid,
                 livenessState,
               },
@@ -1623,6 +1635,24 @@ export async function runEmbeddedPiAgent(
               `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} configured=${configuredExecutionContract} — surfacing blocked state`,
             );
+            // Criterion 4 of the GPT-5.4 parity gate requires every terminal
+            // exit path to emit an explicit livenessState + replayInvalid so
+            // downstream observers never see "silent disappearance". Every
+            // other hard-error terminal branch in this file uses "blocked"
+            // for its livenessState (role ordering, image size, schema
+            // error, compaction timeout, aborted-with-no-payloads). Match
+            // that convention here so lifecycle consumers treat an
+            // isError:true strict-agentic-blocked payload the same way they
+            // treat any other error-terminal payload. Replay validity is
+            // delegated to the shared resolver because the plan-only
+            // transcript itself is replay-safe even though the run is
+            // terminal.
+            const replayInvalid = resolveReplayInvalidForAttempt(null);
+            const livenessState: EmbeddedRunLivenessState = "blocked";
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
             return {
               payloads: [
                 {
@@ -1636,6 +1666,9 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1686,6 +1719,7 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                finalAssistantRawText,
                 replayInvalid,
                 livenessState,
               },
@@ -1734,6 +1768,7 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               finalAssistantVisibleText,
+              finalAssistantRawText,
               replayInvalid,
               livenessState,
               // Handle client tool calls (OpenResponses hosted tools)

@@ -111,6 +111,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
+import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
@@ -179,6 +180,7 @@ import {
 } from "./attempt.context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
+  mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptPrependSystemContext,
@@ -240,6 +242,7 @@ export {
 } from "./attempt.thread-helpers.js";
 export {
   buildAfterTurnRuntimeContext,
+  mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptPrependSystemContext,
@@ -338,6 +341,16 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalImageBlocks,
     maxMessageTextChars,
   };
+}
+
+export function resolveUnknownToolGuardThreshold(loopDetection?: {
+  enabled?: boolean;
+  unknownToolThreshold?: number;
+}): number | undefined {
+  if (loopDetection?.enabled !== true) {
+    return undefined;
+  }
+  return loopDetection.unknownToolThreshold ?? UNKNOWN_TOOL_THRESHOLD;
 }
 
 export async function runEmbeddedAttempt(
@@ -1234,6 +1247,9 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
         allowedToolNames,
+        {
+          unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+        },
       );
 
       if (
@@ -1761,6 +1777,12 @@ export async function runEmbeddedAttempt(
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+          const orphanPromptMerge = mergeOrphanedTrailingUserPrompt({
+            prompt: effectivePrompt,
+            trigger: params.trigger,
+            leafMessage: leafEntry.message,
+          });
+          effectivePrompt = orphanPromptMerge.prompt;
           if (leafEntry.parentId) {
             sessionManager.branch(leafEntry.parentId);
           } else {
@@ -1769,7 +1791,8 @@ export async function runEmbeddedAttempt(
           const sessionContext = sessionManager.buildSessionContext();
           activeSession.agent.state.messages = sessionContext.messages;
           const orphanRepairMessage =
-            `Removed orphaned user message to prevent consecutive user turns. ` +
+            `${orphanPromptMerge.merged ? "Merged and removed" : "Removed"} orphaned user message ` +
+            `to prevent consecutive user turns. ` +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
           if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
             log.warn(orphanRepairMessage);
@@ -1905,6 +1928,7 @@ export async function runEmbeddedAttempt(
                   `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
                   `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
                   `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
+                  `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
                   `sessionFile=${params.sessionFile}`,
               );
               skipPromptSubmission = true;
@@ -1936,7 +1960,9 @@ export async function runEmbeddedAttempt(
                 `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
                 `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
                 `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
-                `reserveTokens=${reserveTokens} sessionFile=${params.sessionFile}`,
+                `reserveTokens=${reserveTokens} ` +
+                `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
+                `sessionFile=${params.sessionFile}`,
             );
             skipPromptSubmission = true;
           }

@@ -284,6 +284,7 @@ export async function initSessionState(params: {
 
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
+  let persistedTrace: string | undefined;
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
@@ -438,6 +439,7 @@ export async function initSessionState(params: {
     abortedLastRun = entry.abortedLastRun ?? false;
     persistedThinking = entry.thinkingLevel;
     persistedVerbose = entry.verboseLevel;
+    persistedTrace = entry.traceLevel;
     persistedReasoning = entry.reasoningLevel;
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
@@ -457,6 +459,7 @@ export async function initSessionState(params: {
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
+      persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
@@ -482,39 +485,64 @@ export async function initSessionState(params: {
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
-  const lastChannelRaw = resolveLastChannelRaw({
-    originatingChannelRaw,
-    persistedLastChannel: baseEntry?.lastChannel,
-    sessionKey,
-    isInterSession,
-  });
-  const lastToRaw = resolveLastToRaw({
-    originatingChannelRaw,
-    originatingToRaw: ctx.OriginatingTo,
-    toRaw: ctx.To,
-    persistedLastTo: baseEntry?.lastTo,
-    persistedLastChannel: baseEntry?.lastChannel,
-    sessionKey,
-    isInterSession,
-  });
-  const lastAccountIdRaw = resolveSessionDefaultAccountId({
-    cfg,
-    channelRaw: lastChannelRaw,
-    accountIdRaw: ctx.AccountId,
-    persistedLastAccountId: baseEntry?.lastAccountId,
-  });
-  // Only fall back to persisted threadId for thread sessions.  Non-thread
+  // Automated heartbeat/cron/exec turns run inside the conversation session,
+  // but they must not rewrite the session's remembered external delivery route.
+  // Otherwise a heartbeat target like "group:..." or a synthetic sender like
+  // "heartbeat" leaks into the shared session and later user replies route to
+  // the wrong chat.
+  const lastChannelRaw = isSystemEvent
+    ? baseEntry?.lastChannel
+    : resolveLastChannelRaw({
+        originatingChannelRaw,
+        persistedLastChannel: baseEntry?.lastChannel,
+        sessionKey,
+        isInterSession,
+      });
+  const lastToRaw = isSystemEvent
+    ? baseEntry?.lastTo
+    : resolveLastToRaw({
+        originatingChannelRaw,
+        originatingToRaw: ctx.OriginatingTo,
+        toRaw: ctx.To,
+        persistedLastTo: baseEntry?.lastTo,
+        persistedLastChannel: baseEntry?.lastChannel,
+        sessionKey,
+        isInterSession,
+      });
+  const lastAccountIdRaw = isSystemEvent
+    ? baseEntry?.lastAccountId
+    : resolveSessionDefaultAccountId({
+        cfg,
+        channelRaw: lastChannelRaw,
+        accountIdRaw: ctx.AccountId,
+        persistedLastAccountId: baseEntry?.lastAccountId,
+      });
+  // Only fall back to persisted threadId for thread sessions. Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
-  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
-  const deliveryFields = normalizeSessionDeliveryFields({
-    deliveryContext: {
-      channel: lastChannelRaw,
-      to: lastToRaw,
-      accountId: lastAccountIdRaw,
-      threadId: lastThreadIdRaw,
-    },
-  });
+  const lastThreadIdRaw = isSystemEvent
+    ? baseEntry?.lastThreadId
+    : ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+  const deliveryFields = isSystemEvent
+    ? normalizeSessionDeliveryFields({
+        channel: baseEntry?.channel,
+        lastChannel: baseEntry?.lastChannel,
+        lastTo: baseEntry?.lastTo,
+        lastAccountId: baseEntry?.lastAccountId,
+        lastThreadId:
+          baseEntry?.lastThreadId ??
+          baseEntry?.deliveryContext?.threadId ??
+          baseEntry?.origin?.threadId,
+        deliveryContext: baseEntry?.deliveryContext,
+      })
+    : normalizeSessionDeliveryFields({
+        deliveryContext: {
+          channel: lastChannelRaw,
+          to: lastToRaw,
+          accountId: lastAccountIdRaw,
+          threadId: lastThreadIdRaw,
+        },
+      });
   const lastChannel = deliveryFields.lastChannel ?? lastChannelRaw;
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
@@ -528,6 +556,7 @@ export async function initSessionState(params: {
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
+    traceLevel: persistedTrace ?? baseEntry?.traceLevel,
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
     responseUsage: baseEntry?.responseUsage,
@@ -573,6 +602,7 @@ export async function initSessionState(params: {
     sessionKey,
     existing: sessionEntry,
     groupResolution,
+    skipSystemEventOrigin: isSystemEvent,
   });
   if (metaPatch) {
     sessionEntry = { ...sessionEntry, ...metaPatch };

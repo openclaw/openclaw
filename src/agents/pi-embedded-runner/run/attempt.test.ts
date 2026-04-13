@@ -8,11 +8,13 @@ import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
+  mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
+  resolveUnknownToolGuardThreshold,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
@@ -230,6 +232,55 @@ describe("shouldWarnOnOrphanedUserRepair", () => {
   });
 });
 
+describe("mergeOrphanedTrailingUserPrompt", () => {
+  it("merges an orphaned user leaf into the next user-triggered prompt when missing", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: [{ type: "text", text: "older active-turn message" }],
+        } as never,
+      }),
+    ).toEqual({
+      merged: true,
+      prompt:
+        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "older active-turn message\n\nnewest inbound message",
+    });
+  });
+
+  it("does not duplicate orphaned user text already present in the next prompt", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "summary\nolder active-turn message\nnewest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "older active-turn message",
+        } as never,
+      }),
+    ).toEqual({
+      merged: false,
+      prompt: "summary\nolder active-turn message\nnewest inbound message",
+    });
+  });
+
+  it("skips orphan prompt merging for non-user triggers", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "HEARTBEAT_OK",
+        trigger: "heartbeat",
+        leafMessage: {
+          content: "older active-turn message",
+        } as never,
+      }),
+    ).toEqual({
+      merged: false,
+      prompt: "HEARTBEAT_OK",
+    });
+  });
+});
+
 describe("resolveEmbeddedAgentStreamFn", () => {
   it("reuses the session's original base stream across later wrapper mutations", () => {
     resetEmbeddedAgentBaseStreamFnCacheForTest();
@@ -371,13 +422,33 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
+
+describe("resolveUnknownToolGuardThreshold", () => {
+  it("returns undefined when loop detection is disabled", () => {
+    expect(resolveUnknownToolGuardThreshold({ enabled: false, unknownToolThreshold: 4 })).toBe(
+      undefined,
+    );
+    expect(resolveUnknownToolGuardThreshold(undefined)).toBe(undefined);
+  });
+
+  it("uses the default threshold when loop detection is enabled without an override", () => {
+    expect(resolveUnknownToolGuardThreshold({ enabled: true })).toBe(10);
+  });
+
+  it("uses the configured threshold override when provided", () => {
+    expect(resolveUnknownToolGuardThreshold({ enabled: true, unknownToolThreshold: 4 })).toBe(4);
+  });
+});
+
 describe("wrapStreamFnTrimToolCallNames", () => {
   async function invokeWrappedStream(
     baseFn: (...args: never[]) => unknown,
     allowedToolNames?: Set<string>,
+    guardOptions?: { unknownToolThreshold?: number },
   ) {
     return await invokeWrappedTestStream(
-      (innerBaseFn) => wrapStreamFnTrimToolCallNames(innerBaseFn as never, allowedToolNames),
+      (innerBaseFn) =>
+        wrapStreamFnTrimToolCallNames(innerBaseFn as never, allowedToolNames, guardOptions),
       baseFn,
     );
   }
@@ -522,6 +593,133 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("graph.search");
     expect(result).toBe(finalMessage);
+  });
+
+  it("rewrites repeated unavailable tool calls into plain assistant text after the threshold", async () => {
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo eleven" } }],
+        },
+      }),
+    );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 10,
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+      const result = await stream.result();
+      expect(result).toMatchObject({
+        role: "assistant",
+        content: [{ type: "toolCall", name: "exec" }],
+      });
+    }
+
+    const blockedStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    const blockedResult = (await blockedStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+
+    expect(blockedResult.role).toBe("assistant");
+    expect(blockedResult.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"exec"'),
+      }),
+    ]);
+  });
+
+  it("leaves repeated unavailable tool calls alone when the unknown-tool guard is disabled", async () => {
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo eleven" } }],
+        },
+      }),
+    );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]));
+
+    for (let i = 0; i < 11; i += 1) {
+      const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+      const result = await stream.result();
+      expect(result).toMatchObject({
+        role: "assistant",
+        content: [{ type: "toolCall", name: "exec" }],
+      });
+    }
+  });
+
+  it("does not count partial tool-call deltas as separate unavailable-tool retries", async () => {
+    const partialToolCall = { type: "toolCall", name: " exec " };
+    const messageToolCall = { type: "toolCall", name: " exec " };
+    const finalToolCall = { type: "toolCall", name: " exec " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read"]), {
+      unknownToolThreshold: 1,
+    });
+
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string; name?: string }>;
+    };
+
+    expect(partialToolCall.name).toBe("exec");
+    expect(messageToolCall.name).toBe("exec");
+    expect(result.content).toEqual([expect.objectContaining({ type: "toolCall", name: "exec" })]);
+  });
+
+  it("does not reset the unavailable-tool streak on partial-only stream chunks", async () => {
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            partial: { role: "assistant", content: [{ type: "toolCall", name: " exec " }] },
+          },
+        ],
+        resultMessage: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo retry" } }],
+        },
+      }),
+    );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 1,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    await firstStream.result();
+
+    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const _item of secondStream) {
+      // drain
+    }
+    const secondResult = (await secondStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+    };
+
+    expect(secondResult.role).toBe("assistant");
+    expect(secondResult.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"exec"'),
+      }),
+    ]);
   });
 
   it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
@@ -1308,9 +1506,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     );
 
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({ api: "google-gemini" } as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
+    const stream = wrapped(
+      { api: "google-gemini" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);

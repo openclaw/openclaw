@@ -1,18 +1,18 @@
-import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
-import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
+import { readChannelAllowFromStoreEntriesSync } from "../../pairing/allow-from-store-read.js";
 import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
-import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
+import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -140,12 +140,7 @@ export async function resolveDeliveryTarget(
       : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
-    const bindings = buildChannelAccountBindings(cfg);
-    const byAgent = bindings.get(channel);
-    const boundAccounts = byAgent?.get(normalizeAgentId(agentId));
-    if (boundAccounts && boundAccounts.length > 0) {
-      accountId = boundAccounts[0];
-    }
+    accountId = resolveFirstBoundAccountId({ cfg, channelId: channel, agentId });
   }
 
   // job.delivery.accountId takes highest precedence — explicitly set by the job author.
@@ -177,7 +172,7 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  const channelPlugin = getLoadedChannelPlugin(channel);
+  const channelPlugin = getLoadedChannelPluginForRead(channel);
   const resolvedAccountId = normalizeAccountId(accountId);
   const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
     cfg,
@@ -186,8 +181,10 @@ export async function resolveDeliveryTarget(
   const configuredAllowFrom = configuredAllowFromRaw
     ? mapAllowFromEntries(configuredAllowFromRaw)
     : [];
-  const storeAllowFrom = mapAllowFromEntries(
-    readChannelAllowFromStoreSync(channel, process.env, resolvedAccountId),
+  const storeAllowFrom = readChannelAllowFromStoreEntriesSync(
+    channel,
+    process.env,
+    resolvedAccountId,
   );
   const allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
   const effectiveAllowFrom = mode === "implicit" ? allowFromOverride : undefined;
