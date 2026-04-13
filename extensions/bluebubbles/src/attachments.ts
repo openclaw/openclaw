@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -19,7 +20,6 @@ import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { createChatForHandle, resolveChatGuidForTarget } from "./send.js";
 import {
-  blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesAttachment,
   type SsrFPolicy,
@@ -94,6 +94,13 @@ function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefine
     : undefined;
 }
 
+function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
+  if (typeof fetchImpl !== "function") {
+    return false;
+  }
+  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
+}
+
 export async function downloadBlueBubblesAttachment(
   attachment: BlueBubblesAttachment,
   opts: BlueBubblesAttachmentOpts & { maxBytes?: number } = {},
@@ -122,12 +129,16 @@ export async function downloadBlueBubblesAttachment(
         : trustedHostname && (allowPrivateNetworkConfig !== false || !trustedHostnameIsPrivate)
           ? { allowedHostnames: [trustedHostname] }
           : undefined,
-      fetchImpl: async (input, init) =>
-        await blueBubblesFetchWithTimeout(
-          resolveRequestUrl(input),
-          { ...init, method: init?.method ?? "GET" },
-          opts.timeoutMs,
-        ),
+      fetchImpl: async (input, init) => {
+        const useFetch = init && "dispatcher" in init && !isMockedFetch(globalThis.fetch)
+          ? fetchWithRuntimeDispatcher
+          : globalThis.fetch;
+        return await useFetch(resolveRequestUrl(input), {
+          ...init,
+          method: init?.method ?? "GET",
+          ...(!init?.signal ? { signal: AbortSignal.timeout(opts.timeoutMs ?? 10_000) } : {}),
+        });
+      },
     });
     return {
       buffer: new Uint8Array(fetched.buffer),
