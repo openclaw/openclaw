@@ -28,10 +28,12 @@ RUN pnpm install --frozen-lockfile
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after pnpm install so playwright-core is available in node_modules.
 ARG OPENCLAW_INSTALL_BROWSER=""
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
 RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
+      chmod -R o+rx /opt/pw-browsers && \
       apt-get clean && \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
