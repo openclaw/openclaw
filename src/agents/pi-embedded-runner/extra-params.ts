@@ -576,7 +576,7 @@ export function createDonutAnalyticsContextWrapper(
             payloadObj.tool_call_id = inferredToolCallId;
           }
         }
-        onPayload?.(payload);
+        onPayload?.(payload, model);
       },
     });
   };

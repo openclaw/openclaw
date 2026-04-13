@@ -676,6 +676,48 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
   return { prompt, hasExecCompletion, hasCronEvents };
 }
 
+/**
+ * Prune heartbeat transcript by truncating the file back to its pre-run size.
+ * Prevents unbounded context growth — heartbeat runs are stateless.
+ */
+async function pruneHeartbeatTranscript(params: {
+  transcriptPath?: string;
+  preHeartbeatSize?: number;
+}) {
+  const { transcriptPath, preHeartbeatSize } = params;
+  if (!transcriptPath || typeof preHeartbeatSize !== "number" || preHeartbeatSize < 0) {
+    return;
+  }
+  try {
+    const stat = await fs.stat(transcriptPath);
+    if (stat.size > preHeartbeatSize) {
+      await fs.truncate(transcriptPath, preHeartbeatSize);
+    }
+  } catch {
+    // File may not exist or may have been removed
+  }
+}
+
+async function captureTranscriptState(params: {
+  storePath: string;
+  sessionKey: string;
+  agentId?: string;
+}): Promise<{ transcriptPath?: string; preHeartbeatSize?: number }> {
+  try {
+    const store = loadSessionStore(params.storePath);
+    const entry = store[params.sessionKey];
+    if (!entry?.sessionId) {
+      return {};
+    }
+    const dir = path.dirname(params.storePath);
+    const transcriptPath = path.join(dir, `${entry.sessionId}.jsonl`);
+    const stat = await fs.stat(transcriptPath);
+    return { transcriptPath, preHeartbeatSize: stat.size };
+  } catch {
+    return {};
+  }
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -995,6 +1037,13 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
+    // Capture transcript state before the heartbeat run so we can prune afterwards
+    const transcriptState = await captureTranscriptState({
+      storePath,
+      sessionKey,
+      agentId,
+    });
+
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const timeoutOverrideSeconds =
