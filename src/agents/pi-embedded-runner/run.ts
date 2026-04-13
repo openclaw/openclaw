@@ -232,8 +232,8 @@ export async function runEmbeddedPiAgent(
   }) => {
     updateAgentRunContext(params.runId, {
       ...(update.lifecyclePhase ? { lifecyclePhase: update.lifecyclePhase } : {}),
-      ...(update.timeoutPhase ? { timeoutPhase: update.timeoutPhase } : {}),
-      ...(update.phaseTimings ? { phaseTimings: update.phaseTimings } : {}),
+      ...("timeoutPhase" in update ? { timeoutPhase: update.timeoutPhase } : {}),
+      ...("phaseTimings" in update ? { phaseTimings: update.phaseTimings } : {}),
       ...(typeof update.latestError === "string" ? { latestError: update.latestError } : {}),
       ...(typeof update.providerRequestStartedAt === "number"
         ? { providerRequestStartedAt: update.providerRequestStartedAt }
@@ -674,6 +674,10 @@ export async function runEmbeddedPiAgent(
             });
           }
           runLoopIterations += 1;
+          applyRunTimingUpdate({
+            timeoutPhase: undefined,
+            phaseTimings: mergePhaseTimings(undefined),
+          });
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);

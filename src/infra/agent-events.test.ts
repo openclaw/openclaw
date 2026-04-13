@@ -116,6 +116,32 @@ describe("agent-events sequencing", () => {
     });
   });
 
+  test("can clear timeout phase and replace phase timings on later updates", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-timeout", {
+      timeoutPhase: "provider_timeout",
+      phaseTimings: {
+        globalQueueWaitMs: 10,
+        providerElapsedMs: 20,
+      },
+    });
+
+    registerAgentRunContext("run-timeout", {
+      timeoutPhase: undefined,
+      phaseTimings: {
+        globalQueueWaitMs: 11,
+      },
+    });
+
+    expect(getAgentRunContext("run-timeout")).toMatchObject({
+      timeoutPhase: undefined,
+      phaseTimings: {
+        globalQueueWaitMs: 11,
+      },
+    });
+    expect(getAgentRunContext("run-timeout")?.phaseTimings).not.toHaveProperty("providerElapsedMs");
+  });
+
   test("falls back to registered sessionKey when event sessionKey is blank", async () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", { sessionKey: "session-main" });

@@ -180,14 +180,15 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.lifecyclePhase) {
     existing.lifecyclePhase = context.lifecyclePhase;
   }
-  if (context.timeoutPhase) {
+  if ("timeoutPhase" in context) {
     existing.timeoutPhase = context.timeoutPhase;
   }
-  if (context.phaseTimings) {
-    existing.phaseTimings = {
-      ...existing.phaseTimings,
-      ...context.phaseTimings,
-    };
+  if ("phaseTimings" in context) {
+    existing.phaseTimings = context.phaseTimings
+      ? {
+          ...context.phaseTimings,
+        }
+      : undefined;
   }
   if (typeof context.latestError === "string") {
     existing.latestError = context.latestError;
