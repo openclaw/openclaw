@@ -1,7 +1,5 @@
 import fs from "node:fs";
-import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
-import { normalizeCronJobInput } from "../normalize.js";
-import { isInvalidCronSessionTargetIdError } from "../session-target.js";
+import { normalizeStoredCronJobs } from "../../commands/doctor-cron-store-migration.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
@@ -35,43 +33,16 @@ export async function ensureLoaded(
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
-  const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
-  for (const [index, job] of jobs.entries()) {
-    const raw = job as unknown as Record<string, unknown>;
-    const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
-    let normalized: Record<string, unknown> | null;
-    try {
-      normalized = normalizeCronJobInput(raw);
-    } catch (error) {
-      if (!isInvalidCronSessionTargetIdError(error)) {
-        throw error;
-      }
-      normalized = null;
-      state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: typeof raw.id === "string" ? raw.id : undefined },
-        "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
-      );
-    }
-    const hydrated =
-      normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    jobs[index] = hydrated;
-    if (legacyJobIdIssue) {
-      const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
-      state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: resolvedId },
-        "cron: job used legacy jobId field; normalized id in memory (run openclaw doctor --fix to persist canonical shape)",
-      );
-    }
-    // Persisted legacy jobs may predate the required `enabled` field.
-    // Keep runtime behavior backward-compatible without rewriting the store.
-    if (typeof hydrated.enabled !== "boolean") {
-      hydrated.enabled = true;
+  const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
+  const { mutated } = normalizeStoredCronJobs(jobs);
+  state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
+  // Ensure every hydrated job has a state object so downstream code can
+  // safely access state fields without null-checking (#65916).
+  for (const job of state.store.jobs) {
+    if (!job.state) {
+      job.state = {};
     }
   }
-  state.store = {
-    version: 1,
-    jobs,
-  };
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;
 

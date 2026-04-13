@@ -202,10 +202,10 @@ const formatStatus = (job: CronJob) => {
   if (!job.enabled) {
     return "disabled";
   }
-  if (job.state.runningAtMs) {
+  if (job.state?.runningAtMs) {
     return "running";
   }
-  return job.state.lastStatus ?? "idle";
+  return job.state?.lastStatus ?? "idle";
 };
 
 export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRuntime) {
@@ -238,10 +238,10 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
       CRON_SCHEDULE_PAD,
     );
     const nextLabel = pad(
-      job.enabled ? formatRelative(job.state.nextRunAtMs, now) : "-",
+      job.enabled ? formatRelative(job.state?.nextRunAtMs, now) : "-",
       CRON_NEXT_PAD,
     );
-    const lastLabel = pad(formatRelative(job.state.lastRunAtMs, now), CRON_LAST_PAD);
+    const lastLabel = pad(formatRelative(job.state?.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);

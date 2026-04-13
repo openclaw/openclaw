@@ -165,6 +165,29 @@ describe("printCronList", () => {
     expect(dataLine).toContain("opus");
   });
 
+  it("does not throw when job.state is null (#65916)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({ id: "null-state-job", state: null as never });
+    expect(() => printCronList([job], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("null-state-job"))).toBe(true);
+  });
+
+  it("does not throw when job.state is undefined (#65916)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({ id: "undef-state-job", state: undefined as never });
+    expect(() => printCronList([job], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("undef-state-job"))).toBe(true);
+  });
+
+  it("formatStatus returns idle when job.state is nullish (#65916)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({ id: "idle-null-state", state: null as never });
+    // printCronList calls formatStatus internally; idle is the default
+    expect(() => printCronList([job], runtime)).not.toThrow();
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).toContain("idle");
+  });
+
   it("shows exact label for cron schedules with stagger disabled", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
