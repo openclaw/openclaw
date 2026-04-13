@@ -322,17 +322,13 @@ function takeMatchingDangerousFlag(
       return currentToken.legacyMappingIdentity === nextToken.legacyMappingIdentity;
     }
     // Priority 3: fingerprint match for id-less mappings (prevents swap attacks)
-    // When both tokens lack idIdentity but have fingerprints, match by fingerprint to detect
-    // when the same mapping object is being modified vs. replaced with a different one.
-    if (
-      !currentToken.idIdentity &&
-      !nextToken.idIdentity &&
-      currentToken.fingerprintIdentity &&
-      nextToken.fingerprintIdentity
-    ) {
+    // When both tokens have fingerprints, match ONLY by fingerprint — never fall back to index.
+    // This prevents replacing one dangerous mapping with a different one at the same index.
+    if (currentToken.fingerprintIdentity && nextToken.fingerprintIdentity) {
       return currentToken.fingerprintIdentity === nextToken.fingerprintIdentity;
     }
-    // Fallback: index-based match for tokens where mapping object was absent at tokenization
+    // Fallback: index-based match only when fingerprint is unavailable (mapping object was
+    // absent from config at tokenization time). This is the least reliable match.
     return currentToken.identities.some((identity) => nextToken.identities.includes(identity));
   });
   if (matchIndex < 0) {
