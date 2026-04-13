@@ -12,6 +12,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(auto-reply): `sendPolicy: "deny"` no longer blocks inbound message processing — the agent still runs its turn (context, memory, tool calls) while all outbound delivery is suppressed: final replies, tool results, block replies, streaming chunks, typing indicators, plan updates, TTS payloads, plugin-binding notices, and fast-abort replies. Enables observer-agent use cases (e.g. a WhatsApp group watcher that reads and routes without replying). (#65461, #53328) Thanks @omarshahine.
+- fix(bluebubbles): lazy-refresh the Private API server-info cache on send when reply threading or message effects are requested but status is unknown, so sends no longer silently degrade to plain messages when the 10-minute cache expires. (#65447, #43764) Thanks @omarshahine.
 - fix(heartbeat): force owner downgrade for untrusted hook:wake system events [AI-assisted]. (#66031) Thanks @pgondhi987.
 - fix(browser): enforce SSRF policy on snapshot, screenshot, and tab routes [AI]. (#66040) Thanks @pgondhi987.
 - fix(msteams): enforce sender allowlist checks on SSO signin invokes [AI]. (#66033) Thanks @pgondhi987.
