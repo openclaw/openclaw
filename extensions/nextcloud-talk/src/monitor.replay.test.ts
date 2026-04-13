@@ -94,18 +94,19 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
     stateDir: string;
     accountId?: string;
     handleMessage: (message: NextcloudTalkInboundMessage) => Promise<void>;
-  }) {
+  }): (message: NextcloudTalkInboundMessage) => Promise<void> {
     const replayGuard = createNextcloudTalkReplayGuard({
       stateDir: params.stateDir,
     });
 
-    return async (message: NextcloudTalkInboundMessage) =>
+    return async (message: NextcloudTalkInboundMessage) => {
       await processNextcloudTalkReplayGuardedMessage({
         replayGuard,
         accountId: params.accountId ?? "acct",
         message,
         handleMessage: () => params.handleMessage(message),
       });
+    };
   }
 
   it("acknowledges replayed requests and skips onMessage side effects", async () => {
