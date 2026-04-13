@@ -410,16 +410,15 @@ export function resolveModelFromRegistry(params: {
     return model;
   }
 
-  const registry = params.modelRegistry as {
-    getAvailable?: () => unknown[];
-    getAll?: () => unknown[];
-  };
-  const candidates =
-    typeof registry.getAvailable === "function"
-      ? registry.getAvailable()
-      : typeof registry.getAll === "function"
-      ? registry.getAll()
+  const fromAvailable =
+    typeof params.modelRegistry.getAvailable === "function"
+      ? params.modelRegistry.getAvailable()
       : [];
+  const fromAll =
+    typeof params.modelRegistry.getAll === "function"
+      ? params.modelRegistry.getAll()
+      : [];
+  const candidates = [...fromAvailable, ...fromAll];
 
   for (const candidate of candidates) {
     if (!isRecord(candidate)) {
