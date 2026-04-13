@@ -6,6 +6,7 @@ import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.j
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
+import { isOperationalAlertMirrorText } from "./transcript-mirror.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -232,6 +233,39 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(message?.model).toBe("delivery-mirror");
     expect(message?.content).toEqual([{ type: "text", text: "Hello from delivery mirror!" }]);
     emitSpy.mockRestore();
+  });
+
+  it("skips operational alert delivery mirrors so stale alerts do not pollute transcripts", async () => {
+    writeTranscriptStore();
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "⚠️ Error en backup-git: Se han producido conflictos durante el pull --rebase en el workspace",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("empty text");
+    }
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    expect(fs.existsSync(sessionFile)).toBe(false);
+  });
+
+  it("detects operational alert mirror text patterns", () => {
+    expect(
+      isOperationalAlertMirrorText(
+        "⚠️ Error en backup-git: Se han producido conflictos durante el pull --rebase en el workspace",
+      ),
+    ).toBe(true);
+    expect(isOperationalAlertMirrorText("Alerta de Backup: conflicto detectado")).toBe(true);
+    expect(
+      isOperationalAlertMirrorText("Git backup failed due to conflicts during pull --rebase"),
+    ).toBe(true);
+    expect(isOperationalAlertMirrorText("Hello from delivery mirror!")).toBe(false);
+    expect(isOperationalAlertMirrorText("Error en el procesamiento de tu solicitud")).toBe(false);
+    expect(isOperationalAlertMirrorText("⚠️ Error en la API: reintenta luego")).toBe(false);
   });
 
   it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
