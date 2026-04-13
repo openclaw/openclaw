@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -13,7 +14,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
-import { readSessionMessages } from "../../gateway/session-utils.fs.js";
+import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -473,11 +474,11 @@ function formatContextManagementTraceBlock(
   ]);
 }
 
-function accumulateSessionUsageFromTranscript(params: {
+async function accumulateSessionUsageFromTranscript(params: {
   sessionId?: string;
   storePath?: string;
   sessionFile?: string;
-}):
+}): Promise<
   | {
       input?: number;
       output?: number;
@@ -485,21 +486,50 @@ function accumulateSessionUsageFromTranscript(params: {
       cacheWrite?: number;
       total?: number;
     }
-  | undefined {
+  | undefined
+> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
   try {
-    const messages = readSessionMessages(sessionId, params.storePath, params.sessionFile) as Array<{
-      usage?: unknown;
-    }>;
+    const candidates = resolveSessionTranscriptCandidates(
+      sessionId,
+      params.storePath,
+      params.sessionFile,
+    );
+    let transcriptText: string | undefined;
+    for (const candidate of candidates) {
+      try {
+        transcriptText = await fs.readFile(candidate, "utf-8");
+        break;
+      } catch {
+        continue;
+      }
+    }
+    if (!transcriptText) {
+      return undefined;
+    }
+
     let input = 0;
     let output = 0;
     let cacheRead = 0;
     let cacheWrite = 0;
     let sawUsage = false;
-    for (const message of messages) {
+    for (const line of transcriptText.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+      let parsed: { message?: { usage?: unknown } } | undefined;
+      try {
+        parsed = JSON.parse(line) as { message?: { usage?: unknown } };
+      } catch {
+        continue;
+      }
+      const message = parsed?.message;
+      if (!message) {
+        continue;
+      }
       const usage = normalizeUsage(message?.usage as Parameters<typeof normalizeUsage>[0]);
       if (!hasNonzeroUsage(usage)) {
         continue;
@@ -1612,7 +1642,7 @@ export async function runReplyAgent(params: {
     } satisfies TraceContextManagementView;
     const sessionUsage =
       activeSessionEntry?.traceLevel === "raw"
-        ? accumulateSessionUsageFromTranscript({
+        ? await accumulateSessionUsageFromTranscript({
             sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
             storePath,
             sessionFile: followupRun.run.sessionFile,
