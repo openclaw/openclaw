@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Agents/context engines: run opt-in turn maintenance as idle-aware background work so the next foreground turn no longer waits on proactive maintenance. (#65233) thanks @100yenadmin
 
 - Plugins/status: report the registered context-engine IDs in `plugins inspect` instead of the owning plugin ID, so non-matching engine IDs and multi-engine plugins are classified correctly. (#58766) thanks @zhuisDEV
+- Context engines: reject resolved plugin engines whose reported `info.id` does not match their registered slot id, so malformed engines fail fast before id-based runtime branches can misbehave. (#63222) Thanks @fuller-stack-dev.
 ## 2026.4.12
 
 ### Changes
@@ -313,7 +314,6 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK/command auth: split command status builders onto the lightweight `openclaw/plugin-sdk/command-status` subpath while preserving deprecated `command-auth` compatibility exports, so auth-only plugin imports no longer pull status/context warmup into CLI onboarding paths. (#63174) Thanks @hxy91819.
 - Wizard/plugin config: coerce integer-typed plugin config fields from interactive text input so integer schema values persist as numbers instead of failing validation. (#63346) Thanks @jalehman.
 - npm packaging: derive required root runtime mirrors from bundled plugin manifests and built root chunks, then install packed release tarballs without the repo `node_modules` so release checks catch missing plugin deps before publish.
-- Context engines: reject resolved plugin engines whose reported `info.id` does not match their registered slot id, so malformed engines fail fast before id-based runtime branches can misbehave. (#63222) Thanks @fuller-stack-dev.
 
 ## 2026.4.8
 
