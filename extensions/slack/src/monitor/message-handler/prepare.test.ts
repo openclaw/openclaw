@@ -258,6 +258,28 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.BodyForAgent).toBe("hi @Bek and @Ava and <@U4>");
   });
 
+  it("keeps generated file placeholders unchanged while normalizing user-authored text", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    slackCtx.resolveUserName = async (userId) =>
+      ({ name: userId === "U2" ? "Bek" : userId === "U3" ? "Ava" : undefined }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        text: "hi <@U2>",
+        files: [{ name: "<@U3>.png" }],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toBe("hi @Bek\n[Slack file: <@U3>.png]");
+  });
+
   it("ignores non-forward attachments when no direct text/files are present", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({

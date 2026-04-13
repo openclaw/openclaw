@@ -60,6 +60,17 @@ async function normalizeSlackInboundMentions(
   );
 }
 
+async function normalizeOptionalSlackInboundText(
+  text: string | undefined,
+  resolveUserName?: (userId: string) => Promise<{ name?: string }>,
+): Promise<string | undefined> {
+  const normalizedText = normalizeOptionalString(text);
+  if (!normalizedText) {
+    return undefined;
+  }
+  return await normalizeSlackInboundMentions(normalizedText, resolveUserName);
+}
+
 function filterInheritedParentFiles(params: {
   files: SlackFile[] | undefined;
   isThreadReply: boolean;
@@ -137,11 +148,24 @@ export async function resolveSlackMessageContent(params: {
           .join("\n")
       : undefined;
 
+  const normalizedMessageText = await normalizeOptionalSlackInboundText(
+    params.message.text,
+    params.resolveUserName,
+  );
+  const normalizedAttachmentText = await normalizeOptionalSlackInboundText(
+    attachmentContent?.text,
+    params.resolveUserName,
+  );
+  const normalizedBotAttachmentText = await normalizeOptionalSlackInboundText(
+    botAttachmentText,
+    params.resolveUserName,
+  );
+
   const rawBody =
     [
-      normalizeOptionalString(params.message.text),
-      attachmentContent?.text,
-      botAttachmentText,
+      normalizedMessageText,
+      normalizedAttachmentText,
+      normalizedBotAttachmentText,
       mediaPlaceholder,
       fileOnlyPlaceholder,
     ]
@@ -152,7 +176,7 @@ export async function resolveSlackMessageContent(params: {
   }
 
   return {
-    rawBody: await normalizeSlackInboundMentions(rawBody, params.resolveUserName),
+    rawBody,
     effectiveDirectMedia,
   };
 }
