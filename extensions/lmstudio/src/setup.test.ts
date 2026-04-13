@@ -505,6 +505,65 @@ describe("lmstudio setup", () => {
     expect(result?.auth).toBeUndefined();
   });
 
+  it("non-interactive setup clears env fallback auth before switching to Authorization header auth", async () => {
+    const ctx = buildNonInteractiveContext({
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234/v1",
+              auth: "api-key",
+              api: "openai-completions",
+              headers: {
+                Authorization: "Bearer proxy-token",
+              },
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      customBaseUrl: "http://localhost:1234/api/v1/",
+      customApiKey: "",
+      customModelId: "qwen3-8b-instruct",
+      resolvedApiKey: "env-fallback-key",
+      resolvedApiKeySource: "env",
+    });
+
+    const result = await configureLmstudioNonInteractive(ctx);
+
+    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      provider: "lmstudio",
+      agentDir: undefined,
+    });
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: undefined,
+      headers: {
+        Authorization: "Bearer proxy-token",
+      },
+      timeoutMs: 5000,
+    });
+    expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
+    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
+      "lmstudio/qwen3-8b-instruct",
+    );
+    expect(result?.models?.providers?.lmstudio).toMatchObject({
+      baseUrl: "http://localhost:1234/v1",
+      api: "openai-completions",
+      headers: {
+        Authorization: "Bearer proxy-token",
+      },
+      models: [
+        {
+          id: "qwen3-8b-instruct",
+        },
+      ],
+    });
+    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("apiKey");
+    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+    expect(result?.auth).toBeUndefined();
+  });
+
   it("non-interactive setup prefers --lmstudio-api-key over --custom-api-key", async () => {
     const ctx = buildNonInteractiveContext({
       customBaseUrl: "http://localhost:1234/api/v1/",
