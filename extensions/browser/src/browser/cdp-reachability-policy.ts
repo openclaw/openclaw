@@ -17,3 +17,5 @@ export function resolveCdpReachabilityPolicy(
   }
   return ssrfPolicy;
 }
+
+export const resolveCdpControlPolicy = resolveCdpReachabilityPolicy;
