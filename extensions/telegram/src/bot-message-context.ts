@@ -2,10 +2,8 @@ import type { ReactionTypeEmoji } from "@grammyjs/types";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
-  type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -35,6 +33,7 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
+import { getTopicName, updateTopicName } from "./topic-name-cache.js";
 
 export type {
   BuildTelegramMessageContextParams,
@@ -56,6 +55,15 @@ type TelegramReactionApi = (
   messageId: number,
   reactions: Array<{ type: "emoji"; emoji: ReactionTypeEmoji["emoji"] }>,
 ) => Promise<unknown>;
+type TelegramStatusReactionController = {
+  setQueued: () => void | Promise<void>;
+  setThinking: () => void | Promise<void>;
+  setTool: (name: string) => void | Promise<void>;
+  setCompacting: () => void | Promise<void>;
+  cancelPending: () => void;
+  setError: () => void | Promise<void>;
+  setDone: () => void | Promise<void>;
+};
 
 export type TelegramMessageContext = {
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
@@ -83,7 +91,7 @@ export type TelegramMessageContext = {
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
   removeAckAfterReply: boolean;
-  statusReactionController: StatusReactionController | null;
+  statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
 };
 
@@ -140,6 +148,45 @@ export const buildTelegramMessageContext = async ({
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  let topicName: string | undefined;
+  if (isForum && resolvedThreadId != null) {
+    const ftCreated = msg.forum_topic_created;
+    const ftEdited = msg.forum_topic_edited;
+    const ftClosed = msg.forum_topic_closed;
+    const ftReopened = msg.forum_topic_reopened;
+
+    if (ftCreated?.name) {
+      updateTopicName(chatId, resolvedThreadId, {
+        name: ftCreated.name,
+        iconColor: ftCreated.icon_color,
+        iconCustomEmojiId: ftCreated.icon_custom_emoji_id,
+        closed: false,
+      });
+    } else if (ftEdited?.name) {
+      updateTopicName(chatId, resolvedThreadId, {
+        name: ftEdited.name,
+        iconCustomEmojiId: ftEdited.icon_custom_emoji_id,
+      });
+    } else if (ftClosed) {
+      updateTopicName(chatId, resolvedThreadId, { closed: true });
+    } else if (ftReopened) {
+      updateTopicName(chatId, resolvedThreadId, { closed: false });
+    }
+
+    topicName = getTopicName(chatId, resolvedThreadId);
+    if (!topicName) {
+      const replyFtCreated = msg.reply_to_message?.forum_topic_created;
+      if (replyFtCreated?.name) {
+        updateTopicName(chatId, resolvedThreadId, {
+          name: replyFtCreated.name,
+          iconColor: replyFtCreated.icon_color,
+          iconCustomEmojiId: replyFtCreated.icon_custom_emoji_id,
+        });
+        topicName = replyFtCreated.name;
+      }
+    }
+  }
+
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
   // Use direct config dmPolicy override if available for DMs
@@ -219,7 +266,7 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  const requireTopic = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
+  const requireTopic = groupConfig?.requireTopic;
   const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
   if (topicRequiredButMissing) {
     logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
@@ -330,7 +377,7 @@ export const buildTelegramMessageContext = async ({
   const requireMention = firstDefined(
     activationOverride,
     topicConfig?.requireMention,
-    (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
+    groupConfig?.requireMention,
     baseRequireMention,
   );
 
@@ -413,46 +460,49 @@ export const buildTelegramMessageContext = async ({
       ? (runtime?.createStatusReactionController ??
         (await loadTelegramMessageContextRuntime()).createStatusReactionController)
       : null;
-  const statusReactionController: StatusReactionController | null = createStatusReactionController
-    ? createStatusReactionController({
-        enabled: true,
-        adapter: {
-          setReaction: async (emoji: string) => {
-            if (reactionApi) {
-              if (!allowedStatusReactionEmojisPromise) {
-                allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
-                  chat: msg.chat,
-                  chatId,
-                  getChat: getChatApi ?? undefined,
-                }).catch((err) => {
-                  logVerbose(
-                    `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
-                  );
-                  return null;
+  const statusReactionController: TelegramStatusReactionController | null =
+    createStatusReactionController
+      ? createStatusReactionController({
+          enabled: true,
+          adapter: {
+            setReaction: async (emoji: string) => {
+              if (reactionApi) {
+                if (!allowedStatusReactionEmojisPromise) {
+                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
+                    chat: msg.chat,
+                    chatId,
+                    getChat: getChatApi ?? undefined,
+                  }).catch((err) => {
+                    logVerbose(
+                      `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
+                    );
+                    return null;
+                  });
+                }
+                const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
+                const resolvedEmoji = resolveTelegramReactionVariant({
+                  requestedEmoji: emoji,
+                  variantsByRequestedEmoji: statusReactionVariantsByEmoji,
+                  allowedEmojiReactions: allowedStatusReactionEmojis,
                 });
+                if (!resolvedEmoji) {
+                  return;
+                }
+                await reactionApi(chatId, msg.message_id, [
+                  { type: "emoji", emoji: resolvedEmoji },
+                ]);
               }
-              const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
-              const resolvedEmoji = resolveTelegramReactionVariant({
-                requestedEmoji: emoji,
-                variantsByRequestedEmoji: statusReactionVariantsByEmoji,
-                allowedEmojiReactions: allowedStatusReactionEmojis,
-              });
-              if (!resolvedEmoji) {
-                return;
-              }
-              await reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: resolvedEmoji }]);
-            }
+            },
+            // Telegram replaces atomically — no removeReaction needed
           },
-          // Telegram replaces atomically — no removeReaction needed
-        },
-        initialEmoji: ackReaction,
-        emojis: resolvedStatusReactionEmojis,
-        timing: statusReactionsConfig?.timing,
-        onError: (err) => {
-          logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
-        },
-      })
-    : null;
+          initialEmoji: ackReaction,
+          emojis: resolvedStatusReactionEmojis,
+          timing: statusReactionsConfig?.timing,
+          onError: (err) => {
+            logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
+          },
+        })
+      : null;
 
   // When status reactions are enabled, setQueued() replaces the simple ack reaction
   const ackReactionPromise: Promise<boolean> | null = statusReactionController
@@ -505,6 +555,7 @@ export const buildTelegramMessageContext = async ({
     dmAllowFrom,
     effectiveGroupAllow,
     commandAuthorized: bodyResult.commandAuthorized,
+    topicName,
     sessionRuntime,
   });
 
