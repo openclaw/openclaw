@@ -16,6 +16,8 @@ import { z } from "zod";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+const LEADING_SYSTEM_EVENT_PREFIX_RE =
+  /^(?:\s*\n)*System(?: \(untrusted\))?: \[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] /;
 
 /**
  * Sentinel strings that identify the start of an injected metadata block.
@@ -60,6 +62,43 @@ function restoreNeutralizedMarkdownFences(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [key, restoreNeutralizedMarkdownFences(entry)]),
   );
+}
+
+function isTimestampedSystemEventLine(line: string): boolean {
+  return LEADING_SYSTEM_EVENT_PREFIX_RE.test(line.trim());
+}
+
+function isSystemEventLine(line: string): boolean {
+  return /^System(?: \(untrusted\))?: /.test(line.trim());
+}
+
+function stripLeadingSystemEventPrefix(lines: string[]): string[] {
+  let start = 0;
+  while (start < lines.length && lines[start]?.trim() === "") {
+    start += 1;
+  }
+  if (start >= lines.length || !isTimestampedSystemEventLine(lines[start] ?? "")) {
+    return lines;
+  }
+
+  let end = start;
+  while (end < lines.length && isSystemEventLine(lines[end] ?? "")) {
+    end += 1;
+  }
+
+  let contentStart = end;
+  while (contentStart < lines.length && lines[contentStart]?.trim() === "") {
+    contentStart += 1;
+  }
+
+  // Only strip when the system-event prefix is separated from visible user
+  // content by a blank line (the normal injected prompt shape) or consumes the
+  // whole message.
+  if (contentStart === end && contentStart < lines.length) {
+    return lines;
+  }
+
+  return lines.slice(contentStart);
 }
 
 function parseInboundMetaBlock(lines: string[], sentinel: string): Record<string, unknown> | null {
@@ -204,6 +243,17 @@ export function stripInboundMetadata(text: string): string {
     .replace(/^\n+/, "")
     .replace(/\n+$/, "")
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+}
+
+export function stripLeadingSystemEventPromptPrefix(text: string): string {
+  if (!text || !LEADING_SYSTEM_EVENT_PREFIX_RE.test(text)) {
+    return text;
+  }
+
+  return stripLeadingSystemEventPrefix(text.split("\n"))
+    .join("\n")
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "");
 }
 
 export function stripLeadingInboundMetadata(text: string): string {

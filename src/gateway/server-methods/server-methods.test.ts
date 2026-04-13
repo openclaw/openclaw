@@ -3,6 +3,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
@@ -20,6 +21,7 @@ import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
   resolveEffectiveChatHistoryMaxChars,
+  rewriteChatSendUserTurnMediaPaths,
   sanitizeChatHistoryMessages,
   sanitizeChatSendMessageInput,
 } from "./chat.js";
@@ -300,6 +302,77 @@ describe("sanitizeChatHistoryMessages", () => {
         timestamp: 3,
       },
     ]);
+  });
+});
+
+describe("rewriteChatSendUserTurnMediaPaths", () => {
+  it("rewrites polluted user transcript turns back to the raw webchat message", async () => {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-session-header-"));
+    const transcriptPath = path.join(dir, "sess-main.jsonl");
+    await fsPromises.writeFile(
+      transcriptPath,
+      `${JSON.stringify({ type: "session", version: 1, id: "sess-main" })}\n`,
+      "utf-8",
+    );
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content:
+        "System (untrusted): [Mon 2026-04-13 09:30:01 EDT] Exec completed (abc12345, code 0) :: npm test\n\n" +
+        "please summarize",
+      timestamp: 1,
+    });
+    const openSpy = vi
+      .spyOn(SessionManager, "open")
+      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
+    try {
+      await rewriteChatSendUserTurnMediaPaths({
+        transcriptPath,
+        sessionKey: "agent:main:main",
+        message: "please summarize",
+        savedImages: [],
+      });
+
+      const branch = sessionManager.getBranch();
+      const userEntry = branch.findLast(
+        (entry) => entry.type === "message" && entry.message.role === "user",
+      );
+      expect(userEntry?.type).toBe("message");
+      const userContent =
+        userEntry && userEntry.type === "message" && userEntry.message.role === "user"
+          ? userEntry.message.content
+          : undefined;
+      expect(userContent).toBe("please summarize");
+    } finally {
+      openSpy.mockRestore();
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips legacy raw jsonl transcripts that do not have a session header", async () => {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-rewrite-"));
+    const transcriptPath = path.join(dir, "sess-main.jsonl");
+    const original = `${JSON.stringify({
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "main thread context" }],
+        timestamp: 1,
+      },
+    })}\n`;
+    await fsPromises.writeFile(transcriptPath, original, "utf-8");
+
+    try {
+      await rewriteChatSendUserTurnMediaPaths({
+        transcriptPath,
+        sessionKey: "agent:main:main",
+        message: "different message",
+        savedImages: [],
+      });
+
+      await expect(fsPromises.readFile(transcriptPath, "utf-8")).resolves.toBe(original);
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,4 +1,7 @@
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  stripInboundMetadata,
+  stripLeadingSystemEventPromptPrefix,
+} from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
 import { stripThinkingTags } from "../format.ts";
@@ -13,7 +16,7 @@ function processMessageText(text: string, role: string): string {
     return stripThinkingTags(text);
   }
   return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(text))
+    ? stripLeadingSystemEventPromptPrefix(stripInboundMetadata(stripEnvelope(text)))
     : stripEnvelope(text);
 }
 

@@ -1,5 +1,6 @@
 import {
   extractInboundSenderLabel,
+  stripLeadingSystemEventPromptPrefix,
   stripInboundMetadata,
 } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
@@ -48,7 +49,9 @@ function stripEnvelopeFromContentWithRole(
     if (entry.type !== "text" || typeof entry.text !== "string") {
       return item;
     }
-    const inboundStripped = stripInboundMetadata(entry.text);
+    const inboundStripped = stripUserEnvelope
+      ? stripLeadingSystemEventPromptPrefix(stripInboundMetadata(entry.text))
+      : stripInboundMetadata(entry.text);
     const stripped = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
@@ -81,7 +84,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   }
 
   if (typeof entry.content === "string") {
-    const inboundStripped = stripInboundMetadata(entry.content);
+    const inboundStripped = stripUserEnvelope
+      ? stripLeadingSystemEventPromptPrefix(stripInboundMetadata(entry.content))
+      : stripInboundMetadata(entry.content);
     const stripped = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
@@ -96,7 +101,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const inboundStripped = stripInboundMetadata(entry.text);
+    const inboundStripped = stripUserEnvelope
+      ? stripLeadingSystemEventPromptPrefix(stripInboundMetadata(entry.text))
+      : stripInboundMetadata(entry.text);
     const stripped = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;

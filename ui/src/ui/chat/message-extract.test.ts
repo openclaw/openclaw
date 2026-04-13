@@ -77,6 +77,23 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBeNull();
     expect(extractTextCached(message)).toBeNull();
   });
+
+  it("strips leading system-event prompt prefixes from user text", () => {
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text:
+            "System (untrusted): [Mon 2026-04-13 09:30:01 EDT] Exec completed (abc12345, code 0) :: npm test\n" +
+            "System (untrusted): stdout: all green\n\n" +
+            "Please summarize the result",
+        },
+      ],
+    };
+    expect(extractText(message)).toBe("Please summarize the result");
+    expect(extractTextCached(message)).toBe("Please summarize the result");
+  });
 });
 
 describe("extractThinkingCached", () => {

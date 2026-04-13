@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { stripLeadingSystemEventPromptPrefix } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
@@ -138,6 +139,8 @@ export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
+type SessionAppendMessage = Parameters<SessionManager["appendMessage"]>[0];
+type SessionUserMessage = Extract<SessionAppendMessage, { role: "user" }>;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
   "direct",
@@ -515,14 +518,37 @@ function extractTranscriptUserText(content: unknown): string | undefined {
   return textBlocks.length > 0 ? textBlocks.join("") : undefined;
 }
 
-async function rewriteChatSendUserTurnMediaPaths(params: {
+function hasSessionTranscriptHeader(transcriptPath: string): boolean {
+  try {
+    const fd = fs.openSync(transcriptPath, "r");
+    try {
+      const buffer = Buffer.alloc(512);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      if (bytesRead <= 0) {
+        return false;
+      }
+      const firstLine = buffer.toString("utf8", 0, bytesRead).split(/\r?\n/u, 1)[0]?.trim();
+      if (!firstLine) {
+        return false;
+      }
+      const parsed = JSON.parse(firstLine) as { type?: unknown };
+      return parsed.type === "session";
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+export async function rewriteChatSendUserTurnMediaPaths(params: {
   transcriptPath: string;
   sessionKey: string;
   message: string;
   savedImages: SavedMedia[];
 }) {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
-  if (!("MediaPath" in mediaFields)) {
+  if (!hasSessionTranscriptHeader(params.transcriptPath)) {
     return;
   }
   const sessionManager = SessionManager.open(params.transcriptPath);
@@ -531,26 +557,54 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
     if (entry.type !== "message" || entry.message.role !== "user") {
       return false;
     }
-    const existingPaths = Array.isArray((entry.message as { MediaPaths?: unknown }).MediaPaths)
-      ? (entry.message as { MediaPaths?: unknown[] }).MediaPaths
-      : undefined;
-    if (
-      (typeof (entry.message as { MediaPath?: unknown }).MediaPath === "string" &&
-        (entry.message as { MediaPath?: string }).MediaPath) ||
-      (existingPaths && existingPaths.length > 0)
-    ) {
+    const contentText = extractTranscriptUserText((entry.message as { content?: unknown }).content);
+    if (typeof contentText !== "string") {
       return false;
     }
     return (
-      extractTranscriptUserText((entry.message as { content?: unknown }).content) === params.message
+      contentText === params.message ||
+      stripLeadingSystemEventPromptPrefix(contentText) === params.message
     );
   });
   if (!target || target.type !== "message") {
     return;
   }
-  const rewrittenMessage = {
-    ...target.message,
+  const currentMessage = target.message as SessionUserMessage & {
+    MediaPath?: unknown;
+    MediaPaths?: unknown;
+    MediaType?: unknown;
+    MediaTypes?: unknown;
+  };
+  const nextMessage: SessionUserMessage = {
+    ...currentMessage,
+    role: "user",
+    content: params.message,
     ...mediaFields,
+  };
+  const nextMessageWithMedia = nextMessage as SessionUserMessage & {
+    MediaPath?: unknown;
+    MediaPaths?: unknown;
+    MediaType?: unknown;
+    MediaTypes?: unknown;
+  };
+  const currentPaths = Array.isArray(currentMessage.MediaPaths) ? currentMessage.MediaPaths : [];
+  const nextPaths = Array.isArray(nextMessageWithMedia.MediaPaths)
+    ? (nextMessageWithMedia.MediaPaths ?? [])
+    : [];
+  if (
+    currentMessage.content === nextMessage.content &&
+    currentMessage.MediaPath === nextMessageWithMedia.MediaPath &&
+    currentMessage.MediaType === nextMessageWithMedia.MediaType &&
+    JSON.stringify(currentPaths) === JSON.stringify(nextPaths) &&
+    JSON.stringify(Array.isArray(currentMessage.MediaTypes) ? currentMessage.MediaTypes : []) ===
+      JSON.stringify(
+        Array.isArray(nextMessageWithMedia.MediaTypes) ? nextMessageWithMedia.MediaTypes : [],
+      )
+  ) {
+    return;
+  }
+  const rewrittenMessage = {
+    ...nextMessage,
   };
   await rewriteTranscriptEntriesInSessionFile({
     sessionFile: params.transcriptPath,

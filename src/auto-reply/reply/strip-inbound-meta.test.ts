@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
-import { extractInboundSenderLabel, stripInboundMetadata } from "./strip-inbound-meta.js";
+import {
+  extractInboundSenderLabel,
+  stripInboundMetadata,
+  stripLeadingSystemEventPromptPrefix,
+} from "./strip-inbound-meta.js";
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
@@ -165,6 +169,29 @@ Hello`;
 
 [Thu 2026-03-12 07:00 UTC] what time is it?`;
     expect(stripInboundMetadata(input)).toBe("what time is it?");
+  });
+
+  it("preserves timestamped System lines that are ordinary user content", () => {
+    const input = `System: [Mon 2026-04-13 09:30:01 EDT] this is part of my example
+
+and this second paragraph is still part of the same user message`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+});
+
+describe("stripLeadingSystemEventPromptPrefix", () => {
+  it("strips leading queued system-event blocks before visible user text", () => {
+    const input = `System (untrusted): [Mon 2026-04-13 09:30:01 EDT] Exec completed (abc12345, code 0) :: npm test
+System (untrusted): stdout: all green
+
+Please summarize the result`;
+    expect(stripLeadingSystemEventPromptPrefix(input)).toBe("Please summarize the result");
+  });
+
+  it("does not strip literal System lines when no separator follows the first line", () => {
+    const input = `System: [Mon 2026-04-13 09:30:01 EDT] this is part of my example
+and this second line is still the same message`;
+    expect(stripLeadingSystemEventPromptPrefix(input)).toBe(input);
   });
 });
 

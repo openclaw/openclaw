@@ -75,4 +75,44 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.history.messages[0]?.__openclaw?.seq).toBe(2);
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
+
+  test("strips leading system-event prompt prefixes from user history snapshots", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content:
+            "System (untrusted): [Mon 2026-04-13 09:30:01 EDT] Exec completed (abc12345, code 0) :: npm test\n" +
+            "System (untrusted): stdout: all green\n\n" +
+            "Please summarize",
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    expect(snapshot.history.messages).toHaveLength(1);
+    expect(snapshot.history.messages[0]?.content).toBe("Please summarize");
+  });
+
+  test("strips leading system-event prompt prefixes from inline SSE updates", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "user",
+        content:
+          "System (untrusted): [Mon 2026-04-13 09:30:01 EDT] Exec completed (abc12345, code 0) :: npm test\n" +
+          "System (untrusted): stdout: all green\n\n" +
+          "What changed?",
+      },
+      messageId: "msg-1",
+    });
+
+    expect(appended).not.toBeNull();
+    expect((appended?.message as { content?: string }).content).toBe("What changed?");
+    expect((state.snapshot().messages[0] as { content?: string }).content).toBe("What changed?");
+  });
 });

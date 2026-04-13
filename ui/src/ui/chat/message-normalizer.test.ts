@@ -33,6 +33,18 @@ describe("message-normalizer", () => {
       });
     });
 
+    it("strips leading system-event prompt prefixes from user content", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content:
+          "System (untrusted): [Mon 2026-04-13 09:30:01 EDT] Exec completed (abc12345, code 0) :: npm test\n" +
+          "System (untrusted): stdout: all green\n\n" +
+          "What changed?",
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "What changed?" }]);
+    });
+
     it("does not reinterpret directive-like user string content", () => {
       const result = normalizeMessage({
         role: "user",

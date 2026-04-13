@@ -90,4 +90,16 @@ describe("stripEnvelopeFromMessage", () => {
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("hello");
   });
+
+  test("strips leading system-event prompt prefixes from user messages", () => {
+    const input = {
+      role: "user",
+      content:
+        "System (untrusted): [Mon 2026-04-13 09:30:01 EDT] Exec completed (abc12345, code 0) :: npm test\n" +
+        "System (untrusted): stdout: all green\n\n" +
+        "What changed?",
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("What changed?");
+  });
 });
