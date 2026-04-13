@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
@@ -22,6 +23,9 @@ const getConfigOverridesMock = vi.hoisted(() => vi.fn(() => ({})));
 const getConfigValueAtPathMock = vi.hoisted(() => vi.fn());
 const parseConfigPathMock = vi.hoisted(() => vi.fn());
 const setConfigValueAtPathMock = vi.hoisted(() => vi.fn());
+const readBestEffortRuntimeConfigSchemaMock = vi.hoisted(() =>
+  vi.fn(async () => ({ uiHints: {} })),
+);
 const resolveConfigWriteDeniedTextMock = vi.hoisted(() =>
   vi.fn<(...args: never[]) => string | null>(() => null),
 );
@@ -80,6 +84,10 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   writeConfigFile: writeConfigFileMock,
+}));
+
+vi.mock("../../config/runtime-schema.js", () => ({
+  readBestEffortRuntimeConfigSchema: readBestEffortRuntimeConfigSchemaMock,
 }));
 
 vi.mock("../../config/runtime-overrides.js", () => ({
@@ -218,6 +226,7 @@ describe("command gating", () => {
         }
       },
     );
+    readBestEffortRuntimeConfigSchemaMock.mockResolvedValue({ uiHints: {} });
   });
 
   it("blocks disabled bash", async () => {
@@ -311,6 +320,59 @@ describe("command gating", () => {
     debugParams.command.senderIsOwner = true;
     const debugResult = await handleDebugCommand(debugParams, true);
     expect(debugResult?.reply?.text).toContain("Debug overrides");
+  });
+
+  it("redacts secrets in full /config show output", async () => {
+    readBestEffortRuntimeConfigSchemaMock.mockResolvedValueOnce({
+      uiHints: {
+        "gateway.auth.token": { input: "SecretInput" },
+        "gateway.auth.password": { input: "SecretInput" },
+        "channels.telegram.botToken": { input: "SecretInput" },
+      },
+    });
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        gateway: { auth: { token: "secret-token", password: "secret-password" } },
+        channels: { telegram: { botToken: "telegram-secret" } },
+      },
+    });
+    const params = buildParams("/config show", {
+      commands: { config: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = true;
+
+    const result = await handleConfigCommand(params, true);
+
+    expect(result?.reply?.text).toContain(REDACTED_SENTINEL);
+    expect(result?.reply?.text).not.toContain("secret-token");
+    expect(result?.reply?.text).not.toContain("secret-password");
+    expect(result?.reply?.text).not.toContain("telegram-secret");
+  });
+
+  it("redacts secrets in path-specific /config show output", async () => {
+    readBestEffortRuntimeConfigSchemaMock.mockResolvedValueOnce({
+      uiHints: {
+        "gateway.auth.token": { input: "SecretInput" },
+      },
+    });
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        gateway: { auth: { token: "secret-token" } },
+      },
+    });
+    const params = buildParams("/config show gateway.auth.token", {
+      commands: { config: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = true;
+
+    const result = await handleConfigCommand(params, true);
+
+    expect(result?.reply?.text).toContain(REDACTED_SENTINEL);
+    expect(result?.reply?.text).not.toContain("secret-token");
   });
 
   it("returns explicit unauthorized replies for native privileged commands", async () => {

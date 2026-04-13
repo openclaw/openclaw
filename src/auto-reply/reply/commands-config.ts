@@ -11,12 +11,14 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
+import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
   getConfigOverrides,
   resetConfigOverrides,
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { readBestEffortRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveChannelAccountId } from "./channel-context.js";
@@ -116,6 +118,8 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   const parsedBase = structuredClone(snapshot.parsed as Record<string, unknown>);
 
   if (configCommand.action === "show") {
+    const schema = await readBestEffortRuntimeConfigSchema();
+    const redactedBase = redactConfigObject(parsedBase, schema.uiHints);
     const pathRaw = normalizeOptionalString(configCommand.path);
     if (pathRaw) {
       const parsedPath = parseConfigPath(pathRaw);
@@ -125,7 +129,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
           reply: { text: `⚠️ ${parsedPath.error ?? "Invalid path."}` },
         };
       }
-      const value = getConfigValueAtPath(parsedBase, parsedPath.path);
+      const value = getConfigValueAtPath(redactedBase, parsedPath.path);
       const rendered = JSON.stringify(value ?? null, null, 2);
       return {
         shouldContinue: false,
@@ -134,7 +138,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    const json = JSON.stringify(parsedBase, null, 2);
+    const json = JSON.stringify(redactedBase, null, 2);
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config (raw):\n\`\`\`json\n${json}\n\`\`\`` },
