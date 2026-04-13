@@ -608,6 +608,8 @@ export class MatrixClient {
           "Cross-signing/bootstrap is incomplete for an already owner-signed device; skipping automatic reset and preserving the current identity. Restore the recovery key or run an explicit verification bootstrap if repair is needed.",
         );
       } else {
+        // No password guard: passwordless token-auth bots should still attempt repair.
+        // UIA failures inside bootstrap() are caught below and logged as warnings.
         try {
           // The repair path already force-resets cross-signing; allow secret storage
           // recreation so the new keys can be persisted. Without this, a device that
