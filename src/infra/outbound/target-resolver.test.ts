@@ -22,9 +22,13 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => value,
 }));
 
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
-}));
+vi.mock("../../plugins/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/runtime.js")>();
+  return {
+    ...actual,
+    getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
+  };
+});
 
 beforeAll(async () => {
   ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
