@@ -157,23 +157,36 @@ function getJiti(tryNative) {
   return jitiLoader;
 }
 
+let monolithicSdkLoading = false;
+
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
-
-  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
-  if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
-    try {
-      monolithicSdk = getJiti(true)(distCandidate);
-      return monolithicSdk;
-    } catch {
-      // Fall through to source alias if dist is unavailable or stale.
-    }
+  // Guard against reentrant calls: if compat.ts evaluation triggers a transitive
+  // require back into root-alias (e.g. via the bluebubbles facade cycle), return
+  // null rather than recursing infinitely and overflowing the call stack.
+  if (monolithicSdkLoading) {
+    return null;
   }
+  monolithicSdkLoading = true;
 
-  monolithicSdk = getJiti(false)(path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"));
-  return monolithicSdk;
+  try {
+    const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
+    if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
+      try {
+        monolithicSdk = getJiti(true)(distCandidate);
+        return monolithicSdk;
+      } catch {
+        // Fall through to source alias if dist is unavailable or stale.
+      }
+    }
+
+    monolithicSdk = getJiti(false)(path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"));
+    return monolithicSdk;
+  } finally {
+    monolithicSdkLoading = false;
+  }
 }
 
 function loadDiagnosticEventsModule() {
