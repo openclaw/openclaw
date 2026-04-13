@@ -126,13 +126,14 @@ Modes:
 
 Slack-only:
 
-- `channels.slack.nativeStreaming` toggles Slack native streaming API calls when `streaming=partial` (default: `true`).
+- `channels.slack.streaming.nativeTransport` toggles Slack native streaming API calls when `channels.slack.streaming.mode="partial"` (default: `true`).
+- Slack native streaming and Slack assistant thread status require a reply thread target; top-level DMs do not show that thread-style preview.
 
 Legacy key migration:
 
 - Telegram: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
 - Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
-- Slack: `streamMode` auto-migrates to `streaming` enum; boolean `streaming` auto-migrates to `nativeStreaming`.
+- Slack: `streamMode` auto-migrates to `streaming.mode`; boolean `streaming` auto-migrates to `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` auto-migrates to `streaming.nativeTransport`.
 
 ### Runtime behavior
 

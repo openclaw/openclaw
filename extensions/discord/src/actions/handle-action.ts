@@ -8,6 +8,7 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
@@ -119,7 +120,7 @@ export async function handleDiscordMessageAction(
 
   if (action === "react") {
     const messageIdRaw = resolveReactionMessageId({ args: params, toolContext: ctx.toolContext });
-    const messageId = messageIdRaw != null ? String(messageIdRaw).trim() : "";
+    const messageId = normalizeOptionalStringifiedId(messageIdRaw) ?? "";
     if (!messageId) {
       throw new Error(
         "messageId required. Provide messageId explicitly or react to the current inbound message.",
@@ -299,5 +300,5 @@ export async function handleDiscordMessageAction(
     return adminResult;
   }
 
-  throw new Error(`Action ${String(action)} is not supported for provider ${providerId}.`);
+  throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
 }

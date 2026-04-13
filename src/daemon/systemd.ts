@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -276,7 +278,7 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("disabled") ||
     normalized.includes("static") ||
@@ -298,7 +300,7 @@ function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.startsWith("command failed: systemctl") &&
     normalized.includes(" is-enabled ") &&
@@ -316,7 +318,7 @@ export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return isSystemctlBusUnavailable(normalized) || isGenericSystemctlIsEnabledFailure(normalized);
 }
 
@@ -349,7 +351,13 @@ function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
 }
 
 function shouldFallbackToMachineUserScope(detail: string): boolean {
-  return isSystemdUserBusUnavailableDetail(detail);
+  if (!isSystemdUserBusUnavailableDetail(detail)) {
+    return false;
+  }
+  // "Permission denied" means the bus socket exists but this process cannot connect to it.
+  // The machine-scope approach targets the same bus infrastructure and will also fail,
+  // so do not trigger the fallback in this case.
+  return !detail.toLowerCase().includes("permission denied");
 }
 
 async function execSystemctlUser(
@@ -359,10 +367,11 @@ async function execSystemctlUser(
   const machineUser = resolveSystemctlMachineScopeUser(env);
   const sudoUser = env.SUDO_USER?.trim();
 
-  // Under sudo, prefer the invoking non-root user's scope directly.
+  // Under sudo, prefer the invoking non-root user's scope directly via machine scope.
   if (sudoUser && sudoUser !== "root" && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
+      // Do not fall through to bare --user: under sudo that can target root's user manager.
       return await execSystemctl([...machineScopeArgs, ...args]);
     }
   }
@@ -613,7 +622,7 @@ export async function readSystemdServiceRuntime(
   } catch (err) {
     return {
       status: "unknown",
-      detail: err instanceof Error ? err.message : String(err),
+      detail: formatErrorMessage(err),
     };
   }
   const serviceName = resolveSystemdServiceName(env);
@@ -627,7 +636,7 @@ export async function readSystemdServiceRuntime(
   ]);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = detail.toLowerCase().includes("not found");
+    const missing = normalizeLowercaseStringOrEmpty(detail).includes("not found");
     return {
       status: missing ? "stopped" : "unknown",
       detail: detail || undefined,
@@ -635,7 +644,7 @@ export async function readSystemdServiceRuntime(
     };
   }
   const parsed = parseSystemdShow(res.stdout || "");
-  const activeState = parsed.activeState?.toLowerCase();
+  const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
   const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
   return {
     status,

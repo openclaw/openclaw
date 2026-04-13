@@ -1,13 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { compactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/compact.runtime.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearMemoryPluginState, registerMemoryPromptSection } from "../plugins/memory-state.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
 // ---------------------------------------------------------------------------
-import { delegateCompactionToRuntime } from "./delegate.js";
-import { LegacyContextEngine, registerLegacyContextEngine } from "./legacy.js";
+import { buildMemorySystemPromptAddition, delegateCompactionToRuntime } from "./delegate.js";
+import { LegacyContextEngine } from "./legacy.js";
+import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
   registerContextEngine,
   registerContextEngineForOwner,
@@ -25,8 +27,16 @@ import type {
   IngestResult,
 } from "./types.js";
 
+const { compactEmbeddedPiSessionDirectMock } = vi.hoisted(() => ({
+  compactEmbeddedPiSessionDirectMock: vi.fn(),
+}));
+
 vi.mock("../agents/pi-embedded-runner/compact.runtime.js", () => ({
-  compactEmbeddedPiSessionDirect: vi.fn(async () => ({
+  compactEmbeddedPiSessionDirect: compactEmbeddedPiSessionDirectMock,
+}));
+
+function installCompactRuntimeSpy() {
+  return compactEmbeddedPiSessionDirectMock.mockResolvedValue({
     ok: true,
     compacted: false,
     reason: "mock compaction",
@@ -37,10 +47,8 @@ vi.mock("../agents/pi-embedded-runner/compact.runtime.js", () => ({
       tokensAfter: 0,
       details: undefined,
     },
-  })),
-}));
-
-const mockedCompactEmbeddedPiSessionDirect = vi.mocked(compactEmbeddedPiSessionDirect);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,6 +103,8 @@ class MockContextEngine implements ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    availableTools?: Set<string>;
+    citationsMode?: MemoryCitationsMode;
   }): Promise<AssembleResult> {
     return {
       messages: params.messages,
@@ -163,6 +173,8 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    availableTools?: Set<string>;
+    citationsMode?: MemoryCitationsMode;
     prompt?: string;
   }): Promise<AssembleResult> {
     this.assembleCalls.push({ ...params });
@@ -274,6 +286,8 @@ class LegacyAssembleStrictEngine implements ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    availableTools?: Set<string>;
+    citationsMode?: MemoryCitationsMode;
     prompt?: string;
   }): Promise<AssembleResult> {
     this.assembleCalls.push({ ...params });
@@ -311,7 +325,9 @@ class LegacyAssembleStrictEngine implements ContextEngine {
 
 describe("Engine contract tests", () => {
   beforeEach(() => {
-    mockedCompactEmbeddedPiSessionDirect.mockClear();
+    vi.restoreAllMocks();
+    compactEmbeddedPiSessionDirectMock.mockReset();
+    clearMemoryPluginState();
   });
 
   it("a mock engine implementing ContextEngine can be registered and resolved", async () => {
@@ -327,6 +343,7 @@ describe("Engine contract tests", () => {
   });
 
   it("legacy compact preserves runtimeContext currentTokenCount when top-level value is absent", async () => {
+    const compactRuntimeSpy = installCompactRuntimeSpy();
     const engine = new LegacyContextEngine();
 
     await engine.compact({
@@ -338,7 +355,7 @@ describe("Engine contract tests", () => {
       },
     });
 
-    expect(mockedCompactEmbeddedPiSessionDirect).toHaveBeenCalledWith(
+    expect(compactRuntimeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         currentTokenCount: 277403,
       }),
@@ -346,6 +363,7 @@ describe("Engine contract tests", () => {
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
+    const compactRuntimeSpy = installCompactRuntimeSpy();
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
       sessionFile: "/tmp/session.json",
@@ -356,7 +374,7 @@ describe("Engine contract tests", () => {
       },
     });
 
-    expect(mockedCompactEmbeddedPiSessionDirect).toHaveBeenCalledWith(
+    expect(compactRuntimeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "s2",
         sessionFile: "/tmp/session.json",
@@ -377,6 +395,29 @@ describe("Engine contract tests", () => {
         details: undefined,
       },
     });
+  });
+
+  it("builds a normalized memory system prompt addition from the active memory prompt path", () => {
+    registerMemoryPromptSection(({ citationsMode }) => [
+      "## Memory Recall",
+      `citations=${citationsMode ?? "auto"}`,
+      "",
+    ]);
+
+    expect(
+      buildMemorySystemPromptAddition({
+        availableTools: new Set(["memory_search"]),
+        citationsMode: "off",
+      }),
+    ).toBe("## Memory Recall\ncitations=off");
+  });
+
+  it("returns undefined when the active memory prompt path contributes nothing", () => {
+    expect(
+      buildMemorySystemPromptAddition({
+        availableTools: new Set(["memory_search"]),
+      }),
+    ).toBeUndefined();
   });
 });
 

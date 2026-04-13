@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
@@ -149,61 +149,6 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("tells the agent not to execute /approve through exec", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-    });
-
-    expect(prompt).toContain(
-      "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
-    );
-  });
-
-  it("keeps manual /approve instructions for non-native approval channels", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      runtimeInfo: { channel: "signal" },
-    });
-
-    expect(prompt).toContain(
-      "When exec returns approval-pending, include the concrete /approve command from tool output",
-    );
-  });
-
-  it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      runtimeInfo: { channel: "telegram" },
-    });
-
-    expect(prompt).toContain(
-      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
-    );
-    expect(prompt).toContain(
-      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
-    );
-    expect(prompt).not.toContain(
-      "When exec returns approval-pending, include the concrete /approve command from tool output",
-    );
-  });
-
-  it("treats webchat as a native approval surface", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      runtimeInfo: { channel: "webchat" },
-    });
-
-    expect(prompt).toContain(
-      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
-    );
-    expect(prompt).toContain(
-      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
-    );
-    expect(prompt).not.toContain(
-      "When exec returns approval-pending, include the concrete /approve command from tool output",
-    );
-  });
-
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -211,6 +156,17 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("## Skills");
+  });
+
+  it("avoids the Claude subscription classifier wording in reply tag guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Assistant Output Directives");
+    expect(prompt).toContain("[[reply_to_current]]");
+    expect(prompt).not.toContain("Tags are stripped before sending");
+    expect(prompt).toContain("Supported tags are stripped before user-visible rendering");
   });
 
   it("omits the heartbeat section when no heartbeat prompt is provided", () => {
@@ -278,6 +234,39 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Runtime-generated completion events may ask for a user update.");
     expect(prompt).toContain("Rewrite those in your normal assistant voice");
     expect(prompt).toContain("do not forward raw internal metadata");
+  });
+
+  it("does not include embed guidance in the default global prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).not.toContain("## Control UI Embed");
+    expect(prompt).not.toContain("Use `[embed ...]` only in Control UI/webchat sessions");
+  });
+
+  it("includes embed guidance only for webchat sessions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "webchat",
+        canvasRootDir: "/Users/example/.openclaw-dev/canvas",
+      },
+    });
+
+    expect(prompt).toContain("## Control UI Embed");
+    expect(prompt).toContain("Use `[embed ...]` only in Control UI/webchat sessions");
+    expect(prompt).toContain('[embed ref="cv_123" title="Status" height="320" /]');
+    expect(prompt).toContain(
+      '[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]',
+    );
+    expect(prompt).toContain(
+      "Never use local filesystem paths or `file://...` URLs in `[embed ...]`.",
+    );
+    expect(prompt).toContain(
+      "The active hosted embed root for this session is: `/Users/example/.openclaw-dev/canvas`.",
+    );
+    expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
 
   it("guides subagent workflows to avoid polling loops", () => {
@@ -469,7 +458,10 @@ describe("buildAgentSystemPrompt", () => {
 
   // The system prompt intentionally does NOT include the current date/time.
   // Only the timezone is included, to keep the prompt stable for caching.
+  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
   // Agents should use session_status or message timestamps to determine the date/time.
+  // Related: https://github.com/moltbot/moltbot/issues/1897
+  //          https://github.com/moltbot/moltbot/issues/3658
   it("does NOT include a date or time in the system prompt (cache stability)", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
@@ -479,9 +471,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability. If you want to add date/time
-    // awareness, do it through gateway-level timestamp injection into messages, not
-    // the system prompt.
+    // This is intentional for prompt cache stability — the date/time was removed in
+    // commit 66eec295b. If you're here because you want to add it back, please see
+    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
+    // gateway-level timestamp injection into messages, not the system prompt.
     expect(prompt).toContain("Time zone: America/Chicago");
     expect(prompt).not.toContain("Monday, January 5th, 2026");
     expect(prompt).not.toContain("3:26 PM");
@@ -617,6 +610,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
   });
 
+  it("reapplies provider prompt contributions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptContribution: {
+        stablePrefix: "## Provider Stable\n\nStable guidance.",
+        dynamicSuffix: "## Provider Dynamic\n\nDynamic guidance.",
+        sectionOverrides: {
+          tool_call_style: "## Tool Call Style\nProvider-specific tool call guidance.",
+        },
+      },
+    });
+
+    expect(prompt).toContain("## Provider Stable\n\nStable guidance.");
+    expect(prompt).toContain("## Provider Dynamic\n\nDynamic guidance.");
+    expect(prompt).toContain("## Tool Call Style\nProvider-specific tool call guidance.");
+    expect(prompt).not.toContain("Default: do not narrate routine, low-risk tool calls");
+  });
+
   it("includes inline button style guidance when runtime supports inline buttons", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -631,6 +642,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("suppresses plain chat approval commands when inline approval UI is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlineButtons"],
+      },
+    });
+
+    expect(prompt).toContain("rely on native approval card/buttons when they appear");
+    expect(prompt).toContain("do not also send plain chat /approve instructions");
+  });
+
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -641,7 +665,21 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("channel=telegram");
-    expect(prompt).toContain("capabilities=inlineButtons");
+    expect(prompt).toContain("capabilities=inlinebuttons");
+  });
+
+  it("canonicalizes runtime provider capabilities before rendering", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: [" InlineButtons ", "voice", "inlinebuttons", "Voice"],
+      },
+    });
+
+    expect(prompt).toContain("channel=telegram");
+    expect(prompt).toContain("capabilities=inlinebuttons,voice");
+    expect(prompt).not.toContain("capabilities= InlineButtons ,voice,inlinebuttons,Voice");
   });
 
   it("includes agent id in runtime when provided", () => {
@@ -696,8 +734,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("model=anthropic/claude");
     expect(line).toContain("default_model=anthropic/claude-opus-4-5");
     expect(line).toContain("channel=telegram");
-    expect(line).toContain("capabilities=inlineButtons");
+    expect(line).toContain("capabilities=inlinebuttons");
     expect(line).toContain("thinking=low");
+  });
+
+  it("renders extra system prompt exactly once", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      extraSystemPrompt: "Custom runtime context",
+    });
+
+    expect(prompt.match(/Custom runtime context/g)).toHaveLength(1);
+    expect(prompt.match(/## Group Chat Context/g)).toHaveLength(1);
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {
@@ -709,7 +757,7 @@ describe("buildAgentSystemPrompt", () => {
         containerWorkspaceDir: "/workspace",
         workspaceAccess: "ro",
         agentWorkspaceMount: "/agent",
-        elevated: { allowed: true, defaultLevel: "on" },
+        elevated: { allowed: true, defaultLevel: "on", fullAccessAvailable: true },
       },
     });
 
@@ -725,6 +773,35 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Sub-agents stay sandboxed");
     expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
     expect(prompt).toContain("Current elevated level: on");
+  });
+
+  it("does not advertise /elevated full when auto-approved full access is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sandboxInfo: {
+        enabled: true,
+        workspaceDir: "/tmp/sandbox",
+        containerWorkspaceDir: "/workspace",
+        workspaceAccess: "ro",
+        agentWorkspaceMount: "/agent",
+        elevated: {
+          allowed: true,
+          defaultLevel: "full",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
+      },
+    });
+
+    expect(prompt).toContain("Elevated exec is available for this session.");
+    expect(prompt).toContain("User can toggle with /elevated on|off|ask.");
+    expect(prompt).not.toContain("User can toggle with /elevated on|off|ask|full.");
+    expect(prompt).toContain(
+      "Auto-approved /elevated full is unavailable here (runtime constraints).",
+    );
+    expect(prompt).toContain(
+      "Current elevated level: full (full auto-approval unavailable here; use ask/on instead).",
+    );
   });
 
   it("includes reaction guidance when provided", () => {
@@ -774,8 +851,7 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");
     expect(prompt).toContain("reported to the main agent");
-    expect(prompt).toContain("[compacted: tool output removed to free context]");
-    expect(prompt).toContain("[truncated: output exceeded context limit]");
+    expect(prompt).toContain("[... N more characters truncated]");
     expect(prompt).toContain("offset/limit");
     expect(prompt).toContain("instead of full-file `cat`");
   });

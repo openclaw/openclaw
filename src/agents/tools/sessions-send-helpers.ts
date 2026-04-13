@@ -4,10 +4,15 @@ import {
 } from "../../channels/plugins/index.js";
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
+export {
+  ANNOUNCE_SKIP_TOKEN,
+  REPLY_SKIP_TOKEN,
+  isAnnounceSkip,
+  isReplySkip,
+} from "./sessions-send-tokens.js";
 
-const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
-const REPLY_SKIP_TOKEN = "REPLY_SKIP";
 const DEFAULT_PING_PONG_TURNS = 5;
 const MAX_PING_PONG_TURNS = 5;
 
@@ -113,14 +118,6 @@ export function buildAgentToAgentAnnounceContext(params: {
     "After this reply, the agent-to-agent conversation is over.",
   ].filter(Boolean);
   return lines.join("\n");
-}
-
-export function isAnnounceSkip(text?: string) {
-  return (text ?? "").trim() === ANNOUNCE_SKIP_TOKEN;
-}
-
-export function isReplySkip(text?: string) {
-  return (text ?? "").trim() === REPLY_SKIP_TOKEN;
 }
 
 export function resolvePingPongTurns(cfg?: OpenClawConfig) {

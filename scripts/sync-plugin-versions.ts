@@ -10,6 +10,12 @@ type PackageJson = {
     install?: {
       minHostVersion?: string;
     };
+    compat?: {
+      pluginApi?: string;
+    };
+    build?: {
+      openclawVersion?: string;
+    };
   };
 };
 
@@ -31,9 +37,9 @@ function syncOpenClawDependencyRange(
   return true;
 }
 
-function syncMinHostVersion(pkg: PackageJson, targetVersion: string): boolean {
-  const installConfig = pkg.openclaw?.install;
-  const current = installConfig?.minHostVersion;
+function syncPluginApiVersion(pkg: PackageJson, targetVersion: string): boolean {
+  const compat = pkg.openclaw?.compat;
+  const current = compat?.pluginApi;
   if (!current || !OPENCLAW_VERSION_RANGE_RE.test(current)) {
     return false;
   }
@@ -41,7 +47,20 @@ function syncMinHostVersion(pkg: PackageJson, targetVersion: string): boolean {
   if (current === next) {
     return false;
   }
-  installConfig.minHostVersion = next;
+  compat.pluginApi = next;
+  return true;
+}
+
+function syncBuildOpenClawVersion(pkg: PackageJson, targetVersion: string): boolean {
+  const build = pkg.openclaw?.build;
+  const current = build?.openclawVersion;
+  if (!current) {
+    return false;
+  }
+  if (current === targetVersion) {
+    return false;
+  }
+  build.openclawVersion = targetVersion;
   return true;
 }
 
@@ -103,9 +122,16 @@ export function syncPluginVersions(rootDir = resolve(".")) {
     const versionChanged = pkg.version !== targetVersion;
     const devDependencyChanged = syncOpenClawDependencyRange(pkg.devDependencies, targetVersion);
     const peerDependencyChanged = syncOpenClawDependencyRange(pkg.peerDependencies, targetVersion);
-    const minHostVersionChanged = syncMinHostVersion(pkg, targetVersion);
+    // minHostVersion is a compatibility floor, not release alignment metadata.
+    // Keep it stable unless the owning plugin intentionally raises it.
+    const pluginApiChanged = syncPluginApiVersion(pkg, targetVersion);
+    const buildOpenClawVersionChanged = syncBuildOpenClawVersion(pkg, targetVersion);
     const packageChanged =
-      versionChanged || devDependencyChanged || peerDependencyChanged || minHostVersionChanged;
+      versionChanged ||
+      devDependencyChanged ||
+      peerDependencyChanged ||
+      pluginApiChanged ||
+      buildOpenClawVersionChanged;
     if (!packageChanged) {
       skipped.push(pkg.name);
       continue;

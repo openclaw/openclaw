@@ -1,5 +1,7 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
+import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
@@ -13,6 +15,7 @@ type UsageSnapshot = {
 };
 
 export type RuntimeAuthState = {
+  generation: number;
   sourceApiKey: string;
   authMode: string;
   profileId?: string;
@@ -38,7 +41,9 @@ export function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig): numbe
 }
 
 export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): number {
-  return cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS;
+  return (
+    cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
+  );
 }
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -72,14 +77,13 @@ export function resolveMaxRunRetryIterations(profileCandidateCount: number): num
   return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
-export function resolveActiveErrorContext(params: {
-  lastAssistant: { provider?: string; model?: string } | undefined;
+export function resolveActiveErrorContext(params: { provider: string; model: string }): {
   provider: string;
   model: string;
-}): { provider: string; model: string } {
+} {
   return {
-    provider: params.lastAssistant?.provider ?? params.provider,
-    model: params.lastAssistant?.model ?? params.model,
+    provider: params.provider,
+    model: params.model,
   };
 }
 
@@ -132,4 +136,14 @@ export function buildErrorAgentMeta(params: {
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
   };
+}
+
+export function resolveFinalAssistantVisibleText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (!lastAssistant) {
+    return undefined;
+  }
+  const visibleText = extractAssistantVisibleText(lastAssistant).trim();
+  return visibleText || undefined;
 }

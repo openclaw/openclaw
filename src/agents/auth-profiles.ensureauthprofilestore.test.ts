@@ -2,9 +2,53 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./auth-profiles.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
+} from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
+vi.mock("./cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => {
+    const codexHome = process.env.CODEX_HOME;
+    if (!codexHome) {
+      return null;
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8")) as {
+        tokens?: {
+          access_token?: unknown;
+          refresh_token?: unknown;
+          account_id?: unknown;
+        };
+      };
+      const access = raw.tokens?.access_token;
+      const refresh = raw.tokens?.refresh_token;
+      if (typeof access !== "string" || typeof refresh !== "string") {
+        return null;
+      }
+      return {
+        type: "oauth",
+        provider: "openai-codex",
+        access,
+        refresh,
+        expires: Date.now() + 60 * 60 * 1000,
+        accountId: typeof raw.tokens?.account_id === "string" ? raw.tokens.account_id : undefined,
+      };
+    } catch {
+      return null;
+    }
+  },
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: vi.fn(),
+  writeCodexCliCredentials: vi.fn(() => false),
+}));
 
 describe("ensureAuthProfileStore", () => {
   function withTempAgentDir<T>(prefix: string, run: (agentDir: string) => T): T {
@@ -336,6 +380,117 @@ describe("ensureAuthProfileStore", () => {
         delete process.env.PI_CODING_AGENT_DIR;
       } else {
         process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exposes Codex CLI auth without persisting copied tokens into auth-profiles.json", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-external-sync-"));
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(root, "codex-home");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(
+        path.join(codexHome, "auth.json"),
+        `${JSON.stringify(
+          {
+            auth_mode: "chatgpt",
+            tokens: {
+              access_token: "codex-access-token",
+              refresh_token: "codex-refresh-token",
+              account_id: "acct_123",
+            },
+            last_refresh: "2026-03-01T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      process.env.CODEX_HOME = codexHome;
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "codex-access-token",
+        refresh: "codex-refresh-token",
+      });
+
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not write inherited auth stores during secrets runtime reads", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secrets-runtime-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      const stateDir = path.join(root, ".openclaw");
+      const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+      const workerAgentDir = path.join(stateDir, "agents", "worker", "agent");
+      const workerStorePath = path.join(workerAgentDir, "auth-profiles.json");
+      fs.mkdirSync(mainAgentDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(workerAgentDir, { readOnly: true });
+
+      expect(store.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+      });
+      expect(fs.existsSync(workerStorePath)).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
       }
       fs.rmSync(root, { recursive: true, force: true });
     }

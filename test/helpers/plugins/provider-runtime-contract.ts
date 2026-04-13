@@ -4,6 +4,7 @@ import path from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../../../src/plugins/types.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   createProviderUsageFetch,
   makeResponse,
@@ -20,24 +21,48 @@ const getOAuthProvidersMock = vi.hoisted(() =>
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" },
   ]),
 );
-const providerRuntimeContractModules = vi.hoisted(() => ({
-  anthropicIndexModuleUrl: new URL("../../../extensions/anthropic/index.ts", import.meta.url).href,
-  githubCopilotIndexModuleUrl: new URL(
-    "../../../extensions/github-copilot/index.ts",
-    import.meta.url,
-  ).href,
-  googleIndexModuleUrl: new URL("../../../extensions/google/index.ts", import.meta.url).href,
-  openAIIndexModuleUrl: new URL("../../../extensions/openai/index.ts", import.meta.url).href,
-  openAICodexProviderRuntimeModuleId: new URL(
-    "../../../extensions/openai/openai-codex-provider.runtime.js",
-    import.meta.url,
-  ).pathname,
-  openRouterIndexModuleUrl: new URL("../../../extensions/openrouter/index.ts", import.meta.url)
-    .href,
-  veniceIndexModuleUrl: new URL("../../../extensions/venice/index.ts", import.meta.url).href,
-  xAIIndexModuleUrl: new URL("../../../extensions/xai/index.ts", import.meta.url).href,
-  zaiIndexModuleUrl: new URL("../../../extensions/zai/index.ts", import.meta.url).href,
-}));
+const providerRuntimeContractModules = {
+  anthropicIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "anthropic",
+    artifactBasename: "index.js",
+  }),
+  githubCopilotIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "github-copilot",
+    artifactBasename: "index.js",
+  }),
+  googleIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "google",
+    artifactBasename: "index.js",
+  }),
+  openAIIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "openai",
+    artifactBasename: "index.js",
+  }),
+  openRouterIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "openrouter",
+    artifactBasename: "index.js",
+  }),
+  veniceIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "venice",
+    artifactBasename: "index.js",
+  }),
+  xAIIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "xai",
+    artifactBasename: "index.js",
+  }),
+  zaiIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "zai",
+    artifactBasename: "index.js",
+  }),
+};
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
@@ -50,12 +75,8 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock(providerRuntimeContractModules.openAICodexProviderRuntimeModuleId, () => ({
-  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
-}));
-
 async function importBundledProviderPlugin<T>(moduleUrl: string): Promise<T> {
-  return (await import(`${moduleUrl}?t=${Date.now()}`)) as T;
+  return (await import(moduleUrl)) as T;
 }
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
@@ -88,7 +109,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.anthropicIndexModuleUrl),
+      }>(providerRuntimeContractModules.anthropicIndexModuleId),
   },
   {
     providerIds: ["github-copilot"],
@@ -97,7 +118,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.githubCopilotIndexModuleUrl),
+      }>(providerRuntimeContractModules.githubCopilotIndexModuleId),
   },
   {
     providerIds: ["google", "google-gemini-cli"],
@@ -106,7 +127,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.googleIndexModuleUrl),
+      }>(providerRuntimeContractModules.googleIndexModuleId),
   },
   {
     providerIds: ["openai", "openai-codex"],
@@ -115,7 +136,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.openAIIndexModuleUrl),
+      }>(providerRuntimeContractModules.openAIIndexModuleId),
   },
   {
     providerIds: ["openrouter"],
@@ -124,7 +145,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.openRouterIndexModuleUrl),
+      }>(providerRuntimeContractModules.openRouterIndexModuleId),
   },
   {
     providerIds: ["venice"],
@@ -133,7 +154,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.veniceIndexModuleUrl),
+      }>(providerRuntimeContractModules.veniceIndexModuleId),
   },
   {
     providerIds: ["xai"],
@@ -142,7 +163,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.xAIIndexModuleUrl),
+      }>(providerRuntimeContractModules.xAIIndexModuleId),
   },
   {
     providerIds: ["zai"],
@@ -151,11 +172,12 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.zaiIndexModuleUrl),
+      }>(providerRuntimeContractModules.zaiIndexModuleId),
   },
 ] as const;
 
 const providerRuntimeContractProviders = new Map<string, ProviderPlugin>();
+let providerRuntimeContractLoadPromise: Promise<void> | null = null;
 
 function requireProviderContractProvider(providerId: string): ProviderPlugin {
   const provider = providerRuntimeContractProviders.get(providerId);
@@ -165,30 +187,42 @@ function requireProviderContractProvider(providerId: string): ProviderPlugin {
   return provider;
 }
 
+async function ensureProviderRuntimeContractProvidersLoaded() {
+  if (!providerRuntimeContractLoadPromise) {
+    providerRuntimeContractLoadPromise = (async () => {
+      providerRuntimeContractProviders.clear();
+      const registeredFixtures = await Promise.all(
+        PROVIDER_RUNTIME_CONTRACT_FIXTURES.map(async (fixture) => {
+          const plugin = await fixture.load();
+          return {
+            fixture,
+            providers: (
+              await registerProviderPlugin({
+                plugin: plugin.default,
+                id: fixture.pluginId,
+                name: fixture.name,
+              })
+            ).providers,
+          };
+        }),
+      );
+      for (const { fixture, providers } of registeredFixtures) {
+        for (const providerId of fixture.providerIds) {
+          providerRuntimeContractProviders.set(
+            providerId,
+            requireRegisteredProvider(providers, providerId, "provider"),
+          );
+        }
+      }
+    })();
+  }
+
+  await providerRuntimeContractLoadPromise;
+}
+
 function installRuntimeHooks() {
   beforeAll(async () => {
-    providerRuntimeContractProviders.clear();
-    const registeredFixtures = await Promise.all(
-      PROVIDER_RUNTIME_CONTRACT_FIXTURES.map(async (fixture) => {
-        const plugin = await fixture.load();
-        return {
-          fixture,
-          providers: registerProviderPlugin({
-            plugin: plugin.default,
-            id: fixture.pluginId,
-            name: fixture.name,
-          }).providers,
-        };
-      }),
-    );
-    for (const { fixture, providers } of registeredFixtures) {
-      for (const providerId of fixture.providerIds) {
-        providerRuntimeContractProviders.set(
-          providerId,
-          requireRegisteredProvider(providers, providerId, "provider"),
-        );
-      }
-    }
+    await ensureProviderRuntimeContractProvidersLoaded();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   beforeEach(() => {
@@ -597,6 +631,33 @@ export function describeOpenAIProviderRuntimeContract() {
 
       expect(model).toMatchObject({
         id: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      });
+    });
+
+    it("owns forward-compat codex mini models", () => {
+      const provider = requireProviderContractProvider("openai-codex");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4-mini",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.1-codex-mini"
+              ? createModel({
+                  id,
+                  api: "openai-codex-responses",
+                  provider: "openai-codex",
+                  baseUrl: "https://chatgpt.com/backend-api",
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.4-mini",
         provider: "openai-codex",
         api: "openai-codex-responses",
         contextWindow: 272_000,

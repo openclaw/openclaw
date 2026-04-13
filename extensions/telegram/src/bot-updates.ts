@@ -1,5 +1,5 @@
 import type { Message } from "@grammyjs/types";
-import { createDedupeCache } from "openclaw/plugin-sdk/core";
+import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import type { TelegramContext } from "./bot/types.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;

@@ -4,10 +4,14 @@
 
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../utils/delivery-context.js";
+} from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type SystemEvent = {
   text: string;
@@ -37,7 +41,7 @@ type SystemEventOptions = {
 };
 
 function requireSessionKey(key?: string | null): string {
-  const trimmed = typeof key === "string" ? key.trim() : "";
+  const trimmed = normalizeOptionalString(key) ?? "";
   if (!trimmed) {
     throw new Error("system events require a sessionKey");
   }
@@ -45,14 +49,7 @@ function requireSessionKey(key?: string | null): string {
 }
 
 function normalizeContextKey(key?: string | null): string | null {
-  if (!key) {
-    return null;
-  }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.toLowerCase();
+  return normalizeOptionalLowercaseString(key) ?? null;
 }
 
 function getSessionQueue(sessionKey: string): SessionQueue | undefined {

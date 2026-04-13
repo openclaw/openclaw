@@ -1,7 +1,10 @@
 import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
-import type { ChannelStatusIssue } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+export type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+export type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
 export { isRecord } from "../channels/plugins/status-issues/shared.js";
 export {
   appendMatchMetadata,
@@ -13,6 +16,21 @@ export {
 
 type RuntimeLifecycleSnapshot = {
   running?: boolean | null;
+  connected?: boolean | null;
+  restartPending?: boolean | null;
+  reconnectAttempts?: number | null;
+  lastConnectedAt?: number | null;
+  lastDisconnect?:
+    | string
+    | {
+        at: number;
+        status?: number;
+        error?: string;
+        loggedOut?: boolean;
+      }
+    | null;
+  lastEventAt?: number | null;
+  healthState?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
@@ -279,6 +297,19 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
     lastStopAt: runtime?.lastStopAt ?? null,
     lastError: runtime?.lastError ?? null,
     probe,
+    ...(typeof runtime?.connected === "boolean" ? { connected: runtime.connected } : {}),
+    ...(typeof runtime?.restartPending === "boolean"
+      ? { restartPending: runtime.restartPending }
+      : {}),
+    ...(typeof runtime?.reconnectAttempts === "number"
+      ? { reconnectAttempts: runtime.reconnectAttempts }
+      : {}),
+    ...(typeof runtime?.lastConnectedAt === "number"
+      ? { lastConnectedAt: runtime.lastConnectedAt }
+      : {}),
+    ...(runtime?.lastDisconnect ? { lastDisconnect: runtime.lastDisconnect } : {}),
+    ...(typeof runtime?.lastEventAt === "number" ? { lastEventAt: runtime.lastEventAt } : {}),
+    ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }
@@ -323,7 +354,10 @@ export function createDependentCredentialStatusIssueCollector(options: {
 }) {
   const isDependencyConfigured =
     options.isDependencyConfigured ??
-    ((value: unknown) => typeof value === "string" && value.trim().length > 0 && value !== "none");
+    ((value: unknown) => {
+      const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+      return Boolean(normalized && normalized !== "none");
+    });
 
   return (accounts: ConfigIssueAccount[]): ChannelStatusIssue[] =>
     accounts.flatMap((account) => {

@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/plugin-sdk/discord.js";
 
 export type NativeCommandSpecMock = {
   name: string;
@@ -21,6 +21,15 @@ type ProviderMonitorTestMocks = {
   clientGetPluginMock: Mock<(name: string) => unknown>;
   clientConstructorOptionsMock: Mock<(options?: unknown) => void>;
   createDiscordAutoPresenceControllerMock: Mock<() => unknown>;
+  createDiscordExecApprovalButtonContextMock: Mock<
+    (params?: {
+      cfg?: OpenClawConfig;
+      accountId?: string;
+      config?: unknown;
+      gatewayUrl?: string;
+    }) => { getApprovers: () => string[]; resolveApproval: () => Promise<boolean> }
+  >;
+  createExecApprovalButtonMock: Mock<(ctx?: unknown) => unknown>;
   createDiscordNativeCommandMock: Mock<(params?: { command?: { name?: string } }) => unknown>;
   createDiscordMessageHandlerMock: Mock<() => unknown>;
   createNoopThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
@@ -82,6 +91,11 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
       refresh: vi.fn(),
       runNow: vi.fn(),
     })),
+    createDiscordExecApprovalButtonContextMock: vi.fn(() => ({
+      getApprovers: () => [],
+      resolveApproval: async () => false,
+    })),
+    createExecApprovalButtonMock: vi.fn(() => ({ id: "exec-approval" })),
     createDiscordNativeCommandMock: vi.fn((params?: { command?: { name?: string } }) => ({
       name: params?.command?.name ?? "mock-command",
     })),
@@ -154,6 +168,8 @@ const {
   clientGetPluginMock,
   clientConstructorOptionsMock,
   createDiscordAutoPresenceControllerMock,
+  createDiscordExecApprovalButtonContextMock,
+  createExecApprovalButtonMock,
   createDiscordNativeCommandMock,
   createDiscordMessageHandlerMock,
   createNoopThreadBindingManagerMock,
@@ -209,6 +225,11 @@ export function resetDiscordProviderMonitorMocks(params?: {
     refresh: vi.fn(),
     runNow: vi.fn(),
   }));
+  createDiscordExecApprovalButtonContextMock.mockClear().mockImplementation(() => ({
+    getApprovers: () => [],
+    resolveApproval: async () => false,
+  }));
+  createExecApprovalButtonMock.mockClear().mockImplementation(() => ({ id: "exec-approval" }));
   createDiscordNativeCommandMock.mockClear().mockImplementation((input) => ({
     name: input?.command?.name ?? "mock-command",
   }));
@@ -274,8 +295,8 @@ export const baseConfig = (): OpenClawConfig =>
     },
   }) as OpenClawConfig;
 
-vi.mock("@buape/carbon", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@buape/carbon")>();
+vi.mock("@buape/carbon", async () => {
+  const actual = await vi.importActual<typeof import("@buape/carbon")>("@buape/carbon");
   class RateLimitError extends Error {
     status = 429;
     discordCode?: number;
@@ -320,7 +341,7 @@ vi.mock("@buape/carbon/gateway", () => ({
 }));
 
 vi.mock("@buape/carbon/voice", () => ({
-  VoicePlugin: class VoicePlugin {},
+  VoicePlugin: function VoicePlugin() {},
 }));
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
@@ -442,15 +463,8 @@ vi.mock(buildDiscordSourceModuleId("monitor/commands.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({
-  createExecApprovalButton: () => ({ id: "exec-approval" }),
-  DiscordExecApprovalHandler: class DiscordExecApprovalHandler {
-    async start() {
-      return undefined;
-    }
-    async stop() {
-      return undefined;
-    }
-  },
+  createExecApprovalButton: createExecApprovalButtonMock,
+  createDiscordExecApprovalButtonContext: createDiscordExecApprovalButtonContextMock,
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
@@ -458,11 +472,11 @@ vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
-  DiscordMessageListener: class DiscordMessageListener {},
-  DiscordPresenceListener: class DiscordPresenceListener {},
-  DiscordReactionListener: class DiscordReactionListener {},
-  DiscordReactionRemoveListener: class DiscordReactionRemoveListener {},
-  DiscordThreadUpdateListener: class DiscordThreadUpdateListener {},
+  DiscordMessageListener: function DiscordMessageListener() {},
+  DiscordPresenceListener: function DiscordPresenceListener() {},
+  DiscordReactionListener: function DiscordReactionListener() {},
+  DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},
+  DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {},
   registerDiscordListener: vi.fn(),
 }));
 

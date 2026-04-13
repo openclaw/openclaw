@@ -105,33 +105,36 @@ read_env_gateway_token() {
   fi
 }
 
-ensure_control_ui_allowed_origins() {
-  if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
-    return 0
+sync_gateway_config() {
+  local allowed_origin_json=""
+  local current_allowed_origins=""
+  local batch_json=""
+
+  if [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
+    allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
+    current_allowed_origins="$(
+      run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+    )"
+    current_allowed_origins="${current_allowed_origins//$'\r'/}"
   fi
 
-  local allowed_origin_json
-  local current_allowed_origins
-  allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
-  current_allowed_origins="$(
-    run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
-  )"
-  current_allowed_origins="${current_allowed_origins//$'\r'/}"
-
-  if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
-    echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
-    return 0
+  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$OPENCLAW_GATEWAY_BIND")"
+  if [[ -n "$allowed_origin_json" ]]; then
+    if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
+      echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
+    else
+      batch_json+=",{\"path\":\"gateway.controlUi.allowedOrigins\",\"value\":$allowed_origin_json}"
+    fi
   fi
+  batch_json+="]"
 
-  run_prestart_cli config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json \
-    >/dev/null
-  echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
-}
-
-sync_gateway_mode_and_bind() {
-  run_prestart_cli config set gateway.mode local >/dev/null
-  run_prestart_cli config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
+  run_prestart_cli config set --batch-json "$batch_json" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
+  if [[ -n "$allowed_origin_json" ]]; then
+    if [[ -z "$current_allowed_origins" || "$current_allowed_origins" == "null" || "$current_allowed_origins" == "[]" ]]; then
+      echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
+    fi
+  fi
 }
 
 run_prestart_gateway() {
@@ -514,11 +517,7 @@ run_prestart_cli onboard --mode local --no-install-daemon
 
 echo ""
 echo "==> Docker gateway defaults"
-sync_gateway_mode_and_bind
-
-echo ""
-echo "==> Control UI origin allowlist"
-ensure_control_ui_allowed_origins
+sync_gateway_config
 
 echo ""
 echo "==> Provider setup (optional)"

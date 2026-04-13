@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn(),
@@ -11,13 +11,11 @@ vi.mock("../plugins/loader.js", () => ({
 describe("ensureRuntimePluginsLoaded", () => {
   let ensureRuntimePluginsLoaded: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
 
-  beforeAll(async () => {
-    ({ ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     hoisted.resolveRuntimePluginRegistry.mockReset();
     hoisted.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+    vi.resetModules();
+    ({ ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js"));
   });
 
   it("does not reactivate plugins when a process already has an active registry", async () => {
