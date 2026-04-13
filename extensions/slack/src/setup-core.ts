@@ -23,6 +23,7 @@ import {
 import { inspectSlackAccount } from "./account-inspect.js";
 import { resolveSlackAccount } from "./accounts.js";
 import {
+  buildSlackManifest,
   buildSlackSetupLines,
   SLACK_CHANNEL as channel,
   isSlackSetupAccountConfigured,
@@ -271,6 +272,11 @@ export function createSlackSetupWizardBase(handlers: {
       return {
         cfg: setSlackInteractiveReplies(cfg, accountId, enableInteractiveReplies),
       };
+    },
+    prepare: async ({ cfg, accountId }) => {
+      if (!isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId }))) {
+        console.log(buildSlackManifest("OpenClaw"));
+      }
     },
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
