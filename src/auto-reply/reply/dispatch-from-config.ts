@@ -1016,24 +1016,38 @@ export async function dispatchReplyFromConfig(
                   // Fallback timeout protection when no abort signal is available
                   // (e.g., compaction notice path). Use 15s timeout (MAX_HUMAN_DELAY_MS + 5s buffer).
                   // Make timeout non-fatal for no-context callers (followup runners, etc.)
+                  const SYNTHETIC_TIMEOUT_SYMBOL = Symbol("synthetic-timeout");
+
+                  interface SyntheticTimeoutError extends Error {
+                    syntheticTimeout: symbol;
+                  }
+
                   let timeoutId: NodeJS.Timeout | undefined;
                   try {
                     await Promise.race([
                       deliveryPromise,
                       new Promise<void>((_, reject) => {
                         timeoutId = setTimeout(() => {
-                          reject(new Error("block reply delivery timeout (no abort context)"));
+                          const timeoutError = new Error(
+                            "block reply delivery timeout (no abort context)",
+                          ) as SyntheticTimeoutError;
+                          timeoutError.syntheticTimeout = SYNTHETIC_TIMEOUT_SYMBOL;
+                          reject(timeoutError);
                         }, 15_000);
                       }),
                     ]);
                   } catch (err) {
                     // Log timeout but continue - no-context callers shouldn't fail on slow delivery
-                    if (err instanceof Error && err.message.includes("delivery timeout")) {
+                    if (
+                      err instanceof Error &&
+                      "syntheticTimeout" in err &&
+                      (err as SyntheticTimeoutError).syntheticTimeout === SYNTHETIC_TIMEOUT_SYMBOL
+                    ) {
                       console.warn(
                         `[dispatch-from-config] ${err.message}, delivery may continue in background`,
                       );
                     } else {
-                      throw err; // Re-throw non-timeout errors
+                      throw err; // Re-throw non-timeout errors (including real delivery failures)
                     }
                   } finally {
                     if (timeoutId) {
