@@ -310,6 +310,18 @@ describe("handleRoamInbound", () => {
       expect(ctxArg.WasMentioned).toBe(false);
     });
 
+    it("drops mention-only message with no remaining content", async () => {
+      await handleRoamInbound({
+        message: makeMessage({ text: "<@bot-uuid>" }),
+        account: makeAccount(),
+        config: defaultConfig,
+        runtime: defaultRuntime,
+        botId: "bot-uuid",
+      });
+
+      expect(mockDispatchInboundReplyWithBase).not.toHaveBeenCalled();
+    });
+
     it("strips <!@botId> exclamation-mark mention format", async () => {
       await handleRoamInbound({
         message: makeMessage({ text: "<!@bot-uuid> hello there" }),

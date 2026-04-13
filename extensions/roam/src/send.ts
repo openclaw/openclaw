@@ -1,4 +1,5 @@
 import { resolveRoamAccount } from "./accounts.js";
+import { resolveApiBase } from "./api-base.js";
 import { stripRoamTargetPrefix } from "./normalize.js";
 import { getRoamRuntime } from "./runtime.js";
 import type { CoreConfig, RoamSendResult } from "./types.js";
@@ -9,14 +10,6 @@ type RoamSendOpts = {
   threadKey?: string;
   cfg?: CoreConfig;
 };
-
-const DEFAULT_API_BASE = "https://api.ro.am";
-
-function resolveApiBase(cfg?: CoreConfig, accountApiBaseUrl?: string): string {
-  // Per-account apiBaseUrl takes precedence over top-level config.
-  const override = (accountApiBaseUrl ?? cfg?.channels?.roam?.apiBaseUrl)?.replace(/\/+$/, "");
-  return override ? `${override}/v1` : `${DEFAULT_API_BASE}/v1`;
-}
 
 function resolveCredentials(
   explicit: { apiKey?: string },

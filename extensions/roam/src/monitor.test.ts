@@ -265,6 +265,16 @@ describe("monitorRoamProvider", () => {
     expect(mockRegisterUnregister).toHaveBeenCalled();
   });
 
+  it("stop() is idempotent — second call is a no-op", async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    const { stop } = await monitorRoamProvider({});
+    stop();
+    stop(); // second call
+
+    expect(mockRegisterUnregister).toHaveBeenCalledTimes(1);
+  });
+
   it("throws when API key is not configured", async () => {
     mockResolveRoamAccount.mockReturnValue(defaultAccount({ apiKey: "" }));
 

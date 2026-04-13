@@ -244,6 +244,12 @@ export async function handleRoamInbound(params: {
   // Strip bot mentions from body before processing
   const bodyForAgent = stripBotMention(rawBody, botId);
 
+  // If the message was only a bot mention with no actual content, drop it.
+  if (!bodyForAgent && !hasControlCommand) {
+    runtime.log?.(`roam: drop mention-only message from ${senderId}`);
+    return;
+  }
+
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
   const wasMentioned = mentionRegexes.length
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)

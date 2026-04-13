@@ -9,17 +9,12 @@ import {
   withResolvedWebhookRequestPipeline,
 } from "../runtime-api.js";
 import { resolveRoamAccount, type ResolvedRoamAccount } from "./accounts.js";
+import { resolveApiBase } from "./api-base.js";
 import { handleRoamInbound } from "./inbound.js";
 import { getRoamRuntime } from "./runtime.js";
 import type { CoreConfig, RoamBotIdentity, RoamInboundMessage, RoamWebhookEvent } from "./types.js";
 
-const DEFAULT_API_BASE = "https://api.ro.am";
 const DEFAULT_WEBHOOK_PATH_PREFIX = "/roam-webhook";
-
-function resolveApiBase(cfg?: CoreConfig, accountApiBaseUrl?: string): string {
-  const override = (accountApiBaseUrl ?? cfg?.channels?.roam?.apiBaseUrl)?.replace(/\/+$/, "");
-  return override ? `${override}/v1` : `${DEFAULT_API_BASE}/v1`;
-}
 
 type RoamWebhookTarget = {
   account: ResolvedRoamAccount;
@@ -39,7 +34,7 @@ function parseRoamWebhookEvent(raw: unknown): RoamWebhookEvent | null {
     return null;
   }
   const obj = raw as Record<string, unknown>;
-  if (typeof obj.type !== "string") {
+  if (obj.type !== "message") {
     return null;
   }
   if (typeof obj.userId !== "string") {
@@ -341,7 +336,12 @@ export async function monitorRoamProvider(opts: RoamMonitorOptions): Promise<{ s
     );
   }
 
+  let stopped = false;
   const stop = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
     unregister();
     // Best-effort unsubscribe on shutdown
     if (webhookUrl) {
