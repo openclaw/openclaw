@@ -52,3 +52,8 @@ Conclusion:
 - 2026-04-10: Verified Greptile's P1 comment (Thread 27 — "Fallback ignores global `plugins.enabled` flag") was addressed: code fix at `src/agents/tools/gateway-tool.ts:165-170` checks `plugins.enabled === false` in the manifest-missing fallback, and test at line 568 covers the no-manifest scenario. All 49 gateway tool tests pass.
 - 2026-04-10: Committed the uncommitted Greptile fix (`fix(gateway): handle global plugins.enabled in manifest-missing fallback`) and pushed to remote (71e01252fc).
 - 2026-04-10: Cleaned up stale review trigger comments and posted fresh `@codex review` and `@greptile review` for the new commit.
+- 2026-04-13: Reviewed all 32 PR review threads. 31 were already resolved; 1 new unresolved Codex P1 (Thread 32 — "Treat empty plugin allowlist as unrestricted") identified.
+- 2026-04-13: Fixed `src/agents/tools/gateway-tool.ts:182` — added `allowList.length > 0` guard to match `resolvePluginActivationState` in `src/plugins/config-state.ts:337`, so empty `plugins.allow: []` is treated as unrestricted (not "deny all") in the manifest-missing fallback.
+- 2026-04-13: Added two regression tests in `src/agents/openclaw-gateway-tool.test.ts`: (1) empty allowlist with already-active dangerous flag passes through, (2) empty allowlist with newly-enabled dangerous flag is correctly rejected. All 48 tests pass.
+- 2026-04-13: Committed fix (`fix(gateway): treat empty plugin allowlist as unrestricted in manifest-missing fallback`), force-pushed to remote (06fbf05d4d).
+- 2026-04-13: Resolved Thread 32, deleted stale review triggers, posted fresh `@codex review` and `@greptile review`.
