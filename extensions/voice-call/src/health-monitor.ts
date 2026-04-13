@@ -82,7 +82,7 @@ async function checkCartesia(apiKey: string, modelId: string, voiceId: string): 
       method: "POST",
       headers: {
         "X-API-Key": apiKey,
-        "Cartesia-Version": "2024-06-10",
+        "Cartesia-Version": "2026-03-01",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -93,7 +93,16 @@ async function checkCartesia(apiKey: string, modelId: string, voiceId: string): 
       }),
       signal: AbortSignal.timeout(10000),
     });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) {
+      // Cartesia-Version 2026-03-01 returns structured JSON errors
+      const body = await resp.text().catch(() => "");
+      let detail = `HTTP ${resp.status}`;
+      try {
+        const parsed = JSON.parse(body);
+        detail = `HTTP ${resp.status}: ${parsed.message || parsed.error || body.slice(0, 100)}`;
+      } catch { detail = `HTTP ${resp.status}: ${body.slice(0, 100)}`; }
+      throw new Error(detail);
+    }
     // Consume body to complete the request
     await resp.arrayBuffer();
     return { name: "cartesia", ok: true, latencyMs: Date.now() - start };
