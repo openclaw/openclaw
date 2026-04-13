@@ -7061,6 +7061,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           exclusiveMinimum: 0,
                           maximum: 9007199254740991,
                         },
+                        unknownToolThreshold: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
                         criticalThreshold: {
                           type: "integer",
                           exclusiveMinimum: 0,
@@ -16952,6 +16957,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
               },
+              unknownToolThreshold: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Unknown-tool Loop Threshold",
+                description:
+                  "Block repeated calls to the same unavailable tool after this many misses (default: 10).",
+              },
               criticalThreshold: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -23731,6 +23744,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "tools.loopDetection.warningThreshold": {
       label: "Tool-loop Warning Threshold",
       help: "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
+      tags: ["tools"],
+    },
+    "tools.loopDetection.unknownToolThreshold": {
+      label: "Unknown-tool Loop Threshold",
+      help: "Block repeated calls to the same unavailable tool after this many misses (default: 10).",
       tags: ["tools"],
     },
     "tools.loopDetection.criticalThreshold": {

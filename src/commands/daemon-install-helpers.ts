@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import {
+  hasAnyAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
@@ -38,7 +39,13 @@ function collectAuthProfileServiceEnvVars(params: {
   authStore?: AuthProfileStore;
   warn?: DaemonInstallWarnFn;
 }): Record<string, string> {
-  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
+  const authStore =
+    params.authStore ??
+    // Keep the daemon install cold path cheap when there is no auth store to read.
+    (hasAnyAuthProfileStoreSource() ? loadAuthProfileStoreForSecretsRuntime() : undefined);
+  if (!authStore) {
+    return {};
+  }
   const entries: Record<string, string> = {};
 
   for (const credential of Object.values(authStore.profiles)) {

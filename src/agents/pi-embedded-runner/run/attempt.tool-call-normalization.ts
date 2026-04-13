@@ -11,6 +11,12 @@ import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 
+type UnknownToolLoopGuardState = {
+  lastUnknownToolName?: string;
+  count: number;
+  countedMessages: WeakSet<object>;
+};
+
 function resolveCaseInsensitiveAllowedToolName(
   rawName: string,
   allowedToolNames?: Set<string>,
@@ -630,14 +636,128 @@ function trimWhitespaceFromToolCallNamesInMessage(
   normalizeToolCallIdsInMessage(message);
 }
 
+function collectUnknownToolNameFromMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+): string | undefined {
+  if (!message || typeof message !== "object" || !allowedToolNames || allowedToolNames.size === 0) {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  let unknownToolName: string | undefined;
+  let sawToolCall = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; name?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
+      continue;
+    }
+    sawToolCall = true;
+    const rawName = typeof typedBlock.name === "string" ? typedBlock.name.trim() : "";
+    if (!rawName) {
+      return undefined;
+    }
+    if (resolveExactAllowedToolName(rawName, allowedToolNames)) {
+      return undefined;
+    }
+    const normalizedUnknownToolName = normalizeToolName(rawName);
+    if (!unknownToolName) {
+      unknownToolName = normalizedUnknownToolName;
+      continue;
+    }
+    if (unknownToolName !== normalizedUnknownToolName) {
+      return undefined;
+    }
+  }
+
+  return sawToolCall ? unknownToolName : undefined;
+}
+
+function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  (message as { content?: unknown }).content = [
+    {
+      type: "text",
+      text: `I can't use the tool "${toolName}" here because it isn't available. I need to stop retrying it and answer without that tool.`,
+    },
+  ];
+}
+
+function guardUnknownToolLoopInMessage(
+  message: unknown,
+  state: UnknownToolLoopGuardState,
+  params: { allowedToolNames?: Set<string>; threshold?: number; countAttempt: boolean },
+): void {
+  const threshold = params.threshold;
+  if (threshold === undefined || threshold <= 0) {
+    return;
+  }
+
+  const unknownToolName = collectUnknownToolNameFromMessage(message, params.allowedToolNames);
+  if (!unknownToolName) {
+    if (params.countAttempt) {
+      state.lastUnknownToolName = undefined;
+      state.count = 0;
+    }
+    return;
+  }
+
+  if (!params.countAttempt) {
+    if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
+      rewriteUnknownToolLoopMessage(message, unknownToolName);
+    }
+    return;
+  }
+
+  if (message && typeof message === "object") {
+    if (state.countedMessages.has(message)) {
+      if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
+        rewriteUnknownToolLoopMessage(message, unknownToolName);
+      }
+      return;
+    }
+    state.countedMessages.add(message);
+  }
+
+  if (state.lastUnknownToolName === unknownToolName) {
+    state.count += 1;
+  } else {
+    state.lastUnknownToolName = unknownToolName;
+    state.count = 1;
+  }
+
+  if (state.count > threshold) {
+    rewriteUnknownToolLoopMessage(message, unknownToolName);
+  }
+}
+
 function wrapStreamTrimToolCallNames(
   stream: ReturnType<typeof streamSimple>,
   allowedToolNames?: Set<string>,
+  options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
 ): ReturnType<typeof streamSimple> {
+  const unknownToolGuardState = options?.state ?? {
+    count: 0,
+    countedMessages: new WeakSet<object>(),
+  };
+  let streamAttemptAlreadyCounted = false;
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
     trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
+    guardUnknownToolLoopInMessage(message, unknownToolGuardState, {
+      allowedToolNames,
+      threshold: options?.unknownToolThreshold,
+      countAttempt: !streamAttemptAlreadyCounted,
+    });
     return message;
   };
 
@@ -655,6 +775,19 @@ function wrapStreamTrimToolCallNames(
             };
             trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
             trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+            if (event.message && typeof event.message === "object") {
+              guardUnknownToolLoopInMessage(event.message, unknownToolGuardState, {
+                allowedToolNames,
+                threshold: options?.unknownToolThreshold,
+                countAttempt: true,
+              });
+              streamAttemptAlreadyCounted = true;
+            }
+            guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
+              allowedToolNames,
+              threshold: options?.unknownToolThreshold,
+              countAttempt: false,
+            });
           }
           return result;
         },
@@ -673,15 +806,26 @@ function wrapStreamTrimToolCallNames(
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
+  guardOptions?: { unknownToolThreshold?: number },
 ): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
+  const unknownToolGuardState: UnknownToolLoopGuardState = {
+    count: 0,
+    countedMessages: new WeakSet<object>(),
+  };
+  return (model, context, streamOptions) => {
+    const maybeStream = baseFn(model, context, streamOptions);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamTrimToolCallNames(stream, allowedToolNames),
+        wrapStreamTrimToolCallNames(stream, allowedToolNames, {
+          unknownToolThreshold: guardOptions?.unknownToolThreshold,
+          state: unknownToolGuardState,
+        }),
       );
     }
-    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
+    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames, {
+      unknownToolThreshold: guardOptions?.unknownToolThreshold,
+      state: unknownToolGuardState,
+    });
   };
 }
 
