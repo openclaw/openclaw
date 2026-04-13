@@ -838,6 +838,17 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    tts: z
+      .object({
+        voiceId: z.string().optional(),
+        modelId: z.string().optional(),
+        languageCode: z.string().optional(),
+        applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
+        speed: z.number().optional(),
+        providers: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+      })
+      .strict()
+      .optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,

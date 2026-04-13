@@ -105,6 +105,16 @@ export type AgentConfig = {
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
+  /** Optional per-agent TTS voice overrides (voiceId, modelId, speed, etc.). */
+  tts?: {
+    voiceId?: string;
+    modelId?: string;
+    languageCode?: string;
+    applyTextNormalization?: "auto" | "on" | "off";
+    speed?: number;
+    /** Per-provider overrides keyed by provider id. */
+    providers?: Record<string, Record<string, unknown>>;
+  };
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
   tools?: AgentToolsConfig;
