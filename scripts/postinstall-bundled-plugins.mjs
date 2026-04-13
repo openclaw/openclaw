@@ -6,9 +6,12 @@
 // plugin deps from the workspace root, so stale plugin-local node_modules must
 // not linger under extensions/* and shadow the root graph.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
+  closeSync,
   existsSync,
   lstatSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -16,7 +19,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
@@ -195,28 +198,46 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
   const pathLstat = params.lstatSync ?? lstatSync;
   const readFile = params.readFileSync ?? readFileSync;
   const resolveRealPath = params.realpathSync ?? realpathSync;
+  const openFile = params.openSync ?? openSync;
+  const closeFile = params.closeSync ?? closeSync;
   const renameFile = params.renameSync ?? renameSync;
   const removePath = params.rmSync ?? rmSync;
+  const createTempPath =
+    params.createTempPath ??
+    ((unsafeTargetPath) =>
+      join(
+        dirname(unsafeTargetPath),
+        `.${basename(unsafeTargetPath)}.openclaw-hotfix-${randomUUID()}`,
+      ));
   const writeFile =
     params.writeFileSync ?? ((filePath, value) => writeFileSync(filePath, value, "utf8"));
   const targetPath = join(packageRoot, BAILEYS_MEDIA_FILE);
   const nodeModulesRoot = join(packageRoot, "node_modules");
 
-  try {
+  function validateTargetPath() {
     if (!pathExists(targetPath)) {
-      return { applied: false, reason: "missing" };
+      return { ok: false, reason: "missing" };
     }
 
     const targetStats = pathLstat(targetPath);
     if (!targetStats.isFile() || targetStats.isSymbolicLink()) {
-      return { applied: false, reason: "unsafe_target", targetPath };
+      return { ok: false, reason: "unsafe_target", targetPath };
     }
 
     const nodeModulesRootReal = resolveRealPath(nodeModulesRoot);
     const targetPathReal = resolveRealPath(targetPath);
     const relativeTargetPath = relative(nodeModulesRootReal, targetPathReal);
     if (relativeTargetPath.startsWith("..") || isAbsolute(relativeTargetPath)) {
-      return { applied: false, reason: "path_escape", targetPath };
+      return { ok: false, reason: "path_escape", targetPath };
+    }
+
+    return { ok: true, targetPathReal };
+  }
+
+  try {
+    const initialTargetValidation = validateTargetPath();
+    if (!initialTargetValidation.ok) {
+      return { applied: false, reason: initialTargetValidation.reason, targetPath };
     }
 
     const currentText = readFile(targetPath, "utf8");
@@ -237,11 +258,26 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       BAILEYS_MEDIA_HOTFIX_NEEDLE,
       BAILEYS_MEDIA_HOTFIX_REPLACEMENT,
     );
-    const tempPath = `${targetPath}.openclaw-hotfix-${process.pid}-${Date.now()}`;
+    const tempPath = createTempPath(targetPath);
+    const tempFd = openFile(tempPath, "wx", 0o600);
+    let tempFdClosed = false;
     try {
-      writeFile(tempPath, patchedText, "utf8");
+      writeFile(tempFd, patchedText, "utf8");
+      closeFile(tempFd);
+      tempFdClosed = true;
+      const finalTargetValidation = validateTargetPath();
+      if (!finalTargetValidation.ok) {
+        return { applied: false, reason: finalTargetValidation.reason, targetPath };
+      }
       renameFile(tempPath, targetPath);
     } finally {
+      if (!tempFdClosed) {
+        try {
+          closeFile(tempFd);
+        } catch {
+          // ignore failed-open cleanup
+        }
+      }
       removePath(tempPath, { force: true });
     }
     return { applied: true, reason: "patched", targetPath };

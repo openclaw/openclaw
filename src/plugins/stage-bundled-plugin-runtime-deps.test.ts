@@ -25,6 +25,7 @@ async function loadStageBundledPluginRuntimeDeps(): Promise<StageBundledPluginRu
 async function loadPostinstallBundledPluginsModule(): Promise<{
   applyBaileysEncryptedStreamFinishHotfix: (params?: {
     packageRoot?: string;
+    createTempPath?: (targetPath: string) => string;
     writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
   }) => {
     applied: boolean;
@@ -37,6 +38,7 @@ async function loadPostinstallBundledPluginsModule(): Promise<{
   return (await import(moduleUrl.href)) as {
     applyBaileysEncryptedStreamFinishHotfix: (params?: {
       packageRoot?: string;
+      createTempPath?: (targetPath: string) => string;
       writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
     }) => {
       applied: boolean;
@@ -299,6 +301,54 @@ describe("stageBundledPluginRuntimeDeps", () => {
       targetPath,
       error: "read-only filesystem",
     });
+    expect(fs.readFileSync(targetPath, "utf8")).toContain("encFileWriteStream.end();");
+  });
+
+  it("refuses pre-created symlink temp paths instead of following them", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-hotfix-temp-symlink-");
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    const redirectedTarget = path.join(repoRoot, "redirected-temp-target.js");
+    const attackerTempPath = path.join(
+      path.dirname(targetPath),
+      ".messages-media.js.attacker-temp",
+    );
+    writeRepoFile(
+      repoRoot,
+      "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+      ].join("\n"),
+    );
+    writeRepoFile(repoRoot, "redirected-temp-target.js", "const untouched = true;\n");
+    fs.symlinkSync(redirectedTarget, attackerTempPath);
+
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({
+      packageRoot: repoRoot,
+      createTempPath() {
+        return attackerTempPath;
+      },
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.reason).toBe("error");
+    expect(result.error).toContain("EEXIST");
+    expect(fs.readFileSync(redirectedTarget, "utf8")).toBe("const untouched = true;\n");
     expect(fs.readFileSync(targetPath, "utf8")).toContain("encFileWriteStream.end();");
   });
 });
