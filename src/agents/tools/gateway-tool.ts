@@ -178,6 +178,10 @@ function isPluginDangerousFlagActive(
     if (Array.isArray(denyList) && denyList.includes(pluginId)) {
       return false;
     }
+    const allowList = (rootConfig.plugins as { allow?: unknown } | undefined)?.allow;
+    if (Array.isArray(allowList) && !allowList.includes(pluginId)) {
+      return false;
+    }
     return (pluginEntry as { enabled?: unknown }).enabled !== false;
   }
 
