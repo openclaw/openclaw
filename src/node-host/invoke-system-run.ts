@@ -273,26 +273,14 @@ async function parseSystemRunPhase(
     overrides: envAssignmentOverrides,
     blockPathOverrides: true,
   });
-  if (
-    envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0 ||
-    envAssignmentDiagnostics.rejectedOverrideInvalidKeys.length > 0
-  ) {
-    const details: string[] = [];
-    if (envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
-      details.push(
-        `blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")}`,
-      );
-    }
-    if (envAssignmentDiagnostics.rejectedOverrideInvalidKeys.length > 0) {
-      details.push(
-        `invalid non-portable env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideInvalidKeys.join(", ")}`,
-      );
-    }
+  // `extractEnvAssignmentKeysFromDispatchWrappers` only emits keys that satisfy
+  // `isEnvAssignment` and therefore portable env-key syntax by construction.
+  if (envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
     await opts.sendInvokeResult({
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: `SYSTEM_RUN_DENIED: command env assignment rejected (${details.join("; ")})`,
+        message: `SYSTEM_RUN_DENIED: command env assignment rejected (blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")})`,
       },
     });
     return null;
