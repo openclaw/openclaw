@@ -9,11 +9,13 @@ export { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 export {
   SsrFBlockedError,
   isBlockedHostnameOrIp,
+  matchesHostnameAllowlist,
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+export { normalizeHostname } from "../infra/net/hostname.js";
 export { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 export { ensurePortAvailable } from "../infra/ports.js";
 export { generateSecureToken } from "../infra/secure-random.js";

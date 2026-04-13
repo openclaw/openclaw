@@ -5,20 +5,40 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ActiveWebListener } from "./inbound/types.js";
 
 const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
+  controllerListeners: new Map<string, ActiveWebListener>(),
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
-let setActiveWebListener: typeof import("./active-listener.js").setActiveWebListener;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+vi.mock("./connection-controller-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
+    "./connection-controller-registry.js",
+  );
+  return {
+    ...actual,
+    getRegisteredWhatsAppConnectionController: vi.fn((accountId: string) => {
+      const listener = hoisted.controllerListeners.get(accountId) ?? null;
+      return listener
+        ? {
+            getActiveListener: () => listener,
+          }
+        : null;
+    }),
+  };
+});
+
+vi.mock("./outbound-media.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./outbound-media.runtime.js")>(
+    "./outbound-media.runtime.js",
+  );
   return {
     ...actual,
     loadOutboundMediaFromUrl: hoisted.loadOutboundMediaFromUrl,
@@ -33,7 +53,6 @@ describe("web outbound", () => {
 
   beforeAll(async () => {
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
-    ({ setActiveWebListener } = await import("./active-listener.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
   });
 
@@ -59,7 +78,8 @@ describe("web outbound", () => {
           hostReadCapability: Boolean(options?.mediaAccess?.readFile ?? options?.mediaReadFile),
         }),
     );
-    setActiveWebListener({
+    hoisted.controllerListeners.clear();
+    hoisted.controllerListeners.set("default", {
       sendComposingTo,
       sendMessage,
       sendPoll,
@@ -70,8 +90,7 @@ describe("web outbound", () => {
   afterEach(() => {
     resetLogger();
     setLoggerOverride(null);
-    setActiveWebListener(null);
-    setActiveWebListener("work", null);
+    hoisted.controllerListeners.clear();
   });
 
   it("sends message via active listener", async () => {
@@ -85,8 +104,8 @@ describe("web outbound", () => {
   });
 
   it("uses configured defaultAccount when outbound accountId is omitted", async () => {
-    setActiveWebListener(null);
-    setActiveWebListener("work", {
+    hoisted.controllerListeners.clear();
+    hoisted.controllerListeners.set("work", {
       sendComposingTo,
       sendMessage,
       sendPoll,
@@ -143,7 +162,7 @@ describe("web outbound", () => {
   });
 
   it("throws a helpful error when no active listener exists", async () => {
-    setActiveWebListener(null);
+    hoisted.controllerListeners.clear();
     await expect(
       sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
     ).rejects.toThrow(/No active WhatsApp Web listener/);
@@ -219,6 +238,26 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
   });
 
+  it("falls back to the first mediaUrls entry when mediaUrl is omitted", async () => {
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrls: ["   ", " /tmp/pic.jpg "],
+    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/tmp/pic.jpg",
+      expect.objectContaining({
+        hostReadCapability: false,
+      }),
+    );
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
+  });
+
   it("maps other kinds to document with filename", async () => {
     const buf = Buffer.from("pdf");
     loadWebMediaMock.mockResolvedValueOnce({
@@ -237,7 +276,7 @@ describe("web outbound", () => {
   });
 
   it("uses account-aware WhatsApp media caps for outbound uploads", async () => {
-    setActiveWebListener("work", {
+    hoisted.controllerListeners.set("work", {
       sendComposingTo,
       sendMessage,
       sendPoll,

@@ -124,17 +124,17 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     }
 
     if (rawCdpUrl) {
+      if (driver === "existing-session") {
+        throw new BrowserValidationError(
+          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
+        );
+      }
       let parsed: ReturnType<typeof parseHttpUrl>;
       try {
         parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
         await assertCdpEndpointAllowed(parsed.normalized, state.resolved.ssrfPolicy);
       } catch (err) {
         throw new BrowserValidationError(formatErrorMessage(err));
-      }
-      if (driver === "existing-session") {
-        throw new BrowserValidationError(
-          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
-        );
       }
       profileConfig = {
         cdpUrl: parsed.normalized,

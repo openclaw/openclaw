@@ -97,7 +97,8 @@ describe("runQaCharacterEval", () => {
       expect.objectContaining({
         judgeModel: "openai/gpt-5.4",
         judgeThinkingDefault: "xhigh",
-        judgeFastMode: true,
+        judgeFastMode: false,
+        timeoutMs: 300_000,
       }),
     );
     expect(result.judgments).toHaveLength(1);
@@ -115,6 +116,7 @@ describe("runQaCharacterEval", () => {
     expect(report).toContain("reply from openai/gpt-5.4");
     expect(report).toContain("reply from codex-cli/test-model");
     expect(report).toContain("Judge thinking: xhigh");
+    expect(report).toContain("- Timeout: 5m");
     expect(report).toContain("Fast mode: on");
     expect(report).toContain("Duration:");
     expect(report).not.toContain("Duration ms:");
@@ -243,7 +245,7 @@ describe("runQaCharacterEval", () => {
       "xhigh",
       "high",
     ]);
-    expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([true, false]);
+    expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([false, false]);
   });
 
   it("runs candidate models with bounded concurrency while preserving result order", async () => {
@@ -452,6 +454,37 @@ describe("runQaCharacterEval", () => {
       model: "google/gemini-test",
       status: "fail",
       error: "LLM timeout leaked into transcript",
+    });
+  });
+
+  it("marks leaked harness coordination transcripts as failed output", async () => {
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript:
+          "ASSISTANT OpenClaw QA: checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
+      }),
+    );
+    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
+      JSON.stringify({
+        rankings: [{ model: "codex/gpt-5.4", rank: 1, score: 0.5, summary: "failed" }],
+      }),
+    );
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["codex/gpt-5.4"],
+      judgeModels: ["openai/gpt-5.4"],
+      runSuite,
+      runJudge,
+    });
+
+    expect(result.runs[0]).toMatchObject({
+      model: "codex/gpt-5.4",
+      status: "fail",
+      error: "internal harness/meta text leaked into transcript",
     });
   });
 

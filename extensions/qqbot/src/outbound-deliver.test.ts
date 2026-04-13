@@ -48,10 +48,17 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-vi.mock("./utils/image-size.js", () => ({
+const imageSizeMocks = vi.hoisted(() => ({
   getImageSize: vi.fn(),
-  formatQQBotMarkdownImage: vi.fn((url: string) => `![img](${url})`),
-  hasQQBotImageSize: vi.fn(() => false),
+  formatQQBotMarkdownImage: vi.fn(),
+  hasQQBotImageSize: vi.fn(),
+}));
+
+vi.mock("./utils/image-size.js", () => ({
+  getImageSize: (...args: unknown[]) => imageSizeMocks.getImageSize(...args),
+  formatQQBotMarkdownImage: (...args: unknown[]) =>
+    imageSizeMocks.formatQQBotMarkdownImage(...args),
+  hasQQBotImageSize: (...args: unknown[]) => imageSizeMocks.hasQQBotImageSize(...args),
 }));
 
 import {
@@ -95,6 +102,9 @@ describe("qqbot outbound deliver", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runtimeMocks.chunkMarkdownText.mockImplementation((text: string) => [text]);
+    imageSizeMocks.getImageSize.mockResolvedValue(null);
+    imageSizeMocks.formatQQBotMarkdownImage.mockImplementation((url: string) => `![img](${url})`);
+    imageSizeMocks.hasQQBotImageSize.mockReturnValue(false);
   });
 
   it("sends plain replies through the shared text chunk sender", async () => {
@@ -167,5 +177,52 @@ describe("qqbot outbound deliver", () => {
       undefined,
     );
     expect(outboundMocks.sendPhoto).toHaveBeenCalledTimes(1);
+  });
+
+  describe("private-network image URL degradation", () => {
+    it("sends markdown reply with fallback dimensions when getImageSize returns null", async () => {
+      imageSizeMocks.getImageSize.mockResolvedValue(null);
+
+      await sendPlainReply(
+        {},
+        "Look at this: ![photo](https://10.0.0.1/internal.png)",
+        buildEvent(),
+        buildAccountContext(true),
+        sendWithRetry,
+        consumeQuoteRef,
+        [],
+      );
+
+      // getImageSize was called with the private-network URL
+      expect(imageSizeMocks.getImageSize).toHaveBeenCalledWith("https://10.0.0.1/internal.png");
+      // formatQQBotMarkdownImage was called with null size (triggers default dimensions)
+      expect(imageSizeMocks.formatQQBotMarkdownImage).toHaveBeenCalledWith(
+        "https://10.0.0.1/internal.png",
+        null,
+      );
+      // Message was still sent (not crashed)
+      expect(apiMocks.sendC2CMessage).toHaveBeenCalled();
+    });
+
+    it("sends markdown reply with fallback when getImageSize throws", async () => {
+      imageSizeMocks.getImageSize.mockRejectedValue(new Error("SSRF blocked"));
+
+      await sendPlainReply(
+        {},
+        "Check ![img](https://169.254.169.254/latest/meta-data/)",
+        buildEvent(),
+        buildAccountContext(true),
+        sendWithRetry,
+        consumeQuoteRef,
+        [],
+      );
+
+      // formatQQBotMarkdownImage still called with null (catch path in outbound-deliver)
+      expect(imageSizeMocks.formatQQBotMarkdownImage).toHaveBeenCalledWith(
+        "https://169.254.169.254/latest/meta-data/",
+        null,
+      );
+      expect(apiMocks.sendC2CMessage).toHaveBeenCalled();
+    });
   });
 });
