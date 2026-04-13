@@ -157,6 +157,42 @@ describe("CronService restart catch-up", () => {
       },
     );
   });
+
+  it("starts cleanly when a persisted job is missing its state object (#66016)", async () => {
+    const dueAt = Date.parse("2025-12-13T15:00:00.000Z");
+
+    await withRestartedCron(
+      [
+        {
+          id: "restart-missing-state",
+          name: "legacy missing state",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-12T15:00:00.000Z"),
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: dueAt - 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "recover missing state" },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-missing-state");
+        expect(updated?.state).toEqual(
+          expect.objectContaining({
+            nextRunAtMs: expect.any(Number),
+          }),
+        );
+        expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(
+          Date.parse("2025-12-13T17:00:00.000Z"),
+        );
+      },
+    );
+  });
+
   it("replays the most recent missed cron slot after restart when nextRunAtMs already advanced", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
