@@ -2,7 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
-const IMAGE_CHAR_ESTIMATE = 8_000;
+export const IMAGE_CHAR_ESTIMATE = 8_000;
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
@@ -12,6 +12,10 @@ function isTextBlock(block: unknown): block is { type: "text"; text: string } {
 
 function isImageBlock(block: unknown): boolean {
   return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
+}
+
+function isAudioBlock(block: unknown): boolean {
+  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "audio";
 }
 
 function estimateUnknownChars(value: unknown): number {
@@ -52,6 +56,8 @@ function estimateContentBlockChars(content: unknown[]): number {
     if (isTextBlock(block)) {
       chars += block.text.length;
     } else if (isImageBlock(block)) {
+      chars += IMAGE_CHAR_ESTIMATE;
+    } else if (isAudioBlock(block)) {
       chars += IMAGE_CHAR_ESTIMATE;
     } else {
       chars += estimateUnknownChars(block);
