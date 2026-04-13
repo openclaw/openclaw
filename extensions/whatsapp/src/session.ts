@@ -109,7 +109,12 @@ async function safeSaveCreds(
         } catch {}
         logger.info({ credsPath }, "restored WhatsApp creds from backup after save failure");
       }
-    } catch {}
+    } catch (restoreErr) {
+      logger.warn(
+        { error: String(restoreErr) },
+        "failed to restore WhatsApp creds from backup after save failure",
+      );
+    }
     return; // Don't throw, allow session to continue with backup
   }
 
@@ -135,7 +140,10 @@ async function safeSaveCreds(
         logger.info({ credsPath }, "restored WhatsApp creds from backup after validation failure");
       }
     } catch (restoreErr) {
-      logger.warn({ error: String(restoreErr) }, "failed to restore WhatsApp creds from backup after validation failure");
+      logger.warn(
+        { error: String(restoreErr) },
+        "failed to restore WhatsApp creds from backup after validation failure",
+      );
     }
   }
 }
