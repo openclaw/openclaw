@@ -113,6 +113,7 @@ async function extractTarBz2WithStaging(params: {
   destinationRealDir: string;
   stripComponents: number;
   timeoutMs: number;
+  beforeMerge?: () => Promise<void>;
 }): Promise<ArchiveExtractResult> {
   return await withStagedArchiveDestination({
     destinationRealDir: params.destinationRealDir,
@@ -127,6 +128,9 @@ async function extractTarBz2WithStaging(params: {
       );
       if (extractResult.code !== 0) {
         return extractResult;
+      }
+      if (params.beforeMerge) {
+        await params.beforeMerge();
       }
       await mergeExtractedTreeIntoDestination({
         sourceDir: stagingDir,
@@ -144,14 +148,20 @@ export async function extractArchive(params: {
   targetDir: string;
   stripComponents?: number;
   timeoutMs: number;
+  validateTargetDir?: () => Promise<void>;
 }): Promise<ArchiveExtractResult> {
-  const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } = params;
+  const { archivePath, archiveType, targetDir, stripComponents, timeoutMs, validateTargetDir } =
+    params;
   const strip =
     typeof stripComponents === "number" && Number.isFinite(stripComponents)
       ? Math.max(0, Math.floor(stripComponents))
       : 0;
 
   try {
+    if (validateTargetDir) {
+      await validateTargetDir();
+    }
+
     if (archiveType === "zip") {
       await extractArchiveSafe({
         archivePath,
@@ -223,6 +233,7 @@ export async function extractArchive(params: {
         destinationRealDir,
         stripComponents: strip,
         timeoutMs,
+        beforeMerge: validateTargetDir,
       });
     }
 

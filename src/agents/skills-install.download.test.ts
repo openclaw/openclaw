@@ -303,6 +303,90 @@ describe("installDownloadSpec extraction safety", () => {
       expect(await fileExists(path.join(outsideRoot, "runtime", "payload.bin"))).toBe(false);
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when targetDir is replaced with a different directory inode during download",
+    async () => {
+      const entry = buildEntry("targetdir-inode-rebind");
+      const targetDir = path.join(resolveSkillToolsRootDir(entry), "runtime");
+      await fs.mkdir(targetDir, { recursive: true });
+
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new Uint8Array(Buffer.from("payload")));
+              const reboundTargetDir = `${targetDir}-rebound`;
+              await fs.rename(targetDir, reboundTargetDir);
+              await fs.mkdir(targetDir, { recursive: true });
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+        release: async () => undefined,
+      });
+
+      const result = await installDownloadSpec({
+        entry,
+        spec: {
+          kind: "download",
+          id: "dl",
+          url: "https://example.invalid/payload.bin",
+          extract: false,
+          targetDir: "runtime",
+        },
+        timeoutMs: 30_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr.toLowerCase()).toContain("directory changed during install");
+      expect(await fileExists(path.join(targetDir, "payload.bin"))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when targetDir is rebound to a symlink before the final copy",
+    async () => {
+      const entry = buildEntry("targetdir-symlink-rebind");
+      const targetDir = path.join(resolveSkillToolsRootDir(entry), "runtime");
+      const outsideRoot = path.join(workspaceDir, "targetdir-symlink-outside");
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.mkdir(outsideRoot, { recursive: true });
+
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new Uint8Array(Buffer.from("payload")));
+              const reboundTargetDir = `${targetDir}-rebound`;
+              await fs.rename(targetDir, reboundTargetDir);
+              await fs.symlink(outsideRoot, targetDir);
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+        release: async () => undefined,
+      });
+
+      const result = await installDownloadSpec({
+        entry,
+        spec: {
+          kind: "download",
+          id: "dl",
+          url: "https://example.invalid/payload.bin",
+          extract: false,
+          targetDir: "runtime",
+        },
+        timeoutMs: 30_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr.toLowerCase()).toContain("directory changed during install");
+      expect(await fileExists(path.join(outsideRoot, "payload.bin"))).toBe(false);
+    },
+  );
 });
 
 describe("installDownloadSpec extraction safety (tar.bz2)", () => {

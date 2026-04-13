@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { sameFileIdentity } from "../infra/file-identity.js";
 import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -22,22 +23,88 @@ function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
   return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
 }
 
-function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
-  const safeRoot = resolveSkillToolsRootDir(entry);
-  const raw = spec.targetDir?.trim();
+type PinnedDirectory = {
+  canonicalPath: string;
+  identity: {
+    dev: number | bigint;
+    ino: number | bigint;
+  };
+};
+
+async function pinCanonicalDirectory(params: {
+  baseDir: string;
+  candidatePath: string;
+  boundaryLabel: string;
+}): Promise<PinnedDirectory> {
+  await assertCanonicalPathWithinBase({
+    baseDir: params.baseDir,
+    candidatePath: params.candidatePath,
+    boundaryLabel: params.boundaryLabel,
+  });
+  const canonicalPath = await fs.promises.realpath(params.candidatePath);
+  await assertCanonicalPathWithinBase({
+    baseDir: params.baseDir,
+    candidatePath: canonicalPath,
+    boundaryLabel: params.boundaryLabel,
+  });
+
+  const stat = await fs.promises.lstat(canonicalPath);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`Invalid ${params.boundaryLabel}: directory must be real and non-symlinked`);
+  }
+  return {
+    canonicalPath,
+    identity: {
+      dev: stat.dev,
+      ino: stat.ino,
+    },
+  };
+}
+
+async function assertPinnedDirectoryUnchanged(params: {
+  baseDir: string;
+  pinnedDir: PinnedDirectory;
+  boundaryLabel: string;
+}): Promise<void> {
+  try {
+    await assertCanonicalPathWithinBase({
+      baseDir: params.baseDir,
+      candidatePath: params.pinnedDir.canonicalPath,
+      boundaryLabel: params.boundaryLabel,
+    });
+  } catch {
+    throw new Error(`Invalid ${params.boundaryLabel}: directory changed during install`);
+  }
+
+  let current: Awaited<ReturnType<typeof fs.promises.lstat>>;
+  try {
+    current = await fs.promises.lstat(params.pinnedDir.canonicalPath);
+  } catch {
+    throw new Error(`Invalid ${params.boundaryLabel}: directory changed during install`);
+  }
+  if (!current.isDirectory() || current.isSymbolicLink()) {
+    throw new Error(`Invalid ${params.boundaryLabel}: directory changed during install`);
+  }
+  if (!sameFileIdentity(current, params.pinnedDir.identity)) {
+    throw new Error(`Invalid ${params.boundaryLabel}: directory changed during install`);
+  }
+}
+
+function resolveDownloadTargetDir(params: { safeRoot: string; spec: SkillInstallSpec }): string {
+  const raw = params.spec.targetDir?.trim();
   if (!raw) {
-    return safeRoot;
+    return params.safeRoot;
   }
 
   // Treat non-absolute paths as relative to the per-skill tools root.
   const resolved =
     raw.startsWith("~") || path.isAbsolute(raw) || isWindowsDrivePath(raw)
       ? resolveUserPath(raw)
-      : path.resolve(safeRoot, raw);
+      : path.resolve(params.safeRoot, raw);
 
-  if (!isWithinDir(safeRoot, resolved)) {
+  if (!isWithinDir(params.safeRoot, resolved)) {
     throw new Error(
-      `Refusing to install outside the skill tools directory. targetDir="${raw}" resolves to "${resolved}". Allowed root: "${safeRoot}".`,
+      `Refusing to install outside the skill tools directory. targetDir="${raw}" resolves to "${resolved}". Allowed root: "${params.safeRoot}".`,
     );
   }
   return resolved;
@@ -69,6 +136,8 @@ async function downloadFile(params: {
   rootDir: string;
   relativePath: string;
   timeoutMs: number;
+  beforeFinalCopy?: () => Promise<void>;
+  afterFinalCopy?: () => Promise<void>;
 }): Promise<{ bytes: number }> {
   const destPath = path.resolve(params.rootDir, params.relativePath);
   const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
@@ -93,11 +162,17 @@ async function downloadFile(params: {
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
     await pipeline(readable, file);
+    if (params.beforeFinalCopy) {
+      await params.beforeFinalCopy();
+    }
     await writeFileFromPathWithinRoot({
       rootDir: params.rootDir,
       relativePath: params.relativePath,
       sourcePath: tempPath,
     });
+    if (params.afterFinalCopy) {
+      await params.afterFinalCopy();
+    }
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
   } finally {
@@ -137,28 +212,39 @@ export async function installDownloadSpec(params: {
 
   let canonicalSafeRoot = "";
   let targetDir = "";
+  let pinnedTargetDir: PinnedDirectory | undefined;
   try {
     await ensureDir(safeRoot);
-    await assertCanonicalPathWithinBase({
+    const pinnedSafeRoot = await pinCanonicalDirectory({
       baseDir: safeRoot,
       candidatePath: safeRoot,
       boundaryLabel: "skill tools directory",
     });
-    canonicalSafeRoot = await fs.promises.realpath(safeRoot);
+    canonicalSafeRoot = pinnedSafeRoot.canonicalPath;
 
-    const requestedTargetDir = resolveDownloadTargetDir(entry, spec);
+    const requestedTargetDir = resolveDownloadTargetDir({ safeRoot: canonicalSafeRoot, spec });
     await ensureDir(requestedTargetDir);
-    await assertCanonicalPathWithinBase({
-      baseDir: safeRoot,
+    pinnedTargetDir = await pinCanonicalDirectory({
+      baseDir: canonicalSafeRoot,
       candidatePath: requestedTargetDir,
       boundaryLabel: "skill tools directory",
     });
-    const targetRelativePath = path.relative(safeRoot, requestedTargetDir);
-    targetDir = path.join(canonicalSafeRoot, targetRelativePath);
+    targetDir = pinnedTargetDir.canonicalPath;
   } catch (err) {
     const message = formatErrorMessage(err);
     return { ok: false, message, stdout: "", stderr: message, code: null };
   }
+
+  const assertTargetDirStillPinned = async (): Promise<void> => {
+    if (!pinnedTargetDir) {
+      throw new Error("invalid download target directory");
+    }
+    await assertPinnedDirectoryUnchanged({
+      baseDir: canonicalSafeRoot,
+      pinnedDir: pinnedTargetDir,
+      boundaryLabel: "skill tools directory",
+    });
+  };
 
   const archivePath = path.join(targetDir, filename);
   const archiveRelativePath = path.relative(canonicalSafeRoot, archivePath);
@@ -178,11 +264,14 @@ export async function installDownloadSpec(params: {
   }
   let downloaded = 0;
   try {
+    await assertTargetDirStillPinned();
     const result = await downloadFile({
       url,
       rootDir: canonicalSafeRoot,
       relativePath: archiveRelativePath,
       timeoutMs,
+      beforeFinalCopy: assertTargetDirStillPinned,
+      afterFinalCopy: assertTargetDirStillPinned,
     });
     downloaded = result.bytes;
   } catch (err) {
@@ -213,11 +302,7 @@ export async function installDownloadSpec(params: {
   }
 
   try {
-    await assertCanonicalPathWithinBase({
-      baseDir: canonicalSafeRoot,
-      candidatePath: targetDir,
-      boundaryLabel: "skill tools directory",
-    });
+    await assertTargetDirStillPinned();
   } catch (err) {
     const message = formatErrorMessage(err);
     return { ok: false, message, stdout: "", stderr: message, code: null };
@@ -229,6 +314,7 @@ export async function installDownloadSpec(params: {
     targetDir,
     stripComponents: spec.stripComponents,
     timeoutMs,
+    validateTargetDir: assertTargetDirStillPinned,
   });
   const success = extractResult.code === 0;
   return {
