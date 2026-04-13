@@ -52,10 +52,11 @@ const forbiddenPrefixes = [
   "docs/.generated/",
 ];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
-// startup/doctor OOM reports. Keep enough headroom for the current pack with
-// restored bundled upgrade surfaces and Control UI assets while still catching
-// regressions quickly.
-const npmPackUnpackedSizeBudgetBytes = 191 * 1024 * 1024;
+// startup/doctor OOM reports. 2026.4.12 intentionally stages Matrix runtime
+// dependencies, including crypto wasm, so packaged installs do not miss Docker
+// and gateway runtime dependencies. Keep the budget below the 2026.3.12 bloat
+// level while allowing that mirrored runtime surface.
+const npmPackUnpackedSizeBudgetBytes = 202 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;

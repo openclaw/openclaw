@@ -40,7 +40,6 @@ import type {
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import {
-  defaultQaModelForMode,
   isQaFastModeEnabled,
   normalizeQaProviderMode,
   type QaProviderMode,
@@ -63,6 +62,7 @@ import {
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
+import { defaultQaModelForMode } from "./run-config.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
@@ -1495,8 +1495,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   const providerMode = normalizeQaProviderMode(params?.providerMode ?? "live-frontier");
   const transportId = normalizeQaTransportId(params?.transportId);
   const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel =
-    params?.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
   const fastMode =
     typeof params?.fastMode === "boolean"
       ? params.fastMode
