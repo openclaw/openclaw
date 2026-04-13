@@ -94,8 +94,12 @@ function buildInlinePluginStatusPayload(entry: SessionEntry | undefined): ReplyP
 }
 
 function formatRawTraceBlock(title: string, value: string | undefined): string {
-  const body = value?.trim() ? value : "<empty>";
+  const body = value?.trim() ? escapeTraceFence(value) : "<empty>";
   return `🔎 ${title}:\n~~~text\n${body}\n~~~`;
+}
+
+function escapeTraceFence(value: string): string {
+  return value.replace(/^~~~/gm, "\\~~~");
 }
 
 function hasTraceUsageFields(
@@ -402,7 +406,6 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
     }
     if (line.trim()) {
       userChars += line.length + 1;
-    } else {
     }
     index += 1;
   }

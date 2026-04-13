@@ -59,7 +59,7 @@ export async function handleDirectiveOnly(
   const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
   if (directives.hasTraceDirective && !params.senderIsOwner && !delegatedTraceAllowed) {
     return {
-      text: "❌ /trace requires owner or operator.admin for gateway clients.",
+      text: "❌ /trace is restricted to owners and gateway clients with operator.admin scope.",
     };
   }
   const activeAgentId = resolveSessionAgentId({

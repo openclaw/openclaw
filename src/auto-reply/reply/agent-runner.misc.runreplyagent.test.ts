@@ -1174,6 +1174,102 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).not.toContain("🔎 Provider Usage (Last Provider Call):");
   });
 
+  it("escapes markdown fence delimiters inside raw trace blocks", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-fence-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionFile = path.join(tmp, "session.jsonl");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      traceLevel: "raw",
+    };
+
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
+    await fs.writeFile(sessionFile, "", "utf-8");
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Visible reply" }],
+      meta: {
+        finalPromptText: "show me\n~~~\nnot a fence",
+        finalAssistantVisibleText: "Visible reply",
+        finalAssistantRawText: "assistant\n~~~\nresponse",
+        agentMeta: {
+          sessionId: "session",
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 10, output: 2, total: 12 },
+        },
+      },
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+      CommandBody: "/trace raw",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile,
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "off",
+        reasoningLevel: "off",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const traceText = (result as { text?: string }[])[1]?.text ?? "";
+    expect(traceText).toContain("show me\n\\~~~\nnot a fence");
+    expect(traceText).toContain("assistant\n\\~~~\nresponse");
+  });
+
   it("does not reload the session store when verbose is disabled", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-inline-"));
     const storePath = path.join(tmp, "sessions.json");

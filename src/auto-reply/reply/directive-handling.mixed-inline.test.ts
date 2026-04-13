@@ -189,4 +189,37 @@ describe("mixed inline directives", () => {
 
     expect(sessionEntry.reasoningLevel).toBe("off");
   });
+
+  it("does not persist trace directives for unauthorized mixed messages", async () => {
+    const directives = parseInlineDirectives("please reply\n/trace raw");
+    const cfg = createConfig();
+    const sessionEntry = createSessionEntry({ traceLevel: "off" as const });
+    const sessionStore = { "agent:main:telegram:user": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      cfg,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:telegram:user",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      initialModelLabel: "anthropic/claude-opus-4-6",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: cfg.agents?.defaults,
+      messageProvider: "telegram",
+      surface: "telegram",
+      gatewayClientScopes: [],
+      senderIsOwner: false,
+    });
+
+    expect(sessionEntry.traceLevel).toBe("off");
+  });
 });

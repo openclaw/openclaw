@@ -289,7 +289,7 @@ describe("directive behavior", () => {
       senderIsOwner: false,
       gatewayClientScopes: ["operator.write"],
     });
-    expect(denied.text).toContain("/trace requires owner or operator.admin");
+    expect(denied.text).toContain("/trace is restricted to owners and gateway clients");
     expect(denied.sessionEntry.traceLevel).toBeUndefined();
   });
 
