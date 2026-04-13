@@ -256,6 +256,7 @@ export async function handleRoamInbound(params: {
   }
 
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const canDetectMention = mentionRegexes.length > 0 || !!botId;
   const wasMentioned = mentionRegexes.length
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
     : wasBotMentioned(rawBody, botId);
@@ -268,6 +269,7 @@ export async function handleRoamInbound(params: {
   const mentionGate = resolveRoamMentionGate({
     isGroup,
     requireMention: shouldRequireMention,
+    canDetectMention,
     wasMentioned,
     allowTextCommands,
     hasControlCommand,

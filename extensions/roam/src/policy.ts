@@ -160,6 +160,7 @@ export function resolveRoamGroupAllow(params: {
 export function resolveRoamMentionGate(params: {
   isGroup: boolean;
   requireMention: boolean;
+  canDetectMention: boolean;
   wasMentioned: boolean;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
@@ -168,7 +169,7 @@ export function resolveRoamMentionGate(params: {
   const result = resolveMentionGatingWithBypass({
     isGroup: params.isGroup,
     requireMention: params.requireMention,
-    canDetectMention: true,
+    canDetectMention: params.canDetectMention,
     wasMentioned: params.wasMentioned,
     allowTextCommands: params.allowTextCommands,
     hasControlCommand: params.hasControlCommand,
