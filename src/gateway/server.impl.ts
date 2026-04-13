@@ -74,6 +74,7 @@ import {
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
 import { prepareGatewayPluginBootstrap } from "./server-startup-plugins.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
@@ -625,7 +626,9 @@ export async function startGatewayServer(
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
-    const unavailableGatewayMethods = new Set<string>(minimalTestGateway ? [] : ["chat.history"]);
+    const unavailableGatewayMethods = new Set<string>(
+      minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+    );
     const gatewayRequestContext = createGatewayRequestContext({
       deps,
       runtimeState,
@@ -756,10 +759,7 @@ export async function startGatewayServer(
       unavailableGatewayMethods,
     }));
 
-    // Activate cron scheduler, heartbeat runner, and pending delivery
-    // recovery now that sidecars are ready and chat.history is available.
-    // Previously these ran before sidecars finished, causing a race.
-    // See #65322.
+    // Keep scheduled work inert until post-attach sidecars finish.
     const activated = activateGatewayScheduledServices({
       minimalTestGateway,
       cfgAtStart,
