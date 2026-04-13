@@ -1093,7 +1093,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       auth: {
         login: async ({ cfg }) => {
-          const { createClackPrompter } = await import("../api.js");
+          const { createClackPrompter } = await import("openclaw/plugin-sdk/setup-runtime");
           const { writeConfigFile } = await import("openclaw/plugin-sdk/config-runtime");
           const prompter = createClackPrompter();
           const { runFeishuLogin } = await import("./setup-surface.js");
