@@ -54,4 +54,4 @@
 /scripts/release-check.ts @openclaw/openclaw-release-managers
 
 # Sparkle auto-update feed — security-sensitive, requires maintainer review
-appcast.xml @steipete @vincentkoc @mbelinky
+/appcast.xml @steipete @vincentkoc @mbelinky
