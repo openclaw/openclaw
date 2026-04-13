@@ -22,6 +22,8 @@ export function buildFeishuCardInteractionContext(params: {
   expiresAt: number;
   chatType?: "p2p" | "group";
   sessionKey?: string;
+  /** Optional card content to update the card to after this action is processed. */
+  updateCard?: Record<string, unknown>;
 }) {
   return {
     u: params.operatorOpenId,
@@ -29,5 +31,6 @@ export function buildFeishuCardInteractionContext(params: {
     ...(params.sessionKey ? { s: params.sessionKey } : {}),
     e: params.expiresAt,
     ...(params.chatType ? { t: params.chatType } : {}),
+    ...(params.updateCard ? { uc: params.updateCard } : {}),
   };
 }

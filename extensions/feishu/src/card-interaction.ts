@@ -26,6 +26,8 @@ export type FeishuCardInteractionEnvelope = {
     s?: string;
     e?: number;
     t?: "p2p" | "group";
+    /** Optional card content to update the message to after this action is processed. */
+    uc?: Record<string, unknown>;
   };
 };
 
@@ -141,6 +143,9 @@ export function decodeFeishuCardAction(params: {
       return { kind: "invalid", reason: "malformed" };
     }
     if (actionValue.c.t !== undefined && actionValue.c.t !== "p2p" && actionValue.c.t !== "group") {
+      return { kind: "invalid", reason: "malformed" };
+    }
+    if (actionValue.c.uc !== undefined && !isRecord(actionValue.c.uc)) {
       return { kind: "invalid", reason: "malformed" };
     }
 

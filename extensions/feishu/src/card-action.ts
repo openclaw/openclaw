@@ -8,7 +8,7 @@ import {
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+import { sendCardFeishu, sendMessageFeishu, updateCardFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
   operator: {
@@ -17,6 +17,8 @@ export type FeishuCardActionEvent = {
     union_id: string;
   };
   token: string;
+  /** Feishu message_id of the card that received the action. */
+  message_id?: string;
   action: {
     value: Record<string, unknown>;
     tag: string;
@@ -166,6 +168,31 @@ async function sendInvalidInteractionNotice(params: {
   });
 }
 
+/** If the card action envelope carries an update-card payload, patch the card message. */
+async function maybeUpdateCard(params: {
+  cfg: ClawdbotConfig;
+  event: FeishuCardActionEvent;
+  updateCard: Record<string, unknown> | undefined;
+  runtime?: RuntimeEnv;
+  accountId?: string;
+}): Promise<void> {
+  if (!params.updateCard || !params.event.message_id) {
+    return;
+  }
+  const log = params.runtime?.log ?? console.log;
+  try {
+    await updateCardFeishu({
+      cfg: params.cfg,
+      messageId: params.event.message_id,
+      card: params.updateCard,
+      accountId: params.accountId,
+    });
+  } catch (err) {
+    // Log but don't fail the action – the command dispatch is the primary concern.
+    log(`[feishu] card update failed for message ${params.event.message_id}: ${String(err)}`);
+  }
+}
+
 export async function handleFeishuCardAction(params: {
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
@@ -249,6 +276,7 @@ export async function handleFeishuCardAction(params: {
           text: "Cancelled.",
           accountId,
         });
+        await maybeUpdateCard({ cfg, event, updateCard: envelope.c?.uc, runtime, accountId });
         completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
         return;
       }
@@ -265,6 +293,8 @@ export async function handleFeishuCardAction(params: {
           completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
           return;
         }
+        // Apply card update before dispatching the command so the UI responds instantly.
+        await maybeUpdateCard({ cfg, event, updateCard: envelope.c?.uc, runtime, accountId });
         await dispatchSyntheticCommand({
           cfg,
           event,

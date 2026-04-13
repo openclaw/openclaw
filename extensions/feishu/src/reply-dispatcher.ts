@@ -55,19 +55,35 @@ function resolveCardHeader(
   };
 }
 
-/** Build a card note footer from agent identity and model context. */
-function resolveCardNote(
-  agentId: string,
-  identity: OutboundIdentity | undefined,
-  prefixCtx: { model?: string; provider?: string },
-): string {
-  const name = identity?.name?.trim() || agentId;
-  const parts: string[] = [`Agent: ${name}`];
-  if (prefixCtx.model) {
-    parts.push(`Model: ${prefixCtx.model}`);
+/** Card footer note data enriched with session token usage. */
+type CardNoteContext = {
+  name: string;
+  model?: string;
+  provider?: string;
+  /** Estimated total tokens for this session turn */
+  totalTokens?: number | null;
+  /** Session context window size (max tokens) */
+  contextTokens?: number | null;
+};
+
+/** Format a card footer note. Shows Agent/Model/Provider/Tokens/Context in one line. */
+function formatCardNote(ctx: CardNoteContext): string {
+  const parts: string[] = [`Agent: ${ctx.name}`];
+  if (ctx.model) {
+    parts.push(`Model: ${ctx.model}`);
   }
-  if (prefixCtx.provider) {
-    parts.push(`Provider: ${prefixCtx.provider}`);
+  if (ctx.provider) {
+    parts.push(`Provider: ${ctx.provider}`);
+  }
+  if (ctx.totalTokens != null) {
+    const formatted = new Intl.NumberFormat("en-US").format(ctx.totalTokens);
+    if (ctx.contextTokens != null) {
+      parts.push(
+        `Tokens: ${formatted} / Context: ${new Intl.NumberFormat("en-US").format(ctx.contextTokens)}`,
+      );
+    } else {
+      parts.push(`Tokens: ${formatted}`);
+    }
   }
   return parts.join(" | ");
 }
@@ -91,6 +107,10 @@ export type CreateFeishuReplyDispatcherParams = {
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
+  /** Session key used to query token usage after the run completes. */
+  sessionKey?: string;
+  /** Path to the session store, required for querying token usage. */
+  sessionStorePath?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -107,6 +127,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     mentionTargets,
     accountId,
     identity,
+    sessionKey,
+    sessionStorePath,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
@@ -283,13 +305,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       );
       try {
         const cardHeader = resolveCardHeader(agentId, identity);
-        const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
           header: cardHeader,
-          note: cardNote,
+          // Note will be updated in closeStreaming once token usage is available.
+          note: formatCardNote({ name: identity?.name?.trim() || agentId }),
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
@@ -309,7 +331,26 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+      // Enrich footer with token usage from session store after run completes.
+      let finalNote = formatCardNote({ name: identity?.name?.trim() || agentId });
+      if (sessionKey && sessionStorePath) {
+        try {
+          const { loadSessionStore } = await import("openclaw/plugin-sdk/config-runtime");
+          const store = loadSessionStore(sessionStorePath, { skipCache: true });
+          const entry = store[sessionKey];
+          if (entry) {
+            finalNote = formatCardNote({
+              name: identity?.name?.trim() || agentId,
+              model: prefixContext.prefixContext.model,
+              provider: prefixContext.prefixContext.provider,
+              totalTokens: entry.totalTokens ?? null,
+              contextTokens: entry.contextTokens ?? null,
+            });
+          }
+        } catch {
+          // Non-fatal: fall back to basic note.
+        }
+      }
       await streaming.close(text, { note: finalNote });
     }
     streaming = null;
@@ -427,7 +468,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
           if (useCard) {
             const cardHeader = resolveCardHeader(agentId, identity);
-            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+            const cardNote = formatCardNote({
+              name: identity?.name?.trim() || agentId,
+              model: prefixContext.prefixContext.model,
+              provider: prefixContext.prefixContext.provider,
+            });
             await sendChunkedTextReply({
               text,
               useCard: true,
