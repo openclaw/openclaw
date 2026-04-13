@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.12-beta.1",
+  "version": "2026.4.12",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -53,6 +53,14 @@
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
+    },
+    "./plugin-sdk/lmstudio": {
+      "types": "./dist/plugin-sdk/lmstudio.d.ts",
+      "default": "./dist/plugin-sdk/lmstudio.js"
+    },
+    "./plugin-sdk/lmstudio-runtime": {
+      "types": "./dist/plugin-sdk/lmstudio-runtime.d.ts",
+      "default": "./dist/plugin-sdk/lmstudio-runtime.js"
     },
     "./plugin-sdk/provider-setup": {
       "types": "./dist/plugin-sdk/provider-setup.d.ts",
