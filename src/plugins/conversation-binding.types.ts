@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "../auto-reply/types.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 
 export type PluginConversationBindingRequestParams = {
   summary?: string;

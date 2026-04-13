@@ -1,4 +1,4 @@
-import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 
