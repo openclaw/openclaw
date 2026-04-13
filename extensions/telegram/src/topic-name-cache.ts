@@ -61,7 +61,7 @@ export function getTopicName(
     cache.set(key, refreshedEntry);
     return refreshedEntry.name;
   }
-  return entry?.name;
+  return undefined;
 }
 
 export function getTopicEntry(
