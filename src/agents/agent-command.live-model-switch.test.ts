@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   clearAgentRunContextMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
+  resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -289,6 +290,8 @@ type FallbackRunnerParams = {
   model: string;
   run: (provider: string, model: string) => Promise<unknown>;
 };
+
+const resolveEffectiveModelFallbacksMock = state.resolveEffectiveModelFallbacksMock;
 
 function makeSuccessResult(provider: string, model: string) {
   return {

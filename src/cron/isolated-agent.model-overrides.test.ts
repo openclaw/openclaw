@@ -2,6 +2,7 @@ import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { resolveThinkingDefaultMock } from "./isolated-agent.mocks.js";
 import {
   DEFAULT_AGENT_TURN_PAYLOAD,
   DEFAULT_MESSAGE,

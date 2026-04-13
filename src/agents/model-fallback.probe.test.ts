@@ -54,6 +54,9 @@ let mockedResolveProfilesUnavailableReason: ReturnType<
 let mockedResolveAuthProfileOrder: ReturnType<
   typeof vi.mocked<AuthProfilesOrderModule["resolveAuthProfileOrder"]>
 >;
+let mockedLoadAuthProfileStoreForRuntime: ReturnType<
+  typeof vi.mocked<AuthProfilesStoreModule["loadAuthProfileStoreForRuntime"]>
+>;
 let runWithModelFallback: ModelFallbackModule["runWithModelFallback"];
 let _probeThrottleInternals: ModelFallbackModule["_probeThrottleInternals"];
 let registerLogTransport: LoggerModule["registerLogTransport"];
@@ -201,6 +204,7 @@ describe("runWithModelFallback – probe logic", () => {
     };
     mockedHasAnyAuthProfileStoreSource.mockReturnValue(true);
     mockedEnsureAuthProfileStore.mockReturnValue(fakeStore);
+    mockedLoadAuthProfileStoreForRuntime.mockReturnValue(fakeStore);
 
     // Default: resolveAuthProfileOrder returns profiles only for "openai" provider
     mockedResolveAuthProfileOrder.mockImplementation(({ provider }: { provider: string }) => {

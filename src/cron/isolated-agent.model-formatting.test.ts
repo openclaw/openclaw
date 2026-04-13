@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 
 const {
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
   loadModelCatalogMock,
   getModelRefStatusMock,
   normalizeModelSelectionMock,
@@ -9,6 +11,8 @@ const {
   resolveConfiguredModelRefMock,
   resolveHooksGmailModelMock,
 } = vi.hoisted(() => ({
+  DEFAULT_MODEL: "claude-opus-4-6",
+  DEFAULT_PROVIDER: "anthropic",
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
   normalizeModelSelectionMock: vi.fn((value: unknown) => {
