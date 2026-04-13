@@ -538,6 +538,30 @@ describe("agents.create", () => {
     expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
   });
 
+  it("treats unsafe IDENTITY.md reads as invalid create requests", async () => {
+    agentsTesting.setDepsForTests({
+      readFileWithinRoot: async () => {
+        throw new SafeOpenError("invalid-path", "path is not a regular file under root");
+      },
+    });
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Unsafe Identity Read",
+      workspace: "/tmp/ws",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining('unsafe workspace file "IDENTITY.md"'),
+      }),
+    );
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
+  });
+
   it("passes model to applyAgentConfig when provided", async () => {
     const { respond, promise } = makeCall("agents.create", {
       name: "Model Agent",
@@ -877,6 +901,30 @@ describe("agents.update", () => {
     );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
+
+  it("treats unsafe IDENTITY.md reads as invalid update requests", async () => {
+    agentsTesting.setDepsForTests({
+      readFileWithinRoot: async () => {
+        throw new SafeOpenError("invalid-path", "path is not a regular file under root");
+      },
+    });
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      avatar: "https://example.com/unsafe.png",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining('unsafe workspace file "IDENTITY.md"'),
+      }),
+    );
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
+  });
 });
 
 describe("agents.delete", () => {
@@ -987,6 +1035,40 @@ describe("agents.files.list", () => {
     const names = await listAgentFileNames();
     expect(names).toContain("BOOTSTRAP.md");
   });
+
+  it("reports unreadable workspace files as present in list responses", async () => {
+    const openFileWithinRoot = vi.fn(async () => {
+      throw createErrnoError("EACCES");
+    });
+    agentsTesting.setDepsForTests({ openFileWithinRoot });
+    mocks.fsLstat.mockImplementation(async (filePath: string) => {
+      if (filePath === "/workspace/main/AGENTS.md") {
+        return makeFileStat({ size: 17, mtimeMs: 4567 });
+      }
+      throw createEnoentError();
+    });
+    mocks.fsStat.mockImplementation(async (filePath: string) => {
+      if (filePath === "/workspace/main/AGENTS.md") {
+        return makeFileStat({ size: 17, mtimeMs: 4567 });
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
+      .files;
+    expect(files).toContainEqual(
+      expect.objectContaining({
+        name: "AGENTS.md",
+        missing: false,
+        size: 17,
+      }),
+    );
+    expect(openFileWithinRoot).not.toHaveBeenCalled();
+  });
 });
 
 describe("agents.files.get/set symlink safety", () => {
@@ -1077,4 +1159,38 @@ describe("agents.files.get/set symlink safety", () => {
       }
     },
   );
+
+  it("uses non-blocking safe reads for agents.files.get", async () => {
+    const readFileWithinRoot = vi.fn(async () => ({
+      buffer: Buffer.from("hello"),
+      realPath: "/workspace/test-agent/AGENTS.md",
+      stat: makeFileStat({ size: 5 }),
+    }));
+    agentsTesting.setDepsForTests({ readFileWithinRoot });
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(readFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/workspace/test-agent",
+        relativePath: "AGENTS.md",
+        rejectHardlinks: true,
+        nonBlockingRead: true,
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: expect.objectContaining({
+          name: "AGENTS.md",
+          content: "hello",
+        }),
+      }),
+      undefined,
+    );
+  });
 });
