@@ -57,6 +57,31 @@ describe("codex provider", () => {
     });
   });
 
+  it("materializes the catalog apiKey when discovery provides a synthetic auth marker", async () => {
+    const provider = buildCodexProvider();
+
+    const result = await provider.catalog?.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "codex-app-server",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: undefined,
+        mode: "none",
+        source: "none",
+      }),
+    } as never);
+
+    expect(result).toEqual({
+      provider: expect.objectContaining({
+        auth: "token",
+        apiKey: "codex-app-server",
+        api: "openai-codex-responses",
+      }),
+    });
+  });
+
   it("keeps a static fallback catalog when discovery is disabled", async () => {
     const listModels = vi.fn();
 

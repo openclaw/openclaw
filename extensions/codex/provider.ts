@@ -39,6 +39,10 @@ type BuildCatalogOptions = {
   env?: NodeJS.ProcessEnv;
   pluginConfig?: unknown;
   listModels?: CodexModelLister;
+  resolveProviderApiKey?: (providerId?: string) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+  };
 };
 
 const FALLBACK_CODEX_MODELS = [
@@ -81,6 +85,7 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
           env: ctx.env,
           pluginConfig: options.pluginConfig,
           listModels: options.listModels,
+          resolveProviderApiKey: ctx.resolveProviderApiKey,
         }),
     },
     resolveDynamicModel: (ctx) => resolveCodexDynamicModel(ctx.modelId),
@@ -111,10 +116,12 @@ export async function buildCodexProviderCatalog(
   const models = (discovered.length > 0 ? discovered : FALLBACK_CODEX_MODELS).map(
     codexModelToDefinition,
   );
+  const resolvedApiKey = options.resolveProviderApiKey?.(PROVIDER_ID).apiKey;
   return {
     provider: {
       baseUrl: CODEX_BASE_URL,
       auth: "token",
+      ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
       api: "openai-codex-responses",
       models,
     },
