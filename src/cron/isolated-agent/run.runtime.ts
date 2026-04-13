@@ -31,6 +31,7 @@ export { normalizeThinkLevel, supportsXHighThinking } from "../../auto-reply/thi
 export { createOutboundSendDeps } from "../../cli/outbound-send-deps.js";
 export {
   resolveAgentMainSessionKey,
+  resolveSessionTranscriptPath,
   setSessionRuntimeModel,
   updateSessionStore,
 } from "../../config/sessions.js";

@@ -18,7 +18,6 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
-import { resolveSessionTranscriptPath } from "./run-execution.runtime.js";
 import { executeCronRun, type CronExecutionResult } from "./run-executor.js";
 import {
   createPersistCronSessionEntry,
@@ -50,6 +49,7 @@ import {
   resolveCronStyleNow,
   resolveDefaultAgentId,
   resolveHookExternalContentSource,
+  resolveSessionTranscriptPath,
   resolveSessionAuthProfileOverride,
   resolveThinkingDefault,
   setSessionRuntimeModel,

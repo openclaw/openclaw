@@ -37,6 +37,25 @@ import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
+export class FeishuRetryableSyntheticEventError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "FeishuRetryableSyntheticEventError";
+  }
+}
+
+function isFeishuRetryableSyntheticEventError(
+  error: unknown,
+): error is FeishuRetryableSyntheticEventError {
+  return (
+    error instanceof FeishuRetryableSyntheticEventError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "FeishuRetryableSyntheticEventError")
+  );
+}
+
 export type FeishuReactionCreatedEvent = {
   message_id: string;
   chat_id?: string;
@@ -643,6 +662,11 @@ function registerEventHandlers(
             if (syntheticMessageId) {
               await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
             }
+          } catch (err) {
+            if (syntheticMessageId && !isFeishuRetryableSyntheticEventError(err)) {
+              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
+            }
+            throw err;
           } finally {
             if (syntheticMessageId) {
               releaseFeishuMessageProcessing(syntheticMessageId, accountId);
@@ -781,8 +805,12 @@ function registerEventHandlers(
             }
             return await handleLegacyMenu();
           })
-          .catch((err) => {
-            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+          .catch(async (err) => {
+            if (isFeishuRetryableSyntheticEventError(err)) {
+              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+            } else {
+              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
+            }
             throw err;
           });
         if (fireAndForget) {
