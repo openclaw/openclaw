@@ -288,6 +288,73 @@ function hasNonPlanToolActivity(toolMetas: PlanningOnlyAttempt["toolMetas"]): bo
   return toolMetas.some((entry) => entry.toolName !== "update_plan");
 }
 
+// ---------------------------------------------------------------------------
+// Tool-call-in-thinking detection
+// ---------------------------------------------------------------------------
+
+const TOOL_CALL_IN_THINKING_RE = /<tool_call>|<function=|<\|tool_call\|>/i;
+
+export const TOOL_CALL_IN_THINKING_RETRY_INSTRUCTION =
+  "Your previous tool call was not executed because it appeared in your reasoning output instead of the tool-calling interface. Please re-issue the intended tool call now using the proper function-calling API. Do not restate your plan — just make the call.";
+
+export const DEFAULT_TOOL_CALL_IN_THINKING_RETRY_LIMIT = 2;
+
+type ToolCallInThinkingAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  | "lastAssistant"
+  | "clientToolCall"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "replayMetadata"
+>;
+
+export function resolveToolCallInThinkingRetryInstruction(params: {
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: ToolCallInThinkingAttempt;
+}): string | null {
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.replayMetadata.hadPotentialSideEffects
+  ) {
+    return null;
+  }
+
+  const lastAssistant = params.attempt.lastAssistant;
+  if (!lastAssistant || lastAssistant.stopReason !== "stop") {
+    return null;
+  }
+
+  const content = lastAssistant.content;
+  if (!Array.isArray(content)) {
+    return null;
+  }
+
+  // If the model produced API-level tool calls, the tool-call lane was fine.
+  const hasApiToolCalls = content.some(
+    (block: { type?: string }) => block.type === "toolCall" || block.type === "tool_use",
+  );
+  if (hasApiToolCalls) {
+    return null;
+  }
+
+  // Collect thinking/reasoning text from all thinking blocks.
+  const thinkingText = content
+    .filter((block: { type?: string }) => block.type === "thinking")
+    .map((block: { thinking?: string }) => block.thinking ?? "")
+    .join("");
+
+  if (!thinkingText || !TOOL_CALL_IN_THINKING_RE.test(thinkingText)) {
+    return null;
+  }
+
+  return TOOL_CALL_IN_THINKING_RETRY_INSTRUCTION;
+}
+
 export function resolvePlanningOnlyRetryLimit(
   executionContract?: EmbeddedPiExecutionContract,
 ): number {

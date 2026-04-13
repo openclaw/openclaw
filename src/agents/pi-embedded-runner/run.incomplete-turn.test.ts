@@ -15,6 +15,8 @@ import {
   resolveAckExecutionFastPathInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveToolCallInThinkingRetryInstruction,
+  TOOL_CALL_IN_THINKING_RETRY_INSTRUCTION,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -299,5 +301,145 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         attempt,
       }),
     ).toBe("paused");
+  });
+});
+
+describe("resolveToolCallInThinkingRetryInstruction", () => {
+  function makeThinkingAttempt(overrides: {
+    stopReason?: string;
+    content?: Array<Record<string, unknown>>;
+    aborted?: boolean;
+    timedOut?: boolean;
+    clientToolCall?: EmbeddedRunAttemptResult["clientToolCall"];
+    yieldDetected?: boolean;
+    didSendDeterministicApprovalPrompt?: boolean;
+    hadPotentialSideEffects?: boolean;
+  }) {
+    return {
+      aborted: overrides.aborted ?? false,
+      timedOut: overrides.timedOut ?? false,
+      attempt: {
+        lastAssistant: {
+          stopReason: overrides.stopReason ?? "stop",
+          content: overrides.content ?? [],
+          provider: "lmstudio",
+          model: "qwen/qwen3.5-35b-a3b",
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        clientToolCall: overrides.clientToolCall,
+        yieldDetected: overrides.yieldDetected,
+        didSendDeterministicApprovalPrompt: overrides.didSendDeterministicApprovalPrompt,
+        replayMetadata: {
+          hadPotentialSideEffects: overrides.hadPotentialSideEffects ?? false,
+          replaySafe: !(overrides.hadPotentialSideEffects ?? false),
+        },
+      },
+    };
+  }
+
+  it("returns instruction when thinking contains <tool_call> and stopReason is stop", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        content: [
+          {
+            type: "thinking",
+            thinking:
+              'Step 2: Reading MEMORY.md\n<tool_call>\n<function=read>\n<parameter=path>/tmp/MEMORY.md</parameter>\n</function>\n</tool_call>',
+          },
+        ],
+      }),
+    );
+    expect(result).toBe(TOOL_CALL_IN_THINKING_RETRY_INSTRUCTION);
+  });
+
+  it("returns instruction when thinking contains <function= variant", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        content: [
+          {
+            type: "thinking",
+            thinking: 'Let me read the file.\n<function=read_file>{"path": "test.md"}</function>',
+          },
+        ],
+      }),
+    );
+    expect(result).toBe(TOOL_CALL_IN_THINKING_RETRY_INSTRUCTION);
+  });
+
+  it("returns null when stopReason is toolUse (model used API correctly)", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        stopReason: "toolUse",
+        content: [
+          { type: "thinking", thinking: "planning the call" },
+          { type: "toolCall", id: "1", name: "read", arguments: {} },
+        ],
+      }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when there is no thinking content", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        content: [{ type: "text", text: "Done." }],
+      }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when thinking has no tool-call patterns", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        content: [
+          {
+            type: "thinking",
+            thinking: "I should read the file and then compile the briefing.",
+          },
+        ],
+      }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when aborted", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        aborted: true,
+        content: [{ type: "thinking", thinking: "<tool_call>something</tool_call>" }],
+      }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when timed out", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        timedOut: true,
+        content: [{ type: "thinking", thinking: "<tool_call>something</tool_call>" }],
+      }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when API-level tool calls are present", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        content: [
+          { type: "thinking", thinking: "<tool_call>duplicate</tool_call>" },
+          { type: "toolCall", id: "1", name: "read", arguments: {} },
+        ],
+      }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when hadPotentialSideEffects is true", () => {
+    const result = resolveToolCallInThinkingRetryInstruction(
+      makeThinkingAttempt({
+        hadPotentialSideEffects: true,
+        content: [{ type: "thinking", thinking: "<tool_call>something</tool_call>" }],
+      }),
+    );
+    expect(result).toBeNull();
   });
 });

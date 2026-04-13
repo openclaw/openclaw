@@ -99,6 +99,8 @@ import {
   extractPlanningOnlyPlanDetails,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveToolCallInThinkingRetryInstruction,
+  DEFAULT_TOOL_CALL_IN_THINKING_RETRY_LIMIT,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -425,9 +427,11 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
+      let toolCallInThinkingRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
+      let toolCallInThinkingRetryInstruction: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
         modelId,
@@ -611,6 +615,7 @@ export async function runEmbeddedPiAgent(
           const promptAdditions = [
             ackExecutionFastPathInstruction,
             planningOnlyRetryInstruction,
+            toolCallInThinkingRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
@@ -1639,6 +1644,27 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTargets: attempt.messagingToolSentTargets,
               successfulCronAdds: attempt.successfulCronAdds,
             };
+          }
+          // Detect tool calls leaked into reasoning/thinking content.
+          const nextToolCallInThinkingInstruction = resolveToolCallInThinkingRetryInstruction({
+            aborted,
+            timedOut,
+            attempt,
+          });
+          if (
+            !incompleteTurnText &&
+            !nextPlanningOnlyRetryInstruction &&
+            nextToolCallInThinkingInstruction &&
+            toolCallInThinkingRetryAttempts < DEFAULT_TOOL_CALL_IN_THINKING_RETRY_LIMIT
+          ) {
+            toolCallInThinkingRetryAttempts += 1;
+            toolCallInThinkingRetryInstruction = nextToolCallInThinkingInstruction;
+            log.warn(
+              `tool-call-in-thinking detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} — retrying ` +
+                `${toolCallInThinkingRetryAttempts}/${DEFAULT_TOOL_CALL_IN_THINKING_RETRY_LIMIT} with re-issue steer`,
+            );
+            continue;
           }
           if (incompleteTurnText) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
