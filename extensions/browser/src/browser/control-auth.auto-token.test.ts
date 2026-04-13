@@ -190,6 +190,22 @@ describe("ensureBrowserControlAuth", () => {
     });
   });
 
+  it("returns only the active token in token mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "active-token",
+          password: "inactive-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      token: "active-token",
+    });
+  });
+
   it("returns only the browser password in trusted-proxy mode", () => {
     const cfg: OpenClawConfig = {
       gateway: {

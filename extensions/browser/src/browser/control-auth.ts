@@ -38,6 +38,10 @@ export function resolveBrowserControlAuth(
     return { token: token || undefined };
   }
 
+  if (mode === "token") {
+    return { token: token || undefined };
+  }
+
   return {
     token: token || undefined,
     password: password || undefined,
