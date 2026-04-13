@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { normalizeFailoverDecisionObservationBase } from "./failover-observation.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../logger.js";
+import {
+  createFailoverDecisionLogger,
+  normalizeFailoverDecisionObservationBase,
+} from "./failover-observation.js";
 
 function normalizeObservation(
   overrides: Partial<Parameters<typeof normalizeFailoverDecisionObservationBase>[0]>,
@@ -49,5 +53,46 @@ describe("normalizeFailoverDecisionObservationBase", () => {
       profileFailureReason: "overloaded",
       timedOut: true,
     });
+  });
+});
+
+describe("createFailoverDecisionLogger", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("includes from and to model refs when the source differs from the selected target", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const logDecision = createFailoverDecisionLogger({
+      stage: "assistant",
+      runId: "run:failover",
+      rawError: "timeout",
+      failoverReason: "timeout",
+      profileFailureReason: "timeout",
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceProvider: "github-copilot",
+      sourceModel: "gpt-5.4-mini",
+      profileId: "openai:p1",
+      fallbackConfigured: true,
+      timedOut: true,
+      aborted: false,
+    });
+
+    logDecision("fallback_model");
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "embedded run failover decision",
+      expect.objectContaining({
+        sourceProvider: "github-copilot",
+        sourceModel: "gpt-5.4-mini",
+        provider: "openai",
+        model: "gpt-5.4",
+        consoleMessage: expect.stringContaining("from=github-copilot/gpt-5.4-mini"),
+      }),
+    );
+    expect(
+      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
+    ).toContain("to=openai/gpt-5.4");
   });
 });

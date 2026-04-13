@@ -82,10 +82,11 @@ import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import {
   buildErrorAgentMeta,
-  resolveFinalAssistantVisibleText,
   buildUsageAgentMetaFields,
   createCompactionDiagId,
   resolveActiveErrorContext,
+  resolveFinalAssistantRawText,
+  resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
@@ -1267,6 +1268,8 @@ export async function runEmbeddedPiAgent(
               profileFailureReason: promptProfileFailureReason,
               provider,
               model: modelId,
+              sourceProvider: provider,
+              sourceModel: modelId,
               profileId: failedPromptProfileId,
               fallbackConfigured,
               aborted,
@@ -1385,6 +1388,8 @@ export async function runEmbeddedPiAgent(
             profileFailureReason: assistantProfileFailureReason,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            sourceProvider: assistantForFailover?.provider ?? provider,
+            sourceModel: assistantForFailover?.model ?? modelId,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
             timedOut,
@@ -1498,6 +1503,7 @@ export async function runEmbeddedPiAgent(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
+          const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
@@ -1557,6 +1563,7 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                finalAssistantRawText,
                 replayInvalid,
                 livenessState,
               },
@@ -1659,6 +1666,7 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                finalAssistantRawText,
                 replayInvalid,
                 livenessState,
               },
@@ -1711,6 +1719,7 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                finalAssistantRawText,
                 replayInvalid,
                 livenessState,
               },
@@ -1759,6 +1768,7 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               finalAssistantVisibleText,
+              finalAssistantRawText,
               replayInvalid,
               livenessState,
               // Handle client tool calls (OpenResponses hosted tools)

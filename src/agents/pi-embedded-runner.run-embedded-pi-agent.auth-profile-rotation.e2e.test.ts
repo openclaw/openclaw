@@ -878,6 +878,8 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       decision: "rotate_profile",
       failoverReason: "overloaded",
       profileId: safeProfileId,
+      sourceProvider: "openai",
+      sourceModel: "gpt-5.4-mini",
       providerErrorType: "overloaded_error",
       rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
     });
