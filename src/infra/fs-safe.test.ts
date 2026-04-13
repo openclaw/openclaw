@@ -12,6 +12,7 @@ import {
   copyFileWithinRoot,
   createRootScopedReadFile,
   mkdirPathWithinRoot,
+  resolveOpenedFileRealPathForHandle,
   SafeOpenError,
   openFileWithinRoot,
   readFileWithinRoot,
@@ -148,6 +149,32 @@ describe("fs-safe", () => {
       code: "symlink",
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "resolves opened file real paths from the fd before the current path target",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const originalPath = path.join(root, "inside.txt");
+      const movedPath = path.join(root, "inside-moved.txt");
+      const outsidePath = path.join(outside, "outside.txt");
+      await fs.writeFile(originalPath, "inside");
+      await fs.writeFile(outsidePath, "outside");
+
+      const handle = await fs.open(originalPath, "r");
+      try {
+        await fs.rename(originalPath, movedPath);
+        await fs.symlink(outsidePath, originalPath);
+
+        const resolved = await resolveOpenedFileRealPathForHandle(handle, originalPath);
+
+        expect(resolved).toBe(movedPath);
+        await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
+      } finally {
+        await handle.close().catch(() => {});
+      }
+    },
+  );
 
   it("blocks traversal outside root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");

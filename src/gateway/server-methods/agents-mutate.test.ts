@@ -1,5 +1,5 @@
-import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { SafeOpenError } from "../../infra/fs-safe.js";
 /* ------------------------------------------------------------------ */
 /* Mocks                                                              */
 /* ------------------------------------------------------------------ */
@@ -499,9 +499,8 @@ describe("agents.create", () => {
   });
 
   it("does not persist config when IDENTITY.md write fails with SafeOpenError", async () => {
-    const { SafeOpenError: SOE } = await import("../../infra/fs-safe.js");
     mocks.writeFileWithinRoot.mockRejectedValueOnce(
-      new SOE("path-mismatch", "path escapes workspace root"),
+      new SafeOpenError("path-mismatch", "path escapes workspace root"),
     );
 
     const { respond, promise } = makeCall("agents.create", {
@@ -520,24 +519,7 @@ describe("agents.create", () => {
 
   it("does not persist config when IDENTITY.md read fails", async () => {
     agentsTesting.setDepsForTests({
-      resolveAgentWorkspaceFilePath: async ({ workspaceDir, name }) => {
-        const ioPath = `${workspaceDir}/${name}`;
-        if (workspaceDir === "/resolved/tmp/ws") {
-          return {
-            kind: "ready",
-            requestPath: ioPath,
-            ioPath,
-            workspaceReal: workspaceDir,
-          };
-        }
-        return {
-          kind: "missing",
-          requestPath: ioPath,
-          ioPath,
-          workspaceReal: workspaceDir,
-        };
-      },
-      readLocalFileSafely: async () => {
+      readFileWithinRoot: async () => {
         throw createErrnoError("EACCES");
       },
     });
@@ -728,27 +710,8 @@ describe("agents.update", () => {
       identityPathCreated: true,
     });
     agentsTesting.setDepsForTests({
-      resolveAgentWorkspaceFilePath: async ({ workspaceDir, name }) => {
-        const ioPath = `${workspaceDir}/${name}`;
-        if (
-          workspaceDir === "/workspace/test-agent" ||
-          workspaceDir === "/resolved/new/workspace"
-        ) {
-          return {
-            kind: "ready",
-            requestPath: ioPath,
-            ioPath,
-            workspaceReal: workspaceDir,
-          };
-        }
-        return {
-          kind: "missing",
-          requestPath: ioPath,
-          ioPath,
-          workspaceReal: workspaceDir,
-        };
-      },
-      readLocalFileSafely: async ({ filePath }) => {
+      readFileWithinRoot: async ({ rootDir, relativePath }) => {
+        const filePath = `${rootDir}/${relativePath}`;
         if (filePath === "/workspace/test-agent/IDENTITY.md") {
           return {
             buffer: Buffer.from(
@@ -825,27 +788,8 @@ describe("agents.update", () => {
       identityPathCreated: false,
     });
     agentsTesting.setDepsForTests({
-      resolveAgentWorkspaceFilePath: async ({ workspaceDir, name }) => {
-        const ioPath = `${workspaceDir}/${name}`;
-        if (
-          workspaceDir === "/workspace/test-agent" ||
-          workspaceDir === "/resolved/new/workspace"
-        ) {
-          return {
-            kind: "ready",
-            requestPath: ioPath,
-            ioPath,
-            workspaceReal: workspaceDir,
-          };
-        }
-        return {
-          kind: "missing",
-          requestPath: ioPath,
-          ioPath,
-          workspaceReal: workspaceDir,
-        };
-      },
-      readLocalFileSafely: async ({ filePath }) => {
+      readFileWithinRoot: async ({ rootDir, relativePath }) => {
+        const filePath = `${rootDir}/${relativePath}`;
         if (filePath === "/workspace/test-agent/IDENTITY.md") {
           return {
             buffer: Buffer.from(
@@ -915,9 +859,8 @@ describe("agents.update", () => {
   });
 
   it("does not persist config when IDENTITY.md write fails on update", async () => {
-    const { SafeOpenError: SOE } = await import("../../infra/fs-safe.js");
     mocks.writeFileWithinRoot.mockRejectedValueOnce(
-      new SOE("path-mismatch", "path escapes workspace root"),
+      new SafeOpenError("path-mismatch", "path escapes workspace root"),
     );
 
     const { respond, promise } = makeCall("agents.update", {
@@ -1058,14 +1001,16 @@ describe("agents.files.get/set symlink safety", () => {
   });
 
   function mockWorkspaceEscapeSymlink() {
-    const workspace = "/workspace/test-agent";
+    const safeOpenError = new SafeOpenError("invalid-path", "path escapes workspace root");
     agentsTesting.setDepsForTests({
-      resolveAgentWorkspaceFilePath: async ({ name }) => ({
-        kind: "invalid",
-        requestPath: path.join(workspace, name),
-        reason: "path escapes workspace root",
-      }),
+      openFileWithinRoot: async () => {
+        throw safeOpenError;
+      },
+      readFileWithinRoot: async () => {
+        throw safeOpenError;
+      },
     });
+    mocks.writeFileWithinRoot.mockRejectedValue(safeOpenError);
   }
 
   it.each([
@@ -1082,83 +1027,25 @@ describe("agents.files.get/set symlink safety", () => {
     },
   );
 
-  it("allows in-workspace symlink reads and writes through symlink aliases", async () => {
-    const workspace = "/workspace/test-agent";
-    const target = path.resolve(workspace, "policies", "AGENTS.md");
-    const targetStat = makeFileStat({ size: 7, mtimeMs: 1700, dev: 9, ino: 42 });
-
-    agentsTesting.setDepsForTests({
-      readLocalFileSafely: async () => ({
-        buffer: Buffer.from("inside\n"),
-        realPath: target,
-        stat: targetStat,
-      }),
-      resolveAgentWorkspaceFilePath: async ({ name }) => ({
-        kind: "ready",
-        requestPath: path.join(workspace, name),
-        ioPath: target,
-        workspaceReal: workspace,
-      }),
-    });
-    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
-      const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === target) {
-        return targetStat;
-      }
-      throw createEnoentError();
-    });
-    mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
-      const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === target) {
-        return targetStat;
-      }
-      throw createEnoentError();
-    });
-
-    const getCall = makeCall("agents.files.get", { agentId: "main", name: "AGENTS.md" });
-    await getCall.promise;
-    expect(getCall.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        file: expect.objectContaining({ missing: false, content: "inside\n" }),
-      }),
-      undefined,
-    );
-
-    const setCall = makeCall("agents.files.set", {
-      agentId: "main",
-      name: "AGENTS.md",
-      content: "updated\n",
-    });
-    await setCall.promise;
-    expect(setCall.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        file: expect.objectContaining({
-          missing: false,
-          content: "updated\n",
-        }),
-      }),
-      undefined,
-    );
-  });
+  it.each(["agents.files.get", "agents.files.set"] as const)(
+    "rejects %s when allowlisted file is an in-workspace symlink alias",
+    async (method) => {
+      mockWorkspaceEscapeSymlink();
+      await expectUnsafeWorkspaceFile(method);
+    },
+  );
 
   function mockHardlinkedWorkspaceAlias() {
-    const workspace = "/workspace/test-agent";
-    const candidate = path.resolve(workspace, "AGENTS.md");
-    mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
-        return workspace;
-      }
-      return p;
+    const safeOpenError = new SafeOpenError("invalid-path", "hardlinked path not allowed");
+    agentsTesting.setDepsForTests({
+      openFileWithinRoot: async () => {
+        throw safeOpenError;
+      },
+      readFileWithinRoot: async () => {
+        throw safeOpenError;
+      },
     });
-    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
-      const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
-        return makeFileStat({ nlink: 2 });
-      }
-      throw createEnoentError();
-    });
+    mocks.writeFileWithinRoot.mockRejectedValue(safeOpenError);
   }
 
   it.each([
