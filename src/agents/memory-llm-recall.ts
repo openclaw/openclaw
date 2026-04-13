@@ -1,6 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ResolvedMemorySearchConfig } from "./memory-search.js";
+
+export type LlmRecallConfig = {
+  enabled: boolean;
+  model: string;
+  baseUrl?: string;
+  apiKey?: string;
+  maxFiles: number;
+  maxTokens: number;
+};
 
 type MemoryFileMeta = {
   filename: string;
@@ -71,7 +79,7 @@ function buildManifest(metas: MemoryFileMeta[]): string {
 async function callSelectorLlm(
   query: string,
   manifest: string,
-  cfg: ResolvedMemorySearchConfig["llmRecall"],
+  cfg: LlmRecallConfig,
 ): Promise<string[]> {
   const apiKey = cfg.apiKey ?? "";
   const baseUrl = (cfg.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
@@ -155,7 +163,7 @@ function resolveApiKey(raw: string | undefined): string {
 export async function findRelevantMemories(
   query: string,
   memoryDir: string,
-  cfg: ResolvedMemorySearchConfig,
+  cfg: { llmRecall: LlmRecallConfig },
 ): Promise<string[]> {
   if (!cfg.llmRecall.enabled || !cfg.llmRecall.model) {
     return [];
