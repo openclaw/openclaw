@@ -31,6 +31,18 @@ function extractFileNameFromMediaUrl(value: string): string | null {
   }
 }
 
+const OPERATIONAL_ALERT_PATTERNS = [
+  /^(?:⚠️\s*)?error en\b/i,
+  /^alerta de backup:/i,
+  /^git backup failed\b/i,
+  /^se han producido conflictos durante el pull --rebase\b/i,
+];
+
+export function isOperationalAlertMirrorText(text: string): boolean {
+  const trimmed = text.trim();
+  return OPERATIONAL_ALERT_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
 export function resolveMirroredTranscriptText(params: {
   text?: string;
   mediaUrls?: string[];
@@ -48,5 +60,11 @@ export function resolveMirroredTranscriptText(params: {
 
   const text = params.text ?? "";
   const trimmed = text.trim();
-  return trimmed ? trimmed : null;
+  if (!trimmed) {
+    return null;
+  }
+  if (isOperationalAlertMirrorText(trimmed)) {
+    return null;
+  }
+  return trimmed;
 }
