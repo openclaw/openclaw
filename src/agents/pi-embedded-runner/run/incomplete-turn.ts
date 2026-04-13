@@ -49,12 +49,14 @@ export function isIncompleteTerminalAssistantTurn(params: {
 }
 
 const PLANNING_ONLY_PROMISE_RE =
-  /\b(?:i(?:'ll| will)|let me|going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
+  /\b(?:i(?:'ll| will)|let me|i(?:'m| am)\s+going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
 const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
+const PLANNING_ONLY_ACTION_VERB_RE =
+  /\b(?:inspect|investigate|check|look(?:\s+into|\s+at)?|read|search|find|debug|fix|patch|update|change|edit|write|implement|run|test|verify|review|analy(?:s|z)e|summari(?:s|z)e|explain|answer|show|share|report|prepare|capture|take|refactor|restart|deploy|ship)\b/i;
 const SINGLE_ACTION_EXPLICIT_CONTINUATION_RE =
   /\b(?:going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|then[, ]+i(?:'ll| will)|i can do that next|let me (?!know\b)\w+(?:\s+\w+){0,3}\s+(?:next|then|first)\b)/i;
 const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
@@ -112,6 +114,10 @@ const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "진행해",
   "계속해",
 ]);
+const ACTIONABLE_PROMPT_DIRECTIVE_RE =
+  /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare)\b/i;
+const ACTIONABLE_PROMPT_REQUEST_RE =
+  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
@@ -232,6 +238,17 @@ export function isLikelyExecutionAckPrompt(text: string): boolean {
     return false;
   }
   return ACK_EXECUTION_NORMALIZED_SET.has(normalizeAckPrompt(trimmed));
+}
+
+function isLikelyActionableUserPrompt(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (isLikelyExecutionAckPrompt(trimmed) || trimmed.includes("?")) {
+    return true;
+  }
+  return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
 }
 
 export function resolveAckExecutionFastPathInstruction(params: {
@@ -355,6 +372,7 @@ export function resolvePlanningOnlyRetryLimit(
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  prompt?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
@@ -371,6 +389,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
       provider: params.provider,
       modelId: params.modelId,
     }) ||
+    (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||
     params.timedOut ||
     params.attempt.clientToolCall ||
@@ -395,7 +414,15 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
     return null;
   }
-  if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningOnlyFormat(text)) {
+  const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(text);
+  if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningFormat) {
+    return null;
+  }
+  if (
+    !hasStructuredPlanningFormat &&
+    !singleActionNarrative &&
+    !PLANNING_ONLY_ACTION_VERB_RE.test(text)
+  ) {
     return null;
   }
   if (PLANNING_ONLY_COMPLETION_RE.test(text)) {
