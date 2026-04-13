@@ -8,6 +8,7 @@ import {
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -570,7 +571,10 @@ export function buildIMessageInboundContext(params: {
     channel: "iMessage",
     from: fromLabel,
     timestamp: decision.createdAt,
-    body: `${decision.bodyText}${replySuffix}`,
+    body: wrapExternalContent(
+      `UNTRUSTED iMessage message body\n${`${decision.bodyText}${replySuffix}`.trim()}`,
+      { source: "unknown", includeWarning: false },
+    ),
     chatType: decision.isGroup ? "group" : "direct",
     sender: { name: decision.senderNormalized, id: decision.sender },
     previousTimestamp: params.previousTimestamp,
@@ -589,7 +593,10 @@ export function buildIMessageInboundContext(params: {
           channel: "iMessage",
           from: fromLabel,
           timestamp: entry.timestamp,
-          body: `${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+          body: wrapExternalContent(
+            `UNTRUSTED iMessage message body\n${`${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`.trim()}`,
+            { source: "unknown", includeWarning: false },
+          ),
           chatType: "group",
           senderLabel: entry.sender,
           envelope: envelopeOptions,
