@@ -1,8 +1,16 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
+  resolveSessionObjectCacheMaxBytes,
+  SESSION_OBJECT_CACHE_MAX_BYTES_ENV,
+} from "./store-cache-limit.js";
+import {
+  dropSessionStoreObjectCache,
+  getSerializedSessionStore,
+  getSessionStoreTtl,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
   setSerializedSessionStore,
@@ -23,9 +31,125 @@ export type LoadSessionStoreOptions = {
 };
 
 const log = createSubsystemLogger("sessions/store");
+const WARNED_SESSION_OBJECT_CACHE_LIMIT_PATHS = new Set<string>();
+type LoadedSessionStoreSnapshot = {
+  serializedFromDisk?: string;
+  serializedDigest?: string;
+  acpByKey: Map<string, NonNullable<SessionEntry["acp"]>>;
+};
+let loadedSessionStoreSnapshots = new WeakMap<
+  Record<string, SessionEntry>,
+  LoadedSessionStoreSnapshot
+>();
+
+export function clearSessionObjectCacheLimitWarningsForTest(): void {
+  WARNED_SESSION_OBJECT_CACHE_LIMIT_PATHS.clear();
+}
+
+export function clearLoadedSessionStoreSnapshotsForTest(): void {
+  loadedSessionStoreSnapshots = new WeakMap();
+}
+
+export function rememberLoadedSessionStoreSnapshot(params: {
+  store: Record<string, SessionEntry>;
+  serializedFromDisk?: string;
+  retainSerializedFromDisk?: boolean;
+}): void {
+  const retainSerializedFromDisk = params.retainSerializedFromDisk ?? true;
+  loadedSessionStoreSnapshots.set(params.store, {
+    serializedFromDisk: retainSerializedFromDisk ? params.serializedFromDisk : undefined,
+    serializedDigest:
+      !retainSerializedFromDisk && params.serializedFromDisk
+        ? createHash("sha256").update(params.serializedFromDisk).digest("hex")
+        : undefined,
+    acpByKey: collectAcpMetadataSnapshot(params.store),
+  });
+}
+
+export function getLoadedSessionStoreSnapshot(
+  store: Record<string, SessionEntry> | undefined,
+): LoadedSessionStoreSnapshot | undefined {
+  if (!store) {
+    return undefined;
+  }
+  return loadedSessionStoreSnapshots.get(store);
+}
+
+export function forgetLoadedSessionStoreSnapshot(
+  store: Record<string, SessionEntry> | undefined,
+): void {
+  if (!store) {
+    return;
+  }
+  loadedSessionStoreSnapshots.delete(store);
+}
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function collectAcpMetadataSnapshot(
+  store: Record<string, SessionEntry>,
+): Map<string, NonNullable<SessionEntry["acp"]>> {
+  const snapshot = new Map<string, NonNullable<SessionEntry["acp"]>>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (entry?.acp) {
+      snapshot.set(sessionKey, structuredClone(entry.acp));
+    }
+  }
+  return snapshot;
+}
+
+function warnSessionObjectCacheLimitHit(params: {
+  storePath: string;
+  sizeBytes: number;
+  limitBytes: number;
+}): void {
+  if (WARNED_SESSION_OBJECT_CACHE_LIMIT_PATHS.has(params.storePath)) {
+    return;
+  }
+  WARNED_SESSION_OBJECT_CACHE_LIMIT_PATHS.add(params.storePath);
+  log.warn("session object cache disabled for large store", {
+    storePath: params.storePath,
+    sizeBytes: params.sizeBytes,
+    limitBytes: params.limitBytes,
+    envVar: SESSION_OBJECT_CACHE_MAX_BYTES_ENV,
+  });
+}
+
+export function isSessionStoreObjectCacheEligible(params: {
+  storePath: string;
+  sizeBytes?: number;
+}): boolean {
+  if (!isSessionStoreCacheEnabled()) {
+    return false;
+  }
+  const maxBytes = resolveSessionObjectCacheMaxBytes();
+  if (maxBytes === 0) {
+    dropSessionStoreObjectCache(params.storePath);
+    return false;
+  }
+  if (params.sizeBytes !== undefined && params.sizeBytes > maxBytes) {
+    warnSessionObjectCacheLimitHit({
+      storePath: params.storePath,
+      sizeBytes: params.sizeBytes,
+      limitBytes: maxBytes,
+    });
+    dropSessionStoreObjectCache(params.storePath);
+    return false;
+  }
+  return true;
+}
+
+function shouldRetainSessionStoreSerializedCache(sizeBytes?: number): boolean {
+  if (!isSessionStoreCacheEnabled()) {
+    return false;
+  }
+  const maxBytes = resolveSessionObjectCacheMaxBytes();
+  if (maxBytes === 0) {
+    return false;
+  }
+  return sizeBytes === undefined || sizeBytes <= maxBytes;
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
@@ -77,15 +201,29 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  if (!opts.skipCache) {
     const currentFileStat = getFileStatSnapshot(storePath);
-    const cached = readSessionStoreCache({
-      storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
-    });
-    if (cached) {
-      return cached;
+    if (
+      isSessionStoreObjectCacheEligible({
+        storePath,
+        sizeBytes: currentFileStat?.sizeBytes,
+      })
+    ) {
+      const cached = readSessionStoreCache({
+        storePath,
+        mtimeMs: currentFileStat?.mtimeMs,
+        sizeBytes: currentFileStat?.sizeBytes,
+      });
+      if (cached) {
+        rememberLoadedSessionStoreSnapshot({
+          store: cached,
+          serializedFromDisk: getSerializedSessionStore({
+            storePath,
+            ttlMs: getSessionStoreTtl(),
+          }),
+        });
+        return cached;
+      }
     }
   }
 
@@ -120,7 +258,10 @@ export function loadSessionStore(
     }
   }
 
-  if (serializedFromDisk !== undefined) {
+  if (
+    serializedFromDisk !== undefined &&
+    shouldRetainSessionStoreSerializedCache(fileStat?.sizeBytes)
+  ) {
     setSerializedSessionStore(storePath, serializedFromDisk);
   } else {
     setSerializedSessionStore(storePath, undefined);
@@ -148,7 +289,13 @@ export function loadSessionStore(
     }
   }
 
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  if (
+    !opts.skipCache &&
+    isSessionStoreObjectCacheEligible({
+      storePath,
+      sizeBytes: fileStat?.sizeBytes,
+    })
+  ) {
     writeSessionStoreCache({
       storePath,
       store,
@@ -156,7 +303,16 @@ export function loadSessionStore(
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
     });
+  } else if (!opts.skipCache) {
+    dropSessionStoreObjectCache(storePath);
   }
 
-  return structuredClone(store);
+  const clonedStore = structuredClone(store);
+  const retainSerializedFromDisk = shouldRetainSessionStoreSerializedCache(fileStat?.sizeBytes);
+  rememberLoadedSessionStoreSnapshot({
+    store: clonedStore,
+    serializedFromDisk,
+    retainSerializedFromDisk,
+  });
+  return clonedStore;
 }

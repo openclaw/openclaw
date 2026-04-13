@@ -314,21 +314,25 @@ export async function tryFastAbortFromMessage(params: {
           delete store[legacyKey];
         }
       }
-      await updateSessionStore(storePath, (nextStore) => {
-        const nextEntry = nextStore[key] ?? entry;
-        if (!nextEntry) {
-          return;
-        }
-        nextEntry.abortedLastRun = true;
-        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-        nextEntry.updatedAt = Date.now();
-        nextStore[key] = nextEntry;
-        for (const legacyKey of legacyKeys ?? []) {
-          if (legacyKey !== key) {
-            delete nextStore[legacyKey];
+      await updateSessionStore(
+        storePath,
+        (nextStore) => {
+          const nextEntry = nextStore[key] ?? entry;
+          if (!nextEntry) {
+            return;
           }
-        }
-      });
+          nextEntry.abortedLastRun = true;
+          applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
+          nextEntry.updatedAt = Date.now();
+          nextStore[key] = nextEntry;
+          for (const legacyKey of legacyKeys ?? []) {
+            if (legacyKey !== key) {
+              delete nextStore[legacyKey];
+            }
+          }
+        },
+        { baseStore: store },
+      );
     } else if (abortKey) {
       setAbortMemory(abortKey, true);
     }

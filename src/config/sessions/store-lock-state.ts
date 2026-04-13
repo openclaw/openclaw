@@ -1,4 +1,8 @@
 import { clearSessionStoreCaches } from "./store-cache.js";
+import {
+  clearLoadedSessionStoreSnapshotsForTest,
+  clearSessionObjectCacheLimitWarningsForTest,
+} from "./store-load.js";
 
 export type SessionStoreLockTask = {
   fn: () => Promise<unknown>;
@@ -18,6 +22,8 @@ export const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
 
 export function clearSessionStoreCacheForTest(): void {
   clearSessionStoreCaches();
+  clearSessionObjectCacheLimitWarningsForTest();
+  clearLoadedSessionStoreSnapshotsForTest();
   for (const queue of LOCK_QUEUES.values()) {
     for (const task of queue.pending) {
       task.reject(new Error("session store queue cleared for test"));

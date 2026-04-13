@@ -437,9 +437,13 @@ export async function handleDirectiveOnly(
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
-      });
+      await updateSessionStore(
+        storePath,
+        (store) => {
+          store[sessionKey] = sessionEntry;
+        },
+        { baseStore: sessionStore },
+      );
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
       // `/model` should retarget queued/future work without interrupting the

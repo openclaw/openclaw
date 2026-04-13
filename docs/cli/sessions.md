@@ -111,3 +111,17 @@ openclaw sessions cleanup --json
 Related:
 
 - Session config: [Configuration reference](/gateway/configuration-reference#session)
+- Session cache limit: [Environment variables](/help/environment#session-store-cache)
+
+## Large session stores
+
+OpenClaw keeps short-lived in-memory session-store caches for `sessions.json`, but those caches now have a size limit. By default, stores larger than `1 MB` (`1000000` bytes) are still read normally, but their in-memory parsed and serialized caches are disabled to reduce memory retention in long-running gateways.
+
+When the limit is exceeded:
+
+- session behavior stays the same
+- no sessions are deleted or reset
+- repeated store reads may be slower because OpenClaw reads and parses from disk again
+- OpenClaw logs a one-time warning for that store path
+
+To override the limit, set `OPENCLAW_SESSION_OBJECT_CACHE_MAX_BYTES`. Setting it to `0` disables the session object cache entirely. See [Environment variables](/help/environment#session-store-cache).

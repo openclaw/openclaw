@@ -117,6 +117,16 @@ Both resolve from process env at activation time. SecretRef details are document
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_LOG_LEVEL` | Override log level for both file and console (e.g. `debug`, `trace`). Takes precedence over `logging.level` and `logging.consoleLevel` in config. Invalid values are ignored with a warning. |
 
+## Session store cache
+
+| Variable                                  | Purpose                                                                                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OPENCLAW_SESSION_OBJECT_CACHE_MAX_BYTES` | Maximum `sessions.json` size eligible for the in-memory session-store caches. Defaults to `1000000` bytes (`1 MB`). Set to `0` to disable those caches completely. |
+
+When a session store grows past this limit, OpenClaw stops retaining both the parsed object cache and the serialized in-memory copy for that `sessions.json`. This lowers memory retention for large stores at the cost of extra disk reads on repeated access.
+
+If the limit is exceeded, OpenClaw logs a one-time warning per store path that includes the store path, current size, configured limit, and `OPENCLAW_SESSION_OBJECT_CACHE_MAX_BYTES`.
+
 ### `OPENCLAW_HOME`
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for all internal path resolution. This enables full filesystem isolation for headless service accounts.

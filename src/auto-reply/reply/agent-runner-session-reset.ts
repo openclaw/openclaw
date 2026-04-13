@@ -85,9 +85,13 @@ export async function resetReplyRunSession(params: {
   nextEntry.sessionFile = nextSessionFile;
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {
-    await deps.updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey!] = nextEntry;
-    });
+    await deps.updateSessionStore(
+      params.storePath,
+      (store) => {
+        store[params.sessionKey!] = nextEntry;
+      },
+      { baseStore: params.activeSessionStore },
+    );
   } catch (err) {
     deps.error(
       `Failed to persist session reset after ${params.options.failureLabel} (${params.sessionKey}): ${String(err)}`,

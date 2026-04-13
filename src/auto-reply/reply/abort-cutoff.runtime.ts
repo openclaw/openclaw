@@ -18,15 +18,19 @@ export async function clearAbortCutoffInSessionRuntime(params: {
   sessionStore[sessionKey] = sessionEntry;
 
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      const existing = store[sessionKey] ?? sessionEntry;
-      if (!existing) {
-        return;
-      }
-      applyAbortCutoffToSessionEntry(existing, undefined);
-      existing.updatedAt = Date.now();
-      store[sessionKey] = existing;
-    });
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const existing = store[sessionKey] ?? sessionEntry;
+        if (!existing) {
+          return;
+        }
+        applyAbortCutoffToSessionEntry(existing, undefined);
+        existing.updatedAt = Date.now();
+        store[sessionKey] = existing;
+      },
+      { baseStore: sessionStore },
+    );
   }
 
   return true;

@@ -13,7 +13,12 @@ const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
 const SESSION_STORE_CACHE = createExpiringMapCache<string, SessionStoreCacheEntry>({
   ttlMs: getSessionStoreTtl,
 });
-const SESSION_STORE_SERIALIZED_CACHE = new Map<string, string>();
+type SerializedSessionStoreCacheEntry = {
+  loadedAt: number;
+  serialized: string;
+};
+
+const SESSION_STORE_SERIALIZED_CACHE = new Map<string, SerializedSessionStoreCacheEntry>();
 
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
@@ -36,16 +41,34 @@ export function invalidateSessionStoreCache(storePath: string): void {
   SESSION_STORE_SERIALIZED_CACHE.delete(storePath);
 }
 
-export function getSerializedSessionStore(storePath: string): string | undefined {
-  return SESSION_STORE_SERIALIZED_CACHE.get(storePath);
+export function getSerializedSessionStore(params: {
+  storePath: string;
+  ttlMs: number;
+}): string | undefined {
+  const cached = SESSION_STORE_SERIALIZED_CACHE.get(params.storePath);
+  if (!cached) {
+    return undefined;
+  }
+  if (params.ttlMs <= 0 || Date.now() - cached.loadedAt > params.ttlMs) {
+    SESSION_STORE_SERIALIZED_CACHE.delete(params.storePath);
+    return undefined;
+  }
+  return cached.serialized;
 }
 
-export function setSerializedSessionStore(storePath: string, serialized?: string): void {
+export function setSerializedSessionStore(
+  storePath: string,
+  serialized?: string,
+  loadedAt = Date.now(),
+): void {
   if (serialized === undefined) {
     SESSION_STORE_SERIALIZED_CACHE.delete(storePath);
     return;
   }
-  SESSION_STORE_SERIALIZED_CACHE.set(storePath, serialized);
+  SESSION_STORE_SERIALIZED_CACHE.set(storePath, {
+    loadedAt,
+    serialized,
+  });
 }
 
 export function dropSessionStoreObjectCache(storePath: string): void {
@@ -75,6 +98,7 @@ export function writeSessionStoreCache(params: {
   sizeBytes?: number;
   serialized?: string;
 }): void {
+  const loadedAt = Date.now();
   SESSION_STORE_CACHE.set(params.storePath, {
     store: structuredClone(params.store),
     mtimeMs: params.mtimeMs,
@@ -82,6 +106,9 @@ export function writeSessionStoreCache(params: {
     serialized: params.serialized,
   });
   if (params.serialized !== undefined) {
-    SESSION_STORE_SERIALIZED_CACHE.set(params.storePath, params.serialized);
+    SESSION_STORE_SERIALIZED_CACHE.set(params.storePath, {
+      loadedAt,
+      serialized: params.serialized,
+    });
   }
 }

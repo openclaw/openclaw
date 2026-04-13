@@ -255,9 +255,13 @@ export async function persistInlineDirectives(params: {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
+        await updateSessionStore(
+          storePath,
+          (store) => {
+            store[sessionKey] = sessionEntry;
+          },
+          { baseStore: sessionStore },
+        );
       }
       enqueueModeSwitchEvents({
         enqueueSystemEvent,

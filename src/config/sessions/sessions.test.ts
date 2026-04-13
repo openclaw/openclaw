@@ -238,6 +238,86 @@ describe("session store lock (Promise chain mutex)", () => {
     expect(store[key]?.modelOverride).toBe("recovered");
   });
 
+  it("does not replay a failed Windows baseStore write on the next update", async () => {
+    const key = "agent:main:base-store-retry";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s1", updatedAt: 100, label: "initial", displayName: "before" },
+    });
+
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const baseStore = loadSessionStore(storePath, { skipCache: true });
+    const writeError = Object.assign(new Error("busy"), { code: "EBUSY" });
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic").mockRejectedValue(writeError);
+
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        store[key] = {
+          ...store[key],
+          label: "failed-write",
+        };
+      },
+      { skipMaintenance: true, baseStore },
+    );
+
+    writeSpy.mockRestore();
+
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        store[key] = {
+          ...store[key],
+          displayName: "fresh",
+        };
+      },
+      { skipMaintenance: true, baseStore },
+    );
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.label).toBe("initial");
+    expect(store[key]?.displayName).toBe("fresh");
+
+    platformSpy.mockRestore();
+  });
+
+  it("does not replay a failed baseStore mutator on the next update", async () => {
+    const key = "agent:main:base-store-throw";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s1", updatedAt: 100, label: "initial", displayName: "before" },
+    });
+
+    const baseStore = loadSessionStore(storePath, { skipCache: true });
+
+    await expect(
+      updateSessionStore(
+        storePath,
+        async (store) => {
+          store[key] = {
+            ...store[key],
+            label: "failed-mutation",
+          };
+          throw new Error("boom");
+        },
+        { skipMaintenance: true, baseStore },
+      ),
+    ).rejects.toThrow("boom");
+
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        store[key] = {
+          ...store[key],
+          displayName: "fresh",
+        };
+      },
+      { skipMaintenance: true, baseStore },
+    );
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.label).toBe("initial");
+    expect(store[key]?.displayName).toBe("fresh");
+  });
+
   it("clears stale runtime provider when model is patched without provider", () => {
     const merged = mergeSessionEntry(
       {
@@ -300,6 +380,40 @@ describe("session store lock (Promise chain mutex)", () => {
         model: "gpt-5.4",
       };
     });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.acp).toEqual(acp);
+    expect(store[key]?.modelProvider).toBe("openai-codex");
+    expect(store[key]?.model).toBe("gpt-5.4");
+  });
+
+  it("preserves ACP metadata when baseStore reuse starts from a pre-mutated entry", async () => {
+    const key = "agent:codex:acp:binding:discord:default:feedface";
+    const acp = {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex-discord",
+      mode: "persistent" as const,
+      state: "idle" as const,
+      lastActivityAt: 100,
+    };
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp,
+      },
+    });
+
+    const baseStore = loadSessionStore(storePath, { skipCache: true });
+    baseStore[key] = {
+      sessionId: "sess-acp",
+      updatedAt: 200,
+      modelProvider: "openai-codex",
+      model: "gpt-5.4",
+    };
+
+    await updateSessionStore(storePath, () => undefined, { baseStore, skipMaintenance: true });
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.acp).toEqual(acp);

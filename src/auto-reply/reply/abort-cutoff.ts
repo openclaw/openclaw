@@ -48,7 +48,6 @@ export function applyAbortCutoffToSessionEntry(
   entry.abortCutoffMessageSid = cutoff?.messageSid;
   entry.abortCutoffTimestamp = cutoff?.timestamp;
 }
-
 function toNumericMessageSid(value: string | undefined): bigint | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed || !/^\d+$/.test(trimmed)) {
