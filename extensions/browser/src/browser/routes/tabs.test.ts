@@ -3,7 +3,9 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
-  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  assertBrowserNavigationResultAllowed: vi.fn(
+    async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
+  ),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
@@ -174,7 +176,8 @@ describe("browser tab routes", () => {
 
   it("redacts blocked tab URLs from GET /tabs", async () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async ({ url }: { url: string }) => {
+      async (opts?: { url: string }) => {
+        const url = opts?.url ?? "";
         if (url.includes("169.254.169.254")) {
           throw new Error("blocked");
         }
@@ -279,7 +282,8 @@ describe("browser tab routes", () => {
 
   it("redacts blocked tab URLs for /tabs/action list", async () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async ({ url }: { url: string }) => {
+      async (opts?: { url: string }) => {
+        const url = opts?.url ?? "";
         if (url.includes("10.0.0.5")) {
           throw new Error("blocked");
         }

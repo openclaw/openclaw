@@ -17,7 +17,9 @@ const chromeMcpMocks = vi.hoisted(() => ({
 
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
-  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  assertBrowserNavigationResultAllowed: vi.fn(
+    async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
+  ),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
@@ -205,7 +207,8 @@ describe("existing-session interaction navigation guard", () => {
         },
       ]);
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async ({ url }: { url: string }) => {
+      async (opts?: { url: string }) => {
+        const url = opts?.url ?? "";
         if (url.includes("169.254.169.254")) {
           throw new Error("blocked new tab");
         }
