@@ -23,7 +23,16 @@ function stripRepeatedFeishuProviderPrefixes(raw: string): string {
 
 function canonicalizeFeishuAllowlistKey(params: { kind: "chat" | "user"; value: string }): string {
   const value = params.value.trim();
-  return value ? `${params.kind}:${value}` : "";
+  if (!value) {
+    return "";
+  }
+  // A typed wildcard (`chat:*`, `user:*`, `open_id:*`, `dm:*`, `group:*`,
+  // `channel:*`) collapses to the bare wildcard so it keeps matching across
+  // both kinds, preserving the prior `normalizeFeishuTarget`-based behavior.
+  if (value === "*") {
+    return "*";
+  }
+  return `${params.kind}:${value}`;
 }
 
 function normalizeFeishuAllowEntry(raw: string): string {

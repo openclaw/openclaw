@@ -160,6 +160,25 @@ describe("resolveFeishuAllowlistMatch", () => {
     ).toEqual({ allowed: true, matchKey: "*", matchSource: "wildcard" });
   });
 
+  it("treats typed wildcard aliases as bare wildcards", () => {
+    for (const wildcard of [
+      "chat:*",
+      "group:*",
+      "channel:*",
+      "user:*",
+      "dm:*",
+      "open_id:*",
+      "feishu:user:*",
+    ]) {
+      expect(
+        resolveFeishuAllowlistMatch({
+          allowFrom: [wildcard],
+          senderId: "ou_anyone",
+        }),
+      ).toEqual({ allowed: true, matchKey: "*", matchSource: "wildcard" });
+    }
+  });
+
   it("matches normalized ID entries", () => {
     expect(
       resolveFeishuAllowlistMatch({
