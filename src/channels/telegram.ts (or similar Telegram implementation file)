@@ -1,0 +1,181 @@
+import { Bot, Context } from 'grammy';
+
+/**
+ * Message types that should remain internal and NOT be shown to end users.
+ * These are used for assistant scratch space, thinking, and internal commentary.
+ */
+const INTERNAL_MESSAGE_TYPES = new Set([
+  'internal',
+  'scratch',
+  'thinking',
+  'commentary',
+  'system',
+  'debug',
+  'narration'
+]);
+
+/**
+ * Configuration options for the Telegram channel
+ */
+export interface TelegramChannelConfig {
+  /** Telegram bot API token */
+  token: string;
+  /** Optional webhook URL for production deployments */
+  webhookUrl?: string;
+  /** Optional list of allowed Telegram user IDs for access control */
+  allowedUserIds?: string[];
+}
+
+/**
+ * Represents a message from the assistant system
+ */
+export interface AssistantMessage {
+  /** The text content of the message */
+  content: string;
+  /** Type of message - internal types are filtered from user view */
+  type?: string;
+  /** Optional metadata attached to the message */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Context passed to message handlers containing user message info
+ */
+export interface UserMessageContext {
+  /** Unique identifier for the user */
+  userId: string;
+  /** Username if available */
+  username?: string;
+  /** The text content of the user's message */
+  text: string;
+  /** Telegram chat ID for sending replies */
+  chatId: string;
+  /** Function to send a reply message to the user */
+  reply: (message: AssistantMessage) => Promise<void>;
+}
+
+/**
+ * Telegram channel implementation for OpenClaw
+ *
+ * Handles bidirectional communication between the assistant and Telegram users.
+ * Filters out internal assistant messages (scratch, thinking, commentary) to prevent
+ * leaking implementation details to end users.
+ *
+ * @see Issue #66161
+ */
+export class TelegramChannel {
+  private readonly bot: Bot;
+  private readonly config: TelegramChannelConfig;
+
+  constructor(config: TelegramChannelConfig) {
+    this.config = config;
+    this.bot = new Bot(config.token);
+  }
+
+  /**
+   * Initialize the Telegram channel
+   * Sets up webhook if configured
+   */
+  async initialize(): Promise<void> {
+    if (this.config.webhookUrl) {
+      await this.bot.api.setWebhook(this.config.webhookUrl);
+    }
+  }
+
+  /**
+   * Register a handler for incoming user messages
+   * @param handler - Async function to handle incoming messages
+   */
+  onMessage(handler: (context: UserMessageContext) => Promise<void>): void {
+    this.bot.on('message:text', async (ctx) => {
+      if (!this.isAuthorized(ctx)) {
+        await ctx.reply('Sorry, you are not authorized to use this bot.');
+        return;
+      }
+
+      const context: UserMessageContext = {
+        userId: ctx.from?.id.toString() || 'unknown',
+        username: ctx.from?.username,
+        text: ctx.message.text,
+        chatId: ctx.chat.id.toString(),
+        reply: async (message: AssistantMessage) => {
+          await this.sendMessage(ctx.chat.id, message);
+        }
+      };
+
+      await handler(context);
+    });
+  }
+
+  /**
+   * Send an assistant message to a Telegram chat
+   *
+   * Messages marked as internal types (scratch, thinking, commentary, etc.)
+   * are filtered out and not sent to users. This prevents leaking internal
+   * assistant chatter and implementation details.
+   *
+   * @param chatId - Telegram chat ID to send the message to
+   * @param message - The assistant message to send
+   */
+  async sendMessage(chatId: number, message: AssistantMessage): Promise<void> {
+    // FIX for Issue #66161:
+    // Filter out internal/scratch/commentary messages before sending to Telegram
+    // This prevents assistant pre-tool chatter from appearing in user chats
+    if (this.isInternalMessage(message)) {
+      return;
+    }
+
+    await this.bot.api.sendMessage(chatId, message.content);
+  }
+
+  /**
+   * Determine if a message should be treated as internal
+   * Internal messages are not shown to end users
+   *
+   * @param message - The message to check
+   * @returns true if the message is internal and should be hidden from users
+   */
+  private isInternalMessage(message: AssistantMessage): boolean {
+    return INTERNAL_MESSAGE_TYPES.has(message.type || '');
+  }
+
+  /**
+   * Check if a user is authorized to interact with the bot
+   *
+   * @param ctx - Grammy context containing user info
+   * @returns true if the user is authorized
+   */
+  private isAuthorized(ctx: Context): boolean {
+    if (!this.config.allowedUserIds || this.config.allowedUserIds.length === 0) {
+      return true;
+    }
+    const userId = ctx.from?.id?.toString();
+    return userId ? this.config.allowedUserIds.includes(userId) : false;
+  }
+
+  /**
+   * Get the webhook callback for integration with HTTP servers
+   * @returns Webhook callback function
+   */
+  getWebhookCallback(): (req: any, res: any) => Promise<void> {
+    // @ts-ignore - grammy webhookCallback return type may vary
+    return this.bot.webhookCallback();
+  }
+
+  /**
+   * Start long polling for message updates
+   * Useful for development and testing without a webhook
+   */
+  async startPolling(): Promise<void> {
+    await this.bot.start();
+  }
+
+  /**
+   * Stop the bot and clean up resources
+   */
+  async stop(): Promise<void> {
+    this.bot.stop();
+  }
+}
+
+export default TelegramChannel;
