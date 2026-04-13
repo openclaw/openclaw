@@ -66,9 +66,11 @@ describe("batchViaPlaywright", () => {
   });
 
   it("supports resize and close inside a batch", async () => {
+    const ctrl = new AbortController();
     const result = await batchViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
+      signal: ctrl.signal,
       actions: [{ kind: "resize", width: 800, height: 600 }, { kind: "close" }],
     });
 
@@ -78,10 +80,12 @@ describe("batchViaPlaywright", () => {
       targetId: "tab-1",
       width: 800,
       height: 600,
+      signal: ctrl.signal,
     });
     expect(closePageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
+      signal: ctrl.signal,
     });
   });
 });
