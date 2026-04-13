@@ -8,6 +8,7 @@ export type ReplyDispatcher = {
    * Enqueue a block reply for delivery.
    *
    * Returns `false` when the payload is dropped (empty/silent).
+   * Returns `true` when delivery completed synchronously (legacy plugins).
    * Otherwise returns a `Promise<true>` that resolves when the queued delivery
    * (and all preceding deliveries) complete.  Callers on the same-channel path
    * should `await` this to guarantee the block text reaches the user before
@@ -16,7 +17,7 @@ export type ReplyDispatcher = {
    * Because a fulfilled `Promise` is truthy, existing boolean-style checks
    * (`if (delivered)`) remain correct without changes.
    */
-  sendBlockReply: (payload: ReplyPayload) => false | Promise<true>;
+  sendBlockReply: (payload: ReplyPayload) => boolean | Promise<true>;
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;

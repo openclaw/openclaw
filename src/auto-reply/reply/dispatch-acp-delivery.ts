@@ -365,7 +365,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       text: ttsPayload.text,
       routed: false,
     });
-    // sendBlockReply returns false | Promise<void>; coerce to boolean for
+    // sendBlockReply returns boolean | Promise<true>; coerce to boolean for
     // the uniform delivered/failed tracking below.
     const deliveredRaw =
       kind === "tool"
