@@ -171,7 +171,7 @@ export function scheduleFollowupDrain(
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
           const authGroups = splitCollectItemsByAuthorization(items);
 
-          for (const [groupIdx, groupItems] of authGroups.entries()) {
+          for (const groupItems of authGroups) {
             const run = groupItems[0]?.run ?? queue.lastRun;
             if (!run) {
               break;
@@ -181,7 +181,7 @@ export function scheduleFollowupDrain(
             const prompt = buildCollectPrompt({
               title: "[Queued messages while agent was busy]",
               items: groupItems,
-              summary: groupIdx === 0 ? summary : undefined,
+              summary,
               renderItem: renderCollectItem,
             });
             await effectiveRunFollowup({
