@@ -73,7 +73,12 @@ export function resolveFallbackRetryPrompt(params: {
   if (!params.sessionHasHistory) {
     return params.body;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  // Preserve the original prompt so the fallback model retains full task context.
+  // When session history exists the model can infer prior progress, but dropping
+  // the original instruction caused agents to lose their task entirely (#65760).
+  const retryNotice =
+    "[System: The previous model attempt failed or timed out. Continue where you left off.]";
+  return `${retryNotice}\n\n${params.body}`;
 }
 
 export function createAcpVisibleTextAccumulator() {
