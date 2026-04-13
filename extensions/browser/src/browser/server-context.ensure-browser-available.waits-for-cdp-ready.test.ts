@@ -76,13 +76,17 @@ describe("browser server-context ensureBrowserAvailable", () => {
       1,
       "http://127.0.0.1:18800",
       PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-      undefined,
+      {
+        allowPrivateNetwork: true,
+      },
     );
     expect(isChromeReachable).toHaveBeenNthCalledWith(
       2,
       "http://127.0.0.1:18800",
       PROFILE_ATTACH_RETRY_TIMEOUT_MS,
-      undefined,
+      {
+        allowPrivateNetwork: true,
+      },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
