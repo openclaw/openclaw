@@ -97,6 +97,7 @@ Docs: https://docs.openclaw.ai
 - CLI/approvals: raise the default `openclaw approvals get` gateway timeout and report config-load timeouts explicitly, so slow hosts stop showing a misleading `Config unavailable.` note when the approvals snapshot succeeds but the follow-up config RPC needs more time. (#66239) Thanks @neeravmakwana.
 - Media/store: honor configured agent media limits when saving generated media and persisting outbound reply media, so the store no longer hard-stops those flows at 5 MB before the configured limit applies. (#66229) Thanks @neeravmakwana and @vincentkoc.
 - Plugins/setup-entry: preserve separate setup-entry secrets exports when loading bundled setup-runtime channels, so setup-mode flows keep the channel secret contract for split plugin + secrets entrypoints. (#66261) Thanks @hxy91819.
+- Agents/OpenAI Responses: classify the exact `Unknown error (no error details in response)` transport failure as failover reason `unknown` so assistant/model fallback still runs for that no-details failure path. (#65254) Thanks @OpenCodeEngineer.
 
 ## 2026.4.12
 
