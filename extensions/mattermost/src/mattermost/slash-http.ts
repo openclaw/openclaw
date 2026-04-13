@@ -51,6 +51,8 @@ type SlashHttpHandlerParams = {
   runtime: RuntimeEnv;
   /** Expected token from registered commands (for validation). */
   commandTokens: Set<string>;
+  /** Exact trigger expected for each registered token. */
+  commandTokenTriggers?: ReadonlyMap<string, string>;
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
@@ -89,6 +91,21 @@ function matchesRegisteredCommandToken(
     }
   }
   return false;
+}
+
+function resolveRegisteredCommandTrigger(
+  commandTokenTriggers: ReadonlyMap<string, string> | undefined,
+  candidateToken: string,
+): string | undefined {
+  if (!commandTokenTriggers) {
+    return undefined;
+  }
+  for (const [token, trigger] of commandTokenTriggers.entries()) {
+    if (safeEqualSecret(candidateToken, token)) {
+      return trigger;
+    }
+  }
+  return undefined;
 }
 
 type SlashInvocationAuth = {
@@ -219,7 +236,7 @@ async function authorizeSlashInvocation(params: {
  * from the Mattermost server when a user invokes a registered slash command.
  */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, commandTokens, triggerMap, log } = params;
+  const { account, cfg, runtime, commandTokens, commandTokenTriggers, triggerMap, log } = params;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method !== "POST") {
@@ -265,6 +282,14 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
 
     // Extract command info
     const trigger = payload.command.replace(/^\//, "").trim();
+    const expectedTrigger = resolveRegisteredCommandTrigger(commandTokenTriggers, payload.token);
+    if (expectedTrigger && expectedTrigger !== trigger) {
+      sendJsonResponse(res, 401, {
+        response_type: "ephemeral",
+        text: "Unauthorized: invalid command token.",
+      });
+      return;
+    }
     const commandText = resolveCommandText(trigger, payload.text, triggerMap);
     const channelId = payload.channel_id;
     const senderId = payload.user_id;

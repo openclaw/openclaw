@@ -525,10 +525,12 @@ When Mattermost native commands are enabled:
 
 - `commands.callbackPath` must be a path (for example `/api/channels/mattermost/command`), not a full URL.
 - `commands.callbackUrl` must resolve to the OpenClaw gateway endpoint and be reachable from the Mattermost server.
+- Native slash command registration fails closed when `commands.callbackUrl` is omitted and the derived fallback would be non-HTTPS.
 - Native slash callbacks are authenticated with the per-command tokens returned
   by Mattermost during slash command registration. If registration fails or no
   commands are activated, OpenClaw rejects callbacks with
   `Unauthorized: invalid command token.`
+- Each callback token is also bound to its registered slash trigger, so a token captured from one command cannot be replayed against a different command name.
 - For private/tailnet/internal callback hosts, Mattermost may require
   `ServiceSettings.AllowedUntrustedInternalConnections` to include the callback host/domain.
   Use host/domain values, not full URLs.

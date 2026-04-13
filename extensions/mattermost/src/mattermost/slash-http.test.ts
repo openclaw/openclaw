@@ -11,18 +11,17 @@ function createRequest(params: {
   contentType?: string;
   autoEnd?: boolean;
 }): IncomingMessage {
-  const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
+  const incoming = new PassThrough() as IncomingMessage;
   incoming.method = params.method ?? "POST";
   incoming.headers = {
     "content-type": params.contentType ?? "application/x-www-form-urlencoded",
   };
   process.nextTick(() => {
     if (params.body) {
-      req.write(params.body);
+      incoming.write(params.body);
     }
     if (params.autoEnd !== false) {
-      req.end();
+      incoming.end();
     }
   });
   return incoming;
@@ -40,7 +39,7 @@ function createResponse(): {
     setHeader(name: string, value: string) {
       headers.set(name.toLowerCase(), value);
     },
-    end(chunk?: string | Buffer) {
+    end(chunk?: string | Uint8Array) {
       body = chunk ? String(chunk) : "";
     },
   } as ServerResponse;
@@ -63,6 +62,7 @@ const accountFixture: ResolvedMattermostAccount = {
 
 async function runSlashRequest(params: {
   commandTokens: Set<string>;
+  commandTokenTriggers?: Map<string, string>;
   body: string;
   method?: string;
 }) {
@@ -71,6 +71,7 @@ async function runSlashRequest(params: {
     cfg: {} as OpenClawConfig,
     runtime: {} as RuntimeEnv,
     commandTokens: params.commandTokens,
+    commandTokenTriggers: params.commandTokenTriggers,
   });
   const req = createRequest({ method: params.method, body: params.body });
   const response = createResponse();
@@ -126,6 +127,17 @@ describe("slash-http", () => {
     const response = await runSlashRequest({
       commandTokens: new Set(["known-token"]),
       body: "token=unknown&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+    });
+
+    expect(response.res.statusCode).toBe(401);
+    expect(response.getBody()).toContain("Unauthorized: invalid command token.");
+  });
+
+  it("rejects a valid token replayed against the wrong command trigger", async () => {
+    const response = await runSlashRequest({
+      commandTokens: new Set(["known-token"]),
+      commandTokenTriggers: new Map([["known-token", "oc_status"]]),
+      body: "token=known-token&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_model&text=",
     });
 
     expect(response.res.statusCode).toBe(401);
