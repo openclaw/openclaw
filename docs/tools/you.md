@@ -2,7 +2,7 @@
 summary: "You.com search, research, and content extraction tools"
 read_when:
   - You want You.com-backed web search
-  - You need a You.com API key
+  - You want to configure a You.com API key
   - You want You.com as a web_search provider
   - You want deep research with citations
   - You want content extraction from URLs
@@ -17,7 +17,7 @@ OpenClaw can use **You.com** in three ways:
 - as `web_research` for deep, multi-step research with citations
 - as `web_contents` for extracting content from specific URLs
 
-You.com provides a Search API, a Research API for comprehensive cited answers, and a Contents API for extracting clean content from webpages. All three require a `YDC_API_KEY`.
+You.com provides a Search API, a Research API for comprehensive cited answers, and a Contents API for extracting clean content from webpages. `web_search` works without an API key (free tier, rate-limited). `web_research` and `web_contents` require a `YDC_API_KEY`.
 
 ## Get an API key
 
@@ -25,7 +25,7 @@ You.com provides a Search API, a Research API for comprehensive cited answers, a
 2. Generate an API key in the dashboard.
 3. Store it in config or set `YDC_API_KEY` in the gateway environment.
 
-**Note:** All You.com tools require an API key (`YDC_API_KEY`).
+**Note:** `web_search` works without an API key. An API key unlocks higher rate limits for search and enables `web_research` and `web_contents`.
 
 ## Configure You.com search
 
@@ -58,7 +58,7 @@ Notes:
 - Choosing You.com in onboarding or `openclaw configure --section web` enables the bundled You.com plugin automatically.
 - Store You.com config under `plugins.entries.you.config.webSearch.*`.
 - `web_search` with You.com supports `query` and `count` (up to 100 results).
-- All tools require `YDC_API_KEY`.
+- `web_search` works without a key; `web_research` and `web_contents` require `YDC_API_KEY`.
 
 ## You.com plugin tools
 
