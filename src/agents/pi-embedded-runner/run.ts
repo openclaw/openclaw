@@ -15,6 +15,7 @@ import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentExecutionContract,
+  resolveConfiguredToolModel,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import {
@@ -47,6 +48,7 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
+import { parseModelRef } from "../model-selection-normalize.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
 import {
@@ -288,6 +290,45 @@ export async function runEmbeddedPiAgent(
         });
       }
       let runtimeModel = model;
+
+      // ── Split model routing: resolve tool model ──────────────────────
+      const toolModelRef = resolveConfiguredToolModel({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
+      let resolvedToolModel: typeof model | undefined;
+      let toolModelProvider: string | undefined;
+      let toolModelIdResolved: string | undefined;
+      if (toolModelRef) {
+        const parsed = parseModelRef(toolModelRef, provider);
+        if (parsed) {
+          toolModelProvider = parsed.provider;
+          toolModelIdResolved = parsed.model;
+          const toolModelResult = await resolveModelAsync(
+            parsed.provider,
+            parsed.model,
+            agentDir,
+            params.config,
+            { authStorage, modelRegistry },
+          );
+          if (toolModelResult.model) {
+            resolvedToolModel = toolModelResult.model;
+            log.info(
+              `split-model routing enabled: primary=${provider}/${modelId} tool=${parsed.provider}/${parsed.model}`,
+            );
+          } else {
+            log.warn(
+              `split-model routing: tool model ${toolModelRef} could not be resolved: ${toolModelResult.error ?? "unknown error"}; using primary model for all turns`,
+            );
+          }
+        } else {
+          log.warn(
+            `split-model routing: could not parse tool model ref "${toolModelRef}"; using primary model for all turns`,
+          );
+        }
+      }
+      // ────────────────────────────────────────────────────────────────
 
       const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
         cfg: params.config,
@@ -682,6 +723,9 @@ export async function runEmbeddedPiAgent(
             initialReplayState: accumulatedReplayState,
             authStorage,
             modelRegistry,
+            toolModel: resolvedToolModel,
+            toolModelProvider,
+            toolModelId: toolModelIdResolved,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,

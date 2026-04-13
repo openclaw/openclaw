@@ -10,6 +10,13 @@ export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string 
   return resolvePrimaryStringValue(model);
 }
 
+export function resolveAgentModelToolValue(model?: AgentModelConfig): string | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  return typeof model.tool === "string" && model.tool.trim() ? model.tool.trim() : undefined;
+}
+
 export function resolveAgentModelFallbackValues(model?: AgentModelConfig): string[] {
   if (!model || typeof model !== "object") {
     return [];

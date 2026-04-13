@@ -33,6 +33,13 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   provider: string;
   modelId: string;
   model: Model<Api>;
+  /** Resolved tool model for split model routing. When set, tool-continuation
+   *  turns are routed to this model instead of the primary. */
+  toolModel?: Model<Api>;
+  /** Provider id for the tool model (e.g. "anthropic"). */
+  toolModelProvider?: string;
+  /** Model id for the tool model (e.g. "claude-sonnet-4-20250514"). */
+  toolModelId?: string;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;

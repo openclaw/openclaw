@@ -5,6 +5,7 @@ export const AgentModelSchema = z.union([
   z
     .object({
       primary: z.string().optional(),
+      tool: z.string().optional(),
       fallbacks: z.array(z.string()).optional(),
     })
     .strict(),
