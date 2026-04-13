@@ -20,7 +20,11 @@ import {
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { resolveShellWrapperTransportArgv } from "../infra/exec-wrapper-resolution.js";
+import {
+  extractEnvAssignmentKeysFromDispatchWrappers,
+  isShellWrapperInvocation,
+  resolveShellWrapperTransportArgv,
+} from "../infra/exec-wrapper-resolution.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
@@ -78,6 +82,7 @@ type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 type SystemRunParsePhase = {
   argv: string[];
   shellPayload: string | null;
+  shellWrapperInvocation: boolean;
   commandText: string;
   commandPreview: string | null;
   approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
@@ -242,6 +247,7 @@ async function parseSystemRunPhase(
   }
 
   const shellPayload = command.shellPayload;
+  const shellWrapperInvocation = isShellWrapperInvocation(command.argv);
   const commandText = command.commandText;
   const approvalPlan =
     opts.params.systemRunPlan === undefined
@@ -258,6 +264,39 @@ async function parseSystemRunPhase(
   const sessionKey = normalizeOptionalString(opts.params.sessionKey) ?? "node";
   const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
+  const envAssignmentKeys = extractEnvAssignmentKeysFromDispatchWrappers(command.argv);
+  const envAssignmentOverrides =
+    envAssignmentKeys.length > 0
+      ? Object.fromEntries(envAssignmentKeys.map((key) => [key, "1"]))
+      : undefined;
+  const envAssignmentDiagnostics = inspectHostExecEnvOverrides({
+    overrides: envAssignmentOverrides,
+    blockPathOverrides: true,
+  });
+  if (
+    envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0 ||
+    envAssignmentDiagnostics.rejectedOverrideInvalidKeys.length > 0
+  ) {
+    const details: string[] = [];
+    if (envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
+      details.push(
+        `blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")}`,
+      );
+    }
+    if (envAssignmentDiagnostics.rejectedOverrideInvalidKeys.length > 0) {
+      details.push(
+        `invalid non-portable env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideInvalidKeys.join(", ")}`,
+      );
+    }
+    await opts.sendInvokeResult({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `SYSTEM_RUN_DENIED: command env assignment rejected (${details.join("; ")})`,
+      },
+    });
+    return null;
+  }
   const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
     blockPathOverrides: true,
@@ -288,11 +327,12 @@ async function parseSystemRunPhase(
   }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
-    shellWrapper: shellPayload !== null,
+    shellWrapper: shellWrapperInvocation,
   });
   return {
     argv: command.argv,
     shellPayload,
+    shellWrapperInvocation,
     commandText,
     commandPreview: command.previewText,
     approvalPlan,
@@ -384,7 +424,7 @@ async function evaluateSystemRunPolicyPhase(
     approved: parsed.approved,
     isWindows,
     cmdInvocation,
-    shellWrapperInvocation: parsed.shellPayload !== null,
+    shellWrapperInvocation: parsed.shellWrapperInvocation,
   });
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
