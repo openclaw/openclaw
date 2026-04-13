@@ -8,9 +8,14 @@ import {
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
-import { runMemoryFlushIfNeeded, setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.js";
+import {
+  runMemoryFlushIfNeeded,
+  runPreflightCompactionIfNeeded,
+  setAgentRunnerMemoryTestDeps,
+} from "./agent-runner-memory.js";
 import type { FollowupRun } from "./queue.js";
 
+const compactEmbeddedPiSessionMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runEmbeddedPiAgentMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
@@ -75,6 +80,11 @@ describe("runMemoryFlushIfNeeded", () => {
       systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
       relativePath: "memory/2023-11-14.md",
     }));
+    compactEmbeddedPiSessionMock.mockReset().mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 12_000 },
+    });
     runWithModelFallbackMock.mockReset().mockImplementation(async ({ provider, model, run }) => ({
       result: await run(provider, model),
       provider,
@@ -105,6 +115,7 @@ describe("runMemoryFlushIfNeeded", () => {
       return nextEntry.compactionCount;
     });
     setAgentRunnerMemoryTestDeps({
+      compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
       runWithModelFallback: runWithModelFallbackMock as never,
       runEmbeddedPiAgent: runEmbeddedPiAgentMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
@@ -119,6 +130,38 @@ describe("runMemoryFlushIfNeeded", () => {
     setAgentRunnerMemoryTestDeps();
     clearMemoryPluginState();
     await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  it("runs preflight compaction when fresh cached totals already exceed the threshold", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: "/tmp/session.jsonl",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      totalTokensFresh: true,
+      compactionCount: 1,
+    };
+    const sessionStore = { main: sessionEntry };
+    const replyOperation = createReplyOperation();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: {} } } },
+      followupRun: createFollowupRun(),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+    expect(entry?.compactionCount).toBe(2);
+    expect(entry?.totalTokens).toBe(12_000);
+    expect(entry?.totalTokensFresh).toBe(true);
+    expect(sessionStore.main.compactionCount).toBe(2);
   });
 
   it("runs a memory flush turn, rotates after compaction, and persists metadata", async () => {

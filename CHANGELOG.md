@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/compaction: let preflight compaction reevaluate fresh cached context totals on later turns so safeguard compaction can still trigger after the first reply when a session approaches its token threshold. (#65600)
+
 ## 2026.4.12-beta.1
 
 ### Changes
