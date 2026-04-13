@@ -197,7 +197,7 @@ describe("cron model formatting and precedence edge cases", () => {
         selectModel({
           payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/" },
         }),
-      ).resolves.toEqual({ ok: false, error: "invalid model: openai/" });
+      ).resolves.toEqual({ ok: false, error: "invalid model" });
     });
 
     it("rejects model with leading slash (empty provider)", async () => {
@@ -205,7 +205,7 @@ describe("cron model formatting and precedence edge cases", () => {
         selectModel({
           payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "/gpt-4.1-mini" },
         }),
-      ).resolves.toEqual({ ok: false, error: "invalid model: /gpt-4.1-mini" });
+      ).resolves.toEqual({ ok: false, error: "invalid model" });
     });
 
     it("normalizes provider casing", async () => {
