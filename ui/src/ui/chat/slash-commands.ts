@@ -292,10 +292,13 @@ function buildFallbackSlashCommands(): SlashCommandDef[] {
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
 
+let _refreshSeq = 0;
+
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
 }): Promise<void> {
+  const seq = ++_refreshSeq;
   const agentId = params.agentId?.trim();
   if (!params.client || !agentId) {
     replaceSlashCommands(buildFallbackSlashCommands());
@@ -307,10 +310,13 @@ export async function refreshSlashCommands(params: {
       includeArgs: true,
       scope: "text",
     });
+    if (seq !== _refreshSeq) return;
     replaceSlashCommands(buildSlashCommandsFromEntries(result?.commands ?? []));
   } catch {
+    if (seq !== _refreshSeq) return;
     replaceSlashCommands(buildFallbackSlashCommands());
   }
+}
 }
 
 export function resetSlashCommandsForTest(): void {
