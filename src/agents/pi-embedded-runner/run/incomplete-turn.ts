@@ -61,6 +61,14 @@ const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
   /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once|and)\b)/i;
 const SINGLE_ACTION_RESULT_STYLE_RE =
   /\b(?:i(?:'ll| will)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
+const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
+  "read",
+  "search",
+  "find",
+  "grep",
+  "glob",
+  "ls",
+]);
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
@@ -299,6 +307,16 @@ function hasNonPlanToolActivity(toolMetas: PlanningOnlyAttempt["toolMetas"]): bo
   return toolMetas.some((entry) => entry.toolName !== "update_plan");
 }
 
+function hasSingleRetrySafeNonPlanTool(toolMetas: PlanningOnlyAttempt["toolMetas"]): boolean {
+  const nonPlanToolNames = toolMetas
+    .map((entry) => normalizeLowercaseStringOrEmpty(entry.toolName))
+    .filter((toolName) => toolName && toolName !== "update_plan");
+  return (
+    nonPlanToolNames.length === 1 &&
+    SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(nonPlanToolNames[0] ?? "")
+  );
+}
+
 /**
  * Treat a turn with exactly one non-plan tool call plus visible "I'll do X
  * next" prose as effectively planning-only from the user's perspective. This
@@ -346,6 +364,8 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     toolMetas: params.attempt.toolMetas,
     assistantTexts: params.attempt.assistantTexts,
   });
+  const allowSingleActionRetryBypass =
+    singleActionNarrative && hasSingleRetrySafeNonPlanTool(params.attempt.toolMetas);
   if (
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
@@ -358,8 +378,9 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.didSendViaMessagingTool ||
     params.attempt.lastToolError ||
-    (hasNonPlanToolActivity(params.attempt.toolMetas) && !singleActionNarrative) ||
-    (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount && !singleActionNarrative) ||
+    (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
+    (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount &&
+      !allowSingleActionRetryBypass) ||
     params.attempt.replayMetadata.hadPotentialSideEffects
   ) {
     return null;

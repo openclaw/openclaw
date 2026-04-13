@@ -571,4 +571,15 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
 
     expect(result).toBeNull();
   });
+
+  it("does not retry when the lone tool call is unclassified", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["vendor_widget"], "I'll continue from there next."),
+    });
+
+    expect(result).toBeNull();
+  });
 });
