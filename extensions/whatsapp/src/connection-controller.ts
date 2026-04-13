@@ -497,10 +497,8 @@ export class WhatsAppConnectionController {
     this.clearReconnectSafetyTimer();
     this.reconnectSafetyTimer = setTimeout(() => {
       console.warn(
-        info(
-          `WA listener guard: ${RECONNECT_SAFETY_TIMEOUT_MS / 1000}s since connection closed ` +
-            `(account=${this.accountId}), reconnect may be stuck`,
-        ),
+        `WA listener guard: ${RECONNECT_SAFETY_TIMEOUT_MS / 1000}s since connection closed ` +
+          `(account=${this.accountId}), reconnect may be stuck`,
       );
     }, RECONNECT_SAFETY_TIMEOUT_MS);
 
