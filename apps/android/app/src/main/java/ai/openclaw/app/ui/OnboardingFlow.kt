@@ -839,7 +839,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                       )
                     return@Button
                   }
-                  gatewayUrl = parsedGateway.config.displayUrl
+                  gatewayUrl = parsedGateway.config.transportUrl
                   viewModel.setGatewayBootstrapToken("")
                 }
                 step = OnboardingStep.Permissions
@@ -1058,8 +1058,8 @@ private fun GatewayStep(
   onTokenChange: (String) -> Unit,
   onPasswordChange: (String) -> Unit,
 ) {
-  val resolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
-  val manualResolvedEndpoint = remember(manualHost, manualPort, manualTls) { composeGatewayManualUrl(manualHost, manualPort, manualTls)?.let { parseGatewayEndpoint(it)?.displayUrl } }
+  val resolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.transportUrl } }
+  val manualResolvedEndpoint = remember(manualHost, manualPort, manualTls) { composeGatewayManualUrl(manualHost, manualPort, manualTls)?.let { parseGatewayEndpoint(it)?.transportUrl } }
 
   StepShell(title = "Gateway Connection") {
     Text(
@@ -1584,7 +1584,7 @@ private fun FinalStep(
   methodLabel: String,
 ) {
   val context = androidx.compose.ui.platform.LocalContext.current
-  val gatewayAddress = parsedGateway?.displayUrl ?: "Invalid gateway URL"
+  val gatewayAddress = parsedGateway?.transportUrl ?: "Invalid gateway URL"
   val statusLabel = gatewayStatusForDisplay(statusText)
   val showDiagnostics = gatewayStatusHasDiagnostics(statusText)
   val pairingRequired = gatewayStatusLooksLikePairing(statusText)
