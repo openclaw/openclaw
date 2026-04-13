@@ -248,11 +248,21 @@ export async function handleBlueBubblesWebhookRequest(
         return true;
       }
       const reaction = normalizeWebhookReaction(payload);
+      // Allow updated-message events through when they carry attachments.
+      // BB fires new-message (text only), then updated-message ~2-3s later once
+      // attachment data is ready. Without this, inbound images/PDFs/files are
+      // silently dropped. Only check data.attachments (normalizeWebhookMessage
+      // requires a message container in payload.data, so root-only attachment
+      // payloads would pass the filter but fail normalization).
+      const dataAttachments = asRecord(payload.data)?.attachments;
+      const isAttachmentUpdate =
+        eventType === "updated-message" && Array.isArray(dataAttachments) && dataAttachments.length > 0;
       if (
         (eventType === "updated-message" ||
           eventType === "message-reaction" ||
           eventType === "reaction") &&
-        !reaction
+        !reaction &&
+        !isAttachmentUpdate
       ) {
         res.statusCode = 200;
         res.end("ok");
