@@ -30,8 +30,8 @@ JSON schemas for all API parameters and responses are in the [assets](assets/) d
 
 ## web_search
 
-**Base URL:** `https://ydc-index.io`
-**Endpoint:** `GET /v1/search`
+**Base URL:** `https://api.you.com`
+**Endpoint:** `GET /v1/agents/search`
 
 Returns raw web and news results. The plugin tool exposes the most common
 parameters directly; the full API surface is documented below for advanced use

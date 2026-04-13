@@ -140,7 +140,7 @@ export async function runYouSearch(params: YouSearchParams): Promise<Record<stri
     return { ...cached.value, cached: true };
   }
 
-  const url = new URL(`${YOU_SEARCH_BASE_URL}/v1/search`);
+  const url = new URL(`${YOU_RESEARCH_BASE_URL}/v1/agents/search`);
   url.searchParams.set("query", params.query);
   url.searchParams.set("count", String(count));
   if (params.freshness) {
