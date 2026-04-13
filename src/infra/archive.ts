@@ -603,9 +603,15 @@ export async function extractArchive(params: {
         }
 
         const destinationRealDir = await prepareArchiveDestinationDir(params.destDir);
+        if (params.beforeWriteToDestination) {
+          await params.beforeWriteToDestination();
+        }
         await withStagedArchiveDestination({
           destinationRealDir,
           run: async (stagingDir) => {
+            if (params.beforeWriteToDestination) {
+              await params.beforeWriteToDestination();
+            }
             const checkTarEntrySafety = createTarEntryPreflightChecker({
               rootDir: destinationRealDir,
               stripComponents: params.stripComponents,

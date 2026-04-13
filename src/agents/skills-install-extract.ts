@@ -113,11 +113,18 @@ async function extractTarBz2WithStaging(params: {
   destinationRealDir: string;
   stripComponents: number;
   timeoutMs: number;
-  beforeMerge?: () => Promise<void>;
+  validateDestination?: () => Promise<void>;
 }): Promise<ArchiveExtractResult> {
+  if (params.validateDestination) {
+    await params.validateDestination();
+  }
+
   return await withStagedArchiveDestination({
     destinationRealDir: params.destinationRealDir,
     run: async (stagingDir) => {
+      if (params.validateDestination) {
+        await params.validateDestination();
+      }
       const extractResult = await runCommandWithTimeout(
         buildTarExtractArgv({
           archivePath: params.archivePath,
@@ -129,14 +136,11 @@ async function extractTarBz2WithStaging(params: {
       if (extractResult.code !== 0) {
         return extractResult;
       }
-      if (params.beforeMerge) {
-        await params.beforeMerge();
-      }
       await mergeExtractedTreeIntoDestination({
         sourceDir: stagingDir,
         destinationDir: params.destinationRealDir,
         destinationRealDir: params.destinationRealDir,
-        beforeEachDestinationWrite: params.beforeMerge,
+        beforeEachDestinationWrite: params.validateDestination,
       });
       return extractResult;
     },
@@ -236,7 +240,7 @@ export async function extractArchive(params: {
         destinationRealDir,
         stripComponents: strip,
         timeoutMs,
-        beforeMerge: validateTargetDir,
+        validateDestination: validateTargetDir,
       });
     }
 

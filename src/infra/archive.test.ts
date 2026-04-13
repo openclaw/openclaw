@@ -365,6 +365,40 @@ describe("archive utils", () => {
     });
   });
 
+  it("runs beforeWriteToDestination before tar staging extraction", async () => {
+    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
+      await writePackageArchive({
+        ext: "tar",
+        workDir,
+        archivePath,
+        fileName: "hello.txt",
+        content: "hi",
+      });
+
+      const tarExtractSpy = vi.spyOn(tar, "x");
+      let callbackCalls = 0;
+      try {
+        await expect(
+          extractArchive({
+            archivePath,
+            destDir: extractDir,
+            timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+            beforeWriteToDestination: async () => {
+              callbackCalls += 1;
+              throw new Error("destination directory changed during extract");
+            },
+          }),
+        ).rejects.toThrow("destination directory changed during extract");
+      } finally {
+        tarExtractSpy.mockRestore();
+      }
+
+      expect(callbackCalls).toBe(1);
+      expect(tarExtractSpy).not.toHaveBeenCalled();
+      await expectPathMissing(path.join(extractDir, "package", "hello.txt"));
+    });
+  });
+
   it("runs beforeWriteToDestination on zip extracts and blocks destination rebinds", async () => {
     await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
       const zip = new JSZip();

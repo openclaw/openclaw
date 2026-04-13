@@ -522,6 +522,48 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "fails closed when targetDir is replaced before tar.bz2 staging extraction",
+    async () => {
+      const entry = buildEntry("tbz2-pre-stage-rebind");
+      const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
+      let extractionAttempted = false;
+
+      mockArchiveResponse(new Uint8Array([1, 2, 3]));
+
+      runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+        const cmd = (argv[0] ?? []) as string[];
+        if (cmd[0] === "tar" && cmd[1] === "tf") {
+          return runCommandResult({ stdout: "package/hello.txt\n" });
+        }
+        if (cmd[0] === "tar" && cmd[1] === "tvf") {
+          const reboundTargetDir = `${targetDir}-rebound`;
+          await fs.rename(targetDir, reboundTargetDir);
+          await fs.mkdir(targetDir, { recursive: true });
+          return runCommandResult({
+            stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n",
+          });
+        }
+        if (cmd[0] === "tar" && cmd[1] === "xf") {
+          extractionAttempted = true;
+          return runCommandResult({ stdout: "ok" });
+        }
+        return runCommandResult();
+      });
+
+      const result = await installDownloadSkill({
+        name: "tbz2-pre-stage-rebind",
+        url: "https://example.invalid/good.tbz2",
+        archive: "tar.bz2",
+        targetDir,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr.toLowerCase()).toContain("directory changed during install");
+      expect(extractionAttempted).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "fails closed when targetDir is replaced between tar.bz2 extract and merge",
     async () => {
       const entry = buildEntry("tbz2-before-merge-rebind");
