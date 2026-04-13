@@ -7,9 +7,10 @@ export async function sanitizeToolResultMedia(
   const content = Array.isArray(result.content) ? result.content : [];
   
   // Check if this is audio or video content
+  // @ts-ignore - types don't include audio/video but runtime might
   const hasMedia = content.some(block => 
     block && typeof block === 'object' && 
-    ('type' in block && (block.type === 'audio' || block.type === 'video'))
+    'type' in block && (block.type === 'audio' || block.type === 'video')
   );
   
   if (hasMedia) {
