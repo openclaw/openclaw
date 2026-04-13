@@ -148,6 +148,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "config/sessions/store.runtime": "src/config/sessions/store.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
