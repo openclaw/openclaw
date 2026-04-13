@@ -287,11 +287,41 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
           }
         }
 
-        // Invisible spacer to balance the row (matches speaker column width)
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-          Box(modifier = Modifier.size(48.dp))
-          Spacer(modifier = Modifier.height(4.dp))
-          Text("", style = mobileCaption2)
+        // Talk Mode toggle — continuous hands-free voice interaction.
+        // Works in the background thanks to FOREGROUND_SERVICE_MICROPHONE.
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          val talkEnabled by viewModel.talkModeEnabled.collectAsState()
+          IconButton(
+            onClick = {
+              if (talkEnabled) {
+                viewModel.setTalkModeEnabled(false)
+              } else {
+                if (hasMicPermission) {
+                  viewModel.setTalkModeEnabled(true)
+                } else {
+                  pendingMicEnable = false
+                  requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+                }
+              }
+            },
+            modifier = Modifier.size(48.dp),
+            colors =
+              IconButtonDefaults.iconButtonColors(
+                containerColor = if (talkEnabled) mobileAccentSoft else mobileSurface,
+              ),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Mic,
+              contentDescription = if (talkEnabled) "Stop talk mode" else "Start talk mode",
+              modifier = Modifier.size(22.dp),
+              tint = if (talkEnabled) mobileAccent else mobileTextSecondary,
+            )
+          }
+          Text(
+            "Talk",
+            style = mobileCaption2,
+            color = if (talkEnabled) mobileAccent else mobileTextTertiary,
+          )
         }
       }
 

@@ -112,6 +112,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val micInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.micInputLevel }
   val micIsSending: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsSending }
 
+  // Talk Mode state for the Voice tab
+  val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
+  val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
+  val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
+  val talkModeStatus: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatus }
+
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
@@ -281,6 +287,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setMicEnabled(enabled: Boolean) {
     ensureRuntime().setMicEnabled(enabled)
+  }
+
+  fun setTalkModeEnabled(enabled: Boolean) {
+    ensureRuntime().setTalkModeEnabled(enabled)
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {

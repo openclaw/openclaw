@@ -21,6 +21,8 @@ class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
   private var didStartForeground = false
+  private var currentServiceTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+  private var talkModeActive = false
 
   override fun onCreate() {
     super.onCreate()
@@ -66,6 +68,16 @@ class NodeForegroundService : Service() {
         (application as NodeApp).peekRuntime()?.disconnect()
         stopSelf()
         return START_NOT_STICKY
+      }
+      ACTION_SET_TALK_MODE -> {
+        // Dynamically upgrade the foreground service type to include microphone
+        // while talk mode is active. Android 12+ requires this to access the
+        // mic from a foreground service when the app is backgrounded.
+        talkModeActive = intent.getBooleanExtra(EXTRA_TALK_MODE_ACTIVE, false)
+        val title = if (talkModeActive) "OpenClaw Node · Talk Mode" else "OpenClaw Node"
+        val text = if (talkModeActive) "Listening for voice…" else "Connected"
+        startForegroundWithTypes(buildNotification(title = title, text = text))
+        return START_STICKY
       }
     }
     // Keep running; connection is managed by NodeRuntime (auto-reconnect + manual).
@@ -133,11 +145,18 @@ class NodeForegroundService : Service() {
   }
 
   private fun startForegroundWithTypes(notification: Notification) {
-    if (didStartForeground) {
+    val types = if (talkModeActive) {
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+    } else {
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+    }
+    if (didStartForeground && types == currentServiceTypes) {
       updateNotification(notification)
       return
     }
-    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+    // Call startForeground again when service types change (Android allows this).
+    currentServiceTypes = types
+    startForeground(NOTIFICATION_ID, notification, types)
     didStartForeground = true
   }
 
@@ -146,6 +165,8 @@ class NodeForegroundService : Service() {
     private const val NOTIFICATION_ID = 1
 
     private const val ACTION_STOP = "ai.openclaw.app.action.STOP"
+    private const val ACTION_SET_TALK_MODE = "ai.openclaw.app.action.SET_TALK_MODE"
+    private const val EXTRA_TALK_MODE_ACTIVE = "talk_mode_active"
 
     fun start(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java)
@@ -154,6 +175,19 @@ class NodeForegroundService : Service() {
 
     fun stop(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_STOP)
+      context.startService(intent)
+    }
+
+    /**
+     * Toggle microphone foreground service type. Call with [active] = true when
+     * Talk Mode is enabled so the foreground service can continue accessing the
+     * mic after the app is backgrounded (Android 12+ requirement).
+     */
+    fun setTalkModeActive(context: Context, active: Boolean) {
+      val intent = Intent(context, NodeForegroundService::class.java).apply {
+        action = ACTION_SET_TALK_MODE
+        putExtra(EXTRA_TALK_MODE_ACTIVE, active)
+      }
       context.startService(intent)
     }
   }

@@ -416,6 +416,25 @@ class NodeRuntime(
   val micIsSending: StateFlow<Boolean>
     get() = micCapture.isSending
 
+  // Talk Mode state flows — exposes the TalkModeManager to the UI layer.
+  val talkModeEnabled: StateFlow<Boolean>
+    get() = talkMode.isEnabled
+  val talkModeListening: StateFlow<Boolean>
+    get() = talkMode.isListening
+  val talkModeSpeaking: StateFlow<Boolean>
+    get() = talkMode.isSpeaking
+  val talkModeStatus: StateFlow<String>
+    get() = talkMode.statusText
+
+  /**
+   * Enable or disable Talk Mode. When enabled, the foreground service is
+   * upgraded to include microphone type so mic access survives backgrounding.
+   */
+  fun setTalkModeEnabled(enabled: Boolean) {
+    talkMode.setEnabled(enabled)
+    NodeForegroundService.setTalkModeActive(appContext, enabled)
+  }
+
   private val talkMode: TalkModeManager by lazy {
     TalkModeManager(
       context = appContext,
