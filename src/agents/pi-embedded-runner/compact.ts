@@ -464,8 +464,8 @@ export async function compactEmbeddedPiSessionDirect(
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       agentId: params.agentId,
-      modelProviderId: provider,
-      modelId,
+      modelProviderId: model.provider,
+      modelId: model.id,
       warn: makeBootstrapWarn({
         sessionLabel,
         warn: (message) => log.warn(message),

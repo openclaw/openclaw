@@ -114,8 +114,8 @@ export function buildEmbeddedExtensionFactories(params: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       agentId: params.agentId,
-      modelProviderId: params.provider,
-      modelId: params.modelId,
+      modelProviderId: params.model?.provider ?? params.provider,
+      modelId: params.model?.id ?? params.modelId,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       provider: compactionCfg?.provider,
     });
