@@ -240,6 +240,9 @@ describe("prepareCliBundleMcpConfig", () => {
         backend: {
           command: "node",
           args: ["./fake-claude.mjs", "--mcp-config", existingConfigPath],
+          env: {
+            BACKEND_ONLY_TOKEN: "backend-token-456",
+          },
         },
         workspaceDir,
         config,
@@ -252,6 +255,7 @@ describe("prepareCliBundleMcpConfig", () => {
               headers: {
                 Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
                 "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+                "x-backend-token": "${BACKEND_ONLY_TOKEN}",
               },
             },
           },
@@ -273,6 +277,7 @@ describe("prepareCliBundleMcpConfig", () => {
       expect(prepared.reportMcpConfig?.mcpServers.openclaw?.headers).toEqual({
         Authorization: "Bearer loopback-token-123",
         "x-session-key": "agent:main:telegram:group:chat123",
+        "x-backend-token": "backend-token-456",
       });
 
       await prepared.cleanup?.();
@@ -371,6 +376,9 @@ describe("prepareCliBundleMcpConfig", () => {
       backend: {
         command: "gemini",
         args: ["--prompt", "{prompt}"],
+        env: {
+          BACKEND_ONLY_TOKEN: "backend-token-456",
+        },
       },
       workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
       additionalConfig: {
@@ -380,6 +388,7 @@ describe("prepareCliBundleMcpConfig", () => {
             url: "http://127.0.0.1:23119/mcp",
             headers: {
               Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+              "x-backend-token": "${BACKEND_ONLY_TOKEN}",
             },
           },
         },
@@ -401,6 +410,7 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(raw.mcp?.allowed).toEqual(["openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
+    expect(raw.mcpServers?.openclaw?.headers?.["x-backend-token"]).toBe("backend-token-456");
 
     await prepared.cleanup?.();
   });
