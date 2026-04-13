@@ -38,6 +38,24 @@ function normalizeModelSelectionForTest(value: unknown): string | undefined {
   return normalizeOptionalString((value as { primary?: unknown }).primary);
 }
 
+function resolveAllowedModelRefForTest(params: {
+  raw: string;
+  defaultProvider: string;
+}): { ref: { provider: string; model: string }; key: string } | { error: string } {
+  const trimmed = params.raw.trim();
+  if (!trimmed) {
+    return { error: "invalid model: empty" };
+  }
+  const slash = trimmed.indexOf("/");
+  const provider = slash === -1 ? params.defaultProvider : trimmed.slice(0, slash).trim();
+  const model = slash === -1 ? trimmed : trimmed.slice(slash + 1).trim();
+  if (!provider || !model) {
+    return { error: `invalid model: ${trimmed}` };
+  }
+  const ref = { provider: provider.toLowerCase(), model };
+  return { ref, key: `${ref.provider}/${ref.model}` };
+}
+
 export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
 export const resolveEffectiveModelFallbacksMock = createMock();
@@ -293,7 +311,7 @@ function resetRunConfigMocks(): void {
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
-  resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
+  resolveAllowedModelRefMock.mockImplementation(resolveAllowedModelRefForTest);
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
