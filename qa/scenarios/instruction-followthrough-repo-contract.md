@@ -51,6 +51,12 @@ execution:
       - "read:"
       - "wrote:"
       - "status:"
+    expectedArtifactAll:
+      - "repo contract"
+    expectedArtifactAny:
+      - "evidence path"
+      - "agent.md"
+      - "followthrough"
     forbiddenNeedles:
       - need permission
       - need your approval
@@ -91,9 +97,16 @@ steps:
         args:
           - lambda:
               async: true
-              expr: "((await fs.readFile(artifactPath, 'utf8').catch(() => null))?.includes('Mission: prove you followed the repo contract.') ? await fs.readFile(artifactPath, 'utf8').catch(() => null) : undefined)"
+              expr: "((await fs.readFile(artifactPath, 'utf8').catch(() => null))?.trim() ? await fs.readFile(artifactPath, 'utf8').catch(() => null) : undefined)"
           - expr: liveTurnTimeoutMs(env, 30000)
           - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+      - set: normalizedArtifact
+        value:
+          expr: "normalizeLowercaseStringOrEmpty(artifact)"
+      - assert:
+          expr: "config.expectedArtifactAll.every((needle) => normalizedArtifact.includes(normalizeLowercaseStringOrEmpty(needle))) && config.expectedArtifactAny.some((needle) => normalizedArtifact.includes(normalizeLowercaseStringOrEmpty(needle)))"
+          message:
+            expr: "`repo contract artifact missing expected followthrough signals: ${artifact}`"
       - set: expectedReplyAll
         value:
           expr: config.expectedReplyAll.map(normalizeLowercaseStringOrEmpty)
