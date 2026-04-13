@@ -7,6 +7,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { buildInlineProviderModels } from "../pi-embedded-runner/model.inline-provider.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { ToolInputError, readStringArrayParam, readStringParam } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
@@ -405,6 +406,31 @@ export function resolveModelFromRegistry(params: {
     throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
   }
   return model;
+}
+
+export function resolveModelFromRegistryOrConfig(params: {
+  modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+}): Model<Api> {
+  const registryModel = params.modelRegistry.find(
+    params.provider,
+    params.modelId,
+  ) as Model<Api> | null;
+  if (registryModel) {
+    return registryModel;
+  }
+
+  const inlineModels = buildInlineProviderModels(params.cfg?.models?.providers ?? {});
+  const configuredModel = inlineModels.find(
+    (model) => model.provider === params.provider && model.id === params.modelId,
+  ) as Model<Api> | undefined;
+  if (configuredModel) {
+    return configuredModel;
+  }
+
+  throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
 }
 
 export async function resolveModelRuntimeApiKey(params: {

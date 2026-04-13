@@ -8,12 +8,12 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveModelWithRegistry } from "../pi-embedded-runner/model.js";
 import { type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   resolveMediaToolLocalRoots,
+  resolveModelFromRegistryOrConfig,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
@@ -143,16 +143,12 @@ async function runPdfPrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelWithRegistry({
+      const model = resolveModelFromRegistryOrConfig({
         modelRegistry,
         provider,
         modelId,
         cfg: effectiveCfg,
-        agentDir: params.agentDir,
       });
-      if (!model) {
-        throw new Error(`Unknown model: ${provider}/${modelId}`);
-      }
       const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,
