@@ -426,12 +426,16 @@ export function pruneContextMessages(params: {
   }
 
   ratio = totalChars / charWindow;
-  if (ratio < settings.softTrimRatio && !hasPrunableImageToolResult) {
+  const restrictSoftTrimToImagesOnly = ratio < settings.softTrimRatio && hasPrunableImageToolResult;
+  if (ratio < settings.softTrimRatio && !restrictSoftTrimToImagesOnly) {
     return next ?? messages;
   }
   for (const i of prunableToolIndexes) {
     const msg = (next ?? messages)[i];
     if (!msg || msg.role !== "toolResult") {
+      continue;
+    }
+    if (restrictSoftTrimToImagesOnly && !hasImageBlocks(msg.content)) {
       continue;
     }
 

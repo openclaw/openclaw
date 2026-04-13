@@ -639,6 +639,48 @@ describe("pruneContextMessages", () => {
     );
   });
 
+  it("keeps text-only tool results once only image cleanup remains necessary", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\r\n".repeat(200) + "alpha\r\nbeta\r\n" }]),
+      makeToolResult([{ type: "text", text: "B".repeat(6_000) }]),
+      makeToolResult([
+        { type: "text", text: "\r\n\r\nbefore  " },
+        { type: "image", data: "img", mimeType: "image/png" },
+        { type: "text", text: "\n\nafter\t\t" },
+      ]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.7,
+        hardClearRatio: 10,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 5_100,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\nbeta");
+    expect(getToolResultText(result, 2)).toBe("B".repeat(6_000));
+    expect(getToolResultText(result, 3)).toBe(
+      "before\n[image removed during context pruning]\n\nafter",
+    );
+  });
+
   it("hard-clears image-containing tool results once ratios require clearing", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),
