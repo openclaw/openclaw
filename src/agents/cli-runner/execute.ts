@@ -462,13 +462,12 @@ export async function executePreparedCliRun(
           outputMode: useResume ? (backend.resumeOutput ?? backend.output) : backend.output,
           fallbackSessionId: resolvedSessionId,
         });
+        const rawText = parsed.text;
         return {
           ...parsed,
+          rawText,
           finalPromptText: prompt,
-          text: applyPluginTextReplacements(
-            parsed.text,
-            context.backendResolved.textTransforms?.output,
-          ),
+          text: applyPluginTextReplacements(rawText, context.backendResolved.textTransforms?.output),
         };
       } finally {
         restoreSkillEnv?.();

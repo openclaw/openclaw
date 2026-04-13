@@ -20,6 +20,7 @@ export async function runPreparedCliAgent(
     effectiveCliSessionId?: string;
   }): EmbeddedPiRunResult => {
     const text = resultParams.output.text?.trim();
+    const rawText = resultParams.output.rawText?.trim();
     const payloads = text ? [{ text }] : undefined;
 
     return {
@@ -29,7 +30,12 @@ export async function runPreparedCliAgent(
         ...(resultParams.output.finalPromptText
           ? { finalPromptText: resultParams.output.finalPromptText }
           : {}),
-        ...(text ? { finalAssistantVisibleText: text, finalAssistantRawText: text } : {}),
+        ...((text || rawText)
+          ? {
+              ...(text ? { finalAssistantVisibleText: text } : {}),
+              ...(rawText ? { finalAssistantRawText: rawText } : {}),
+            }
+          : {}),
         systemPromptReport: context.systemPromptReport,
         executionTrace: {
           winnerProvider: params.provider,

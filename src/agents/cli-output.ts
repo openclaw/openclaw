@@ -12,6 +12,7 @@ type CliUsage = {
 
 export type CliOutput = {
   text: string;
+  rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
   finalPromptText?: string;

@@ -217,6 +217,35 @@ describe("runCliAgent reliability", () => {
       refusal: false,
     });
   });
+
+  it("keeps raw assistant output separate from transformed visible CLI output", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent({
+      ...buildPreparedContext(),
+      backendResolved: {
+        ...buildPreparedContext().backendResolved,
+        textTransforms: {
+          output: [{ from: "hello", to: "goodbye" }],
+        },
+      },
+    });
+
+    expect(result.payloads).toEqual([{ text: "goodbye from cli" }]);
+    expect(result.meta.finalAssistantVisibleText).toBe("goodbye from cli");
+    expect(result.meta.finalAssistantRawText).toBe("hello from cli");
+  });
 });
 
 describe("resolveCliNoOutputTimeoutMs", () => {
