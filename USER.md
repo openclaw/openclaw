@@ -32,6 +32,9 @@ Conclusion:
 
 [CODEX COMMENTS RESOLUTION]
 
+- 2026-04-13: Reviewed the final unresolved Codex P1 on `openclaw/openclaw#62006` and confirmed the remote mutation guard still missed setup-driven auto-enable surfaces used by `configMayNeedPluginAutoEnable`, specifically top-level `browser`, `acp`, browser tool policy refs under `tools.allow` / `tools.alsoAllow`, and plugin-owned `tools.web.x_search`.
+- 2026-04-13: Fixed `src/agents/tools/gateway-tool.ts` so the remote plugin-activation denylist also blocks those remaining setup auto-enable paths on remote gateways, closing the host-specific dangerous-plugin activation gap without changing the existing hardening exception flow.
+- 2026-04-13: Added remote regression coverage in `src/agents/openclaw-gateway-tool.test.ts` for `browser`, `acp`, `tools.allow`, `tools.alsoAllow`, and `tools.web.x_search`, then reran `corepack pnpm test src/agents/openclaw-gateway-tool.test.ts` successfully (`55 passed`).
 - 2026-04-13: Reviewed the remaining unresolved Codex P1 on `openclaw/openclaw#62006` and confirmed the manifest-missing plugin activation fallback still used raw `plugins.allow`/`plugins.deny` semantics, which diverged from runtime plugin-id normalization and let non-canonical allowlist entries activate dangerous plugin config without tripping the guard.
 - 2026-04-13: Fixed `src/agents/tools/gateway-tool.ts` so manifest-missing dangerous-plugin activation checks now reuse normalized plugin state (`normalizePluginId` + `normalizePluginsConfig`) for entry lookup, allowlist/denylist gating, manifest lookup, and auto-enable reason lookup.
 - 2026-04-13: Added a regression in `src/agents/openclaw-gateway-tool.test.ts` covering a manifest-missing allowlist activation via non-canonical `plugins.allow: [\"ACPX\"]`, then reran `corepack pnpm test src/agents/openclaw-gateway-tool.test.ts` successfully (`49 passed`).

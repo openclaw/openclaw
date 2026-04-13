@@ -493,6 +493,14 @@ function assertGatewayConfigMutationAllowed(params: {
       "models.providers",
       "agents.defaults",
       "agents.list",
+      // Setup-driven auto-enable can also be triggered by top-level browser and ACP config.
+      "browser",
+      "acp",
+      // Browser setup auto-enable also keys off top-level tool policy references.
+      "tools.allow",
+      "tools.alsoAllow",
+      // Plugin-owned x_search config can auto-enable provider plugins without touching entries.
+      "tools.web.x_search",
       // tools.web.fetch.provider controls which fetch provider is used; changes can activate
       // provider-specific plugin contracts on the remote host.
       "tools.web.fetch.provider",
