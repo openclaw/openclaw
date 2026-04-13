@@ -69,9 +69,7 @@ Minimal `HOOK.md`:
 ---
 name: model-switch-notify
 description: "Notify an operator when model fallback succeeds"
-metadata:
-  openclaw:
-    events: ["gateway:startup"]
+metadata: { "openclaw": { "events": ["gateway:startup"] } }
 ---
 ```
 
