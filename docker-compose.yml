@@ -1,6 +1,7 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build: .
     environment:
       HOME: /home/node
       TERM: xterm-256color
