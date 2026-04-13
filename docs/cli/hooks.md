@@ -246,6 +246,9 @@ openclaw plugins install -l ./my-hook-pack
 Linked hook packs are treated as managed hooks from an operator-configured
 directory, not as workspace hooks.
 
+If you want to package and publicly share your own hook pack, see
+[Publishing Hook Packs](/automation/publishing-hook-packs).
+
 ## Update Hook Packs
 
 ```bash

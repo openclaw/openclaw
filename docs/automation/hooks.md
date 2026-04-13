@@ -149,6 +149,10 @@ openclaw plugins install <path-or-spec>
 
 Npm specs are registry-only (package name + optional exact version or dist-tag). Git/URL/file specs and semver ranges are rejected.
 
+Public sharing works today through npm-distributed hook packs. OpenClaw does not
+currently provide a dedicated first-party hook marketplace. For packaging and
+publication guidance, see [Publishing Hook Packs](/automation/publishing-hook-packs).
+
 ## Bundled hooks
 
 | Hook                  | Events                         | What it does                                          |
