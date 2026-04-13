@@ -280,6 +280,56 @@ describe("browser tab routes", () => {
     expect(profileCtx.focusTab).not.toHaveBeenCalled();
   });
 
+  it("does not run SSRF result validation for /tabs/focus when policy is not configured", async () => {
+    const profileCtx = createProfileContext({
+      ensureTabAvailable: vi.fn(async () => ({
+        targetId: "T2",
+        title: "Internal",
+        url: "http://169.254.169.254/latest/meta-data/",
+        type: "page",
+      })),
+    });
+
+    const response = await callTabsFocus({
+      profileCtx,
+      body: { targetId: "T2" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(profileCtx.focusTab).toHaveBeenCalledWith("T2");
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
+  it("does not run SSRF result validation for /tabs/action select when policy is not configured", async () => {
+    const profileCtx = createProfileContext({
+      listTabs: vi.fn(async () => [
+        {
+          targetId: "T1",
+          title: "Public",
+          url: "https://example.com",
+          type: "page",
+        },
+        {
+          targetId: "T2",
+          title: "Internal",
+          url: "http://169.254.169.254/latest/meta-data/",
+          type: "page",
+        },
+      ]),
+    });
+
+    const response = await callTabsAction({
+      body: { action: "select", index: 1 },
+      profileCtx,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true, targetId: "T2" });
+    expect(profileCtx.focusTab).toHaveBeenCalledWith("T2");
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
   it("redacts blocked tab URLs for /tabs/action list", async () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
       async (opts?: { url: string }) => {

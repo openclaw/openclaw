@@ -187,10 +187,13 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       targetId,
       mutate: async (profileCtx, id) => {
         const tab = await profileCtx.ensureTabAvailable(id);
-        await assertBrowserNavigationResultAllowed({
-          url: tab.url,
-          ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
-        });
+        const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+        if (ssrfPolicyOpts.ssrfPolicy) {
+          await assertBrowserNavigationResultAllowed({
+            url: tab.url,
+            ...ssrfPolicyOpts,
+          });
+        }
         await profileCtx.focusTab(tab.targetId);
       },
     });
@@ -265,10 +268,13 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           if (!target) {
             throw new BrowserTabNotFoundError();
           }
-          await assertBrowserNavigationResultAllowed({
-            url: target.url,
-            ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
-          });
+          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
+              url: target.url,
+              ...ssrfPolicyOpts,
+            });
+          }
           await profileCtx.focusTab(target.targetId);
           return res.json({ ok: true, targetId: target.targetId });
         }
