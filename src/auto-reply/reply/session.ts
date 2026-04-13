@@ -22,6 +22,7 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import { ensureSessionTranscriptFile } from "../../config/sessions/transcript.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
@@ -648,6 +649,10 @@ export async function initSessionState(params: {
     maintenanceConfig,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
+  await ensureSessionTranscriptFile({
+    sessionFile: resolvedSessionFile.sessionFile,
+    sessionId: sessionEntry.sessionId,
+  });
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;

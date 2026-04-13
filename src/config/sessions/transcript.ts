@@ -36,6 +36,13 @@ async function ensureSessionHeader(params: {
   });
 }
 
+export async function ensureSessionTranscriptFile(params: {
+  sessionFile: string;
+  sessionId: string;
+}): Promise<void> {
+  await ensureSessionHeader(params);
+}
+
 export type SessionTranscriptAppendResult =
   | { ok: true; sessionFile: string; messageId: string }
   | { ok: false; reason: string };

@@ -1088,6 +1088,47 @@ describe("initSessionState RawBody", () => {
     }
   });
 
+  it("recreates a missing transcript file for an existing fresh session", async () => {
+    const root = await makeCaseDir("openclaw-session-store-repair-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:12345";
+    const sessionId = "sess-repair-1";
+    const sessionFile = path.join(root, `${sessionId}.jsonl`);
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId,
+        sessionFile,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        ChatType: "direct",
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.sessionId).toBe(sessionId);
+    expect(result.sessionEntry.sessionFile).toBe(sessionFile);
+    const headerLine = (await fs.readFile(sessionFile, "utf-8"))
+      .split(/\r?\n/)
+      .find((line) => line.trim().length > 0);
+    if (!headerLine) {
+      throw new Error("Missing session header");
+    }
+    const parsedHeader = JSON.parse(headerLine) as { id?: string; type?: string };
+    expect(parsedHeader.type).toBe("session");
+    expect(parsedHeader.id).toBe(sessionId);
+  });
+
   it.each([
     {
       name: "Slack DM",
