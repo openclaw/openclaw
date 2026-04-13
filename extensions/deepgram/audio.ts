@@ -36,6 +36,7 @@ export async function transcribeDeepgramAudio(
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
       defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
+      allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
       headers: params.headers,
       request: params.request,
       defaultHeaders: {

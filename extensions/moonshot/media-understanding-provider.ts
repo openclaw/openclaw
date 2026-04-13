@@ -30,6 +30,7 @@ export async function describeMoonshotVideo(
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
       defaultBaseUrl: DEFAULT_MOONSHOT_VIDEO_BASE_URL,
+      allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
       headers: params.headers,
       request: params.request,
       defaultHeaders: {

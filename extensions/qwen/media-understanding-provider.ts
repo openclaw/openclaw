@@ -52,6 +52,7 @@ export async function describeQwenVideo(
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
       defaultBaseUrl: QWEN_STANDARD_GLOBAL_BASE_URL,
+      allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
       headers: params.headers,
       request: params.request,
       defaultHeaders: {
