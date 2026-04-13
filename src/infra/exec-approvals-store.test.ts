@@ -29,6 +29,7 @@ let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 
 const tempDirs: string[] = [];
 const originalOpenClawHome = process.env.OPENCLAW_HOME;
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 
 beforeAll(async () => {
   ({
@@ -59,6 +60,11 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_HOME = originalOpenClawHome;
   }
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  }
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -82,6 +88,31 @@ function readApprovalsFile(homeDir: string): ExecApprovalsFile {
 describe("exec approvals store helpers", () => {
   it("expands home-prefixed default file and socket paths", () => {
     const dir = createHomeDir();
+
+    expect(path.normalize(resolveExecApprovalsPath())).toBe(
+      path.normalize(path.join(dir, ".openclaw", "exec-approvals.json")),
+    );
+    expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
+      path.normalize(path.join(dir, ".openclaw", "exec-approvals.sock")),
+    );
+  });
+
+  it("prefers OPENCLAW_STATE_DIR over the home-relative default paths", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "state-root");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    expect(path.normalize(resolveExecApprovalsPath())).toBe(
+      path.normalize(path.join(stateDir, "exec-approvals.json")),
+    );
+    expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
+      path.normalize(path.join(stateDir, "exec-approvals.sock")),
+    );
+  });
+
+  it("keeps exec approvals on ~/.openclaw when only legacy state dirs exist", () => {
+    const dir = createHomeDir();
+    fs.mkdirSync(path.join(dir, ".clawdbot"), { recursive: true });
 
     expect(path.normalize(resolveExecApprovalsPath())).toBe(
       path.normalize(path.join(dir, ".openclaw", "exec-approvals.json")),

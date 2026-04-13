@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -172,6 +173,8 @@ export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const DEFAULT_SOCKET_FILENAME = "exec-approvals.sock";
+const DEFAULT_FILE_FILENAME = "exec-approvals.json";
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -181,10 +184,16 @@ function hashExecApprovalsRaw(raw: string | null): string {
 }
 
 export function resolveExecApprovalsPath(): string {
+  if (process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return path.join(resolveStateDir(), DEFAULT_FILE_FILENAME);
+  }
   return expandHomePrefix(DEFAULT_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
+  if (process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return path.join(resolveStateDir(), DEFAULT_SOCKET_FILENAME);
+  }
   return expandHomePrefix(DEFAULT_SOCKET);
 }
 
