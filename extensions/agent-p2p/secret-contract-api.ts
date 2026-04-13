@@ -1,6 +1,4 @@
-import type { SecretContract } from "openclaw/plugin-sdk/secret-contract";
-
-export const channelSecrets: SecretContract = {
+export const channelSecrets = {
   // Define secrets that need to be configured
   secrets: [
     {
@@ -11,9 +9,9 @@ export const channelSecrets: SecretContract = {
       sensitive: true,
     },
   ],
-  
+
   // Validate secrets
-  validateSecrets(secrets) {
+  validateSecrets(secrets: Record<string, string>) {
     if (!secrets.apiKey) {
       return { valid: false, error: "API Key is required" };
     }

@@ -1,6 +1,6 @@
 import WebSocket from "ws";
-import type { AgentP2PConfig, AgentP2PMessage } from "./types.js";
 import { getRuntimeLogger } from "../runtime-api.js";
+import type { AgentP2PConfig, AgentP2PMessage } from "./types.js";
 
 export type AgentP2PClientOptions = {
   config: AgentP2PConfig;
@@ -28,10 +28,10 @@ export class AgentP2PClient {
   async connect(): Promise<void> {
     const wsUrl = `${this.config.portalUrl.replace("https://", "wss://").replace("http://", "ws://")}/ws/agent`;
     const logger = getRuntimeLogger();
-    
+
     return new Promise((resolve, reject) => {
       let isResolved = false;
-      
+
       try {
         this.ws = new WebSocket(wsUrl, {
           headers: {
@@ -49,9 +49,10 @@ export class AgentP2PClient {
           }
         });
 
-        this.ws.on("message", (data) => {
+        this.ws.on("message", (data: Buffer | ArrayBuffer | Buffer[]) => {
           try {
-            const message = JSON.parse(data.toString()) as AgentP2PMessage;
+            const dataStr = Buffer.isBuffer(data) ? data.toString() : JSON.stringify(data);
+            const message = JSON.parse(dataStr) as AgentP2PMessage;
             this.options.onMessage?.(message);
           } catch (err) {
             const logger = getRuntimeLogger();
@@ -92,17 +93,21 @@ export class AgentP2PClient {
   }
 
   private scheduleReconnect(): void {
-    if (!this.shouldReconnect) return;
-    
+    if (!this.shouldReconnect) {
+      return;
+    }
+
     this.reconnectAttempts++;
     const delay = Math.min(
       this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
-      this.maxReconnectDelay
+      this.maxReconnectDelay,
     );
-    
+
     const logger = getRuntimeLogger();
-    logger.log(`[Agent P2P] Reconnecting in ${delay / 1000}s (attempt ${this.reconnectAttempts})...`);
-    
+    logger.log(
+      `[Agent P2P] Reconnecting in ${delay / 1000}s (attempt ${this.reconnectAttempts})...`,
+    );
+
     this.reconnectTimer = setTimeout(() => {
       this.connect().catch((err) => {
         logger.error("[Agent P2P] Reconnect failed:", err);

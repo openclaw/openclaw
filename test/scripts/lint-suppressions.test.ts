@@ -78,6 +78,7 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual([
+      "extensions/agent-p2p/src/channel.ts|@typescript-eslint/no-explicit-any|6",
       "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
       "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
       "src/agents/agent-scope.ts|no-control-regex|1",

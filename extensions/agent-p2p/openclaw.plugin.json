@@ -5,5 +5,9 @@
   "version": "0.1.0",
   "channels": ["agent-p2p"],
   "entry": "./channel-entry.ts",
-  "configSchema": "./src/config-schema.ts"
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
 }

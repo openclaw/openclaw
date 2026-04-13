@@ -14,6 +14,7 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "@types/ws": "^8.5.10",
     "typescript": "^5.3.3",
     "vitest": "^1.2.0"
