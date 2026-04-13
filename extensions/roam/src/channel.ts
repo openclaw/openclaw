@@ -264,15 +264,19 @@ export const roamPlugin: ChannelPlugin<ResolvedRoamAccount> = {
       let changed = false;
 
       if (nextSection) {
-        if (accountId === DEFAULT_ACCOUNT_ID && nextSection.apiKey) {
-          delete nextSection.apiKey;
-          cleared = true;
-          changed = true;
+        if (accountId === DEFAULT_ACCOUNT_ID) {
+          for (const field of ["apiKey", "apiKeyFile"] as const) {
+            if (nextSection[field]) {
+              delete nextSection[field];
+              cleared = true;
+              changed = true;
+            }
+          }
         }
         const accountCleanup = clearAccountEntryFields({
           accounts: nextSection.accounts,
           accountId,
-          fields: ["apiKey"],
+          fields: ["apiKey", "apiKeyFile"],
         });
         if (accountCleanup.changed) {
           changed = true;
