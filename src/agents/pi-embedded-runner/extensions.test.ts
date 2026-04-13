@@ -97,7 +97,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(factories).toContain(contextPruningExtension);
   });
 
-  it("reduces keepLastAssistants to 1 when skillsSnapshot is present", () => {
+  it("reduces keepLastAssistants to 1 in minimal prompt mode (subagent/cron)", () => {
     const sessionManager = {} as SessionManager;
     const factories = buildEmbeddedExtensionFactories({
       cfg: {
@@ -113,7 +113,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
       model: { api: "anthropic-messages", contextWindow: 200_000 } as Model<Api>,
-      skillsSnapshot: { prompt: "test skill", skills: [{ name: "test" }] },
+      promptMode: "minimal",
     });
 
     expect(factories).toContain(contextPruningExtension);
@@ -121,7 +121,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(runtime?.settings.keepLastAssistants).toBe(1);
   });
 
-  it("keeps default keepLastAssistants of 3 without skillsSnapshot", () => {
+  it("keeps default keepLastAssistants of 3 in full prompt mode", () => {
     const sessionManager = {} as SessionManager;
     const factories = buildEmbeddedExtensionFactories({
       cfg: {
@@ -137,6 +137,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
       model: { api: "anthropic-messages", contextWindow: 200_000 } as Model<Api>,
+      promptMode: "full",
     });
 
     expect(factories).toContain(contextPruningExtension);

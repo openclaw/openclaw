@@ -1,5 +1,4 @@
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
-import type { SkillSnapshot } from "../../agents/skills/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
@@ -36,7 +35,7 @@ function buildContextPruningFactory(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
-  skillsSnapshot?: SkillSnapshot;
+  promptMode?: "full" | "minimal";
 }): ExtensionFactory | undefined {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
@@ -50,10 +49,11 @@ function buildContextPruningFactory(params: {
   if (!settings) {
     return undefined;
   }
-  // In skill mode the agent drives all tool calls and consumes results in the
-  // same turn, so retaining 3 turns of full tool results is wasteful. Reduce
-  // to 1 while still respecting an explicit user override of 0.
-  if (params.skillsSnapshot) {
+  // In autonomous execution modes (subagents, cron jobs) the agent drives all
+  // tool calls and consumes results in the same turn, so retaining 3 turns of
+  // full tool results is wasteful. Reduce to 1 while still respecting an
+  // explicit user override of 0.
+  if (params.promptMode === "minimal") {
     settings.keepLastAssistants = Math.min(settings.keepLastAssistants, 1);
   }
   const transcriptPolicy = resolveTranscriptPolicy({
@@ -91,7 +91,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
-  skillsSnapshot?: SkillSnapshot;
+  promptMode?: "full" | "minimal";
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -125,7 +125,7 @@ export function buildEmbeddedExtensionFactories(params: {
     provider: params.provider,
     modelId: params.modelId,
     model: params.model,
-    skillsSnapshot: params.skillsSnapshot,
+    promptMode: params.promptMode,
   });
   if (pruningFactory) {
     factories.push(pruningFactory);
