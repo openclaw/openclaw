@@ -153,9 +153,16 @@ export async function deliverLineAutoReply(params: {
     });
     replyTokenUsed = nextReplyTokenUsed;
     if (!hasQuickReplies || !hasRichOrMedia) {
-      await sendLineMessages(richMessages, false);
+      // Allow rich messages (flex tables, carousels) to use the reply
+      // token if it hasn't been consumed by the text chunks above. On
+      // LINE free plans, push messages are quota-limited — if the quota
+      // is exhausted, these messages are silently dropped with 429.
+      // Using the reply token (free, up to 5 messages) avoids this.
+      // If replyTokenUsed is already true, sendLineMessages falls
+      // through to push automatically (#65656).
+      await sendLineMessages(richMessages, true);
       if (mediaMessages.length > 0) {
-        await sendLineMessages(mediaMessages, false);
+        await sendLineMessages(mediaMessages, true);
       }
     }
   } else {
