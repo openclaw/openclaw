@@ -133,9 +133,22 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate);
-    context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
-    respond(true, job, undefined);
+    try {
+      const job = await context.cron.add(jobCreate);
+      context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
+      respond(true, job, undefined);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (errorMessage.includes("already exists")) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, errorMessage),
+        );
+      } else {
+        throw err;
+      }
+    }
   },
   "cron.update": async ({ params, respond, context }) => {
     let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
