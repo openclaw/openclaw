@@ -15,7 +15,6 @@ import {
   resolveStateDir,
   writeFileWithinRoot,
   type OpenClawConfig,
-  type ResolvedMemorySearchSyncConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -81,6 +80,25 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".tox",
   "__pycache__",
 ]);
+
+function isDefaultMemoryPath(relPath: string): boolean {
+  const normalized = relPath
+    .trim()
+    .replace(/^[./]+/, "")
+    .replace(/\\/g, "/");
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized === "MEMORY.md" ||
+    normalized === "memory.md" ||
+    normalized === "DREAMS.md" ||
+    normalized === "dreams.md"
+  ) {
+    return true;
+  }
+  return normalized.startsWith("memory/");
+}
 
 function buildQmdProcessPath(rawPath: string | undefined): string {
   const nodeBinDir = path.dirname(process.execPath);
@@ -256,7 +274,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
-  private readonly syncSettings: ResolvedMemorySearchSyncConfig | null;
+  private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
@@ -2518,7 +2536,44 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!this.isWithinWorkspace(absPath)) {
       throw new Error("path escapes workspace");
     }
+    const workspaceRel = path.relative(this.workspaceDir, absPath).replace(/\\/g, "/");
+    if (!isDefaultMemoryPath(workspaceRel) && !this.isIndexedWorkspaceReadPath(absPath)) {
+      throw new Error("path required");
+    }
     return absPath;
+  }
+
+  private isIndexedWorkspaceReadPath(absPath: string): boolean {
+    const normalizedAbsPath = path.normalize(absPath);
+    for (const [collection, root] of this.collectionRoots.entries()) {
+      if (!this.isWithinRoot(root.path, normalizedAbsPath)) {
+        continue;
+      }
+      const collectionRelativePath = path
+        .relative(root.path, normalizedAbsPath)
+        .replace(/\\/g, "/");
+      if (!collectionRelativePath || collectionRelativePath.startsWith("..")) {
+        continue;
+      }
+      try {
+        const rows = this.ensureDb()
+          .prepare("SELECT path FROM documents WHERE collection = ? AND active = 1")
+          .all(collection) as Array<{ path: string }>;
+        const match = rows.find((row) =>
+          this.matchesPreferredFileHint(row.path, collectionRelativePath),
+        );
+        if (match && path.normalize(path.resolve(root.path, match.path)) === normalizedAbsPath) {
+          return true;
+        }
+      } catch (err) {
+        if (this.isSqliteBusyError(err)) {
+          log.debug(`qmd index is busy while checking read path: ${String(err)}`);
+          throw this.createQmdBusyError(err);
+        }
+        log.debug(`qmd indexed read-path lookup skipped: ${String(err)}`);
+      }
+    }
+    return false;
   }
 
   private isWithinWorkspace(absPath: string): boolean {
