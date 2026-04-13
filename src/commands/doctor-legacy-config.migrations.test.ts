@@ -285,6 +285,70 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("preserves top-level Feishu group policy fallback for existing named accounts", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        feishu: {
+          enabled: true,
+          groupPolicy: "open",
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+          accounts: {
+            main: {
+              appId: "main-app-id",
+              appSecret: "main-app-secret",
+            },
+            candy: {
+              appId: "candy-app-id",
+              appSecret: "candy-app-secret",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.feishu?.groupPolicy).toBe("open");
+    expect(res.config.channels?.feishu?.accounts?.default).toBeUndefined();
+    expect(res.changes).not.toContain(
+      "Moved channels.feishu single-account top-level values into channels.feishu.accounts.default.",
+    );
+  });
+
+  it("keeps Feishu shared auth and policy fallback top-level for named accounts", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "legacy-app-id",
+          appSecret: "legacy-app-secret",
+          groupPolicy: "open",
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+          accounts: {
+            main: {
+              appId: "main-app-id",
+              appSecret: "main-app-secret",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.feishu?.appId).toBe("legacy-app-id");
+    expect(res.config.channels?.feishu?.appSecret).toBe("legacy-app-secret");
+    expect(res.config.channels?.feishu?.groupPolicy).toBe("open");
+    expect(res.config.channels?.feishu?.accounts?.default).toBeUndefined();
+    expect(res.changes).not.toContain(
+      "Moved channels.feishu single-account top-level values into channels.feishu.accounts.default.",
+    );
+  });
+
   it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
     const res = normalizeCompatibilityConfigValues({
       browser: {

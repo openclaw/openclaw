@@ -49,6 +49,8 @@ const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string
 const BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
   // Keep top-level Telegram policy fallback intact when only auth needs seeding.
   telegram: ["botToken", "tokenFile"],
+  // Keep shared Feishu group and DM policy fallback at the top level.
+  feishu: ["appId", "appSecret", "encryptKey", "verificationToken"],
 };
 
 type ChannelSetupPromotionSurface = {

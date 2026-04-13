@@ -6,6 +6,13 @@ import {
 import { resolveDefaultFeishuAccountId } from "./accounts.js";
 import type { FeishuConfig } from "./types.js";
 
+export const feishuNamedAccountPromotionKeys = [
+  "appId",
+  "appSecret",
+  "encryptKey",
+  "verificationToken",
+] as const;
+
 export function setFeishuNamedAccountEnabled(
   cfg: OpenClawConfig,
   accountId: string,
@@ -32,6 +39,7 @@ export function setFeishuNamedAccountEnabled(
 
 export const feishuSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ cfg, accountId }) => accountId?.trim() || resolveDefaultFeishuAccountId(cfg),
+  namedAccountPromotionKeys: feishuNamedAccountPromotionKeys,
   applyAccountConfig: ({ cfg, accountId }) => {
     const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
     if (isDefault) {

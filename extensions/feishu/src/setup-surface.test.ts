@@ -120,6 +120,15 @@ describe("feishu setup wizard", () => {
     ).toBe("work");
   });
 
+  it("setup adapter only promotes Feishu auth fields for named accounts", () => {
+    expect(feishuSetupPlugin.setup?.namedAccountPromotionKeys).toEqual([
+      "appId",
+      "appSecret",
+      "encryptKey",
+      "verificationToken",
+    ]);
+  });
+
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
