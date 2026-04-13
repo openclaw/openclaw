@@ -84,4 +84,9 @@ describe("ensureDefaultModelsFile", () => {
     const content = await fs.readFile(path.join(tmpDir, "RULES.md"), "utf-8");
     expect(content).toBe(DEFAULT_MODELS_MD);
   });
+
+  it("rejects path traversal filenames", async () => {
+    const created = await ensureDefaultModelsFile(tmpDir, "../escape.md");
+    expect(created).toBe(false);
+  });
 });

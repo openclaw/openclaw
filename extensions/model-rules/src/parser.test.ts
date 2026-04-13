@@ -25,10 +25,17 @@ describe("parseModelRef", () => {
     });
   });
 
-  it("handles multiple slashes by splitting on the first", () => {
+  it("handles multiple slashes by splitting on the last", () => {
     expect(parseModelRef("a/b/c")).toEqual({
       fullRef: "a/b/c",
-      bareId: "b/c",
+      bareId: "c",
+    });
+  });
+
+  it("handles nested provider refs like openrouter/anthropic/model", () => {
+    expect(parseModelRef("openrouter/anthropic/claude-sonnet-4-6")).toEqual({
+      fullRef: "openrouter/anthropic/claude-sonnet-4-6",
+      bareId: "claude-sonnet-4-6",
     });
   });
 

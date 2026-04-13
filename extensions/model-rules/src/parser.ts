@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { resolve } from "node:path";
 
 const fileCache = new Map<string, { content: string; mtimeMs: number }>();
 
@@ -11,7 +11,10 @@ export async function readModelsFile(
   workspaceDir: string,
   filename: string = "MODELS.md",
 ): Promise<string | null> {
-  const filePath = join(workspaceDir, filename);
+  const filePath = resolve(workspaceDir, filename);
+  if (!filePath.startsWith(resolve(workspaceDir))) {
+    return null;
+  }
   try {
     const fileStat = await stat(filePath);
     const cached = fileCache.get(filePath);
@@ -118,14 +121,15 @@ function findNextHeading(rest: string): number {
 
 /**
  * Parse an OpenClaw model ref into provider and bare model ID.
- * Model refs are `provider/model-id` (e.g., `openai/gpt-5.4`).
+ * Splits on the last `/` so nested refs like `openrouter/anthropic/claude-sonnet-4-6`
+ * produce `bareId: "claude-sonnet-4-6"` (not `"anthropic/claude-sonnet-4-6"`).
  */
 export function parseModelRef(modelRef: string): {
   fullRef: string;
   bareId: string;
 } {
   const trimmed = modelRef.trim();
-  const slashIndex = trimmed.indexOf("/");
+  const slashIndex = trimmed.lastIndexOf("/");
   if (slashIndex === -1) {
     return { fullRef: trimmed, bareId: trimmed };
   }

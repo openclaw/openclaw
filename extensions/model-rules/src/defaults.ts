@@ -1,5 +1,5 @@
 import { writeFile, access } from "node:fs/promises";
-import { join } from "node:path";
+import { resolve } from "node:path";
 
 /**
  * Default MODELS.md shipped with the plugin.
@@ -213,12 +213,16 @@ Flag clearly when you're speculating vs. stating facts. If you don't know, say y
 
 /**
  * Copy the default MODELS.md to the workspace if it doesn't exist yet.
+ * Rejects filenames that resolve outside the workspace directory.
  */
 export async function ensureDefaultModelsFile(
   workspaceDir: string,
   filename: string = "MODELS.md",
 ): Promise<boolean> {
-  const filePath = join(workspaceDir, filename);
+  const filePath = resolve(workspaceDir, filename);
+  if (!filePath.startsWith(resolve(workspaceDir))) {
+    return false;
+  }
   try {
     await access(filePath);
     return false;
