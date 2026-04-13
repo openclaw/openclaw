@@ -69,5 +69,11 @@ export function releaseDiscordInboundReplay(params: {
 function normalizeDiscordInboundReplayKeys(
   replayKeys?: readonly (string | null | undefined)[],
 ): string[] {
-  return [...new Set((replayKeys ?? []).map((replayKey) => replayKey?.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      (replayKeys ?? [])
+        .map((replayKey) => replayKey?.trim())
+        .filter((replayKey): replayKey is string => Boolean(replayKey)),
+    ),
+  ];
 }

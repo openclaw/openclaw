@@ -7,7 +7,9 @@ const {
 } = vi.hoisted(() => ({
   loadBundledChannelDoctorContractApiMock: vi.fn(),
   getBootstrapChannelPluginMock: vi.fn(),
-  listPluginDoctorLegacyConfigRulesMock: vi.fn(() => []),
+  listPluginDoctorLegacyConfigRulesMock: vi.fn<() => Array<{ path: string[]; message: string }>>(
+    () => [],
+  ),
 }));
 
 vi.mock("./doctor-contract-api.js", () => ({

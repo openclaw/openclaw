@@ -131,7 +131,13 @@ export async function attachWebInboxToSocket(
     entries: QueuedInboundMessage[],
     error?: unknown,
   ): Promise<void> => {
-    const dedupeKeys = [...new Set(entries.map((entry) => entry.dedupeKey).filter(Boolean))];
+    const dedupeKeys = [
+      ...new Set(
+        entries
+          .map((entry) => entry.dedupeKey)
+          .filter((dedupeKey): dedupeKey is string => Boolean(dedupeKey)),
+      ),
+    ];
     if (dedupeKeys.length === 0) {
       return;
     }
