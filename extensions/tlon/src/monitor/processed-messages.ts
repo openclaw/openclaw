@@ -1,4 +1,4 @@
-import { createDedupeCache } from "../../api.js";
+import { createDedupeCache } from "../../runtime-api.js";
 
 export type ProcessedMessageTracker = {
   mark: (id?: string | null) => boolean;

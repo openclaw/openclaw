@@ -1,7 +1,7 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
@@ -67,10 +67,13 @@ export function createCronPromptExecutor(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
 }) {
-  const sessionFile = resolveSessionTranscriptPath(
-    params.cronSession.sessionEntry.sessionId,
-    params.agentId,
-  );
+  const sessionFile =
+    params.cronSession.sessionEntry.sessionFile?.trim() ||
+    resolveSessionTranscriptPath(params.cronSession.sessionEntry.sessionId, params.agentId);
+  // Fallback for callers that bypass prepareCronRunContext before persisting retries.
+  if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
+    params.cronSession.sessionEntry.sessionFile = sessionFile;
+  }
   const cronFallbacksOverride = resolveCronFallbacksOverride({
     cfg: params.cfg,
     job: params.job,
@@ -116,8 +119,10 @@ export function createCronPromptExecutor(params: {
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             cliSessionId,
+            skillsSnapshot: params.skillsSnapshot,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -130,7 +135,7 @@ export function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           allowGatewaySubagentBinding: true,
-          senderIsOwner: true,
+          senderIsOwner: false,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           sessionFile,

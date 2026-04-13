@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
@@ -179,6 +179,32 @@ describe("runCapability skips tiny audio files", () => {
         expect(result.outputs).toHaveLength(1);
         expect(result.outputs[0].text).toBe("hello world");
         expect(result.decision.outcome).toBe("success");
+      },
+    });
+  });
+
+  it("marks the decision as failed when every audio model attempt fails", async () => {
+    await withAudioFixture({
+      filePrefix: "openclaw-failed-audio",
+      extension: "ogg",
+      mediaType: "audio/ogg",
+      fileContents: Buffer.alloc(MIN_AUDIO_FILE_BYTES + 100),
+      run: async ({ ctx, media, cache }) => {
+        const result = await runAudioCapabilityWithTranscriber({
+          ctx,
+          media,
+          cache,
+          transcribeAudio: async () => {
+            throw new Error("upstream 500");
+          },
+        });
+
+        expect(result.outputs).toHaveLength(0);
+        expect(result.decision.outcome).toBe("failed");
+        expect(result.decision.attachments).toHaveLength(1);
+        expect(result.decision.attachments[0]?.attempts).toHaveLength(1);
+        expect(result.decision.attachments[0]?.attempts[0]?.outcome).toBe("failed");
+        expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain("upstream 500");
       },
     });
   });

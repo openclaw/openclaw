@@ -5,7 +5,6 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { compactEmbeddedPiSession, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -13,7 +12,6 @@ import {
   normalizeUsage,
   type UsageLike,
 } from "../../agents/usage.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
@@ -22,6 +20,7 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -45,10 +44,26 @@ import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+async function compactEmbeddedPiSessionDefault(
+  ...args: Parameters<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>
+): Promise<
+  Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>>
+> {
+  const { compactEmbeddedPiSession } = await import("../../agents/pi-embedded.js");
+  return await compactEmbeddedPiSession(...args);
+}
+
+async function runEmbeddedPiAgentDefault(
+  ...args: Parameters<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>
+): Promise<Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>>> {
+  const { runEmbeddedPiAgent } = await import("../../agents/pi-embedded.js");
+  return await runEmbeddedPiAgent(...args);
+}
+
 const memoryDeps = {
-  compactEmbeddedPiSession,
+  compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
   runWithModelFallback,
-  runEmbeddedPiAgent,
+  runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
@@ -60,8 +75,8 @@ const memoryDeps = {
 export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
     runWithModelFallback,
-    compactEmbeddedPiSession,
-    runEmbeddedPiAgent,
+    compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
+    runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,
@@ -444,6 +459,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     groupId: entry.groupId ?? params.followupRun.run.groupId,
     groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
     groupSpace: entry.space ?? params.followupRun.run.groupSpace,
+    senderId: params.followupRun.run.senderId,
+    senderName: params.followupRun.run.senderName,
+    senderUsername: params.followupRun.run.senderUsername,
+    senderE164: params.followupRun.run.senderE164,
     sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
     workspaceDir: params.followupRun.run.workspaceDir,
     agentDir: params.followupRun.run.agentDir,

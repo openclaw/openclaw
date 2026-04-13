@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   decorateOpenClawProfile,
   ensureProfileCleanExit,
@@ -22,6 +21,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
 
@@ -357,7 +357,7 @@ describe("browser chrome helpers", () => {
           dangerouslyAllowPrivateNetwork: false,
           allowedHostnames: ["127.0.0.1"],
         }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
+      ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
