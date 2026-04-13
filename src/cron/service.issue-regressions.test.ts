@@ -1616,11 +1616,11 @@ describe("Cron issue regressions", () => {
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.scheduleErrorCount).toBe(1);
     expect(job.state.lastError).toMatch(/^schedule error:/);
-    expect(job.state.nextRunAtMs).toBe(endedAt + 2_000);
+    expect(job.state.nextRunAtMs).toBeUndefined();
     expect(job.enabled).toBe(true);
   });
 
-  it("falls back to backoff schedule when cron next-run computation throws on error path (#30905)", () => {
+  it("keeps state updates when cron next-run computation throws on error path (#30905)", () => {
     const startedAt = Date.parse("2026-03-02T12:05:00.000Z");
     const endedAt = startedAt + 25;
     const state = createCronServiceState({
@@ -1655,7 +1655,7 @@ describe("Cron issue regressions", () => {
     expect(job.state.consecutiveErrors).toBe(1);
     expect(job.state.scheduleErrorCount).toBe(1);
     expect(job.state.lastError).toMatch(/^schedule error:/);
-    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    expect(job.state.nextRunAtMs).toBeUndefined();
     expect(job.enabled).toBe(true);
   });
 

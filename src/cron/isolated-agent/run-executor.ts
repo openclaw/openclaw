@@ -118,25 +118,25 @@ export function createCronPromptExecutor(params: {
       agentDir: params.agentDir,
       fallbacksOverride: cronFallbacksOverride,
       beforeAttempt: ({ attempt }) => {
-        if (attempt <= 1) {
-          return;
+        const deadlineAtMs = params.deadlineAtMs;
+        const fallbackMinRemainingMs = params.fallbackMinRemainingMs;
+        const hasFallbackTimeBudget =
+          attempt > 1 &&
+          typeof deadlineAtMs === "number" &&
+          Number.isFinite(deadlineAtMs) &&
+          typeof fallbackMinRemainingMs === "number" &&
+          fallbackMinRemainingMs > 0;
+        if (!hasFallbackTimeBudget) {
+          return undefined;
         }
-        if (
-          typeof params.deadlineAtMs !== "number" ||
-          !Number.isFinite(params.deadlineAtMs) ||
-          typeof params.fallbackMinRemainingMs !== "number" ||
-          params.fallbackMinRemainingMs <= 0
-        ) {
-          return;
-        }
-        const remainingMs = params.deadlineAtMs - Date.now();
-        if (remainingMs >= params.fallbackMinRemainingMs) {
-          return;
+        const remainingMs = deadlineAtMs - Date.now();
+        if (remainingMs >= fallbackMinRemainingMs) {
+          return undefined;
         }
         return {
           type: "stop" as const,
           reason: "timeout" as const,
-          error: `Skipping fallback: only ${Math.max(0, remainingMs)}ms remain before cron timeout (need at least ${params.fallbackMinRemainingMs}ms).`,
+          error: `Skipping fallback: only ${Math.max(0, remainingMs)}ms remain before cron timeout (need at least ${fallbackMinRemainingMs}ms).`,
         };
       },
       run: async (providerOverride, modelOverride, runOptions) => {
