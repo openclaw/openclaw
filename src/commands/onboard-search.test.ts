@@ -148,12 +148,15 @@ function createPrompter(params: {
   selectValue?: string;
   selectValues?: string[];
   textValue?: string;
+  confirmValue?: boolean;
+  confirmValues?: boolean[];
 }): {
   prompter: WizardPrompter;
   notes: Array<{ title?: string; message: string }>;
 } {
   const notes: Array<{ title?: string; message: string }> = [];
   const remainingSelectValues = [...(params.selectValues ?? [])];
+  const remainingConfirmValues = [...(params.confirmValues ?? [])];
   const prompter: WizardPrompter = {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
@@ -165,7 +168,9 @@ function createPrompter(params: {
     ) as unknown as WizardPrompter["select"],
     multiselect: vi.fn(async () => []) as unknown as WizardPrompter["multiselect"],
     text: vi.fn(async () => params.textValue ?? ""),
-    confirm: vi.fn(async () => true),
+    confirm: vi.fn(
+      async () => remainingConfirmValues.shift() ?? params.confirmValue ?? true,
+    ) as unknown as WizardPrompter["confirm"],
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
   };
   return { prompter, notes };
@@ -319,6 +324,55 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-test-key");
     expect(result.plugins?.entries?.brave?.enabled).toBe(true);
+  });
+
+  it("can enable native Codex search during onboarding without a managed provider", async () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({
+      selectValues: ["cached"],
+      confirmValues: [true, false],
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search).toEqual({
+      enabled: true,
+      openaiCodex: {
+        enabled: true,
+        mode: "cached",
+      },
+    });
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
+  it("still lets onboarding configure a managed provider after declining native Codex search", async () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({
+      selectValue: "perplexity",
+      textValue: "pplx-test-key",
+      confirmValues: [false],
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("perplexity");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.openaiCodex?.enabled).toBe(false);
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("pplx-test-key");
   });
 
   it("sets provider and key for gemini", async () => {
