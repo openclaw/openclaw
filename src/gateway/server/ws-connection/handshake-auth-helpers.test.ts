@@ -79,7 +79,7 @@ describe("handshake auth helpers", () => {
     });
   });
 
-  it("allows silent local pairing for not-paired, scope-upgrade and role-upgrade", () => {
+  it("allows silent local pairing for not-paired, scope-upgrade, role-upgrade and metadata-upgrade", () => {
     expect(
       shouldAllowSilentLocalPairing({
         locality: "direct_local",
@@ -124,9 +124,9 @@ describe("handshake auth helpers", () => {
         isWebchat: false,
         reason: "metadata-upgrade",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
-  it("rejects silent role-upgrade for remote clients", () => {
+  it("rejects silent role-upgrade and metadata-upgrade for remote clients", () => {
     expect(
       shouldAllowSilentLocalPairing({
         locality: "remote",
@@ -134,6 +134,15 @@ describe("handshake auth helpers", () => {
         isControlUi: false,
         isWebchat: false,
         reason: "role-upgrade",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "metadata-upgrade",
       }),
     ).toBe(false);
   });
