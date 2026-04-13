@@ -1189,7 +1189,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage("mattermost: drop post (missing message id)");
       return;
     }
-<<<<<<< HEAD
     const replayResult = await processMattermostReplayGuardedPost({
       accountId: account.accountId,
       messageIds: allMessageIds,
