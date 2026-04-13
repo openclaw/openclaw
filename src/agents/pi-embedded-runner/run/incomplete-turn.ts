@@ -304,6 +304,9 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+    return null;
+  }
   if (assistant?.stopReason === "error") {
     return null;
   }
