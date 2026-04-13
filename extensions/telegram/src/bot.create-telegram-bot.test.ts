@@ -9,6 +9,8 @@ const {
   botCtorSpy,
   commandSpy,
   dispatchReplyWithBufferedBlockDispatcher,
+  editMessageTextSpy,
+  enqueueSystemEventSpy,
   getLoadWebMediaMock,
   getChatSpy,
   getLoadConfigMock,
@@ -2745,5 +2747,241 @@ describe("createTelegramBot", () => {
 
     expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
     expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
+  });
+
+  it("retries group migration updates after a bubbled handler failure", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groups: {
+            "-1001": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const migrationHandler = getOnHandler("message:migrate_to_chat_id");
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
+          typeof fn === "function",
+      );
+    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await migrationHandler(ctx);
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const ctx = {
+      update: { update_id: 444 },
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "Old Group" },
+        migrate_to_chat_id: -1002,
+      },
+    };
+
+    const loadConfigCallsBeforeRetry = loadConfig.mock.calls.length;
+    loadConfig.mockImplementationOnce(() => {
+      throw new Error("cfg boom");
+    });
+    await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
+    const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
+    await runMiddlewareChain(ctx);
+
+    expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
+    expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
+  });
+
+  it("retries reaction updates after a bubbled enqueue failure", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const reactionHandler = getOnHandler("message_reaction");
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
+          typeof fn === "function",
+      );
+    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await reactionHandler(ctx);
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const ctx = {
+      update: { update_id: 555 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada", username: "ada_bot" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "\u{1F44D}" }],
+      },
+    };
+
+    enqueueSystemEventSpy.mockImplementationOnce(() => {
+      throw new Error("queue boom");
+    });
+    await expect(runMiddlewareChain(ctx)).rejects.toThrow("queue boom");
+    await runMiddlewareChain(ctx);
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(2);
+    expect(enqueueSystemEventSpy.mock.calls.at(-1)?.[0]).toContain("Telegram reaction added:");
+  });
+
+  it("retries model callback updates after a bubbled preflight failure", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    buildModelsProviderDataMock.mockClear();
+    editMessageTextSpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
+          typeof fn === "function",
+      );
+    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await callbackHandler(ctx);
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const ctx = {
+      update: { update_id: 666 },
+      callbackQuery: {
+        id: "cbq-model-retry-1",
+        data: "mdl_prov",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 18,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    buildModelsProviderDataMock.mockImplementationOnce(async () => {
+      throw new Error("providers boom");
+    });
+    await expect(runMiddlewareChain(ctx)).rejects.toThrow("providers boom");
+    await runMiddlewareChain(ctx);
+
+    expect(buildModelsProviderDataMock).toHaveBeenCalledTimes(2);
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Select a provider:");
+  });
+
+  it("retries command pagination callbacks after a bubbled edit failure", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
+          typeof fn === "function",
+      );
+    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await callbackHandler(ctx);
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const ctx = {
+      update: { update_id: 777 },
+      callbackQuery: {
+        id: "cbq-commands-retry-1",
+        data: "commands_page_2:main",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 19,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    editMessageTextSpy.mockImplementationOnce(async () => {
+      throw new Error("edit boom");
+    });
+    await expect(runMiddlewareChain(ctx)).rejects.toThrow("edit boom");
+    await runMiddlewareChain(ctx);
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
+    expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Commands (2/");
   });
 });

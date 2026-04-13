@@ -1,4 +1,4 @@
-import { resolveAuthStorePath } from "./paths.js";
+import { resolveAuthStorePath } from "./path-resolve.js";
 import type { AuthProfileStore } from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();

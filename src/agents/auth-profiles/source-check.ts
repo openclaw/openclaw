@@ -1,5 +1,9 @@
 import fs from "node:fs";
-import { resolveAuthStatePath, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
+import {
+  resolveAuthStatePath,
+  resolveAuthStorePath,
+  resolveLegacyAuthStorePath,
+} from "./path-resolve.js";
 import { hasAnyRuntimeAuthProfileStoreSource } from "./runtime-snapshots.js";
 
 function hasStoredAuthProfileFiles(agentDir?: string): boolean {

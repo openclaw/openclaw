@@ -408,7 +408,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(options?.messageThreadId).toBeUndefined();
     });
   });
-
   it("keeps exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg: OpenClawConfig = {
@@ -472,6 +471,75 @@ describe("Ghost reminder bug (issue #13317)", () => {
         "telegram:-1003774691294:topic:47",
         "The review-worker spawn finished successfully.",
         expect.objectContaining({ messageThreadId: 47 }),
+      );
+    });
+  });
+
+  it("keeps Telegram topic routing for isolated scheduled heartbeats", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+              isolatedSession: true,
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "-100155462274",
+            deliveryContext: {
+              channel: "telegram",
+              to: "-100155462274",
+              threadId: 42,
+            },
+            chatType: "group",
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "-100155462274",
+      });
+      replySpy.mockResolvedValue({ text: "Topic heartbeat" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "timer",
+        deps: {
+          getReplyFromConfig: replySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: `${sessionKey}:heartbeat`,
+          MessageThreadId: 42,
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "-100155462274",
+        "Topic heartbeat",
+        expect.objectContaining({ messageThreadId: 42 }),
       );
     });
   });
