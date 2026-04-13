@@ -817,7 +817,7 @@ export async function runTui(opts: TuiOptions) {
       lastCtrlCAt,
     });
     lastCtrlCAt = decision.nextLastCtrlCAt;
-    const activeRunHint = activeChatRunId ? "; run still active (Esc or /abort to stop)" : "";
+    const activeRunHint = activeChatRunId ? "; run still active (/abort to stop)" : "";
     if (decision.action === "clear") {
       editor.setText("");
       setActivityStatus(`cleared input; press ctrl+c again to exit${activeRunHint}`);
