@@ -34,6 +34,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     tmpDir: string;
     storePath: string;
     target?: "telegram" | "none";
+    isolatedSession?: boolean;
   }): Promise<{ cfg: OpenClawConfig; sessionKey: string }> => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -42,6 +43,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           heartbeat: {
             every: "5m",
             target: params.target ?? "telegram",
+            ...(params.isolatedSession === true ? { isolatedSession: true } : {}),
           },
         },
       },
@@ -94,10 +96,16 @@ describe("Ghost reminder bug (issue #13317)", () => {
     reason: string;
     enqueue: (sessionKey: string) => void;
     target?: "telegram" | "none";
+    isolatedSession?: boolean;
   }): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
-    calledCtx: { Provider?: string; Body?: string; ForceSenderIsOwnerFalse?: boolean } | null;
+    calledCtx: {
+      Provider?: string;
+      Body?: string;
+      SessionKey?: string;
+      ForceSenderIsOwnerFalse?: boolean;
+    } | null;
     replyCallCount: number;
   }> => {
     return withTempHeartbeatSandbox(
@@ -107,6 +115,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           tmpDir,
           storePath,
           target: params.target,
+          isolatedSession: params.isolatedSession,
         });
         params.enqueue(sessionKey);
         const result = await runHeartbeatOnce({
@@ -121,6 +130,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {
           Provider?: string;
           Body?: string;
+          SessionKey?: string;
           ForceSenderIsOwnerFalse?: boolean;
         } | null;
         return {
@@ -336,6 +346,28 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("forces owner downgrade for untrusted hook:wake events with isolated sessions", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-hook-untrusted-isolated-",
+      replyText: "Handled internally",
+      reason: "hook:wake",
+      target: "none",
+      isolatedSession: true,
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
+          sessionKey,
+          trusted: false,
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.SessionKey).toContain(":heartbeat");
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(sendTelegram).not.toHaveBeenCalled();
   });

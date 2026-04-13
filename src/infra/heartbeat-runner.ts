@@ -871,11 +871,7 @@ export async function runHeartbeatOnce(opts: {
     }
     runSessionKey = isolatedSessionKey;
   }
-  const activePendingEventEntries =
-    runSessionKey === sessionKey
-      ? preflight.pendingEventEntries
-      : peekSystemEventEntries(runSessionKey);
-  const hasUntrustedPendingEvents = activePendingEventEntries.some(
+  const hasUntrustedPendingEvents = preflight.pendingEventEntries.some(
     (event) => event.trusted === false,
   );
 
