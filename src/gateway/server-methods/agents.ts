@@ -366,6 +366,7 @@ async function readWorkspaceFileContent(
       rootDir: workspaceDir,
       relativePath: name,
       rejectHardlinks: true,
+      nonBlockingRead: true,
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {

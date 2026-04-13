@@ -793,6 +793,7 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
       rootDir: params.rootDir,
       relativePath: params.relativePath,
       rejectHardlinks: true,
+      nonBlockingRead: true,
     });
     try {
       mode = opened.stat.mode & 0o777;

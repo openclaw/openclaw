@@ -562,6 +562,26 @@ describe("agents.create", () => {
     expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
   });
 
+  it("uses non-blocking reads for IDENTITY.md during agents.create", async () => {
+    const readFileWithinRoot = vi.fn(async () => {
+      throw new SafeOpenError("not-found", "file not found");
+    });
+    agentsTesting.setDepsForTests({ readFileWithinRoot });
+
+    const { promise } = makeCall("agents.create", {
+      name: "NB Agent",
+      workspace: "/tmp/ws",
+    });
+    await promise;
+
+    expect(readFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relativePath: "IDENTITY.md",
+        nonBlockingRead: true,
+      }),
+    );
+  });
+
   it("passes model to applyAgentConfig when provided", async () => {
     const { respond, promise } = makeCall("agents.create", {
       name: "Model Agent",
@@ -924,6 +944,26 @@ describe("agents.update", () => {
     );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
+  });
+
+  it("uses non-blocking reads for IDENTITY.md during agents.update", async () => {
+    const readFileWithinRoot = vi.fn(async () => {
+      throw new SafeOpenError("not-found", "file not found");
+    });
+    agentsTesting.setDepsForTests({ readFileWithinRoot });
+
+    const { promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      name: "Updated NB",
+    });
+    await promise;
+
+    expect(readFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relativePath: "IDENTITY.md",
+        nonBlockingRead: true,
+      }),
+    );
   });
 });
 
