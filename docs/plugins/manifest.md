@@ -249,6 +249,8 @@ Current live consumers:
 
 - command-triggered CLI planning falls back to legacy
   `commandAliases[].cliCommand` or `commandAliases[].name`
+- channel-triggered setup/channel planning falls back to legacy `channels[]`
+  ownership when explicit channel activation metadata is missing
 - provider-triggered setup/runtime planning falls back to legacy
   `providers[]` and top-level `cliBackends[]` ownership when explicit provider
   activation metadata is missing
