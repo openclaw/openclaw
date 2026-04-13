@@ -127,7 +127,7 @@ let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashC
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
   const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
+  const incoming = req as unknown as IncomingMessage;
   incoming.method = "POST";
   incoming.headers = {
     "content-type": "application/x-www-form-urlencoded",
@@ -148,17 +148,9 @@ function createResponse(): {
       return this;
     }
 
-    override end(): this;
-    override end(cb: () => void): this;
-    override end(chunk: string | Buffer | Uint8Array, cb?: () => void): this;
     override end(
-      chunk: string | Buffer | Uint8Array,
-      encoding: BufferEncoding,
-      cb?: () => void,
-    ): this;
-    override end(
-      chunkOrCb?: string | Buffer | Uint8Array | (() => void),
-      encodingOrCb?: BufferEncoding | (() => void),
+      chunkOrCb?: string | Uint8Array | (() => void),
+      encodingOrCb?: string | (() => void),
       cb?: () => void,
     ): this {
       const chunk = typeof chunkOrCb === "function" ? undefined : chunkOrCb;
@@ -260,5 +252,21 @@ describe("slash-http cfg threading", () => {
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).toContain("Processing");
     expect(hasSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows known tokens without a recorded trigger binding", async () => {
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      commandTokens: new Set(["valid-token"]),
+      commandTokenBindings: new Map([["other-token", "oc_status"]]),
+    });
+    const response = createResponse();
+
+    await handler(createRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("Processing");
   });
 });

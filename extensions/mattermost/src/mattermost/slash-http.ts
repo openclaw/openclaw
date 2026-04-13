@@ -103,7 +103,8 @@ function matchesRegisteredCommandBinding(
       return trigger === expectedTrigger;
     }
   }
-  return false;
+  // Token has no binding recorded, so there is no extra trigger constraint to enforce.
+  return true;
 }
 
 type SlashInvocationAuth = {
