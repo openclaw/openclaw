@@ -400,7 +400,10 @@ async function requestOpenAiVerification(params: {
       body: {
         model: params.modelId,
         messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 1,
+        // OpenAI (and several compatible providers, including proxies routing
+        // to recent OpenAI models) enforce max_tokens >= 16. Use 16 so the
+        // probe succeeds on both older providers and current OpenAI.
+        max_tokens: 16,
         stream: false,
       },
     });
