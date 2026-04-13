@@ -60,7 +60,7 @@ export function applyImageModelConfigDefaults(
 export function applyImageGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageGenerationModelConfig: ToolModelConfig,
-): OpenClawConfigConfig | undefined {
+): OpenClawConfig | undefined {
   return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
 }
 
@@ -358,7 +358,7 @@ export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { workspaceOnly?: boolean },
   _mediaSources?: readonly string[],
-):  string[] {
+): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
@@ -410,8 +410,15 @@ export function resolveModelFromRegistry(params: {
 }
 
 export async function resolveModelRuntimeApiKey(params: {
-  model: Model<Api>;
-  cfg: OpenClawConfig | undefined;
-  agentDir: string;
-  authStorage: {
-    setRuntimeApiKey: (
+  modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  provider: string;
+  modelId: string;
+  agentDir?: string;
+}): Promise<string> {
+  resolveModelFromRegistry(params);
+  return requireApiKey({
+    provider: params.provider,
+    modelId: params.modelId,
+    agentDir: params.agentDir,
+  });
+}
