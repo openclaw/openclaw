@@ -616,12 +616,24 @@ export async function runEmbeddedAttempt(
     if (clientToolNameConflicts.length > 0) {
       // Dispose runtimes and release session lock before throwing — the inner
       // try/finally that normally handles cleanup hasn't been entered yet.
-      await bundleMcpRuntime?.dispose();
-      await bundleLspRuntime?.dispose();
-      await sessionLock.release();
+      // Use try/finally so the lock is always released even if disposal throws.
+      try {
+        await bundleMcpRuntime?.dispose();
+        await bundleLspRuntime?.dispose();
+      } finally {
+        await sessionLock.release();
+      }
       throw createClientToolNameConflictError(clientToolNameConflicts);
     }
-    await params.onPreflightPassed?.();
+    // Run the preflight callback inside a guard so the session lock is
+    // released if the callback throws before we reach the inner try/finally
+    // that normally handles cleanup.
+    try {
+      await params.onPreflightPassed?.();
+    } catch (err) {
+      await sessionLock.release();
+      throw err;
+    }
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
