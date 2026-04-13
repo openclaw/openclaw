@@ -125,7 +125,7 @@ describe("authorizeSlackSystemEventSender", () => {
     clearSlackAllowFromCacheForTest();
   });
 
-  it("blocks channel senders outside a configured global allowFrom", async () => {
+  it("keeps non-interactive channel senders open when only global allowFrom is configured", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
       senderId: "U_ATTACKER",
@@ -133,14 +133,13 @@ describe("authorizeSlackSystemEventSender", () => {
     });
 
     expect(result).toEqual({
-      allowed: false,
-      reason: "sender-not-allowlisted",
+      allowed: true,
       channelType: "channel",
       channelName: "general",
     });
   });
 
-  it("allows channel senders who match the global allowFrom even when channel users are configured", async () => {
+  it("keeps channel users as the non-interactive gate even when global allowFrom is configured", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({
         allowFrom: ["U_OWNER"],
@@ -153,13 +152,14 @@ describe("authorizeSlackSystemEventSender", () => {
     });
 
     expect(result).toEqual({
-      allowed: true,
+      allowed: false,
+      reason: "sender-not-channel-allowed",
       channelType: "channel",
       channelName: "general",
     });
   });
 
-  it("uses a combined denial reason when sender matches neither global nor channel allowlists", async () => {
+  it("uses the channel denial reason for non-interactive senders who miss a channel users allowlist", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({
         allowFrom: ["U_OWNER"],
@@ -173,7 +173,7 @@ describe("authorizeSlackSystemEventSender", () => {
 
     expect(result).toEqual({
       allowed: false,
-      reason: "sender-not-authorized",
+      reason: "sender-not-channel-allowed",
       channelType: "channel",
       channelName: "general",
     });
@@ -212,7 +212,7 @@ describe("authorizeSlackSystemEventSender", () => {
     });
   });
 
-  it("does not let a wildcard global allowFrom bypass channel users restrictions", async () => {
+  it("does not let a wildcard global allowFrom bypass non-interactive channel users restrictions", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({
         allowFrom: ["*"],
@@ -226,7 +226,7 @@ describe("authorizeSlackSystemEventSender", () => {
 
     expect(result).toEqual({
       allowed: false,
-      reason: "sender-not-authorized",
+      reason: "sender-not-channel-allowed",
       channelType: "channel",
       channelName: "general",
     });
@@ -251,7 +251,7 @@ describe("authorizeSlackSystemEventSender", () => {
     });
   });
 
-  it("ignores wildcard owner access when channel users are configured, even if explicit owners are also listed", async () => {
+  it("does not give non-interactive owner bypass when channel users are configured, even if explicit owners are also listed", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({
         allowFrom: ["U_OWNER", "*"],
@@ -265,13 +265,13 @@ describe("authorizeSlackSystemEventSender", () => {
 
     expect(result).toEqual({
       allowed: false,
-      reason: "sender-not-authorized",
+      reason: "sender-not-channel-allowed",
       channelType: "channel",
       channelName: "general",
     });
   });
 
-  it("preserves explicit owner access when allowFrom also contains wildcard", async () => {
+  it("keeps explicit owners behind the non-interactive channel users gate when allowFrom also contains wildcard", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({
         allowFrom: ["U_OWNER", "*"],
@@ -284,7 +284,8 @@ describe("authorizeSlackSystemEventSender", () => {
     });
 
     expect(result).toEqual({
-      allowed: true,
+      allowed: false,
+      reason: "sender-not-channel-allowed",
       channelType: "channel",
       channelName: "general",
     });
@@ -344,7 +345,50 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     });
   });
 
-  it("denies interactive channel events when no allowlists are configured", async () => {
+  it("allows interactive channel senders who match the global allowFrom even when channel users are configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("uses a combined denial reason when an interactive sender matches neither global nor channel allowlists", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+      expectedSenderId: "U_ATTACKER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-authorized",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("keeps interactive channel events open when no allowlists are configured", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx(),
       senderId: "U_ANYONE",
@@ -354,8 +398,28 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     });
 
     expect(result).toEqual({
-      allowed: false,
-      reason: "sender-not-allowlisted",
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("preserves explicit owner access for interactive events when allowFrom also contains wildcard", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER", "*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
       channelType: "channel",
       channelName: "general",
     });

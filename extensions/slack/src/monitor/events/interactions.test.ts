@@ -889,9 +889,8 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
-  it("blocks channel block actions when no allowlists are configured (interactive default-deny)", async () => {
+  it("keeps channel block actions open when no allowlists are configured", async () => {
     enqueueSystemEventMock.mockClear();
-    // No allowFrom, no channel users — interactive events default-deny
     const { ctx, app, getHandler } = createContext({ allowFrom: [] });
     registerSlackInteractionEvents({ ctx: ctx as never });
     const handler = getHandler();
@@ -918,12 +917,9 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(app.client.chat.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "You are not authorized to use this control.",
-      response_type: "ephemeral",
-    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it("blocks DM block actions when sender is not in allowFrom", async () => {

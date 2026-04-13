@@ -173,9 +173,9 @@ export async function authorizeSlackSystemEventSender(params: {
   channelId?: string;
   channelType?: string | null;
   expectedSenderId?: string;
-  /** When true, applies stricter default-deny rules for interactive controls:
-   *  requires expectedSenderId, rejects ambiguous channel types, and denies
-   *  senders when no allowlists are configured instead of allowing by default. */
+  /** When true, requires expectedSenderId, rejects ambiguous channel types,
+   *  and applies interactive-only owner allowFrom checks without changing the
+   *  open-by-default channel behavior when no allowlists are configured. */
   interactiveEvent?: boolean;
 }): Promise<SlackSystemEventAuthResult> {
   const senderId = params.senderId?.trim();
@@ -331,7 +331,7 @@ export async function authorizeSlackSystemEventSender(params: {
         userName: senderName,
         allowNameMatching: params.ctx.allowNameMatching,
       });
-      if (channelUserAllowed || ownerExplicitlyAllowed) {
+      if (channelUserAllowed || (params.interactiveEvent && ownerExplicitlyAllowed)) {
         return {
           allowed: true,
           channelType,
@@ -340,29 +340,22 @@ export async function authorizeSlackSystemEventSender(params: {
       }
       return {
         allowed: false,
-        reason: ownerAllowlistConfigured ? "sender-not-authorized" : "sender-not-channel-allowed",
+        reason:
+          params.interactiveEvent && ownerAllowlistConfigured
+            ? "sender-not-authorized"
+            : "sender-not-channel-allowed",
         channelType,
         channelName,
       };
     }
-    if (ownerAllowed) {
+    if (params.interactiveEvent && ownerAllowed) {
       return {
         allowed: true,
         channelType,
         channelName,
       };
     }
-    if (ownerAllowlistConfigured) {
-      return {
-        allowed: false,
-        reason: "sender-not-allowlisted",
-        channelType,
-        channelName,
-      };
-    }
-    // Interactive events require explicit authorization even when no
-    // allowlists are configured — default-deny for interactive controls.
-    if (params.interactiveEvent) {
+    if (params.interactiveEvent && ownerAllowlistConfigured) {
       return {
         allowed: false,
         reason: "sender-not-allowlisted",
