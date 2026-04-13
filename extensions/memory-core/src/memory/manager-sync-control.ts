@@ -72,15 +72,6 @@ export function extractMemoryErrorReason(err: unknown): string {
   if (formattedMessage.trim()) {
     return formattedMessage;
   }
-  if (err && typeof err === "object") {
-    const record = err as Record<string, unknown>;
-    if (typeof record.message === "string" && record.message.trim()) {
-      return record.message;
-    }
-    if (typeof record.code === "string" && record.code.trim()) {
-      return record.code;
-    }
-  }
   return String(err);
 }
 

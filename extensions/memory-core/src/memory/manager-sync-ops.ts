@@ -631,9 +631,7 @@ export abstract class MemoryManagerSyncOps {
       // Mark dirty so runSync actually checks for file changes.
       // Without this, interval sync is a no-op when the watcher has silently
       // stopped firing events — dirty stays false and syncMemoryFiles is skipped.
-      if (this.sources.has("memory")) {
-        this.dirty = true;
-      }
+      this.dirty = true;
       runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
     }, ms);
   }
