@@ -6,10 +6,12 @@ on:
     paths:
       - "extensions/qa-lab/**"
       - "extensions/qa-channel/**"
+      - "extensions/openai/**"
       - "qa/scenarios/**"
       - "src/agents/**"
       - "src/context-engine/**"
       - "src/gateway/**"
+      - "src/media/**"
       - ".github/workflows/parity-gate.yml"
 
 permissions:
