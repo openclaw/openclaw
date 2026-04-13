@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -19,7 +20,6 @@ import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { createChatForHandle, resolveChatGuidForTarget } from "./send.js";
 import {
-  blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesAttachment,
   type SsrFPolicy,
@@ -122,12 +122,15 @@ export async function downloadBlueBubblesAttachment(
         : trustedHostname && (allowPrivateNetworkConfig !== false || !trustedHostnameIsPrivate)
           ? { allowedHostnames: [trustedHostname] }
           : undefined,
-      fetchImpl: async (input, init) =>
-        await blueBubblesFetchWithTimeout(
+      fetchImpl: async (input, init) => {
+        const useFetch = init && "dispatcher" in init
+          ? fetchWithRuntimeDispatcher
+          : globalThis.fetch;
+        return await useFetch(
           resolveRequestUrl(input),
           { ...init, method: init?.method ?? "GET" },
-          opts.timeoutMs,
-        ),
+        );
+      },
     });
     return {
       buffer: new Uint8Array(fetched.buffer),
