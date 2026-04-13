@@ -500,6 +500,10 @@ export async function runSetupWizard(
     });
   }
 
+  if (!authChoice) {
+    throw new Error("Missing auth choice.");
+  }
+
   if (authChoice === "custom-api-key") {
     const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
     const customResult = await promptCustomApiConfig({

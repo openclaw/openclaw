@@ -157,7 +157,10 @@ export async function attachWebInboxToSocket(
       if (!senderKey) {
         return null;
       }
-      const conversationKey = msg.chatType === "group" ? msg.chatId : msg.from;
+      const conversationKey = msg.chatType === "group" ? (msg.chatId ?? msg.from) : msg.from;
+      if (!conversationKey) {
+        return null;
+      }
       return `${msg.accountId}:${conversationKey}:${senderKey}`;
     },
     shouldDebounce: options.shouldDebounce,

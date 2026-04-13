@@ -154,12 +154,12 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
         throw new NextcloudTalkRetryableWebhookError("transient nextcloud failure");
       }
     });
-    const processMessage = vi.fn(
-      createReplayAwareProcessMessage({
+    const processMessage = vi.fn(async (message: NextcloudTalkInboundMessage) => {
+      await createReplayAwareProcessMessage({
         stateDir,
         handleMessage,
-      }),
-    );
+      })(message);
+    });
     const harness = await startWebhookServer({
       path: "/nextcloud-replay-process",
       processMessage,
@@ -196,12 +196,12 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
       visibleSideEffect();
       throw new Error("post-send failure");
     });
-    const processMessage = vi.fn(
-      createReplayAwareProcessMessage({
+    const processMessage = vi.fn(async (message: NextcloudTalkInboundMessage) => {
+      await createReplayAwareProcessMessage({
         stateDir,
         handleMessage,
-      }),
-    );
+      })(message);
+    });
     const harness = await startWebhookServer({
       path: "/nextcloud-replay-post-send",
       processMessage,
