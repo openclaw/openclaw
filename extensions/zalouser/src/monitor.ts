@@ -12,6 +12,7 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import { resolveSenderCommandAuthorization } from "openclaw/plugin-sdk/command-auth";
 import {
   isDangerousNameMatchingEnabled,
+  normalizeNonTelegramGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   type MarkdownTableMode,
@@ -306,11 +307,14 @@ async function processMessage(
   }
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: config.channels?.zalouser !== undefined,
-    groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.zalouser !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  // "members" is Telegram-only; normalize to "open" for Zalo
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "zalouser",

@@ -46,6 +46,7 @@ export type { WizardPrompter } from "openclaw/plugin-sdk/matrix-runtime-shared";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,

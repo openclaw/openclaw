@@ -34,7 +34,7 @@ type DiscordMessagePreflightSharedFields = {
   textLimit: number;
   replyToMode: ReplyToMode;
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
-  groupPolicy: "open" | "disabled" | "allowlist";
+  groupPolicy: "open" | "disabled" | "allowlist" | "members";
 };
 
 export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields & {

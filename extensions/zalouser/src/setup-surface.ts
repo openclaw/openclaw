@@ -1,3 +1,4 @@
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
@@ -411,7 +412,8 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       Object.keys(resolveZalouserAccountSync({ cfg, accountId }).config.groups ?? {}),
     updatePrompt: ({ cfg, accountId }) =>
       Boolean(resolveZalouserAccountSync({ cfg, accountId }).config.groups),
-    setPolicy: ({ cfg, accountId, policy }) => setZalouserGroupPolicy(cfg, accountId, policy),
+    setPolicy: ({ cfg, accountId, policy }) =>
+      setZalouserGroupPolicy(cfg, accountId, normalizeNonTelegramGroupPolicy(policy)),
     resolveAllowlist: async ({ cfg, accountId, entries, prompter }) => {
       if (entries.length === 0) {
         await prompter.note(

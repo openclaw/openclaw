@@ -53,6 +53,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
@@ -208,7 +209,7 @@ function resolveDiscordGuildNativeCommandAuthorized(params: {
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
   const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
-    groupPolicy,
+    groupPolicy: normalizeNonTelegramGroupPolicy(groupPolicy),
     guildInfo: params.guildInfo,
     channelConfig: params.channelConfig,
   });
@@ -488,7 +489,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
       defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
     });
     const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
-      groupPolicy,
+      groupPolicy: normalizeNonTelegramGroupPolicy(groupPolicy),
       guildInfo,
       channelConfig,
     });
@@ -898,11 +899,13 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
   if (useAccessGroups && interaction.guild) {
-    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    const { groupPolicy: rawGroupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
       defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
     });
+    // Normalize "members" to "open": Discord has no Bot API member-check equivalent.
+    const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
     const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
       groupPolicy,
       guildInfo,

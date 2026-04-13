@@ -2,6 +2,7 @@
  * Twitch setup wizard surface for CLI setup.
  */
 
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   formatDocsLink,
   type ChannelSetupAdapter,
@@ -320,7 +321,7 @@ const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
     const account = getAccountConfig(cfg, resolveSetupAccountId(cfg));
     return Boolean(account?.allowedRoles?.length || account?.allowFrom?.length);
   },
-  setPolicy: ({ cfg, policy }) => setTwitchGroupPolicy(cfg, policy),
+  setPolicy: ({ cfg, policy }) => setTwitchGroupPolicy(cfg, normalizeNonTelegramGroupPolicy(policy)),
   resolveAllowlist: async () => [],
   applyAllowlist: ({ cfg }) => cfg,
 };

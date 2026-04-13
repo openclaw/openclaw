@@ -1,16 +1,26 @@
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import {
+  type GroupPolicy,
+  normalizeNonTelegramGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "openclaw/plugin-sdk/config-runtime";
 
 export function resolveWhatsAppRuntimeGroupPolicy(params: {
   providerConfigPresent: boolean;
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  defaultGroupPolicy?: "open" | "allowlist" | "disabled";
+  groupPolicy?: GroupPolicy;
+  defaultGroupPolicy?: GroupPolicy;
 }): {
   groupPolicy: "open" | "allowlist" | "disabled";
   providerMissingFallbackApplied: boolean;
 } {
-  return resolveOpenProviderRuntimeGroupPolicy({
+  // "members" is Telegram-only; treat it as "open" for WhatsApp.
+  const resolved = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
+    groupPolicy: params.groupPolicy && normalizeNonTelegramGroupPolicy(params.groupPolicy),
+    defaultGroupPolicy:
+      params.defaultGroupPolicy && normalizeNonTelegramGroupPolicy(params.defaultGroupPolicy),
   });
+  return {
+    groupPolicy: normalizeNonTelegramGroupPolicy(resolved.groupPolicy),
+    providerMissingFallbackApplied: resolved.providerMissingFallbackApplied,
+  };
 }

@@ -27,7 +27,10 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  normalizeNonTelegramGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
@@ -121,11 +124,13 @@ async function loadTypingRuntime() {
 function resolveComponentGroupPolicy(
   ctx: AgentComponentContext,
 ): "open" | "disabled" | "allowlist" {
-  return resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: ctx.cfg.channels?.discord !== undefined,
-    groupPolicy: ctx.discordConfig?.groupPolicy,
-    defaultGroupPolicy: ctx.cfg.channels?.defaults?.groupPolicy,
-  }).groupPolicy;
+  return normalizeNonTelegramGroupPolicy(
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: ctx.cfg.channels?.discord !== undefined,
+      groupPolicy: ctx.discordConfig?.groupPolicy,
+      defaultGroupPolicy: ctx.cfg.channels?.defaults?.groupPolicy,
+    }).groupPolicy,
+  );
 }
 
 function buildDiscordComponentConversationLabel(params: {

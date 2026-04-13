@@ -115,7 +115,7 @@ export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[])
 }
 
 export function isSignalGroupAllowed(params: {
-  groupPolicy: "open" | "disabled" | "allowlist";
+  groupPolicy: "open" | "disabled" | "allowlist" | "members";
   allowFrom: string[];
   sender: SignalSender;
 }): boolean {

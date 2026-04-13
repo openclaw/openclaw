@@ -146,6 +146,7 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
       .object({
         groupPolicy: GroupPolicySchema.optional(),
         contextVisibility: ContextVisibilityModeSchema.optional(),
+        groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
       })
       .strict()

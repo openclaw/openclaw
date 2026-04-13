@@ -15,7 +15,10 @@ import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/c
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  normalizeNonTelegramGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import {
   parseDiscordComponentCustomId,
@@ -423,11 +426,13 @@ export async function ensureAgentComponentInteractionAllowed(params: {
     componentLabel: params.componentLabel,
     unauthorizedReply: params.unauthorizedReply,
     allowNameMatching: isDangerousNameMatchingEnabled(params.ctx.discordConfig),
-    groupPolicy: resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: params.ctx.cfg.channels?.discord !== undefined,
-      groupPolicy: params.ctx.discordConfig?.groupPolicy,
-      defaultGroupPolicy: params.ctx.cfg.channels?.defaults?.groupPolicy,
-    }).groupPolicy,
+    groupPolicy: normalizeNonTelegramGroupPolicy(
+      resolveOpenProviderRuntimeGroupPolicy({
+        providerConfigPresent: params.ctx.cfg.channels?.discord !== undefined,
+        groupPolicy: params.ctx.discordConfig?.groupPolicy,
+        defaultGroupPolicy: params.ctx.cfg.channels?.defaults?.groupPolicy,
+      }).groupPolicy,
+    ),
   });
   if (!memberAllowed) {
     return null;

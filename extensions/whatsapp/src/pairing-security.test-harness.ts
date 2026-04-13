@@ -1,4 +1,5 @@
 import {
+  normalizeNonTelegramGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -26,6 +27,7 @@ export function resetPairingSecurityMocks(config: Record<string, unknown>) {
 vi.mock("openclaw/plugin-sdk/config-runtime", () => {
   return {
     loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    normalizeNonTelegramGroupPolicy,
     resolveDefaultGroupPolicy,
     resolveOpenProviderRuntimeGroupPolicy,
     warnMissingProviderGroupPolicyFallbackOnce,

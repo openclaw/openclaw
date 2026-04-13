@@ -310,7 +310,10 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
       continue;
     }
     const section = value as Record<string, unknown>;
-    if (section.groupPolicy === "open") {
+    const isTelegram = channelId === "telegram";
+    // "members" normalizes to "open" for non-Telegram channels; flag both as open-access.
+    // Telegram "members" is restrictive membership-verification, not open access.
+    if (section.groupPolicy === "open" || (section.groupPolicy === "members" && !isTelegram)) {
       out.push(`channels.${channelId}.groupPolicy`);
     }
     const accounts = section.accounts;
@@ -320,7 +323,7 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
           continue;
         }
         const acc = accountVal as Record<string, unknown>;
-        if (acc.groupPolicy === "open") {
+        if (acc.groupPolicy === "open" || (acc.groupPolicy === "members" && !isTelegram)) {
           out.push(`channels.${channelId}.accounts.${accountId}.groupPolicy`);
         }
       }
@@ -344,9 +347,16 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     return [];
   }
 
-  const inspectSection = (section: Record<string, unknown>, basePath: string) => {
+  const inspectSection = (
+    section: Record<string, unknown>,
+    basePath: string,
+    isTelegram: boolean,
+  ) => {
     const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
-    if (groupPolicy === "open") {
+    // "members" normalizes to "open" for non-Telegram channels; treat as effectively open.
+    // Telegram "members" is stricter membership-verification and must NOT be counted as open.
+    const isEffectivelyOpen = groupPolicy === "open" || (groupPolicy === "members" && !isTelegram);
+    if (isEffectivelyOpen) {
       out.add(`${basePath}.groupPolicy="open"`);
     } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
       out.add(`${basePath}.groupPolicy="allowlist" with configured group targets`);
@@ -385,8 +395,9 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     if (!value || typeof value !== "object") {
       continue;
     }
+    const isTelegram = channelId === "telegram";
     const section = value as Record<string, unknown>;
-    inspectSection(section, `channels.${channelId}`);
+    inspectSection(section, `channels.${channelId}`, isTelegram);
     const accounts = section.accounts;
     if (!accounts || typeof accounts !== "object") {
       continue;
@@ -398,6 +409,7 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
       inspectSection(
         accountValue as Record<string, unknown>,
         `channels.${channelId}.accounts.${accountId}`,
+        isTelegram,
       );
     }
   }
@@ -1082,7 +1094,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
       detail:
         `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
         "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
-      remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
+      remediation: `Set groupPolicy="allowlist" or "members" and keep elevated allowlists extremely tight.`,
     });
   }
 

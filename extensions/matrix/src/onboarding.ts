@@ -33,6 +33,7 @@ import {
   isPrivateOrLoopbackHost,
   mergeAllowFromEntries,
   normalizeAccountId,
+  normalizeNonTelegramGroupPolicy,
   promptAccountId,
   promptChannelAccessConfig,
   splitSetupEntries,
@@ -345,7 +346,11 @@ async function configureMatrixAccessPrompts(params: {
   });
   if (accessConfig) {
     if (accessConfig.policy !== "allowlist") {
-      next = setMatrixGroupPolicy(next, accessConfig.policy, params.accountId);
+      next = setMatrixGroupPolicy(
+        next,
+        normalizeNonTelegramGroupPolicy(accessConfig.policy),
+        params.accountId,
+      );
     } else {
       let roomKeys = accessConfig.entries;
       if (accessConfig.entries.length > 0) {

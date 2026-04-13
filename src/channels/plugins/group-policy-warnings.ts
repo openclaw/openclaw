@@ -1,4 +1,5 @@
 import {
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -155,7 +156,7 @@ export function buildOpenGroupPolicyConfigureRouteAllowlistWarning(params: {
 
 export function collectOpenGroupPolicyRestrictSendersWarnings(
   params: Parameters<typeof buildOpenGroupPolicyRestrictSendersWarning>[0] & {
-    groupPolicy: "open" | "allowlist" | "disabled";
+    groupPolicy: GroupPolicy;
   },
 ): string[] {
   if (params.groupPolicy !== "open") {
@@ -339,7 +340,7 @@ export function createAllowlistProviderRouteAllowlistWarningCollector<ResolvedAc
       params.resolveGroupPolicy(account),
     collect: ({ account, groupPolicy }) =>
       collectOpenGroupPolicyRouteAllowlistWarnings({
-        groupPolicy,
+        groupPolicy: normalizeNonTelegramGroupPolicy(groupPolicy),
         routeAllowlistConfigured: params.resolveRouteAllowlistConfigured(account),
         restrictSenders: params.restrictSenders,
         noRouteAllowlist: params.noRouteAllowlist,
@@ -376,7 +377,7 @@ export function createOpenProviderConfiguredRouteWarningCollector<ResolvedAccoun
       params.resolveGroupPolicy(account),
     collect: ({ account, groupPolicy }) =>
       collectOpenGroupPolicyConfiguredRouteWarnings({
-        groupPolicy,
+        groupPolicy: normalizeNonTelegramGroupPolicy(groupPolicy),
         routeAllowlistConfigured: params.resolveRouteAllowlistConfigured(account),
         configureRouteAllowlist: params.configureRouteAllowlist,
         missingRouteAllowlist: params.missingRouteAllowlist,

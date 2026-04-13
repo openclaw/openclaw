@@ -15,6 +15,7 @@ import {
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
+  normalizeNonTelegramGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -421,11 +422,14 @@ export async function handleFeishuMessage(params: {
       return;
     }
     const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-    const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.feishu !== undefined,
-      groupPolicy: feishuCfg?.groupPolicy,
-      defaultGroupPolicy,
-    });
+    const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
+      resolveOpenProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.feishu !== undefined,
+        groupPolicy: feishuCfg?.groupPolicy,
+        defaultGroupPolicy,
+      });
+    // "members" is Telegram-only; normalize to "open" for Feishu
+    const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
     warnMissingProviderGroupPolicyFallbackOnce({
       providerMissingFallbackApplied,
       providerKey: "feishu",

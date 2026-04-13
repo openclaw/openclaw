@@ -1,6 +1,7 @@
 export {
   isDangerousNameMatchingEnabled,
   loadConfig,
+  normalizeNonTelegramGroupPolicy,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveChannelContextVisibilityMode,

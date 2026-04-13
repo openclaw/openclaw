@@ -1,3 +1,4 @@
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -63,10 +64,13 @@ async function resolveWhatsAppCommandAuthorized(params: {
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
   const dmPolicy = account.dmPolicy ?? "pairing";
-  const groupPolicy = account.groupPolicy ?? "allowlist";
+  const groupPolicy = normalizeNonTelegramGroupPolicy(account.groupPolicy ?? "allowlist");
   const configuredAllowFrom = account.allowFrom ?? [];
+  const defaultGroupAllowFrom = params.cfg.channels?.defaults?.groupAllowFrom;
   const configuredGroupAllowFrom =
-    account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
+    account.groupAllowFrom ??
+    defaultGroupAllowFrom ??
+    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
   const storeAllowFrom = isGroup
     ? []
@@ -156,7 +160,7 @@ export async function processMessage(params: {
   const configuredGroupAllowFrom =
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
   const groupAllowFrom = configuredGroupAllowFrom ?? [];
-  const groupPolicy = account.groupPolicy ?? "allowlist";
+  const groupPolicy = normalizeNonTelegramGroupPolicy(account.groupPolicy ?? "allowlist");
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
     agentId: params.route.agentId,

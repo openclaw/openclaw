@@ -4,6 +4,7 @@ import {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
 } from "./audit-extra.summary.js";
+import { collectExposureMatrixFindings } from "./audit-extra.sync.js";
 import { safeEqualSecret } from "./secret-equal.js";
 
 describe("collectAttackSurfaceSummaryFindings", () => {
@@ -40,6 +41,70 @@ describe("collectAttackSurfaceSummaryFindings", () => {
     for (const snippet of expectedDetail) {
       expect(finding.detail).toContain(snippet);
     }
+  });
+});
+
+describe('summarizeGroupPolicy via collectAttackSurfaceSummaryFindings: Telegram "members"', () => {
+  // Telegram "members" is a stricter membership-verification mode and must be
+  // counted in the allowlist bucket, not the open bucket.
+  // Non-Telegram "members" normalizes to "open" so it counts as open.
+
+  it('counts channels.telegram.groupPolicy="members" in the allowlist bucket (not open)', () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: { groupPolicy: "members" },
+      },
+    };
+
+    const [finding] = collectAttackSurfaceSummaryFindings(cfg);
+    // Telegram "members" => allowlist (restricted), not open
+    expect(finding.detail).toContain("groups: open=0, allowlist=1");
+  });
+
+  it('counts channels.discord.groupPolicy="members" in the open bucket (non-Telegram normalizes to open)', () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: { groupPolicy: "members" },
+      },
+    };
+
+    const [finding] = collectAttackSurfaceSummaryFindings(cfg);
+    // Non-Telegram "members" normalizes to "open"
+    expect(finding.detail).toContain("groups: open=1, allowlist=0");
+  });
+});
+
+describe('listGroupPolicyOpen via collectExposureMatrixFindings: Telegram "members"', () => {
+  // collectExposureMatrixFindings surfaces open groupPolicy paths; Telegram
+  // "members" must NOT appear there (it is allowlist-equivalent).
+
+  it('does NOT flag channels.telegram with groupPolicy="members" as open', () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: { groupPolicy: "members" },
+      },
+      // Ensure elevated tools are on so a finding would be emitted if groupPolicy were open.
+      tools: { elevated: { enabled: true } },
+    };
+
+    const findings = collectExposureMatrixFindings(cfg);
+    // Telegram "members" is allowlist-equivalent → no "open" paths → no exposure finding
+    expect(findings).toHaveLength(0);
+  });
+
+  it('DOES flag channels.discord with groupPolicy="members" as open (non-Telegram = open)', () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: { groupPolicy: "members" },
+      },
+      tools: { elevated: { enabled: true } },
+    };
+
+    const findings = collectExposureMatrixFindings(cfg);
+    // discord "members" normalizes to "open" → exposure finding should appear
+    expect(findings.length).toBeGreaterThan(0);
+    const detail = findings.map((f) => f.detail).join("\n");
+    expect(detail).toContain("channels.discord.groupPolicy");
   });
 });
 

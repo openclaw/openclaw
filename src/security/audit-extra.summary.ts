@@ -37,15 +37,18 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
   let open = 0;
   let allowlist = 0;
   let other = 0;
-  for (const value of Object.values(channels)) {
+  for (const [channelKey, value] of Object.entries(channels)) {
     if (!value || typeof value !== "object") {
       continue;
     }
     const section = value as Record<string, unknown>;
     const policy = section.groupPolicy;
-    if (policy === "open") {
+    // "members" normalizes to "open" for non-Telegram channels, but Telegram "members" is a
+    // stricter membership-verification mode and must NOT be counted as open.
+    const isTelegram = channelKey === "telegram";
+    if (policy === "open" || (policy === "members" && !isTelegram)) {
       open += 1;
-    } else if (policy === "allowlist") {
+    } else if (policy === "allowlist" || (policy === "members" && isTelegram)) {
       allowlist += 1;
     } else {
       other += 1;

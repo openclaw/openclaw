@@ -38,6 +38,7 @@ import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -541,7 +542,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       await resolveSignalAccessState({
         accountId: deps.accountId,
         dmPolicy: deps.dmPolicy,
-        groupPolicy: deps.groupPolicy,
+        // "members" is Telegram-only; normalize to "open" for Signal
+        groupPolicy: normalizeNonTelegramGroupPolicy(deps.groupPolicy),
         allowFrom: deps.allowFrom,
         groupAllowFrom: deps.groupAllowFrom,
         sender,

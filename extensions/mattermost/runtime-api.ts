@@ -43,6 +43,7 @@ export {
   GROUP_POLICY_BLOCKED_LABEL,
   isDangerousNameMatchingEnabled,
   loadSessionStore,
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveStorePath,

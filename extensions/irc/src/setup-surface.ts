@@ -1,3 +1,4 @@
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type {
   ChannelSetupDmPolicy,
@@ -365,7 +366,13 @@ export const ircSetupWizard: ChannelSetupWizard = {
     updatePrompt: ({ cfg, accountId }) =>
       Boolean(resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.groups),
     setPolicy: ({ cfg, accountId, policy }) =>
-      setIrcGroupAccess(cfg as CoreConfig, accountId, policy, [], normalizeGroupEntry),
+      setIrcGroupAccess(
+        cfg as CoreConfig,
+        accountId,
+        normalizeNonTelegramGroupPolicy(policy),
+        [],
+        normalizeGroupEntry,
+      ),
     resolveAllowlist: async ({ entries }) =>
       [...new Set(entries.map((entry) => normalizeGroupEntry(entry)).filter(Boolean))] as string[],
     applyAllowlist: ({ cfg, accountId, resolved }) =>
