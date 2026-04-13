@@ -23,6 +23,7 @@ export const MEDIA_AUDIO_FIELD_KEYS = [
   "tools.media.audio.request.proxy.url",
   "tools.media.audio.request.proxy.tls",
   "tools.media.audio.request.tls",
+  "tools.media.audio.request.allowPrivateNetwork",
 ] as const;
 
 type MediaAudioFieldKey = (typeof MEDIA_AUDIO_FIELD_KEYS)[number];
@@ -76,6 +77,8 @@ export const MEDIA_AUDIO_FIELD_HELP: Record<MediaAudioFieldKey, string> = {
     "TLS settings applied when connecting to the configured audio proxy, such as custom CA trust for an internal proxy gateway.",
   "tools.media.audio.request.tls":
     "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
+  "tools.media.audio.request.allowPrivateNetwork":
+    "Allow audio provider requests to reach private or internal network addresses. Set to true when your transcription backend runs on a private host such as a Docker-internal hostname or RFC1918 address. Requires explicit opt-in because private network access bypasses the default SSRF guard.",
 };
 
 export const MEDIA_AUDIO_FIELD_LABELS: Record<MediaAudioFieldKey, string> = {
@@ -103,4 +106,5 @@ export const MEDIA_AUDIO_FIELD_LABELS: Record<MediaAudioFieldKey, string> = {
   "tools.media.audio.request.proxy.url": "Audio Request Proxy URL",
   "tools.media.audio.request.proxy.tls": "Audio Request Proxy TLS",
   "tools.media.audio.request.tls": "Audio Request TLS",
+  "tools.media.audio.request.allowPrivateNetwork": "Audio Request Allow Private Network",
 };

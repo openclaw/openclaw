@@ -28,6 +28,7 @@ export async function transcribeOpenAiCompatibleAudio(
       defaultBaseUrl: params.defaultBaseUrl,
       headers: params.headers,
       request: params.request,
+      allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
       defaultHeaders: {
         authorization: `Bearer ${params.apiKey}`,
       },

@@ -3785,7 +3785,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Memory Search Provider",
                     description:
-                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
                   },
                   remote: {
                     type: "object",
@@ -3926,7 +3926,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Memory Search Fallback",
                     description:
-                      'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+                      'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
                   },
                   model: {
                     type: "string",
@@ -8907,6 +8907,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           },
                           additionalProperties: false,
                         },
+                        allowPrivateNetwork: {
+                          type: "boolean",
+                        },
                       },
                       additionalProperties: false,
                     },
@@ -10224,6 +10227,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         additionalProperties: false,
                       },
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -11505,6 +11511,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
+                            },
+                            allowPrivateNetwork: {
+                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -12863,6 +12872,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
                       },
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Audio Request Allow Private Network",
+                        description:
+                          "Allow audio provider requests to reach private or internal network addresses. Set to true when your transcription backend runs on a private host such as a Docker-internal hostname or RFC1918 address. Requires explicit opt-in because private network access bypasses the default SSRF guard.",
+                      },
                     },
                     additionalProperties: false,
                     title: "Audio Request Overrides",
@@ -14147,6 +14162,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
+                            },
+                            allowPrivateNetwork: {
+                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -15460,6 +15478,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         additionalProperties: false,
                       },
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -16741,6 +16762,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
+                            },
+                            allowPrivateNetwork: {
+                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -23601,6 +23625,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
       tags: ["media", "tools"],
     },
+    "tools.media.audio.request.allowPrivateNetwork": {
+      label: "Audio Request Allow Private Network",
+      help: "Allow audio provider requests to reach private or internal network addresses. Set to true when your transcription backend runs on a private host such as a Docker-internal hostname or RFC1918 address. Requires explicit opt-in because private network access bypasses the default SSRF guard.",
+      tags: ["access", "media", "tools"],
+    },
     "tools.media.video.enabled": {
       label: "Enable Video Understanding",
       help: "Enable video understanding so clips can be summarized into text for downstream reasoning and responses. Disable when processing video is out of policy or too expensive for your deployment.",
@@ -24622,7 +24651,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.provider": {
       label: "Memory Search Provider",
-      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.remote.baseUrl": {
@@ -24678,7 +24707,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.fallback": {
       label: "Memory Search Fallback",
-      help: 'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+      help: 'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
       tags: ["reliability"],
     },
     "agents.defaults.memorySearch.local.modelPath": {

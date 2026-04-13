@@ -734,7 +734,7 @@ const MediaUnderstandingRuntimeFields = {
   deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  request: ConfiguredProviderRequestSchema,
+  request: ConfiguredModelProviderRequestSchema,
 };
 
 export const MediaUnderstandingModelSchema = z

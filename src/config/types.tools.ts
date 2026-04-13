@@ -3,7 +3,7 @@ import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
-import type { ConfiguredProviderRequest } from "./types.provider-request.js";
+import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -47,7 +47,7 @@ type MediaProviderRequestConfig = {
   /** Optional headers merged into provider requests. */
   headers?: Record<string, string>;
   /** Optional request transport overrides for provider HTTP calls. */
-  request?: ConfiguredProviderRequest;
+  request?: ConfiguredModelProviderRequest;
 };
 
 export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
