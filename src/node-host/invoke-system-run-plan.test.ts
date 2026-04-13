@@ -209,10 +209,40 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
     command: ["busybox", "awk", 'BEGIN{system("id")}'],
   },
   {
+    name: "rejects busybox shell applets that forward inline commands",
+    binName: "busybox",
+    tmpPrefix: "openclaw-busybox-shell-inline-",
+    command: ["busybox", "sh", "-c", "echo SAFE"],
+  },
+  {
+    name: "rejects busybox shell applets with script file operands",
+    binName: "busybox",
+    tmpPrefix: "openclaw-busybox-shell-file-",
+    command: ["busybox", "sh", "./run.sh"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "run.sh"), "#!/bin/sh\necho SAFE\n");
+    },
+  },
+  {
     name: "rejects toybox applets that cannot be safely bound",
     binName: "toybox",
     tmpPrefix: "openclaw-toybox-awk-",
     command: ["toybox", "awk", 'BEGIN{system("id")}'],
+  },
+  {
+    name: "rejects toybox shell applets that forward inline commands",
+    binName: "toybox",
+    tmpPrefix: "openclaw-toybox-shell-inline-",
+    command: ["toybox", "ash", "-lc", "echo SAFE"],
+  },
+  {
+    name: "rejects toybox shell applets with script file operands",
+    binName: "toybox",
+    tmpPrefix: "openclaw-toybox-shell-file-",
+    command: ["toybox", "ash", "./run.sh"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "run.sh"), "#!/bin/sh\necho SAFE\n");
+    },
   },
   {
     name: "rejects node inline import operands that cannot be bound to one stable file",
