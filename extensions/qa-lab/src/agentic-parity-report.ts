@@ -300,14 +300,19 @@ function verifySummaryLabelMatch(params: {
   role: "candidate" | "baseline";
 }): void {
   const runProvider = params.summary.run?.primaryProvider?.trim();
-  const runModel = params.summary.run?.primaryModel?.trim();
-  if (!runProvider || !runModel) {
+  const runModelRaw = params.summary.run?.primaryModel?.trim();
+  if (!runProvider || !runModelRaw) {
     return;
   }
   const labelRef = parseStructuredLabelRef(params.label);
   if (!labelRef) {
     return;
   }
+  // `primaryModel` is the full model ref (e.g. "openai/gpt-5.4") while
+  // `labelRef.model` is the bare model name (e.g. "gpt-5.4"). Strip the
+  // provider prefix before comparing so the check doesn't false-positive.
+  const slashIdx = runModelRaw.indexOf("/");
+  const runModel = slashIdx >= 0 ? runModelRaw.slice(slashIdx + 1) : runModelRaw;
   if (
     runProvider.toLowerCase() === labelRef.provider &&
     runModel.toLowerCase() === labelRef.model
@@ -318,7 +323,7 @@ function verifySummaryLabelMatch(params: {
     role: params.role,
     label: params.label,
     runProvider,
-    runModel,
+    runModel: runModelRaw,
   });
 }
 

@@ -98,13 +98,17 @@ function createSnapshotFromLifecycleEvent(params: {
       : (context?.startedAt ?? agentRunStarts.get(runId));
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const error = typeof data?.error === "string" ? data.error : undefined;
+  const status = phase === "error" ? "error" : data?.aborted ? "timeout" : "ok";
   return {
     runId,
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
+    status,
     ...(typeof context?.acceptedAt === "number" ? { acceptedAt: context.acceptedAt } : {}),
     startedAt,
     endedAt,
-    error: error ?? context?.latestError,
+    // Only propagate context.latestError for non-ok snapshots — a stale
+    // latestError from a transient failure during failover should not leak
+    // into successful terminal snapshots.
+    error: status !== "ok" ? (error ?? context?.latestError) : error,
     ...(context?.timeoutPhase ? { timeoutPhase: context.timeoutPhase } : {}),
     ...(context?.phaseTimings ? { phaseTimings: context.phaseTimings } : {}),
     ...(context?.lifecyclePhase ? { lifecyclePhase: context.lifecyclePhase } : {}),
