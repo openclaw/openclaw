@@ -1,7 +1,9 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -13,6 +15,7 @@ type ReplayMetadataAttempt = Pick<
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "clientToolCall"
+  | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "lastToolError"
@@ -121,6 +124,8 @@ const ACTIONABLE_PROMPT_REQUEST_RE =
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
+export const REASONING_ONLY_RETRY_INSTRUCTION =
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
@@ -166,7 +171,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,
   });
-  if (!incompleteTerminalAssistant && stopReason !== "error") {
+  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
+    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
+  );
+  if (!incompleteTerminalAssistant && !reasoningOnlyAssistant && stopReason !== "error") {
     return null;
   }
 
@@ -210,6 +218,48 @@ export function resolveRunLivenessState(params: {
     return "blocked";
   }
   return "working";
+}
+
+export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
+}
+
+export function resolveReasoningOnlyRetryInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError
+  ) {
+    return null;
+  }
+
+  if (
+    !shouldApplyPlanningOnlyRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    return null;
+  }
+
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!isReasoningOnlyAssistantTurn(assistant)) {
+    return null;
+  }
+
+  return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
 function shouldApplyPlanningOnlyRetryGuard(params: {
