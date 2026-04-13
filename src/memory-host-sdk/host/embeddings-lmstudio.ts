@@ -35,6 +35,16 @@ function normalizeLmstudioModel(model: string): string {
   });
 }
 
+function hasAuthorizationHeader(headers: Record<string, string> | undefined): boolean {
+  if (!headers) {
+    return false;
+  }
+  return Object.entries(headers).some(
+    ([headerName, value]) =>
+      headerName.trim().toLowerCase() === "authorization" && value.trim().length > 0,
+  );
+}
+
 /** Resolves API key (real or synthetic placeholder) from runtime/provider auth config. */
 async function resolveLmstudioApiKey(
   options: EmbeddingProviderOptions,
@@ -79,9 +89,6 @@ export async function createLmstudioEmbeddingProvider(
         : undefined;
   const baseUrl = resolveLmstudioInferenceBase(configuredBaseUrl);
   const model = normalizeLmstudioModel(options.model);
-  const apiKey = !isFallbackActivation
-    ? remoteApiKey?.trim() || (await resolveLmstudioApiKey(options))
-    : await resolveLmstudioApiKey(options);
   const providerHeaders = await resolveLmstudioProviderHeaders({
     config: options.config,
     env: process.env,
@@ -91,6 +98,11 @@ export async function createLmstudioEmbeddingProvider(
       !isFallbackActivation ? options.remote?.headers : {},
     ),
   });
+  const apiKey = hasAuthorizationHeader(providerHeaders)
+    ? undefined
+    : !isFallbackActivation
+      ? remoteApiKey?.trim() || (await resolveLmstudioApiKey(options))
+      : await resolveLmstudioApiKey(options);
   const headerOverrides = Object.assign({}, providerHeaders);
   const headers =
     buildLmstudioAuthHeaders({

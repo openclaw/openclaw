@@ -226,10 +226,7 @@ export async function ensureLmstudioModelLoaded(params: {
           requestedContextLength ?? LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
           advertisedContextLimit,
         );
-  if (
-    loadedContextWindow !== null &&
-    (requestedContextLength === null || loadedContextWindow >= contextLengthForLoad)
-  ) {
+  if (loadedContextWindow !== null && loadedContextWindow >= contextLengthForLoad) {
     return;
   }
 

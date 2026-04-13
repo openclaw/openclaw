@@ -156,6 +156,65 @@ describe("embeddings-lmstudio", () => {
     });
   });
 
+  it("preserves remote Authorization header auth for primary lmstudio", async () => {
+    ensureLmstudioModelLoadedMock.mockResolvedValue(undefined);
+    resolveLmstudioRuntimeApiKeyMock.mockResolvedValue("stale-profile-key");
+
+    const fetchMock = mockEmbeddingFetch([1, 2, 3]);
+
+    const { provider } = await createLmstudioEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              headers: {
+                "X-Provider": "provider",
+              },
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      provider: "lmstudio",
+      model: "",
+      fallback: "none",
+      remote: {
+        baseUrl: "http://localhost:9999",
+        headers: {
+          Authorization: "Bearer remote-proxy-token",
+          "X-Remote-Only": "from-remote",
+        },
+      },
+    });
+
+    await provider.embedBatch(["one", "two"]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:9999/v1/embeddings",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer remote-proxy-token",
+          "X-Provider": "provider",
+          "X-Remote-Only": "from-remote",
+        }),
+      }),
+    );
+    expect(resolveLmstudioRuntimeApiKeyMock).not.toHaveBeenCalled();
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:9999/v1",
+      apiKey: undefined,
+      headers: {
+        "X-Provider": "provider",
+        Authorization: "Bearer remote-proxy-token",
+        "X-Remote-Only": "from-remote",
+      },
+      ssrfPolicy: { allowedHostnames: ["localhost"] },
+      modelKey: "text-embedding-nomic-embed-text-v1.5",
+      timeoutMs: 120_000,
+    });
+  });
+
   it("ignores memorySearch remote overrides for fallback lmstudio activation", async () => {
     ensureLmstudioModelLoadedMock.mockResolvedValue(undefined);
     resolveLmstudioRuntimeApiKeyMock.mockResolvedValue("profile-key");
