@@ -3265,6 +3265,71 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               userTimezone: {
                 type: "string",
               },
+              startupContext: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    title: "Enable Startup Context",
+                    description:
+                      "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+                  },
+                  applyOn: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "new",
+                        },
+                        {
+                          type: "string",
+                          const: "reset",
+                        },
+                      ],
+                    },
+                    title: "Startup Context Apply On",
+                    description:
+                      'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+                  },
+                  dailyMemoryDays: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 14,
+                    title: "Startup Context Daily Memory Days",
+                    description:
+                      "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+                  },
+                  maxFileBytes: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 65536,
+                    title: "Startup Context Max File Bytes",
+                    description:
+                      "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+                  },
+                  maxFileChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 10000,
+                    title: "Startup Context Max File Chars",
+                    description:
+                      "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 2000).",
+                  },
+                  maxTotalChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 50000,
+                    title: "Startup Context Max Total Chars",
+                    description:
+                      "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 4500). Additional files are truncated from the prelude once this cap is reached.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Startup Context",
+                description:
+                  'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+              },
               timeFormat: {
                 anyOf: [
                   {
@@ -3720,7 +3785,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Memory Search Provider",
                     description:
-                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
                   },
                   remote: {
                     type: "object",
@@ -3861,7 +3926,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Memory Search Fallback",
                     description:
-                      'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+                      'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
                   },
                   model: {
                     type: "string",
@@ -8865,6 +8930,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Media Understanding Concurrency",
                 description:
                   "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
+              },
+              asyncCompletion: {
+                type: "object",
+                properties: {
+                  directSend: {
+                    type: "boolean",
+                    title: "Async Media Completion Direct Send",
+                    description:
+                      "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+                  },
+                },
+                additionalProperties: false,
               },
               image: {
                 type: "object",
@@ -20574,6 +20651,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
               },
+              embedSandbox: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "strict",
+                  },
+                  {
+                    type: "string",
+                    const: "scripts",
+                  },
+                  {
+                    type: "string",
+                    const: "trusted",
+                  },
+                ],
+                title: "Control UI Embed Sandbox Mode",
+                description:
+                  'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+              },
+              allowExternalEmbedUrls: {
+                type: "boolean",
+                title: "Allow External Control UI Embed URLs",
+                description:
+                  "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+              },
               allowedOrigins: {
                 type: "array",
                 items: {
@@ -24061,6 +24163,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       placeholder: "dist/control-ui",
       tags: ["network"],
     },
+    "gateway.controlUi.embedSandbox": {
+      label: "Control UI Embed Sandbox Mode",
+      help: 'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+      tags: ["security", "access", "advanced"],
+    },
+    "gateway.controlUi.allowExternalEmbedUrls": {
+      label: "Allow External Control UI Embed URLs",
+      help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+      tags: ["security", "access", "network", "advanced"],
+    },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",
       help: 'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
@@ -24388,6 +24500,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
       tags: ["advanced"],
     },
+    "agents.defaults.startupContext": {
+      label: "Startup Context",
+      help: 'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.enabled": {
+      label: "Enable Startup Context",
+      help: "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.applyOn": {
+      label: "Startup Context Apply On",
+      help: 'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.dailyMemoryDays": {
+      label: "Startup Context Daily Memory Days",
+      help: "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.maxFileBytes": {
+      label: "Startup Context Max File Bytes",
+      help: "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+      tags: ["performance", "storage"],
+    },
+    "agents.defaults.startupContext.maxFileChars": {
+      label: "Startup Context Max File Chars",
+      help: "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 2000).",
+      tags: ["performance", "storage"],
+    },
+    "agents.defaults.startupContext.maxTotalChars": {
+      label: "Startup Context Max Total Chars",
+      help: "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 4500). Additional files are truncated from the prelude once this cap is reached.",
+      tags: ["performance"],
+    },
     "agents.defaults.envelopeTimezone": {
       label: "Envelope Timezone",
       help: 'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
@@ -24475,7 +24622,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.provider": {
       label: "Memory Search Provider",
-      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.remote.baseUrl": {
@@ -24531,7 +24678,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.fallback": {
       label: "Memory Search Fallback",
-      help: 'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+      help: 'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
       tags: ["reliability"],
     },
     "agents.defaults.memorySearch.local.modelPath": {
@@ -27112,6 +27259,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.11",
+  version: "2026.4.12",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };
