@@ -305,6 +305,46 @@ describe("hol-guard plugin", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("preserves valid guard settings when tokenEnvVar is malformed", async () => {
+    delete process.env.OPENCLAW_GUARD_TOKEN;
+
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const hooks = setupPlugin({
+      baseUrl: "https://guard.example/api/v1/consumer",
+      failOpen: false,
+      tokenEnvVar: "   ",
+    });
+    const beforeToolCall = hooks.get("before_tool_call");
+
+    const result = await beforeToolCall?.(
+      {
+        toolName: "mcp_invalid_token_env",
+        toolCallId: "tool-invalid-token-env",
+        params: {
+          artifactId: "mcp-server:openclaw:invalid-token-env",
+          artifactName: "invalid token env",
+          artifactSlug: "invalid-token-env",
+          artifactType: "mcp-server",
+          launchSummary: "guard config uses a whitespace token env var",
+        },
+      },
+      {
+        runId: "run-invalid-token-env",
+        toolName: "mcp_invalid_token_env",
+        toolCallId: "tool-invalid-token-env",
+      },
+    );
+
+    expect(result).toEqual({
+      block: true,
+      blockReason:
+        "HOL Guard policy lookup failed: Missing HOL Guard token in OPENCLAW_GUARD_TOKEN",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the guard verdict payload is malformed", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(createJsonResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);

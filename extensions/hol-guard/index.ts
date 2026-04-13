@@ -70,6 +70,16 @@ const DEFAULT_GUARD_SETTINGS: GuardSettings = {
   painSignalsEnabled: true,
 };
 
+const guardPluginConfigFieldSchemas = {
+  enabled: z.boolean(),
+  baseUrl: z.string().trim().url(),
+  timeoutSeconds: z.number().positive().max(30),
+  failOpen: z.boolean(),
+  tokenEnvVar: z.string().trim().min(1),
+  receiptsEnabled: z.boolean(),
+  painSignalsEnabled: z.boolean(),
+} as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -101,8 +111,52 @@ function buildPendingKey(
 }
 
 function readGuardSettings(rawConfig: unknown): GuardSettings {
-  const parsed = guardPluginConfigSchema.safeParse(rawConfig);
-  const config: GuardPluginConfig = parsed.success ? parsed.data : {};
+  if (!isRecord(rawConfig)) {
+    return { ...DEFAULT_GUARD_SETTINGS };
+  }
+
+  const config: GuardPluginConfig = {};
+  const enabled = guardPluginConfigFieldSchemas.enabled.safeParse(rawConfig.enabled);
+  if (enabled.success) {
+    config.enabled = enabled.data;
+  }
+
+  const baseUrl = guardPluginConfigFieldSchemas.baseUrl.safeParse(rawConfig.baseUrl);
+  if (baseUrl.success) {
+    config.baseUrl = baseUrl.data;
+  }
+
+  const timeoutSeconds = guardPluginConfigFieldSchemas.timeoutSeconds.safeParse(
+    rawConfig.timeoutSeconds,
+  );
+  if (timeoutSeconds.success) {
+    config.timeoutSeconds = timeoutSeconds.data;
+  }
+
+  const failOpen = guardPluginConfigFieldSchemas.failOpen.safeParse(rawConfig.failOpen);
+  if (failOpen.success) {
+    config.failOpen = failOpen.data;
+  }
+
+  const tokenEnvVar = guardPluginConfigFieldSchemas.tokenEnvVar.safeParse(rawConfig.tokenEnvVar);
+  if (tokenEnvVar.success) {
+    config.tokenEnvVar = tokenEnvVar.data;
+  }
+
+  const receiptsEnabled = guardPluginConfigFieldSchemas.receiptsEnabled.safeParse(
+    rawConfig.receiptsEnabled,
+  );
+  if (receiptsEnabled.success) {
+    config.receiptsEnabled = receiptsEnabled.data;
+  }
+
+  const painSignalsEnabled = guardPluginConfigFieldSchemas.painSignalsEnabled.safeParse(
+    rawConfig.painSignalsEnabled,
+  );
+  if (painSignalsEnabled.success) {
+    config.painSignalsEnabled = painSignalsEnabled.data;
+  }
+
   return {
     enabled: config.enabled ?? DEFAULT_GUARD_SETTINGS.enabled,
     baseUrl: (config.baseUrl ?? DEFAULT_GUARD_SETTINGS.baseUrl).replace(/\/+$/, ""),
