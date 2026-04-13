@@ -209,6 +209,15 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
     command: ["busybox", "awk", 'BEGIN{system("id")}'],
   },
   {
+    name: "rejects busybox applets even when cwd contains a file named after the applet",
+    binName: "busybox",
+    tmpPrefix: "openclaw-busybox-awk-file-bait-",
+    command: ["busybox", "awk", 'BEGIN{system("id")}'],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "awk"), "bait\n");
+    },
+  },
+  {
     name: "rejects busybox shell applets that forward inline commands",
     binName: "busybox",
     tmpPrefix: "openclaw-busybox-shell-inline-",
@@ -228,6 +237,15 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
     binName: "toybox",
     tmpPrefix: "openclaw-toybox-awk-",
     command: ["toybox", "awk", 'BEGIN{system("id")}'],
+  },
+  {
+    name: "rejects toybox applets even when cwd contains a file named after the applet",
+    binName: "toybox",
+    tmpPrefix: "openclaw-toybox-awk-file-bait-",
+    command: ["toybox", "awk", 'BEGIN{system("id")}'],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "awk"), "bait\n");
+    },
   },
   {
     name: "rejects toybox shell applets that forward inline commands",
