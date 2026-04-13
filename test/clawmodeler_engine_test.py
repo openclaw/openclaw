@@ -281,6 +281,88 @@ class ClawModelerEngineTest(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertIn("network_edges_dijkstra", accessibility)
 
+    def test_export_refreshes_qa_and_blocks_missing_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "demo"
+            self.run_engine("demo", "--workspace", str(workspace), "--run-id", "sample")
+            manifest_path = workspace / "runs" / "sample" / "manifest.json"
+            manifest_path.unlink()
+
+            result = self.run_engine(
+                "export",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                "sample",
+                expected_code=40,
+            )
+            self.assertIn("Export blocked by QA gate", result.stderr)
+            qa_report = json.loads(
+                (workspace / "runs" / "sample" / "qa_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertFalse(qa_report["export_ready"])
+            self.assertIn("manifest_missing", qa_report["blockers"])
+
+    def test_export_refreshes_qa_and_blocks_invalid_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "demo"
+            self.run_engine("demo", "--workspace", str(workspace), "--run-id", "sample")
+            manifest_path = workspace / "runs" / "sample" / "manifest.json"
+            manifest_path.write_text('{"artifact_type": "run_manifest"}\n', encoding="utf-8")
+
+            result = self.run_engine(
+                "export",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                "sample",
+                expected_code=40,
+            )
+            self.assertIn("Export blocked by QA gate", result.stderr)
+            qa_report = json.loads(
+                (workspace / "runs" / "sample" / "qa_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertFalse(qa_report["export_ready"])
+            self.assertIn("manifest_invalid", qa_report["blockers"])
+
+    def test_export_refreshes_qa_and_blocks_invalid_fact_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "demo"
+            self.run_engine("demo", "--workspace", str(workspace), "--run-id", "sample")
+            fact_blocks_path = (
+                workspace
+                / "runs"
+                / "sample"
+                / "outputs"
+                / "tables"
+                / "fact_blocks.jsonl"
+            )
+            with fact_blocks_path.open("a", encoding="utf-8") as file:
+                file.write('{"fact_id": "broken"}\n')
+
+            result = self.run_engine(
+                "export",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                "sample",
+                expected_code=40,
+            )
+            self.assertIn("Export blocked by QA gate", result.stderr)
+            qa_report = json.loads(
+                (workspace / "runs" / "sample" / "qa_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertFalse(qa_report["export_ready"])
+            self.assertIn("fact_blocks_invalid", qa_report["blockers"])
+            self.assertGreater(qa_report["checks"]["fact_block_count"], 0)
+            self.assertEqual(qa_report["checks"]["invalid_fact_block_count"], 1)
+
     def test_workflow_full_runs_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workflow"

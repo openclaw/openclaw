@@ -17,7 +17,7 @@ ClawModeler should let a user install this OpenClaw fork and ask agents to handl
 
 ## Current Checkpoint
 
-The current stack is a usable foundation when it can do these things:
+The current OpenClaw sidecar stack is a usable foundation. It now does these things:
 
 - `openclaw clawmodeler doctor` and `tools` expose the local modeling lab.
 - `workflow full` handles init, intake, planning, run, report export, bridge preparation, and bridge validation.
@@ -28,7 +28,9 @@ The current stack is a usable foundation when it can do these things:
 - QA blocks unsupported report export.
 - The sidecar can be installed as a Python package with the `clawmodeler-engine` entrypoint.
 
-That is the right boundary for this phase. More features should strengthen these contracts before expanding into deeper calibration or engine-specific execution.
+That is the right boundary for this sidecar phase. More features should strengthen these contracts before expanding into deeper calibration or engine-specific execution.
+
+This checkpoint is not the finished desktop product. The originally planned Tauri + React planner UI still needs a dedicated application shell, file intake flow, scenario editor, map/table artifact review, QA-blocker review, and sidecar invocation permissions.
 
 ## Rabbit Holes To Avoid
 
@@ -44,31 +46,27 @@ Do not let CLI orchestration, workflow orchestration, and tests drift into three
 
 ## Next Engineering Milestones
 
-1. Stabilize orchestration internals.
+1. Finish sidecar foundation hardening.
 
-   Move duplicated CLI and workflow stage logic into shared service functions so `workflow full`, manual commands, and tests exercise the same code paths.
+   Keep CLI and workflow behavior routed through shared orchestration functions. Protect export gating, manifest validation, fact-block validation, workflow reports, and the OpenClaw wrapper with focused regression tests.
 
-2. Version the workspace contract.
-
-   Add explicit schema versions for `question.json`, `analysis_plan.json`, `manifest.json`, `qa_report.json`, bridge manifests, and workflow reports. Add validation helpers and focused tests for required fields.
-
-3. Add small public integration fixtures.
+2. Add small public integration fixtures.
 
    Keep the built-in synthetic demo, then add one tiny real-world fixture path for zones, GTFS, network edges, and bridge preparation. The fixture should be small enough for CI.
 
-4. Add CI packaging checks.
-
-   Verify Python tests, TypeScript CLI tests, editable install, wheel build, package-data inclusion, and `clawmodeler-engine --help`.
-
-5. Harden bridge adapters before adding new ones.
+3. Harden bridge adapters before adding new ones.
 
    Improve SUMO, MATSim, UrbanSim, DTALite, and TBEST validation reports with clearer missing-input explanations and links to generated files. Add actual engine execution only after generated packages are stable.
 
-6. Add calibrated-model execution gates.
+4. Add calibrated-model execution gates.
 
    Before agents run detailed external engines as authoritative forecasts, require project-specific calibration inputs, validation checks, and method notes in the manifest.
 
-7. Add optional ML workflows last.
+5. Build the planner-facing application layer.
+
+   Decide whether the first user-facing layer is a guided OpenClaw workflow, a lightweight web UI, or the planned Tauri + React desktop app. The desktop app should invoke only the `clawmodeler-engine` sidecar, keep external downloads opt-in, and surface QA blockers before report export.
+
+6. Add optional ML workflows last.
 
    Expose ML libraries through the toolbox, but keep ML-assisted forecasting behind explicit data, validation, reproducibility, and reporting requirements.
 
@@ -86,4 +84,4 @@ Proceed to production packaging only when the wheel excludes accidental heavywei
 
 ## Definition Of Done For The Next Pass
 
-The next pass is done when the core orchestration is easier to maintain, workspace artifacts have versioned contracts, and the install/test path can run in CI without relying on the developer's local environment.
+The next pass is done when the sidecar foundation is ready for review: focused Python and TypeScript wrapper tests pass, `pnpm clawmodeler:check` passes, roadmap/docs match the implemented contracts, and the PR clearly states that this is the OpenClaw sidecar foundation rather than the final Tauri desktop product.

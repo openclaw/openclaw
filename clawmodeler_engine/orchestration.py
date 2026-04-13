@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .contracts import normalize_question_contract, stamp_contract, validate_contract
+from .contracts import (
+    CURRENT_MANIFEST_VERSION,
+    normalize_question_contract,
+    stamp_contract,
+    validate_artifact_file,
+    validate_contract,
+)
 from .model import run_full_stack
 from .qa import build_qa_report, load_qa_report
 from .report import render_markdown_report
@@ -146,6 +152,7 @@ def write_run(workspace: Path, run_id: str, scenarios: list[str]) -> tuple[Path,
 
 def write_export(workspace: Path, run_id: str, export_format: str) -> Path:
     ensure_workspace(workspace)
+    build_qa_report(workspace, run_id)
     qa_report = load_qa_report(workspace, run_id)
     reports_dir = workspace / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -171,7 +178,10 @@ def write_export(workspace: Path, run_id: str, export_format: str) -> Path:
             f"Export format {export_format!r} is not implemented in the sidecar scaffold."
         )
 
-    manifest = read_json(workspace / "runs" / run_id / "manifest.json")
+    manifest = validate_artifact_file(
+        workspace / "runs" / run_id / "manifest.json",
+        "run_manifest",
+    )
     report_path = reports_dir / f"{run_id}_report.{export_format}"
     report_path.write_text(render_markdown_report(manifest), encoding="utf-8")
     return report_path
