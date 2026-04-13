@@ -227,6 +227,30 @@ describe("buildStatusMessage", () => {
     expect(visible).toContain("trace");
   });
 
+  it("shows raw trace mode and plugin trace lines in status", () => {
+    const visible = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "off",
+          traceLevel: "raw",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🔎 Active Memory Debug: spicy ramen; tacos"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+
+    expect(visible).toContain("Active Memory Debug: spicy ramen; tacos");
+    expect(visible).toContain("trace:raw");
+  });
+
   it("shows fast mode when enabled", () => {
     const text = buildStatusMessage({
       agent: {
@@ -1683,6 +1707,10 @@ describe("buildHelpMessage", () => {
 
   it("includes /fast in help output", () => {
     expect(buildHelpMessage()).toContain("/fast status|on|off");
+  });
+
+  it("includes raw trace mode in help output", () => {
+    expect(buildHelpMessage()).toContain("/trace on|off|raw");
   });
 });
 
