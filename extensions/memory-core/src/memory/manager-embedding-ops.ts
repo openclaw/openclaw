@@ -286,13 +286,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const provider = this.provider;
     const embedBatchInputs = provider?.embedBatchInputs;
+    if (!embedBatchInputs) {
+      // Fall through — embedBatchWithRetry sanitizes its own input, so we pass raw texts.
+      return await this.embedBatchWithRetry(inputs.map((input) => input.text));
+    }
     const sanitizedInputs = inputs.map((input) => ({
       ...input,
       text: stripUnpairedSurrogates(input.text),
     }));
-    if (!embedBatchInputs) {
-      return await this.embedBatchWithRetry(sanitizedInputs.map((input) => input.text));
-    }
     return await runMemoryEmbeddingRetryLoop({
       run: async () => {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
