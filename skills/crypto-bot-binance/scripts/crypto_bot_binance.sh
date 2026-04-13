@@ -23,7 +23,7 @@ Commands:
   save-settings [--integration-enabled true|false] [--remote-control-enabled true|false] [--monitoring-enabled true|false] [--ui-badge-enabled true|false]
 
 Environment:
-  CRYPTO_BOT_BINANCE_BASE_URL   Required (example: https://bot.adduser.xyz)
+  CRYPTO_BOT_BINANCE_BASE_URL   Required (example: https://selfhostbot.com)
   CRYPTO_BOT_BINANCE_API_PREFIX Optional endpoint prefix, default: /api/openclaw
   CRYPTO_BOT_BINANCE_TOKEN      Optional, sent as X-OpenClaw-Token when set
   CRYPTO_BOT_BINANCE_BASIC_USER Optional, for HTTP Basic Auth at reverse proxy
