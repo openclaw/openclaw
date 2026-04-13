@@ -10,6 +10,7 @@ import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -173,6 +174,7 @@ describe("gateway server models + voicewake", () => {
       await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
       clearRuntimeConfigSnapshot();
       clearConfigCache();
+      __resetModelCatalogCacheForTest();
       return await run();
     } finally {
       if (previousConfig === undefined) {
@@ -182,6 +184,7 @@ describe("gateway server models + voicewake", () => {
       }
       clearRuntimeConfigSnapshot();
       clearConfigCache();
+      __resetModelCatalogCacheForTest();
     }
   };
 
@@ -213,6 +216,30 @@ describe("gateway server models + voicewake", () => {
         const res = await listModels();
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(options.expected);
+      },
+    );
+  };
+
+  const expectReplaceModeModels = async (options: {
+    providers: Record<string, object>;
+    expected: Array<Pick<ModelCatalogRpcEntry, "id" | "provider">>;
+    catalog?: PiCatalogFixtureEntry[];
+  }): Promise<void> => {
+    await withModelsConfig(
+      {
+        models: {
+          mode: "replace",
+          providers: options.providers,
+        },
+      },
+      async () => {
+        piSdkMock.enabled = true;
+        piSdkMock.models = options.catalog ?? buildPiCatalogFixture();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(
+          res.payload?.models?.map((entry) => ({ id: entry.id, provider: entry.provider })),
+        ).toEqual(options.expected);
       },
     );
   };
@@ -319,6 +346,60 @@ describe("gateway server models + voicewake", () => {
     expect(piSdkMock.discoverCalls).toBe(1);
   });
 
+  test("models.list filters to configured providers when models.mode is replace", async () => {
+    await expectReplaceModeModels({
+      providers: {
+        anthropic: {
+          baseUrl: "https://anthropic.example.test",
+          models: [
+            { id: "claude-test-a", name: "A-Model" },
+            { id: "claude-test-b", name: "B-Model" },
+          ],
+        },
+      },
+      expected: [
+        {
+          id: "claude-test-a",
+          provider: "anthropic",
+        },
+        {
+          id: "claude-test-b",
+          provider: "anthropic",
+        },
+      ],
+    });
+  });
+
+  test("models.list normalizes provider aliases when models.mode is replace", async () => {
+    await expectReplaceModeModels({
+      providers: {
+        "z.ai": {
+          baseUrl: "https://zai.example.test/v1",
+          models: [{ id: "glm-4.6", name: "GLM 4.6" }],
+        },
+      },
+      catalog: [
+        {
+          id: "glm-4.6",
+          name: "GLM 4.6",
+          provider: "zai",
+          contextWindow: 200_000,
+        },
+        {
+          id: "gpt-test-z",
+          provider: "openai",
+          contextWindow: 0,
+        },
+      ],
+      expected: [
+        {
+          id: "glm-4.6",
+          provider: "zai",
+        },
+      ],
+    });
+  });
+
   test("models.list filters to allowlisted configured models by default", async () => {
     await expectAllowlistedModels({
       primary: "openai/gpt-test-z",
@@ -395,6 +476,8 @@ describe("gateway server models + voicewake", () => {
             alias: "Kimi K2.5 (NVIDIA)",
             provider: "nvidia",
             contextWindow: 32_000,
+            input: ["text"],
+            reasoning: false,
           },
         ]);
       },
@@ -438,6 +521,8 @@ describe("gateway server models + voicewake", () => {
             alias: "GPT Test Z Alias",
             provider: "openai",
             contextWindow: 64_000,
+            input: ["text"],
+            reasoning: false,
           },
         ]);
       },
