@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
-import { extractInboundSenderLabel, stripInboundMetadata } from "./strip-inbound-meta.js";
+import {
+  extractInboundSenderLabel,
+  stripInboundMetadata,
+  stripLeadingInboundMetadata,
+} from "./strip-inbound-meta.js";
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
@@ -120,6 +124,11 @@ This is plain user text`;
 This line mentions <active_memory_plugin> inline
 What should I grab on the way?`;
     expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("strips a leading active-memory prompt prefix block from leading-only history views", () => {
+    const input = `${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
+    expect(stripLeadingInboundMetadata(input)).toBe("What should I grab on the way?");
   });
 
   it("does not strip lookalike sentinel lines with extra text", () => {

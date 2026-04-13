@@ -244,7 +244,7 @@ export function stripLeadingInboundMetadata(text: string): string {
     return text;
   }
 
-  const lines = text.split("\n");
+  const lines = stripLeadingActiveMemoryPromptPrefix(text.split("\n"));
   let index = 0;
 
   while (index < lines.length && lines[index] === "") {
