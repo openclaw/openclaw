@@ -57,10 +57,31 @@ function buildRequestUrl(
   return new URL(requestUrl ?? "/", `http://${requestHost ?? fallbackHost}`);
 }
 
+function normalizeProxyIp(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const unwrapped =
+    trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+  const normalized = unwrapped.toLowerCase();
+  const mappedIpv4Prefix = "::ffff:";
+  if (normalized.startsWith(mappedIpv4Prefix)) {
+    const mappedIpv4 = normalized.slice(mappedIpv4Prefix.length);
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(mappedIpv4)) {
+      return mappedIpv4;
+    }
+  }
+  return normalized;
+}
+
 function resolveForwardedClientIp(
   request: http.IncomingMessage,
   trustedProxyIPs: readonly string[],
 ): string | undefined {
+  const normalizedTrustedProxyIps = new Set(
+    trustedProxyIPs.map((ip) => normalizeProxyIp(ip)).filter((ip): ip is string => Boolean(ip)),
+  );
   const forwardedFor = getHeader(request.headers, "x-forwarded-for");
   if (forwardedFor) {
     const forwardedIps = forwardedFor
@@ -68,12 +89,12 @@ function resolveForwardedClientIp(
       .map((part) => part.trim())
       .filter(Boolean);
     if (forwardedIps.length > 0) {
-      if (trustedProxyIPs.length === 0) {
+      if (normalizedTrustedProxyIps.size === 0) {
         return forwardedIps[0];
       }
       for (let index = forwardedIps.length - 1; index >= 0; index -= 1) {
         const hop = forwardedIps[index];
-        if (!trustedProxyIPs.includes(hop)) {
+        if (!normalizedTrustedProxyIps.has(normalizeProxyIp(hop) ?? "")) {
           return hop;
         }
       }
@@ -163,8 +184,13 @@ export class VoiceCallWebhookServer {
   private resolveMediaStreamClientIp(request: http.IncomingMessage): string | undefined {
     const remoteIp = request.socket.remoteAddress ?? undefined;
     const trustedProxyIPs = this.config.webhookSecurity.trustedProxyIPs.filter(Boolean);
+    const normalizedTrustedProxyIps = new Set(
+      trustedProxyIPs.map((ip) => normalizeProxyIp(ip)).filter((ip): ip is string => Boolean(ip)),
+    );
+    const normalizedRemoteIp = normalizeProxyIp(remoteIp);
     const fromTrustedProxy =
-      trustedProxyIPs.length === 0 || (remoteIp ? trustedProxyIPs.includes(remoteIp) : false);
+      normalizedTrustedProxyIps.size === 0 ||
+      (normalizedRemoteIp ? normalizedTrustedProxyIps.has(normalizedRemoteIp) : false);
     const shouldTrustForwardingHeaders =
       this.config.webhookSecurity.trustForwardingHeaders && fromTrustedProxy;
 

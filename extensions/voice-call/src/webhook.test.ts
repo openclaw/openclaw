@@ -306,6 +306,26 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
 
     expect(ip).toBe("198.51.100.10");
   });
+
+  it("matches trusted proxies when the remote uses an IPv4-mapped form", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["127.0.0.1", "203.0.113.10"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10, 203.0.113.10",
+        },
+        socket: { remoteAddress: "::ffff:127.0.0.1" },
+      },
+    );
+
+    expect(ip).toBe("198.51.100.10");
+  });
 });
 
 async function runStaleCallReaperCase(params: {
