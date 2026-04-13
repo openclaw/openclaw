@@ -1036,7 +1036,8 @@ function tryExtractInlineToolCalls(text: string): ExtractedToolCall[] | null {
 
   // Pattern 1: ▶ @ {"name":"read_file","arguments":{"path":"…"}} ◂
   // Also matches ▸ @ {"name":...} or ▶ {"name":...}
-  const gemmaPattern = /(?:\u25B6|\u25B8)\s*@?\s*(\{[\s\S]*?\})\s*(?:\u25C0|\u25B9|$)/g;
+  // Closing markers: ◀◂▹◹ and end-of-string
+  const gemmaPattern = /(?:\u25B6|\u25B8)\s*@?\s*(\{[\s\S]*?\})\s*(?:\u25C0|\u25C2|\u25B9|\u25F9|$)/g;
   let match: RegExpExecArray | null;
   while ((match = gemmaPattern.exec(text)) !== null) {
     try {
@@ -1324,11 +1325,21 @@ async function processOpenAICompletionsStream(
           }
           // Upgrade stopReason so the agent loop keeps going.
           output.stopReason = "toolUse";
-          // NOTE: we keep currentBlock (it now holds the text AFTER the last
-          // extracted tool call).  The next delta will append to it.  If that
-          // next chunk completes another tool-call pattern, we'll extract it
-          // in the next iteration of this loop — so multi-call streams are
-          // handled correctly without losing any content.
+          // Create a fresh text block for any content that arrives after the
+          // inline tool call(s).  This prevents content-index drift: if we
+          // kept the old currentBlock its blockIndex would no longer match
+          // the actual position in output.content (which now includes toolCall
+          // blocks), causing subsequent text_deltas to reference the wrong
+          // content slot.
+          const postToolBlock: TextBlock = { type: "text", text: "" };
+          output.content.push(postToolBlock);
+          currentBlock = postToolBlock;
+          stream.push({
+            type: "text_delta",
+            contentIndex: blockIndex(),
+            delta: "",
+            partial: output,
+          });
         }
       }
       continue;
