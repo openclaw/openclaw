@@ -115,7 +115,10 @@ function maybeMicroCompressToolResultMessage(params: {
   if (normalized === joined) {
     return null;
   }
-  return { ...msg, content: [asText(normalized)] };
+  const rewritten = { ...msg, content: [asText(normalized)] };
+  const beforeChars = estimateMessageChars(msg as unknown as AgentMessage);
+  const afterChars = estimateMessageChars(rewritten as unknown as AgentMessage);
+  return afterChars < beforeChars ? rewritten : null;
 }
 
 function estimateJoinedTextLength(parts: string[]): number {
@@ -309,11 +312,14 @@ function softTrimToolResultMessage(params: {
   const effectiveJoined = maybeMicroCompressJoinedText({ text: joined, settings });
   const effectiveParts = effectiveJoined === joined ? parts : effectiveJoined.split("\n");
   const rawLen = estimateJoinedTextLength(effectiveParts);
+  const normalizedWithoutTrim = { ...msg, content: [asText(effectiveJoined)] };
+  const beforeChars = estimateMessageChars(msg as unknown as AgentMessage);
+  const normalizedChars = estimateMessageChars(normalizedWithoutTrim as unknown as AgentMessage);
   if (rawLen <= settings.softTrim.maxChars) {
     if (!hasImages && effectiveJoined === joined) {
       return null;
     }
-    return { ...msg, content: [asText(effectiveJoined)] };
+    return hasImages || normalizedChars < beforeChars ? normalizedWithoutTrim : null;
   }
 
   const headChars = Math.max(0, settings.softTrim.headChars);
@@ -322,7 +328,7 @@ function softTrimToolResultMessage(params: {
     if (!hasImages && effectiveJoined === joined) {
       return null;
     }
-    return { ...msg, content: [asText(effectiveJoined)] };
+    return hasImages || normalizedChars < beforeChars ? normalizedWithoutTrim : null;
   }
 
   const head = takeHeadFromJoinedText(effectiveParts, headChars);
@@ -416,6 +422,9 @@ export function pruneContextMessages(params: {
   }
 
   ratio = totalChars / charWindow;
+  if (ratio < settings.softTrimRatio) {
+    return next ?? messages;
+  }
   for (const i of prunableToolIndexes) {
     const msg = (next ?? messages)[i];
     if (!msg || msg.role !== "toolResult") {

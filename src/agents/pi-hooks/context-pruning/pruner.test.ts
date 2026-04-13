@@ -316,6 +316,37 @@ describe("pruneContextMessages", () => {
     expect(result).toBe(messages);
   });
 
+  it("skips micro-compression rewrites that would grow multi-block tool results", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([
+        { type: "text", text: "alpha" },
+        { type: "text", text: "beta" },
+        { type: "text", text: "gamma " },
+      ]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(result).toBe(messages);
+  });
+
   it("can disable micro-compression entirely", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),
@@ -534,11 +565,11 @@ describe("pruneContextMessages", () => {
     ]);
   });
 
-  it("still replaces image blocks after micro-compression drops below soft-trim ratio", () => {
+  it("stops before soft-trim once micro-compression drops below soft-trim ratio", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),
-      makeToolResult([{ type: "text", text: "\r\n\r\nalpha\r\nbeta\r\n" }]),
-      makeToolResult([{ type: "image", data: "img", mimeType: "image/png" }]),
+      makeToolResult([{ type: "text", text: "\r\n".repeat(200) + "alpha\r\nbeta\r\n" }]),
+      makeToolResult([{ type: "text", text: "X".repeat(250) }]),
       makeAssistant([{ type: "text", text: "done" }]),
     ];
 
@@ -547,7 +578,7 @@ describe("pruneContextMessages", () => {
       settings: {
         ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
         keepLastAssistants: 1,
-        softTrimRatio: 0.5,
+        softTrimRatio: 0.7,
         hardClearRatio: 10,
         hardClear: {
           ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
@@ -561,11 +592,11 @@ describe("pruneContextMessages", () => {
       },
       ctx: CONTEXT_WINDOW_1M,
       isToolPrunable: () => true,
-      contextWindowTokensOverride: 6,
+      contextWindowTokensOverride: 120,
     });
 
     expect(getToolResultText(result)).toBe("alpha\nbeta");
-    expect(getToolResultText(result, 2)).toBe("[image removed during context pruning]");
+    expect(getToolResultText(result, 2)).toBe("X".repeat(250));
   });
 
   it("hard-clears image-containing tool results once ratios require clearing", () => {
