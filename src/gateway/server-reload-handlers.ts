@@ -123,7 +123,9 @@ export function createGatewayReloadHandlers(params: {
           // to release the connection before we open a new one. Without this, Telegram
           // can return a 409 Conflict when the new session starts before the old one
           // is fully deregistered on their end.
-          await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+          if (name === "telegram") {
+            await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+          }
           await params.startChannel(name);
         };
         for (const channel of plan.restartChannels) {
