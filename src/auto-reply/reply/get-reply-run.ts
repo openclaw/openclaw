@@ -634,6 +634,9 @@ export async function runPreparedReply(
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
       senderIsOwner: forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner,
+      traceAuthorized:
+        (forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner) ||
+        (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       config: cfg,

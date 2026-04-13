@@ -552,6 +552,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         workspaceDir: "/tmp",
         config: {},
         skillsSnapshot: {},
+        traceAuthorized: true,
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -663,6 +664,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         workspaceDir: "/tmp",
         config: {},
         skillsSnapshot: {},
+        traceAuthorized: true,
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -773,6 +775,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         workspaceDir: "/tmp",
         config: {},
         skillsSnapshot: {},
+        traceAuthorized: true,
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -937,6 +940,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         workspaceDir: "/tmp",
         config: {},
         skillsSnapshot: {},
+        traceAuthorized: true,
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -1055,6 +1059,102 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
   });
 
+  it("does not emit persisted trace output to an unauthorized sender", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-unauthorized-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionFile = path.join(tmp, "session.jsonl");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      traceLevel: "raw",
+    };
+
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
+    await fs.writeFile(sessionFile, "", "utf-8");
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Visible reply" }],
+      meta: {
+        finalPromptText: "secret prompt context",
+        finalAssistantVisibleText: "Visible reply",
+        finalAssistantRawText: "secret raw output",
+        agentMeta: {
+          sessionId: "session",
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 12, output: 3, total: 15 },
+        },
+      },
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+      CommandBody: "show me the answer",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile,
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        senderIsOwner: false,
+        traceAuthorized: false,
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toMatchObject({ text: "Visible reply" });
+    expect(Array.isArray(result)).toBe(false);
+  });
+
   it("shows session and last-turn usage totals without per-call usage blocks", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-usage-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -1127,6 +1227,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         workspaceDir: "/tmp",
         config: {},
         skillsSnapshot: {},
+        traceAuthorized: true,
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -1225,6 +1326,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         workspaceDir: "/tmp",
         config: {},
         skillsSnapshot: {},
+        traceAuthorized: true,
         provider: "anthropic",
         model: "claude",
         thinkLevel: "off",

@@ -78,14 +78,18 @@ import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
-function buildInlinePluginStatusPayload(entry: SessionEntry | undefined): ReplyPayload | undefined {
+function buildInlinePluginStatusPayload(params: {
+  entry: SessionEntry | undefined;
+  includeTraceLines: boolean;
+}): ReplyPayload | undefined {
   const statusLines =
-    entry?.verboseLevel && entry.verboseLevel !== "off"
-      ? resolveSessionPluginStatusLines(entry)
+    params.entry?.verboseLevel && params.entry.verboseLevel !== "off"
+      ? resolveSessionPluginStatusLines(params.entry)
       : [];
   const traceLines =
-    entry?.traceLevel === "on" || entry?.traceLevel === "raw"
-      ? resolveSessionPluginTraceLines(entry)
+    params.includeTraceLines &&
+    (params.entry?.traceLevel === "on" || params.entry?.traceLevel === "raw")
+      ? resolveSessionPluginTraceLines(params.entry)
       : [];
   const lines = [...statusLines, ...traceLines];
   if (lines.length === 0) {
@@ -1565,6 +1569,7 @@ export async function runReplyAgent(params: {
       sessionCtx.Body;
     const rawAssistantText =
       runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText;
+    const traceAuthorized = followupRun.run.traceAuthorized === true;
     const executionTrace = mergeExecutionTrace({
       fallbackAttempts,
       executionTrace: runResult.meta?.executionTrace as TraceExecutionView | undefined,
@@ -1641,38 +1646,44 @@ export async function runReplyAgent(params: {
         : {}),
     } satisfies TraceContextManagementView;
     const sessionUsage =
-      activeSessionEntry?.traceLevel === "raw"
+      traceAuthorized && activeSessionEntry?.traceLevel === "raw"
         ? await accumulateSessionUsageFromTranscript({
             sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
             storePath,
             sessionFile: followupRun.run.sessionFile,
           })
         : undefined;
-    const shouldAppendTracePayload =
-      verboseEnabled ||
-      activeSessionEntry?.traceLevel === "on" ||
-      activeSessionEntry?.traceLevel === "raw";
+    const traceEnabledForSender =
+      traceAuthorized &&
+      (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
+    const shouldAppendTracePayload = verboseEnabled || traceEnabledForSender;
     let trailingPluginStatusPayload: ReplyPayload | undefined;
     if (shouldAppendTracePayload) {
-      const pluginStatusPayload = buildInlinePluginStatusPayload(activeSessionEntry);
-      const rawTracePayload = buildInlineRawTracePayload({
+      const pluginStatusPayload = buildInlinePluginStatusPayload({
         entry: activeSessionEntry,
-        rawUserText,
-        rawAssistantText,
-        sessionUsage,
-        usage: runResult.meta?.agentMeta?.usage,
-        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-        provider: providerUsed,
-        model: modelUsed,
-        contextLimit: contextTokensUsed,
-        promptTokens,
-        executionTrace,
-        requestShaping,
-        promptSegments,
-        toolSummary,
-        completion,
-        contextManagement,
+        includeTraceLines: traceEnabledForSender,
       });
+      const rawTracePayload =
+        traceAuthorized && activeSessionEntry?.traceLevel === "raw"
+          ? buildInlineRawTracePayload({
+              entry: activeSessionEntry,
+              rawUserText,
+              rawAssistantText,
+              sessionUsage,
+              usage: runResult.meta?.agentMeta?.usage,
+              lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+              provider: providerUsed,
+              model: modelUsed,
+              contextLimit: contextTokensUsed,
+              promptTokens,
+              executionTrace,
+              requestShaping,
+              promptSegments,
+              toolSummary,
+              completion,
+              contextManagement,
+            })
+          : undefined;
       trailingPluginStatusPayload =
         pluginStatusPayload && rawTracePayload
           ? { text: `${pluginStatusPayload.text}\n\n${rawTracePayload.text}` }
