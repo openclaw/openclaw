@@ -426,23 +426,30 @@ async function fetchLocalGatewayHealth(params: {
 }
 
 async function probeQaBusReady(baseUrl: string): Promise<boolean> {
-  try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${baseUrl.replace(/\/+$/, "")}/v1/state`,
-      init: {
-        signal: AbortSignal.timeout(2_000),
-      },
-      policy: { allowPrivateNetwork: true },
-      auditContext: "qa-lab-qa-bus-health",
-    });
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      return response.ok;
-    } finally {
-      await release();
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${baseUrl.replace(/\/+$/, "")}/v1/state`,
+        init: {
+          signal: AbortSignal.timeout(2_000),
+        },
+        policy: { allowPrivateNetwork: true },
+        auditContext: "qa-lab-qa-bus-health",
+      });
+      try {
+        if (response.ok) return true;
+      } finally {
+        await release();
+      }
+    } catch {
+      /* retry */
     }
-  } catch {
-    return false;
+    if (attempt < maxAttempts - 1) {
+      await new Promise(resolve => setTimeout(resolve, 2_000));
+    }
   }
+  return false;
 }
 
 export const __testing = {
