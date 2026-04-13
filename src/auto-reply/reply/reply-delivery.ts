@@ -1,5 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
+import { sanitizeAssistantVisibleText } from "../../shared/text/assistant-visible-text.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -104,36 +105,41 @@ export function createBlockReplyDeliveryHandler(params: {
       ? await params.normalizeMediaPaths(normalized.payload)
       : normalized.payload;
     const blockPayload = params.applyReplyToMode(mediaNormalizedPayload);
-    const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
+    // Strip reasoning tags and other internal scaffolding (e.g. `<think>` blocks
+    // emitted by Ollama/Kimi/Qwen models) before the text reaches end users.
+    const deliveryPayload: ReplyPayload = blockPayload.text
+      ? { ...blockPayload, text: sanitizeAssistantVisibleText(blockPayload.text) }
+      : blockPayload;
+    const blockHasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
-    if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
+    if (!deliveryPayload.text && !blockHasMedia && !deliveryPayload.audioAsVoice) {
       return;
     }
     if (normalized.isSilent && !blockHasMedia) {
       return;
     }
 
-    if (blockPayload.text) {
-      void params.typingSignals.signalTextDelta(blockPayload.text).catch((err) => {
+    if (deliveryPayload.text) {
+      void params.typingSignals.signalTextDelta(deliveryPayload.text).catch((err) => {
         logVerbose(`block reply typing signal failed: ${String(err)}`);
       });
     }
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
-      params.blockReplyPipeline.enqueue(blockPayload);
+      params.blockReplyPipeline.enqueue(deliveryPayload);
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key to avoid duplicate in final payloads.
-      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply(blockPayload);
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(deliveryPayload));
+      await params.onBlockReply(deliveryPayload);
     } else if (blockHasMedia) {
       // When block streaming is disabled, text-only block replies are accumulated into the
       // final response. Media cannot be reconstructed later, so send it immediately and let
       // the assistant's final text arrive through the normal final-reply path.
-      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply({ ...blockPayload, text: undefined });
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(deliveryPayload));
+      await params.onBlockReply({ ...deliveryPayload, text: undefined });
     }
     // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };
