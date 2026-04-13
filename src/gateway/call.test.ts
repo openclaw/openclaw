@@ -30,6 +30,7 @@ let lastClientOptions: {
   clientDisplayName?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
+  onConnectError?: (err: Error) => void;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
@@ -42,6 +43,7 @@ type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
+let connectErrorBeforeClose: Error | null = null;
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
 
 vi.mock("./client.js", () => ({
@@ -61,6 +63,7 @@ vi.mock("./client.js", () => ({
       password?: string;
       clientDisplayName?: string;
       scopes?: string[];
+      onConnectError?: (err: Error) => void;
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
     }) {
@@ -82,6 +85,9 @@ vi.mock("./client.js", () => ({
           },
         });
       } else if (startMode === "close") {
+        if (connectErrorBeforeClose) {
+          lastClientOptions?.onConnectError?.(connectErrorBeforeClose);
+        }
         lastClientOptions?.onClose?.(closeCode, closeReason);
       }
     }
@@ -99,6 +105,7 @@ class StubGatewayClient {
     password?: string;
     clientDisplayName?: string;
     scopes?: string[];
+    onConnectError?: (err: Error) => void;
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string) => void;
   }) {
@@ -120,6 +127,9 @@ class StubGatewayClient {
         },
       });
     } else if (startMode === "close") {
+      if (connectErrorBeforeClose) {
+        lastClientOptions?.onConnectError?.(connectErrorBeforeClose);
+      }
       lastClientOptions?.onClose?.(closeCode, closeReason);
     }
   }
@@ -136,6 +146,7 @@ function resetGatewayCallMocks() {
   startMode = "hello";
   closeCode = 1006;
   closeReason = "";
+  connectErrorBeforeClose = null;
   helloMethods = ["health", "secrets.resolve"];
   const loadConfigForTests = loadConfig as unknown as () => OpenClawConfig;
   const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
@@ -741,6 +752,24 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Bind: loopback");
   });
 
+  it("includes the underlying connect error when the gateway closes before handshake completes", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    connectErrorBeforeClose = new Error("connect EPERM 127.0.0.1:18789 - Local");
+    setLocalLoopbackGatewayConfig();
+
+    let err: Error | null = null;
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      err = caught as Error;
+    }
+
+    expect(err?.message).toContain("gateway connect failed: connect EPERM 127.0.0.1:18789 - Local");
+    expect(err?.message).toContain("gateway closed (1006");
+  });
+
   it("includes connection details on timeout", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
@@ -786,6 +815,26 @@ describe("callGateway error details", () => {
 
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("omits device identity for unauthenticated local loopback calls", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps device identity for authenticated local loopback calls", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "token", token: "local-token" } },
+    });
+    setGatewayNetworkDefaults(18789);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.token).toBe("local-token");
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {

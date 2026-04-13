@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -6,6 +7,7 @@ import { captureEnv } from "../test-utils/env.js";
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.hoisted(() => vi.fn());
@@ -113,6 +115,16 @@ vi.mock("../infra/device-auth-store.js", async () => {
   };
 });
 
+vi.mock("../infra/device-identity.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/device-identity.js")>(
+    "../infra/device-identity.js",
+  );
+  return {
+    ...actual,
+    loadOrCreateDeviceIdentity: (...args: unknown[]) => loadOrCreateDeviceIdentityMock(...args),
+  };
+});
+
 vi.mock("../logger.js", async () => {
   const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
   return {
@@ -174,6 +186,16 @@ function expectSecurityConnectError(
 
 beforeAll(async () => {
   await loadGatewayClientModule();
+});
+
+beforeEach(() => {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  loadOrCreateDeviceIdentityMock.mockReset();
+  loadOrCreateDeviceIdentityMock.mockReturnValue({
+    deviceId: "mock-device",
+    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
+  } satisfies DeviceIdentity);
 });
 
 describe("GatewayClient security checks", () => {
@@ -275,6 +297,37 @@ describe("GatewayClient security checks", () => {
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1);
     client.stop();
+  });
+});
+
+describe("GatewayClient device identity handling", () => {
+  it("preserves explicit null device identity", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+    });
+
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+    expect(
+      (client as unknown as { opts: { deviceIdentity: DeviceIdentity | null } }).opts
+        .deviceIdentity,
+    ).toBeNull();
+  });
+
+  it("loads device identity when omitted", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    expect(loadOrCreateDeviceIdentityMock).toHaveBeenCalledTimes(1);
+    expect(
+      (client as unknown as { opts: { deviceIdentity: DeviceIdentity | null } }).opts
+        .deviceIdentity,
+    ).toEqual(
+      expect.objectContaining({
+        deviceId: "mock-device",
+      }),
+    );
   });
 });
 
