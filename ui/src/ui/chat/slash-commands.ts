@@ -1,8 +1,6 @@
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
-import type {
-  ChatCommandDefinition,
-  CommandArgChoice,
-} from "../../../../src/auto-reply/commands-registry.types.js";
+import type { CommandEntry, CommandsListResult } from "../../../../src/gateway/protocol/index.js";
+import type { GatewayBrowserClient } from "../gateway.ts";
 import type { IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
@@ -22,6 +20,21 @@ export type SlashCommandDef = {
   argOptions?: string[];
   /** Keyboard shortcut hint shown in the menu (display only). */
   shortcut?: string;
+};
+
+type LocalArgChoice = string | { value: string; label: string };
+
+type CommandLike = {
+  key: string;
+  name: string;
+  aliases?: string[];
+  description: string;
+  args?: Array<{
+    name: string;
+    required?: boolean;
+    choices?: LocalArgChoice[];
+  }>;
+  category?: string;
 };
 
 const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
@@ -130,26 +143,22 @@ const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
   steer: "[id] <message>",
 };
 
-function normalizeUiKey(command: ChatCommandDefinition): string {
+function normalizeUiKey(command: CommandLike): string {
   return command.key.replace(/[:.-]/g, "_");
 }
 
-function getSlashAliases(command: ChatCommandDefinition): string[] {
-  return command.textAliases
+function getSlashAliases(command: CommandLike): string[] {
+  return (command.aliases ?? [])
     .map((alias) => alias.trim())
-    .filter((alias) => alias.startsWith("/"))
-    .map((alias) => alias.slice(1));
+    .filter(Boolean)
+    .map((alias) => (alias.startsWith("/") ? alias.slice(1) : alias));
 }
 
-function getPrimarySlashName(command: ChatCommandDefinition): string | null {
-  const aliases = getSlashAliases(command);
-  if (aliases.length === 0) {
-    return null;
-  }
-  return aliases[0] ?? null;
+function getPrimarySlashName(command: CommandLike): string | null {
+  return command.name.trim() || null;
 }
 
-function formatArgs(command: ChatCommandDefinition): string | undefined {
+function formatArgs(command: CommandLike): string | undefined {
   if (!command.args?.length) {
     return undefined;
   }
@@ -161,28 +170,41 @@ function formatArgs(command: ChatCommandDefinition): string | undefined {
     .join(" ");
 }
 
-function choiceToValue(choice: CommandArgChoice): string {
+function choiceToValue(choice: LocalArgChoice): string {
   return typeof choice === "string" ? choice : choice.value;
 }
 
-function getArgOptions(command: ChatCommandDefinition): string[] | undefined {
+function getArgOptions(command: CommandLike): string[] | undefined {
   const firstArg = command.args?.[0];
-  if (!firstArg || typeof firstArg.choices === "function") {
+  if (!firstArg) {
     return undefined;
   }
   const options = firstArg.choices?.map(choiceToValue).filter(Boolean);
   return options?.length ? options : undefined;
 }
 
-function mapCategory(command: ChatCommandDefinition): SlashCommandCategory {
-  return CATEGORY_OVERRIDES[normalizeUiKey(command)] ?? "tools";
+function mapCategory(command: CommandLike): SlashCommandCategory {
+  const override = CATEGORY_OVERRIDES[normalizeUiKey(command)];
+  if (override) {
+    return override;
+  }
+  switch (command.category) {
+    case "session":
+      return "session";
+    case "options":
+      return "model";
+    case "management":
+      return "tools";
+    default:
+      return "tools";
+  }
 }
 
-function mapIcon(command: ChatCommandDefinition): IconName | undefined {
+function mapIcon(command: CommandLike): IconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
 }
 
-function toSlashCommand(command: ChatCommandDefinition): SlashCommandDef | null {
+function toSlashCommand(command: CommandLike): SlashCommandDef | null {
   const name = getPrimarySlashName(command);
   if (!name) {
     return null;
@@ -200,12 +222,100 @@ function toSlashCommand(command: ChatCommandDefinition): SlashCommandDef | null 
   };
 }
 
-export const SLASH_COMMANDS: SlashCommandDef[] = [
-  ...buildBuiltinChatCommands()
+function normalizeCommandEntry(entry: CommandEntry): CommandLike {
+  const aliases = Array.isArray(entry.textAliases)
+    ? entry.textAliases.filter((alias) => typeof alias === "string")
+    : [];
+  const primaryAlias = aliases.find((alias) => alias.startsWith("/"));
+  const primaryName = primaryAlias ? primaryAlias.slice(1) : entry.name;
+  return {
+    key: primaryName,
+    name: primaryName,
+    aliases,
+    description: entry.description,
+    args: entry.args?.map((arg) => ({
+      name: arg.name,
+      required: arg.required,
+      choices: arg.dynamic ? undefined : arg.choices,
+    })),
+    category: entry.category,
+  };
+}
+
+function replaceSlashCommands(next: SlashCommandDef[]) {
+  SLASH_COMMANDS.splice(0, SLASH_COMMANDS.length, ...next);
+}
+
+function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
+  const mapped = entries
+    .map(normalizeCommandEntry)
     .map(toSlashCommand)
-    .filter((command): command is SlashCommandDef => command !== null),
-  ...UI_ONLY_COMMANDS,
-];
+    .filter((command): command is SlashCommandDef => command !== null);
+  const deduped = new Map<string, SlashCommandDef>();
+  for (const command of [...mapped, ...UI_ONLY_COMMANDS]) {
+    const key = normalizeLowercaseStringOrEmpty(command.name);
+    if (!key || deduped.has(key)) {
+      continue;
+    }
+    deduped.set(key, command);
+  }
+  return Array.from(deduped.values());
+}
+
+function buildFallbackSlashCommands(): SlashCommandDef[] {
+  const builtins = buildBuiltinChatCommands()
+    .map((command) => ({
+      key: command.key,
+      name: command.textAliases[0]?.replace(/^\//, "") ?? command.key,
+      aliases: command.textAliases,
+      description: command.description,
+      args: command.args?.map((arg) => ({
+        name: arg.name,
+        required: arg.required,
+        choices: Array.isArray(arg.choices) ? arg.choices : undefined,
+      })),
+      category: command.category,
+    }))
+    .map(toSlashCommand)
+    .filter((command): command is SlashCommandDef => command !== null);
+  return buildSlashCommandsFromEntries([]).concat(
+    builtins.filter(
+      (command) =>
+        !UI_ONLY_COMMANDS.some(
+          (uiCommand) =>
+            normalizeLowercaseStringOrEmpty(uiCommand.name) ===
+            normalizeLowercaseStringOrEmpty(command.name),
+        ),
+    ),
+  );
+}
+
+export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
+
+export async function refreshSlashCommands(params: {
+  client: GatewayBrowserClient | null;
+  agentId?: string | null;
+}): Promise<void> {
+  const agentId = params.agentId?.trim();
+  if (!params.client || !agentId) {
+    replaceSlashCommands(buildFallbackSlashCommands());
+    return;
+  }
+  try {
+    const result = await params.client.request<CommandsListResult>("commands.list", {
+      agentId,
+      includeArgs: true,
+      scope: "text",
+    });
+    replaceSlashCommands(buildSlashCommandsFromEntries(result?.commands ?? []));
+  } catch {
+    replaceSlashCommands(buildFallbackSlashCommands());
+  }
+}
+
+export function resetSlashCommandsForTest(): void {
+  replaceSlashCommands(buildFallbackSlashCommands());
+}
 
 const CATEGORY_ORDER: SlashCommandCategory[] = ["session", "model", "tools", "agents"];
 

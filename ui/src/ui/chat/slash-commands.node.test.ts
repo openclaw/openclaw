@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { parseSlashCommand, SLASH_COMMANDS } from "./slash-commands.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  parseSlashCommand,
+  refreshSlashCommands,
+  resetSlashCommandsForTest,
+  SLASH_COMMANDS,
+} from "./slash-commands.ts";
+
+afterEach(() => {
+  resetSlashCommandsForTest();
+});
 
 describe("parseSlashCommand", () => {
   it("parses commands with an optional colon separator", () => {
@@ -97,6 +106,64 @@ describe("parseSlashCommand", () => {
   it("keeps focus as a local slash command", () => {
     expect(parseSlashCommand("/focus")).toMatchObject({
       command: { key: "focus", executeLocal: true },
+      args: "",
+    });
+  });
+
+  it("refreshes runtime commands from commands.list so docks, plugins, and direct skills appear", async () => {
+    const request = async (method: string) => {
+      expect(method).toBe("commands.list");
+      return {
+        commands: [
+          {
+            name: "dock-discord",
+            textAliases: ["/dock-discord", "/dock_discord"],
+            description: "Switch to discord for replies.",
+            source: "native",
+            scope: "both",
+            acceptsArgs: false,
+            category: "docks",
+          },
+          {
+            name: "dreaming",
+            textAliases: ["/dreaming"],
+            description: "Enable or disable memory dreaming.",
+            source: "plugin",
+            scope: "both",
+            acceptsArgs: true,
+          },
+          {
+            name: "prose",
+            textAliases: ["/prose"],
+            description: "Draft polished prose.",
+            source: "skill",
+            scope: "both",
+            acceptsArgs: true,
+          },
+        ],
+      };
+    };
+
+    await refreshSlashCommands({
+      client: { request } as never,
+      agentId: "main",
+    });
+
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "dock-discord")).toMatchObject({
+      aliases: ["dock_discord"],
+      category: "tools",
+      executeLocal: false,
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toMatchObject({
+      key: "dreaming",
+      executeLocal: false,
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "prose")).toMatchObject({
+      key: "prose",
+      executeLocal: false,
+    });
+    expect(parseSlashCommand("/dock_discord")).toMatchObject({
+      command: { name: "dock-discord" },
       args: "",
     });
   });
