@@ -5,6 +5,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import {
   buildSessionStartupContextPrelude,
@@ -72,6 +73,7 @@ import {
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -204,6 +206,7 @@ function dispatchAgentRunFromGateway(params: {
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  abortSignal?: AbortSignal;
 }) {
   const inputProvenance = normalizeInputProvenance(params.ingressOpts.inputProvenance);
   const shouldTrackTask =
@@ -231,7 +234,11 @@ function dispatchAgentRunFromGateway(params: {
       // Best-effort only: background task tracking must not block agent runs.
     }
   }
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
+  void agentCommandFromIngress(
+    { ...params.ingressOpts, abortSignal: params.abortSignal },
+    defaultRuntime,
+    params.context.deps,
+  )
     .then((result) => {
       const payload = {
         runId: params.runId,
@@ -273,6 +280,9 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         error: formatForLog(err),
       });
+    })
+    .finally(() => {
+      params.context.chatAbortControllers.delete(params.runId);
     });
 }
 
@@ -788,17 +798,32 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
+    const now = Date.now();
+    const timeoutMs = resolveAgentTimeoutMs({
+      cfg,
+      overrideMs: request.timeout,
+    });
+    const abortController = new AbortController();
+    context.chatAbortControllers.set(runId, {
+      controller: abortController,
+      sessionId: resolvedSessionId ?? runId,
+      sessionKey: resolvedSessionKey ?? "",
+      startedAtMs: now,
+      expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+      ownerConnId: connId,
+    });
+
     const accepted = {
       runId,
       status: "accepted" as const,
-      acceptedAt: Date.now(),
+      acceptedAt: now,
     };
     // Store an in-flight ack so retries do not spawn a second run.
     setGatewayDedupeEntry({
       dedupe: context.dedupe,
       key: `agent:${idem}`,
       entry: {
-        ts: Date.now(),
+        ts: now,
         ok: true,
         payload: accepted,
       },
@@ -844,6 +869,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
     dispatchAgentRunFromGateway({
+      abortSignal: abortController.signal,
       ingressOpts: {
         message,
         images,
