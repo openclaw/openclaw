@@ -8,7 +8,7 @@ OpenClaw already worked well with tool-using frontier models, but GPT-5.4 and Co
 - they could lose long-running task state during replay or compaction
 - parity claims against Claude Opus 4.6 were based on anecdotes instead of repeatable scenarios
 
-This parity program fixes those gaps in two waves: three merged runtime contracts, a merged proof-harness base, and a second-wave proof expansion that broadens the merged-main parity evidence.
+This parity program fixes those gaps in four reviewable slices.
 
 ## What changed
 
@@ -48,16 +48,6 @@ This slice adds the first-wave QA-lab parity pack so GPT-5.4 and Opus 4.6 can be
 
 The parity pack is the proof layer. It does not change runtime behavior by itself.
 
-### PR E: second-wave parity expansion
-
-This slice keeps the work proof-only and expands the parity pack with more agentic continuity lanes:
-
-- subagent delegation and synthesis
-- memory recall and thread isolation
-- restart-triggered capability recovery in the same session
-
-PR E does not add new runtime behavior. It makes the parity claim stronger by widening the proof surface and turning the final closeout into a merged-main ten-scenario comparison instead of a smaller first-wave sample.
-
 After you have two `qa-suite-summary.json` artifacts, generate the release-gate comparison with:
 
 ```bash
@@ -95,13 +85,13 @@ to:
 
 ## Before vs after for GPT-5.4 users
 
-| Before this program                                                                            | After PR A-E                                                                                     |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| GPT-5.4 could stop after a reasonable plan without taking the next tool step                   | PR A turns “plan only” into “act now or surface a blocked state”                                 |
-| Strict tool schemas could reject parameter-free or OpenAI/Codex-shaped tools in confusing ways | PR C makes provider-owned tool registration and invocation more predictable                      |
-| `/elevated full` guidance could be vague or wrong in blocked runtimes                          | PR B gives GPT-5.4 and the user truthful runtime and permission hints                            |
-| Replay or compaction failures could feel like the task silently disappeared                    | PR C surfaces paused, blocked, abandoned, and replay-invalid outcomes explicitly                 |
-| “GPT-5.4 feels worse than Opus” was mostly anecdotal                                           | PR D and PR E turn that into the same scenario pack, the same metrics, and a hard pass/fail gate |
+| Before this program                                                                            | After PR A-D                                                                             |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| GPT-5.4 could stop after a reasonable plan without taking the next tool step                   | PR A turns “plan only” into “act now or surface a blocked state”                         |
+| Strict tool schemas could reject parameter-free or OpenAI/Codex-shaped tools in confusing ways | PR C makes provider-owned tool registration and invocation more predictable              |
+| `/elevated full` guidance could be vague or wrong in blocked runtimes                          | PR B gives GPT-5.4 and the user truthful runtime and permission hints                    |
+| Replay or compaction failures could feel like the task silently disappeared                    | PR C surfaces paused, blocked, abandoned, and replay-invalid outcomes explicitly         |
+| “GPT-5.4 feels worse than Opus” was mostly anecdotal                                           | PR D turns that into the same scenario pack, the same metrics, and a hard pass/fail gate |
 
 ## Architecture
 
@@ -139,7 +129,7 @@ flowchart LR
 
 ## Scenario pack
 
-The parity pack now covers ten scenarios in two waves.
+The first-wave parity pack currently covers five scenarios:
 
 ### `approval-turn-tool-followthrough`
 
@@ -161,26 +151,6 @@ Checks that mixed-mode tasks involving attachments remain actionable and do not 
 
 Checks that a task with a real mutating write keeps replay-unsafety explicit instead of quietly looking replay-safe if the run compacts, retries, or loses reply state under pressure.
 
-### `subagent-handoff`
-
-Checks that the agent can delegate one bounded task to a subagent and fold the child result back into the parent reply instead of stalling or leaving the user with a “waiting” placeholder.
-
-### `subagent-fanout-synthesis`
-
-Checks that the agent can launch two bounded subagent tasks, wait for both, and synthesize both results into a single coherent parent answer.
-
-### `memory-recall`
-
-Checks that the agent can remember a seeded fact, switch context, and later recall the same fact accurately instead of hallucinating or losing the state.
-
-### `thread-memory-isolation`
-
-Checks that a memory-backed answer requested inside a thread stays inside that thread and does not leak into the root channel.
-
-### `config-restart-capability-flip`
-
-Checks that a restart-triggering config change restores a capability and that the same live session actually uses the restored tool after wake-up instead of losing continuity.
-
 ## Scenario matrix
 
 | Scenario                           | What it tests                           | Good GPT-5.4 behavior                                                          | Failure signal                                                                 |
@@ -190,11 +160,6 @@ Checks that a restart-triggering config change restores a capability and that th
 | `source-docs-discovery-report`     | Source reading + synthesis + action     | Finds sources, uses tools, and produces a useful report without stalling       | thin summary, missing tool work, or incomplete-turn stop                       |
 | `image-understanding-attachment`   | Attachment-driven agentic work          | Interprets the attachment, connects it to tools, and continues the task        | vague narration, attachment ignored, or no concrete next action                |
 | `compaction-retry-mutating-tool`   | Mutating work under compaction pressure | Performs a real write and keeps replay-unsafety explicit after the side effect | mutating write happens but replay safety is implied, missing, or contradictory |
-| `subagent-handoff`                 | Single delegated worker flow            | Launches one bounded subagent and folds the result back cleanly                | no delegation, dangling “waiting”, or missing child result                     |
-| `subagent-fanout-synthesis`        | Multi-worker synthesis                  | Launches two bounded subagents and combines both results in one parent answer  | only one child result lands, or synthesis collapses into partial output        |
-| `memory-recall`                    | Durable recall after context shift      | Remembers a seeded fact and recalls it accurately later                        | guessed fact, forgotten fact, or drift after the context switch                |
-| `thread-memory-isolation`          | Scoped threaded recall                  | Answers correctly inside the thread and keeps the root channel quiet           | answer leaks to the root channel or ignores the threaded memory task           |
-| `config-restart-capability-flip`   | Restart + capability continuity         | Same session resumes after restart and uses the restored tool successfully     | capability remains missing, wake-up fails, or the session loses acting context |
 
 ## Release gate
 
@@ -208,7 +173,7 @@ Required outcomes:
 - no silent replay or compaction abandonment
 - parity-pack metrics that are at least as strong as the agreed Opus 4.6 baseline
 
-For the current parity pack, the gate compares:
+For the first-wave harness, the gate compares:
 
 - completion rate
 - unintended-stop rate
@@ -217,41 +182,22 @@ For the current parity pack, the gate compares:
 
 Parity evidence is intentionally split across two layers:
 
-- PR D and PR E prove same-scenario GPT-5.4 vs Opus 4.6 behavior with QA-lab
+- PR D proves same-scenario GPT-5.4 vs Opus 4.6 behavior with QA-lab
 - PR B deterministic suites prove auth, proxy, DNS, and `/elevated full` truthfulness outside the harness
 
 ## Goal-to-evidence matrix
 
-| Completion gate item                                     | Owning PR          | Evidence source                                                                             | Pass signal                                                                              |
-| -------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| GPT-5.4 no longer stalls after planning                  | PR A               | `approval-turn-tool-followthrough` plus PR A runtime suites                                 | approval turns trigger real work or an explicit blocked state                            |
-| GPT-5.4 no longer fakes progress or fake tool completion | PR A + PR D + PR E | parity report scenario outcomes and fake-success count                                      | no suspicious pass results and no commentary-only completion                             |
-| GPT-5.4 no longer gives false `/elevated full` guidance  | PR B               | deterministic truthfulness suites                                                           | blocked reasons and full-access hints stay runtime-accurate                              |
-| Replay/liveness failures stay explicit                   | PR C + PR D + PR E | PR C lifecycle/replay suites plus `compaction-retry-mutating-tool` and continuity scenarios | mutating work keeps replay-unsafety explicit instead of silently disappearing            |
-| GPT-5.4 matches or beats Opus 4.6 on the agreed metrics  | PR D + PR E        | `qa-agentic-parity-report.md` and `qa-agentic-parity-summary.json`                          | same scenario coverage and no regression on completion, stop behavior, or valid tool use |
-
-## Merged-main parity proof
-
-The final release claim should come from one merged-main run, not from branch-era anecdotes.
-
-Required inputs:
-
-- merged PR A, PR B, and PR C runtime behavior
-- merged PR D proof harness
-- merged PR E second-wave parity expansion
-- generated `qa-suite-summary.json` for GPT-5.4
-- generated `qa-suite-summary.json` for Opus 4.6
-
-Required outputs:
-
-- `qa-agentic-parity-report.md`
-- `qa-agentic-parity-summary.json`
-
-Only treat parity as complete when those generated artifacts come from the merged runtime and the full ten-scenario pack.
+| Completion gate item                                     | Owning PR   | Evidence source                                                    | Pass signal                                                                              |
+| -------------------------------------------------------- | ----------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| GPT-5.4 no longer stalls after planning                  | PR A        | `approval-turn-tool-followthrough` plus PR A runtime suites        | approval turns trigger real work or an explicit blocked state                            |
+| GPT-5.4 no longer fakes progress or fake tool completion | PR A + PR D | parity report scenario outcomes and fake-success count             | no suspicious pass results and no commentary-only completion                             |
+| GPT-5.4 no longer gives false `/elevated full` guidance  | PR B        | deterministic truthfulness suites                                  | blocked reasons and full-access hints stay runtime-accurate                              |
+| Replay/liveness failures stay explicit                   | PR C + PR D | PR C lifecycle/replay suites plus `compaction-retry-mutating-tool` | mutating work keeps replay-unsafety explicit instead of silently disappearing            |
+| GPT-5.4 matches or beats Opus 4.6 on the agreed metrics  | PR D        | `qa-agentic-parity-report.md` and `qa-agentic-parity-summary.json` | same scenario coverage and no regression on completion, stop behavior, or valid tool use |
 
 ## How to read the parity verdict
 
-Use the verdict in `qa-agentic-parity-summary.json` as the final machine-readable decision for the merged-main parity pack.
+Use the verdict in `qa-agentic-parity-summary.json` as the final machine-readable decision for the first-wave parity pack.
 
 - `pass` means GPT-5.4 covered the same scenarios as Opus 4.6 and did not regress on the agreed aggregate metrics.
 - `fail` means at least one hard gate tripped: weaker completion, worse unintended stops, weaker valid tool use, any fake-success case, or mismatched scenario coverage.

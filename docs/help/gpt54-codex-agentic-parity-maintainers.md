@@ -1,6 +1,6 @@
 # GPT-5.4 / Codex Parity Maintainer Notes
 
-This note explains how to review the GPT-5.4 / Codex parity program as a two-wave closeout without losing the original six-contract architecture.
+This note explains how to review the GPT-5.4 / Codex parity program as four merge units without losing the original six-contract architecture.
 
 ## Merge units
 
@@ -62,19 +62,6 @@ Does not own:
 - runtime behavior changes outside QA-lab
 - auth/proxy/DNS simulation inside the harness
 
-### PR E: second-wave parity expansion
-
-Owns:
-
-- second-wave parity scenario expansion
-- merged-main proof packaging
-- goal-to-evidence parity documentation
-
-Does not own:
-
-- runtime behavior changes outside QA-lab
-- auth/proxy/DNS truthfulness logic
-
 ## Mapping back to the original six contracts
 
 | Original contract                        | Merge unit |
@@ -92,9 +79,8 @@ Does not own:
 2. PR B
 3. PR C
 4. PR D
-5. PR E
 
-PR D establishes the proof base. PR E expands scenario breadth and merged-main proof depth. Neither should be the reason runtime-correctness PRs are delayed.
+PR D is the proof layer. It should not be the reason runtime-correctness PRs are delayed.
 
 ## What to look for
 
@@ -123,12 +109,6 @@ PR D establishes the proof base. PR E expands scenario breadth and merged-main p
 - reports are readable by humans and automation
 - parity claims are evidence-backed, not anecdotal
 
-### PR E
-
-- the parity pack widens beyond the first wave without adding runtime-scope behavior
-- subagent, memory, thread-isolation, and restart-capability lanes are covered
-- merged-main parity proof is explicitly documented and traceable
-
 Expected artifacts from PR D:
 
 - `qa-suite-report.md` / `qa-suite-summary.json` for each model run
@@ -140,7 +120,7 @@ Expected artifacts from PR D:
 Do not claim GPT-5.4 parity or superiority over Opus 4.6 until:
 
 - PR A, PR B, and PR C are merged
-- PR D and PR E run the full parity pack cleanly
+- PR D runs the first-wave parity pack cleanly
 - runtime-truthfulness regression suites remain green
 - the parity report shows no fake-success cases and no regression in stop behavior
 
@@ -160,18 +140,18 @@ flowchart LR
 
 The parity harness is not the only evidence source. Keep this split explicit in review:
 
-- PR D and PR E own the scenario-based GPT-5.4 vs Opus 4.6 comparison
+- PR D owns the scenario-based GPT-5.4 vs Opus 4.6 comparison
 - PR B deterministic suites still own auth/proxy/DNS and full-access truthfulness evidence
 
 ## Goal-to-evidence map
 
-| Completion gate item                     | Primary owner      | Review artifact                                                                    |
-| ---------------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| No plan-only stalls                      | PR A               | strict-agentic runtime tests and `approval-turn-tool-followthrough`                |
-| No fake progress or fake tool completion | PR A + PR D + PR E | parity fake-success count plus scenario-level report details                       |
-| No false `/elevated full` guidance       | PR B               | deterministic runtime-truthfulness suites                                          |
-| Replay/liveness failures remain explicit | PR C + PR D + PR E | lifecycle/replay suites plus `compaction-retry-mutating-tool` and continuity lanes |
-| GPT-5.4 matches or beats Opus 4.6        | PR D + PR E        | `qa-agentic-parity-report.md` and `qa-agentic-parity-summary.json`                 |
+| Completion gate item                     | Primary owner | Review artifact                                                     |
+| ---------------------------------------- | ------------- | ------------------------------------------------------------------- |
+| No plan-only stalls                      | PR A          | strict-agentic runtime tests and `approval-turn-tool-followthrough` |
+| No fake progress or fake tool completion | PR A + PR D   | parity fake-success count plus scenario-level report details        |
+| No false `/elevated full` guidance       | PR B          | deterministic runtime-truthfulness suites                           |
+| Replay/liveness failures remain explicit | PR C + PR D   | lifecycle/replay suites plus `compaction-retry-mutating-tool`       |
+| GPT-5.4 matches or beats Opus 4.6        | PR D          | `qa-agentic-parity-report.md` and `qa-agentic-parity-summary.json`  |
 
 ## Reviewer shorthand: before vs after
 
