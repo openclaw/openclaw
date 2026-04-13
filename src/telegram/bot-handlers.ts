@@ -398,11 +398,37 @@ export const registerTelegramHandlers = ({
         }
         const groupAllowlist = resolveGroupPolicy(chatId);
         if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
-          logger.info(
-            { chatId, title: callbackMessage.chat.title, reason: "not-allowed" },
-            "skipping group message",
-          );
-          return;
+          // If the group is not in the allowlist but has an explicit peer binding,
+          // allow it through — the binding implicitly authorizes the group.
+          const peerRoute = resolveAgentRoute({
+            cfg: loadConfig(),
+            channel: "telegram",
+            accountId,
+            peer: {
+              kind: "group",
+              id: buildTelegramGroupPeerId(chatId, resolvedThreadId),
+            },
+            parentPeer: buildTelegramParentPeer({
+              isGroup: true,
+              resolvedThreadId,
+              chatId,
+            }),
+          });
+          const hasPeerBinding =
+            peerRoute.matchedBy === "binding.peer" ||
+            peerRoute.matchedBy === "binding.peer.parent";
+          if (!hasPeerBinding) {
+            logger.info(
+              {
+                chatId,
+                title: callbackMessage.chat.title,
+                reason: "not-allowed",
+                hint: 'Add this group id to channels.telegram.groups or use "*" to allow all groups',
+              },
+              "skipping group message (not in group allowlist and no peer binding)",
+            );
+            return;
+          }
         }
       }
 
@@ -765,11 +791,37 @@ export const registerTelegramHandlers = ({
         // Group allowlist based on configured group IDs.
         const groupAllowlist = resolveGroupPolicy(chatId);
         if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
-          logger.info(
-            { chatId, title: msg.chat.title, reason: "not-allowed" },
-            "skipping group message",
-          );
-          return;
+          // If the group is not in the allowlist but has an explicit peer binding,
+          // allow it through — the binding implicitly authorizes the group.
+          const peerRoute = resolveAgentRoute({
+            cfg: loadConfig(),
+            channel: "telegram",
+            accountId,
+            peer: {
+              kind: "group",
+              id: buildTelegramGroupPeerId(chatId, resolvedThreadId),
+            },
+            parentPeer: buildTelegramParentPeer({
+              isGroup: true,
+              resolvedThreadId,
+              chatId,
+            }),
+          });
+          const hasPeerBinding =
+            peerRoute.matchedBy === "binding.peer" ||
+            peerRoute.matchedBy === "binding.peer.parent";
+          if (!hasPeerBinding) {
+            logger.info(
+              {
+                chatId,
+                title: msg.chat.title,
+                reason: "not-allowed",
+                hint: 'Add this group id to channels.telegram.groups or use "*" to allow all groups',
+              },
+              "skipping group message (not in group allowlist and no peer binding)",
+            );
+            return;
+          }
         }
       }
 

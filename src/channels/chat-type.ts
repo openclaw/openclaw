@@ -8,7 +8,7 @@ export function normalizeChatType(raw?: string): ChatType | undefined {
   if (value === "direct" || value === "dm") {
     return "direct";
   }
-  if (value === "group") {
+  if (value === "group" || value === "supergroup") {
     return "group";
   }
   if (value === "channel") {

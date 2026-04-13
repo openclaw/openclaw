@@ -119,6 +119,11 @@ export function createGatewayReloadHandlers(params: {
         const restartChannel = async (name: ChannelKind) => {
           params.logChannels.info(`restarting ${name} channel`);
           await params.stopChannel(name);
+          // Brief pause after stopping to allow remote services (e.g. Telegram long-poll)
+          // to release the connection before we open a new one. Without this, Telegram
+          // can return a 409 Conflict when the new session starts before the old one
+          // is fully deregistered on their end.
+          await new Promise<void>((resolve) => setTimeout(resolve, 1500));
           await params.startChannel(name);
         };
         for (const channel of plan.restartChannels) {
