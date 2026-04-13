@@ -565,8 +565,9 @@ export async function configureLmstudioNonInteractive(
     headers: persistedHeaders,
   });
   const hasAuthorizationHeader = hasLmstudioAuthorizationHeader(resolvedHeaders);
+  const useHeaderOnlyAuth = hasAuthorizationHeader && (!resolved || resolved.source === "profile");
   const setupDiscoveryApiKey =
-    resolved?.key ??
+    (useHeaderOnlyAuth ? undefined : resolved?.key) ??
     (shouldUseLmstudioApiKeyPlaceholder({
       hasModels: true,
       resolvedApiKey: undefined,
@@ -613,7 +614,7 @@ export async function configureLmstudioNonInteractive(
     normalizedCtx.runtime.exit(1);
     return null;
   }
-  if (!resolved && hasAuthorizationHeader) {
+  if (useHeaderOnlyAuth) {
     await removeProviderAuthProfilesWithLock({
       provider: PROVIDER_ID,
       agentDir: normalizedCtx.agentDir,
