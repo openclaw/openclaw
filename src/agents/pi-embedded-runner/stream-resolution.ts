@@ -117,14 +117,23 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
 
-  // Prefer boundary-aware transport stream when available, regardless of
-  // currentStreamFn.  Previously this only activated when currentStreamFn
-  // was undefined or streamSimple, which caused custom-API sessions (where
-  // ensureCustomApiRegistered sets a named streamFn) to bypass the transport
-  // layer entirely — breaking tool_calls handling for local LLM providers.
+  // For openai-completions (used by local providers like llama.cpp, LM Studio,
+  // vLLM), always prefer the boundary-aware transport stream.  Local providers
+  // need the full transport pipeline to handle inline text tool calls and
+  // streaming usage, but ensureCustomApiRegistered may have already set
+  // currentStreamFn — which would previously cause us to skip the transport
+  // layer entirely, breaking tool_calls handling.
+  // For other APIs (openai-responses, anthropic-messages, etc.), preserve the
+  // original behaviour: only upgrade when currentStreamFn is the default.
   const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
   if (boundaryAwareStreamFn) {
-    return boundaryAwareStreamFn;
+    if (
+      params.model.api === "openai-completions" ||
+      currentStreamFn === undefined ||
+      currentStreamFn === streamSimple
+    ) {
+      return boundaryAwareStreamFn;
+    }
   }
 
   return currentStreamFn;
