@@ -224,6 +224,71 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("(from Guest)");
   });
 
+  it("keeps one collect batch when only sender display fields drift", async () => {
+    const key = `test-collect-auth-display-drift-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = createRun({
+      prompt: "first",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    const second = createRun({
+      prompt: "second",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...first,
+        run: {
+          ...first.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderUsername: "guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...second,
+        run: {
+          ...second.run,
+          senderId: "user-1",
+          senderName: "Guest User",
+          senderUsername: "guest-renamed",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("first");
+    expect(calls[0]?.prompt).toContain("second");
+    expect(calls[0]?.prompt).toContain("(from Guest)");
+    expect(calls[0]?.prompt).toContain("(from Guest User)");
+  });
+
   it("splits collect batches when exec context changes", async () => {
     const key = `test-collect-exec-split-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -890,6 +955,27 @@ describe("resolveFollowupAuthorizationKey", () => {
         senderId: "user-1",
         bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
         execOverrides: { ask: "always" },
+      }),
+    );
+  });
+
+  it("does not change when only sender display fields change", () => {
+    const run = createRun({ prompt: "one" }).run;
+    expect(
+      resolveFollowupAuthorizationKey({
+        ...run,
+        senderId: "user-1",
+        senderName: "Guest",
+        senderUsername: "guest",
+        senderIsOwner: false,
+      }),
+    ).toBe(
+      resolveFollowupAuthorizationKey({
+        ...run,
+        senderId: "user-1",
+        senderName: "Guest User",
+        senderUsername: "guest-renamed",
+        senderIsOwner: false,
       }),
     );
   });

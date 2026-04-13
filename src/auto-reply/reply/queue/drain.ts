@@ -60,14 +60,14 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 }
 
 // Keep this key aligned with the fields that affect per-message authorization or
-// exec-context propagation in collect-mode batching. Fields like authProfileId,
-// elevatedLevel, ownerNumbers, and config are intentionally excluded because
-// they are session-level or not consulted in per-message authorization checks.
+// exec-context propagation in collect-mode batching. Display-only sender fields
+// stay out of the key so profile/name drift does not force conservative splits.
+// Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
+// intentionally excluded because they are session-level or not consulted in
+// per-message authorization checks.
 export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
-    run.senderName ?? "",
-    run.senderUsername ?? "",
     run.senderE164 ?? "",
     run.senderIsOwner === true,
     run.execOverrides?.host ?? "",
