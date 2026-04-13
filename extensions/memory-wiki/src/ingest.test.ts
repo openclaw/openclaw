@@ -32,6 +32,47 @@ describe("ingestMemoryWikiSource", () => {
     );
   });
 
+  it("reuses an existing legacy source page identity when reingesting an old vault", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-legacy-");
+    const inputPath = path.join(rootDir, "meeting-notes.txt");
+    await fs.writeFile(inputPath, "updated source content\n", "utf8");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+    const legacyPagePath = path.join(config.vault.path, "sources", "meeting-notes.md");
+    await fs.mkdir(path.dirname(legacyPagePath), { recursive: true });
+    await fs.writeFile(
+      legacyPagePath,
+      [
+        "---",
+        "pageType: source",
+        "id: source.meeting-notes",
+        "title: meeting notes",
+        "sourceType: local-file",
+        `sourcePath: ${inputPath}`,
+        "status: active",
+        "---",
+        "",
+        "# meeting notes",
+        "",
+        "legacy source body",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    expect(result.pageId).toBe("source.meeting-notes");
+    expect(result.pagePath).toBe("sources/meeting-notes.md");
+    expect(result.created).toBe(false);
+    await expect(fs.readFile(legacyPagePath, "utf8")).resolves.toContain("updated source content");
+  });
+
   it("keeps pure CJK source titles on distinct pages", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-cjk-");
     const firstInputPath = path.join(rootDir, "cjk-a.txt");
@@ -185,5 +226,38 @@ describe("ingestMemoryWikiSource", () => {
     await expect(
       fs.readFile(path.join(config.vault.path, second.pagePath), "utf8"),
     ).resolves.toContain("same title source two");
+  });
+
+  it("treats symlinked paths to the same file as one stable source", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-symlink-");
+    const actualDir = path.join(rootDir, "actual");
+    const aliasDir = path.join(rootDir, "alias");
+    await fs.mkdir(actualDir, { recursive: true });
+    await fs.mkdir(aliasDir, { recursive: true });
+    const actualPath = path.join(actualDir, "shared.txt");
+    const aliasPath = path.join(aliasDir, "shared-link.txt");
+    await fs.writeFile(actualPath, "shared source content\n", "utf8");
+    await fs.symlink(actualPath, aliasPath);
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+
+    const first = await ingestMemoryWikiSource({
+      config,
+      inputPath: actualPath,
+      title: "Shared Source",
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+    const second = await ingestMemoryWikiSource({
+      config,
+      inputPath: aliasPath,
+      title: "Shared Source",
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    expect(first.pageId).toBe(second.pageId);
+    expect(first.pagePath).toBe(second.pagePath);
+    expect(second.created).toBe(false);
+    expect(second.sourcePath).toBe(actualPath);
   });
 });

@@ -10,6 +10,7 @@ import {
   renderWikiMarkdown,
   slugifyWikiSegment,
 } from "./markdown.js";
+import { readQueryableWikiPages } from "./query.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 export type IngestMemoryWikiSourceResult = {
@@ -44,17 +45,31 @@ function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
   return buffer.toString("utf8");
 }
 
-function resolveIngestSourcePageIdentity(params: { sourcePath: string; title: string }): {
+async function resolveIngestSourcePageIdentity(params: {
+  vaultPath: string;
+  sourcePath: string;
+  title: string;
+}): Promise<{
   pageId: string;
   pageRelativePath: string;
-} {
+}> {
+  const existingPage = (await readQueryableWikiPages(params.vaultPath)).find(
+    (page) =>
+      page.kind === "source" &&
+      page.sourceType === "local-file" &&
+      page.sourcePath === params.sourcePath,
+  );
+  if (existingPage?.id) {
+    return {
+      pageId: existingPage.id,
+      pageRelativePath: existingPage.relativePath,
+    };
+  }
+
   const titleSlug = slugifyWikiSegment(params.title);
   // Bind identity to the resolved file path so same-source reingest stays stable.
   // Moving the file intentionally creates a new source identity.
-  const sourceHash = createHash("sha1")
-    .update(path.resolve(params.sourcePath))
-    .digest("hex")
-    .slice(0, 8);
+  const sourceHash = createHash("sha1").update(params.sourcePath).digest("hex").slice(0, 8);
   const pageSlug = `${titleSlug}-${sourceHash}`;
   return {
     pageId: `source.${pageSlug}`,
@@ -69,11 +84,16 @@ export async function ingestMemoryWikiSource(params: {
   nowMs?: number;
 }): Promise<IngestMemoryWikiSourceResult> {
   await initializeMemoryWikiVault(params.config, { nowMs: params.nowMs });
-  const sourcePath = path.resolve(params.inputPath);
+  const resolvedInputPath = path.resolve(params.inputPath);
+  const sourcePath = await fs.realpath(resolvedInputPath).catch(() => resolvedInputPath);
   const buffer = await fs.readFile(sourcePath);
   const content = assertUtf8Text(buffer, sourcePath);
   const title = resolveSourceTitle(sourcePath, params.title);
-  const { pageId, pageRelativePath } = resolveIngestSourcePageIdentity({ sourcePath, title });
+  const { pageId, pageRelativePath } = await resolveIngestSourcePageIdentity({
+    vaultPath: params.config.vault.path,
+    sourcePath,
+    title,
+  });
   const pagePath = path.join(params.config.vault.path, pageRelativePath);
   const created = !(await pathExists(pagePath));
   const timestamp = new Date(params.nowMs ?? Date.now()).toISOString();
