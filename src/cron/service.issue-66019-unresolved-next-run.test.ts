@@ -136,7 +136,7 @@ describe("#66019 unresolved next-run repro", () => {
     const nextRunSpy = vi
       .spyOn(schedule, "computeNextRunAtMs")
       .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(naturalNext)
+      .mockReturnValueOnce(undefined)
       .mockReturnValue(naturalNext);
     const state = createCronServiceState({
       cronEnabled: true,
