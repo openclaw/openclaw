@@ -4,7 +4,7 @@
 // Usage:
 //   lesson-engine <subcommand> [--agent <name>] [--all] [--dry-run] [--apply] [...]
 //
-// Subcommands: migrate | dedupe | forget | status | maintenance | scan | distill | gate
+// Subcommands: migrate | dedupe | forget | status | maintenance | scan | distill | gate | inject
 //
 // Stdout: single machine-readable JSON document (pretty-printed).
 // Stderr: human-readable summary.
@@ -30,8 +30,9 @@ import {
 } from "../src/error-scanner.js";
 import { forgetFile, type ForgetResult, DEFAULT_MAX_ACTIVE } from "../src/forget.js";
 import { DEFAULT_CONFIDENCE_THRESHOLD, gateCandidates } from "../src/gate.js";
+import { injectLessons, type InjectResult } from "../src/inject.js";
 import { migrateFile, type MigrateResult } from "../src/migrate.js";
-import type { LessonCandidate, MaintenanceState } from "../src/types.js";
+import type { AgentName, LessonCandidate, MaintenanceState } from "../src/types.js";
 import {
   VALID_AGENTS,
   atomicWriteJson,
@@ -51,6 +52,7 @@ type Subcommand =
   | "scan"
   | "distill"
   | "gate"
+  | "inject"
   | "help";
 
 interface ParsedArgs {
@@ -62,6 +64,7 @@ interface ParsedArgs {
   maxActive?: number;
   minCluster?: number;
   confidence?: number;
+  domainTags?: string[];
   root?: string;
   help: boolean;
 }
@@ -80,6 +83,7 @@ Commands:
   scan          Scan session JSONL logs for tool failure error seeds.
   distill       Cluster error seeds and distill into lesson candidates via LLM.
   gate          Promote or reject lesson candidates based on confidence + dedup.
+  inject        Select top lessons and write injected-lessons.md for agent startup.
 
 Options:
   --agent <name>      One of: ${VALID_AGENTS.join(", ")}
@@ -89,6 +93,7 @@ Options:
   --max-active <N>    Active cap for forget (default ${DEFAULT_MAX_ACTIVE}).
   --min-cluster <N>   Minimum cluster size for distill (default ${DEFAULT_MIN_CLUSTER_SIZE}).
   --confidence <N>    Confidence threshold for gate (default ${DEFAULT_CONFIDENCE_THRESHOLD}).
+  --domain-tags <t>   Comma-separated tag list for inject filtering.
   --root <path>       Override AGENT_DATA_ROOT for this invocation.
   -h, --help          Print this help.
 `;
@@ -126,6 +131,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--confidence":
         out.confidence = Number(rest[++i]);
+        break;
+      case "--domain-tags":
+        out.domainTags = rest[++i]?.split(",").filter(Boolean);
         break;
       case "--root":
         out.root = rest[++i];
@@ -218,6 +226,7 @@ function updateMaintenanceState(params: {
   migrate: MigrateResult;
   dedupe: DedupeResult;
   forget: ForgetResult;
+  inject?: InjectResult;
   root?: string;
   now: Date;
 }): string {
@@ -240,6 +249,7 @@ function updateMaintenanceState(params: {
     lastMigrateAt: iso,
     lastDedupeAt: iso,
     lastForgetAt: iso,
+    ...(params.inject ? { lastInjectAt: iso } : {}),
     lastMaintenanceAt: iso,
     dedupeMerged: params.dedupe.merges.length,
     forgetStale: params.forget.transitions.filter((t) => t.to === "stale").length,
@@ -315,6 +325,12 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
     }
     case "maintenance": {
       const agents = resolveAgents(args);
+      const injectResults: {
+        agent: string;
+        selected: number;
+        estimatedTokens: number;
+        outputPath: string | null;
+      }[] = [];
       const results = agents.map((agent) => {
         const filePath = lessonsFilePath(agent, args.root);
         const migrate = migrateFile({ filePath, agent, dryRun, now });
@@ -326,6 +342,13 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
           maxActive: args.maxActive,
           now,
         });
+        // inject step — after gate/forget
+        const inject = injectLessons({
+          agent: agent as AgentName,
+          root: args.root,
+          dryRun,
+          now,
+        });
         let statePath: string | undefined;
         if (!dryRun) {
           statePath = updateMaintenanceState({
@@ -333,6 +356,7 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
             migrate,
             dedupe,
             forget,
+            inject,
             root: args.root,
             now,
           });
@@ -340,10 +364,23 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
         stderr.push(summarizeMigrate(migrate));
         stderr.push(summarizeDedupe(dedupe));
         stderr.push(summarizeForget(forget));
+        stderr.push(
+          `[inject] ${agent}: ${inject.selected.length} lessons injected (~${inject.estimatedTokens} tokens)`,
+        );
         if (statePath) stderr.push(`[${agent}] maintenance-state: ${statePath}`);
+        injectResults.push({
+          agent,
+          selected: inject.selected.length,
+          estimatedTokens: inject.estimatedTokens,
+          outputPath: inject.outputPath,
+        });
         return { agent, filePath, migrate, dedupe, forget, statePath };
       });
-      return { stdout: { command: "maintenance", dryRun, results }, stderr, exitCode: 0 };
+      return {
+        stdout: { command: "maintenance", dryRun, results, injectResults },
+        stderr,
+        exitCode: 0,
+      };
     }
     case "scan": {
       const agents = args.all ? [...VALID_AGENTS] : resolveAgents(args);
@@ -441,6 +478,28 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
         `[gate] promoted=${result.promoted} rejected=${result.rejected} (${dryRun ? "dry-run" : "applied"})`,
       );
       return { stdout: { command: "gate", dryRun, ...result }, stderr, exitCode: 0 };
+    }
+    case "inject": {
+      const agents = resolveAgents(args);
+      const results = agents.map((agent) => {
+        const result = injectLessons({
+          agent: agent as AgentName,
+          domainTags: args.domainTags,
+          root: args.root,
+          dryRun,
+          now,
+        });
+        stderr.push(
+          `[inject] ${agent}: ${result.selected.length} lessons injected (~${result.estimatedTokens} tokens)`,
+        );
+        return {
+          agent,
+          selected: result.selected.length,
+          estimatedTokens: result.estimatedTokens,
+          outputPath: result.outputPath,
+        };
+      });
+      return { stdout: { command: "inject", dryRun, results }, stderr, exitCode: 0 };
     }
     default:
       throw new UserError(`Unknown subcommand: ${String(args.command)}`);

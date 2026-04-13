@@ -70,6 +70,7 @@ export interface MaintenanceStatePerAgent {
   lastMigrateAt?: string;
   lastDedupeAt?: string;
   lastForgetAt?: string;
+  lastInjectAt?: string;
   lastMaintenanceAt?: string;
   dedupeMerged?: number;
   forgetStale?: number;
