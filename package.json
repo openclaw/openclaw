@@ -1248,6 +1248,7 @@
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
+    "test:build:bundled-runtime-deps": "node scripts/test-built-bundled-runtime-deps.mjs",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:bundled": "node scripts/run-vitest.mjs run --config test/vitest/vitest.bundled.config.ts",
     "test:changed": "node scripts/test-projects.mjs --changed origin/main",
@@ -1461,6 +1462,8 @@
   "optionalDependencies": {
     "@discordjs/opus": "^0.10.0",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "fake-indexeddb": "^6.2.5",
+    "music-metadata": "^11.12.3",
     "openshell": "0.1.0"
   },
   "overrides": {

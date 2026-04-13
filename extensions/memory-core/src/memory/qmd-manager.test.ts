@@ -2752,6 +2752,7 @@ describe("QmdMemoryManager", () => {
       "/agents/main/qmd/xdg-config/qmd",
     );
     expect(normalizePath(spawnOpts?.env?.XDG_CACHE_HOME)).toContain("/agents/main/qmd/xdg-cache");
+    expect(spawnOpts?.env?.PATH?.split(path.delimiter)).toContain(path.dirname(process.execPath));
 
     await manager.close();
   });
