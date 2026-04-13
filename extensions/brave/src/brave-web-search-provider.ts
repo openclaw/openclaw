@@ -122,7 +122,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     envVars: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
     signupUrl: "https://brave.com/search/api/",
-    docsUrl: "https://docs.openclaw.ai/brave-search",
+    docsUrl: "https://docs.openclaw.ai/tools/brave-search",
     autoDetectOrder: 10,
     credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.brave.config.webSearch.apiKey"],
