@@ -1630,12 +1630,31 @@ export async function runEmbeddedPiAgent(
               let preservedHead: string;
               if (sanitizerMaxChars > 0 && visibleText.length > sanitizerMaxChars) {
                 const targetSplit = visibleText.length - sanitizerMaxChars;
-                // Find the nearest paragraph break after the target point
-                const breakIndex = visibleText.indexOf("\n\n", targetSplit);
+                // Find the nearest paragraph break after the target point,
+                // but never split inside a fenced code block — blank lines
+                // inside fences would create an incomplete fence that
+                // extractCodeBlocks can't match.
+                let breakIndex = visibleText.indexOf("\n\n", targetSplit);
+                if (breakIndex > 0 && breakIndex < targetSplit + 500) {
+                  // Check if this break falls inside a code fence by counting
+                  // opening ``` markers before the break point. Odd count means
+                  // we're inside a fence — scan forward for the closing ```.
+                  const beforeBreak = visibleText.slice(0, breakIndex);
+                  const fenceCount = (beforeBreak.match(/^```/gm) || []).length;
+                  if (fenceCount % 2 !== 0) {
+                    // Inside a fence — move split to after the closing fence
+                    const closingFence = visibleText.indexOf("\n```", breakIndex);
+                    if (closingFence > 0) {
+                      const afterFence = visibleText.indexOf("\n", closingFence + 4);
+                      breakIndex = afterFence > 0 ? afterFence + 1 : closingFence + 4;
+                    } else {
+                      // No closing fence found — don't split at all
+                      breakIndex = -1;
+                    }
+                  }
+                }
                 const splitAt =
-                  breakIndex > 0 && breakIndex < targetSplit + 500
-                    ? breakIndex + 2 // Split after the \n\n
-                    : targetSplit; // Fall back to exact position
+                  breakIndex > 0 && breakIndex < visibleText.length ? breakIndex : targetSplit; // Fall back to exact position
                 preservedHead = visibleText.slice(0, splitAt);
                 textToRewrite = visibleText.slice(splitAt);
               } else {
