@@ -1925,6 +1925,7 @@ export async function runEmbeddedAttempt(
                   promptBudgetBeforeReserve: 0,
                   overflowTokens: 0,
                   toolResultReducibleChars: 0,
+                  effectiveReserveTokens: reserveTokens,
                 }
               : shouldPreemptivelyCompactBeforePrompt({
                   messages: activeSession.messages,
