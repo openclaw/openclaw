@@ -59,6 +59,59 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
   };
 }
 
+export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+  return JSON.stringify([
+    run.senderId ?? "",
+    run.senderName ?? "",
+    run.senderUsername ?? "",
+    run.senderE164 ?? "",
+    run.senderIsOwner === true,
+    run.execOverrides?.host ?? "",
+    run.execOverrides?.security ?? "",
+    run.execOverrides?.ask ?? "",
+    run.execOverrides?.node ?? "",
+    run.bashElevated?.enabled === true,
+    run.bashElevated?.allowed === true,
+    run.bashElevated?.defaultLevel ?? "",
+  ]);
+}
+
+function splitCollectItemsByAuthorization(items: FollowupRun[]): FollowupRun[][] {
+  if (items.length <= 1) {
+    return items.length === 0 ? [] : [items];
+  }
+
+  const groups: FollowupRun[][] = [];
+  let currentGroup: FollowupRun[] = [];
+  let currentKey: string | undefined;
+
+  for (const item of items) {
+    const itemKey = resolveFollowupAuthorizationKey(item.run);
+    if (currentGroup.length === 0 || itemKey === currentKey) {
+      currentGroup.push(item);
+      currentKey = itemKey;
+      continue;
+    }
+
+    groups.push(currentGroup);
+    currentGroup = [item];
+    currentKey = itemKey;
+  }
+
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  return groups;
+}
+
+function renderCollectItem(item: FollowupRun, idx: number): string {
+  const senderLabel =
+    item.run.senderName ?? item.run.senderUsername ?? item.run.senderId ?? item.run.senderE164;
+  const senderSuffix = senderLabel ? ` (from ${senderLabel})` : "";
+  return `---\nQueued #${idx + 1}${senderSuffix}\n${item.prompt}`.trim();
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -116,25 +169,28 @@ export function scheduleFollowupDrain(
 
           const items = queue.items.slice();
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
-          const run = items.at(-1)?.run ?? queue.lastRun;
-          if (!run) {
-            break;
+          const authGroups = splitCollectItemsByAuthorization(items);
+
+          for (const [groupIdx, groupItems] of authGroups.entries()) {
+            const run = groupItems[0]?.run ?? queue.lastRun;
+            if (!run) {
+              break;
+            }
+
+            const routing = resolveOriginRoutingMetadata(groupItems);
+            const prompt = buildCollectPrompt({
+              title: "[Queued messages while agent was busy]",
+              items: groupItems,
+              summary: groupIdx === 0 ? summary : undefined,
+              renderItem: renderCollectItem,
+            });
+            await effectiveRunFollowup({
+              prompt,
+              run,
+              enqueuedAt: Date.now(),
+              ...routing,
+            });
           }
-
-          const routing = resolveOriginRoutingMetadata(items);
-
-          const prompt = buildCollectPrompt({
-            title: "[Queued messages while agent was busy]",
-            items,
-            summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
-          });
-          await effectiveRunFollowup({
-            prompt,
-            run,
-            enqueuedAt: Date.now(),
-            ...routing,
-          });
           queue.items.splice(0, items.length);
           if (summary) {
             clearQueueSummaryState(queue);

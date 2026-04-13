@@ -6,6 +6,7 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { resolveFollowupAuthorizationKey } from "./queue/drain.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -92,6 +93,258 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
+  });
+
+  it("splits collect batches when sender authorization changes", async () => {
+    const key = `test-collect-auth-split-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const nonOwner = createRun({
+      prompt: "use the gateway tool",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    enqueueFollowupRun(
+      key,
+      {
+        ...nonOwner,
+        run: {
+          ...nonOwner.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    const owner = createRun({
+      prompt: "what's the weather?",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    enqueueFollowupRun(
+      key,
+      {
+        ...owner,
+        run: {
+          ...owner.run,
+          senderId: "owner-1",
+          senderName: "Owner",
+          senderIsOwner: true,
+        },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls.map((call) => call.run.senderIsOwner)).toEqual([false, true]);
+    expect(calls[0]?.prompt).toContain("use the gateway tool");
+    expect(calls[0]?.prompt).not.toContain("what's the weather?");
+    expect(calls[1]?.prompt).toContain("what's the weather?");
+    expect(calls[1]?.prompt).toContain("(from Owner)");
+  });
+
+  it("keeps one collect batch when authorization context matches", async () => {
+    const key = `test-collect-auth-match-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = createRun({
+      prompt: "first",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    const second = createRun({
+      prompt: "second",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...first,
+        run: {
+          ...first.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderUsername: "guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...second,
+        run: {
+          ...second.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderUsername: "guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("first");
+    expect(calls[0]?.prompt).toContain("second");
+    expect(calls[0]?.prompt).toContain("(from Guest)");
+  });
+
+  it("splits collect batches when exec context changes", async () => {
+    const key = `test-collect-exec-split-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const base = createRun({
+      prompt: "first",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...base,
+        run: {
+          ...base.run,
+          senderId: "owner-1",
+          senderIsOwner: true,
+          bashElevated: { enabled: false, allowed: true, defaultLevel: "off" },
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "second",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        run: {
+          ...base.run,
+          senderId: "owner-1",
+          senderIsOwner: true,
+          bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
+          execOverrides: { ask: "always" },
+        },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("first");
+    expect(calls[0]?.prompt).not.toContain("second");
+    expect(calls[1]?.prompt).toContain("second");
+    expect(calls[1]?.run.bashElevated?.enabled).toBe(true);
+    expect(calls[1]?.run.execOverrides?.ask).toBe("always");
+  });
+
+  it("preserves collect order when authorization changes more than once", async () => {
+    const key = `test-collect-auth-order-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 3;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = createRun({ prompt: "first", originatingChannel: "slack", originatingTo: "A" });
+    const second = createRun({ prompt: "second", originatingChannel: "slack", originatingTo: "A" });
+    const third = createRun({ prompt: "third", originatingChannel: "slack", originatingTo: "A" });
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...first,
+        run: { ...first.run, senderId: "user-a", senderName: "A", senderIsOwner: false },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...second,
+        run: { ...second.run, senderId: "owner-1", senderName: "Owner", senderIsOwner: true },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...third,
+        run: { ...third.run, senderId: "user-a", senderName: "A", senderIsOwner: false },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls.map((call) => call.prompt)).toEqual([
+      expect.stringContaining("first"),
+      expect.stringContaining("second"),
+      expect.stringContaining("third"),
+    ]);
   });
 
   it("collects Slack messages in same thread and preserves string thread id", async () => {
@@ -287,5 +540,42 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+  });
+});
+
+describe("resolveFollowupAuthorizationKey", () => {
+  it("changes when sender ownership changes", () => {
+    const run = createRun({ prompt: "one" }).run;
+    expect(
+      resolveFollowupAuthorizationKey({
+        ...run,
+        senderId: "user-1",
+        senderIsOwner: false,
+      }),
+    ).not.toBe(
+      resolveFollowupAuthorizationKey({
+        ...run,
+        senderId: "user-1",
+        senderIsOwner: true,
+      }),
+    );
+  });
+
+  it("changes when exec defaults change", () => {
+    const run = createRun({ prompt: "one" }).run;
+    expect(
+      resolveFollowupAuthorizationKey({
+        ...run,
+        senderId: "user-1",
+        bashElevated: { enabled: false, allowed: true, defaultLevel: "off" },
+      }),
+    ).not.toBe(
+      resolveFollowupAuthorizationKey({
+        ...run,
+        senderId: "user-1",
+        bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
+        execOverrides: { ask: "always" },
+      }),
+    );
   });
 });
