@@ -7,6 +7,7 @@ const DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
+const ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_HTTP";
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 
@@ -121,15 +122,34 @@ function normalizeQaCredentialRole(value: string | undefined): QaCredentialRole 
   throw new Error(`Credential role must be one of maintainer or ci, got "${value}".`);
 }
 
-function normalizeConvexSiteUrl(raw: string): string {
+function isTruthyOptIn(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function isLoopbackHostname(hostname: string) {
+  return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
+}
+
+function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
     throw new Error(`OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL, got "${raw || "<empty>"}".`);
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("OPENCLAW_QA_CONVEX_SITE_URL must use http:// or https://.");
+  if (url.protocol === "https:") {
+    const text = url.toString();
+    return text.endsWith("/") ? text.slice(0, -1) : text;
+  }
+  if (url.protocol !== "http:") {
+    throw new Error("OPENCLAW_QA_CONVEX_SITE_URL must use https://.");
+  }
+  const allowInsecureHttp = isTruthyOptIn(env[ALLOW_INSECURE_HTTP_ENV_KEY]);
+  if (!allowInsecureHttp || !isLoopbackHostname(url.hostname)) {
+    throw new Error(
+      `OPENCLAW_QA_CONVEX_SITE_URL must use https://. http:// is only allowed for loopback hosts when ${ALLOW_INSECURE_HTTP_ENV_KEY}=1.`,
+    );
   }
   const text = url.toString();
   return text.endsWith("/") ? text.slice(0, -1) : text;
@@ -141,7 +161,18 @@ function normalizeEndpointPrefix(value: string | undefined): string {
     return DEFAULT_ENDPOINT_PREFIX;
   }
   const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
+  const normalized = prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
+  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
+    throw new Error(
+      "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path like /qa-credentials/v1.",
+    );
+  }
+  if (normalized.includes("\\") || normalized.split("/").some((segment) => segment === "..")) {
+    throw new Error(
+      "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must not contain backslashes or .. path segments.",
+    );
+  }
+  return normalized;
 }
 
 function resolveConvexAuthToken(env: NodeJS.ProcessEnv, role: QaCredentialRole): string {
@@ -149,24 +180,23 @@ function resolveConvexAuthToken(env: NodeJS.ProcessEnv, role: QaCredentialRole):
     role === "ci"
       ? env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim()
       : env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim();
-  const sharedToken = env.OPENCLAW_QA_CONVEX_SECRET?.trim();
-  const token = roleToken || sharedToken;
+  const token = roleToken;
   if (token) {
     return token;
   }
   if (role === "ci") {
-    throw new Error(
-      "Missing OPENCLAW_QA_CONVEX_SECRET_CI (or OPENCLAW_QA_CONVEX_SECRET) for CI credential access.",
-    );
+    throw new Error("Missing OPENCLAW_QA_CONVEX_SECRET_CI for CI credential access.");
   }
-  throw new Error(
-    "Missing OPENCLAW_QA_CONVEX_SECRET_MAINTAINER (or OPENCLAW_QA_CONVEX_SECRET) for maintainer credential access.",
-  );
+  throw new Error("Missing OPENCLAW_QA_CONVEX_SECRET_MAINTAINER for maintainer credential access.");
 }
 
 function joinConvexEndpoint(baseUrl: string, prefix: string, suffix: string): string {
   const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
-  return new URL(`${prefix}${normalizedSuffix}`, `${baseUrl}/`).toString();
+  const url = new URL(baseUrl);
+  url.pathname = `${prefix}${normalizedSuffix}`.replace(/\/{2,}/gu, "/");
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 function resolveConvexCredentialBrokerConfig(params: {
@@ -178,7 +208,7 @@ function resolveConvexCredentialBrokerConfig(params: {
   if (!siteUrl) {
     throw new Error("Missing OPENCLAW_QA_CONVEX_SITE_URL for --credential-source convex.");
   }
-  const baseUrl = normalizeConvexSiteUrl(siteUrl);
+  const baseUrl = normalizeConvexSiteUrl(siteUrl, params.env);
   const endpointPrefix = normalizeEndpointPrefix(params.env.OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX);
   const ownerId =
     params.ownerId?.trim() ||
@@ -350,15 +380,40 @@ export async function acquireQaCredentialLease<TPayload>(
           heartbeatIntervalMs: config.heartbeatIntervalMs,
         },
       });
-      const brokerError = toBrokerError({
-        payload,
-        fallback: `Convex credential acquire failed for kind "${opts.kind}".`,
-      });
-      if (brokerError) {
-        throw brokerError;
-      }
       const acquired = convexAcquireSuccessSchema.parse(payload);
-      const parsedPayload = opts.parsePayload(acquired.payload);
+      const releaseLease = async () => {
+        const releasePayload = await postConvexBroker({
+          fetchImpl,
+          timeoutMs: config.httpTimeoutMs,
+          authToken: config.authToken,
+          url: config.releaseUrl,
+          body: {
+            kind: opts.kind,
+            ownerId: config.ownerId,
+            credentialId: acquired.credentialId,
+            leaseToken: acquired.leaseToken,
+            actorRole: config.role,
+          },
+        });
+        assertConvexOk(releasePayload, "release");
+      };
+      let parsedPayload: TPayload;
+      try {
+        parsedPayload = opts.parsePayload(acquired.payload);
+      } catch (error) {
+        try {
+          await releaseLease();
+        } catch (releaseError) {
+          throw new Error(
+            `Convex credential payload validation failed for kind "${opts.kind}" and cleanup release failed: ${formatErrorMessage(error)}; release failed: ${formatErrorMessage(releaseError)}`,
+            { cause: releaseError },
+          );
+        }
+        throw new Error(
+          `Convex credential payload validation failed for kind "${opts.kind}": ${formatErrorMessage(error)}`,
+          { cause: error },
+        );
+      }
       const leaseTtlMs = acquired.leaseTtlMs ?? config.leaseTtlMs;
       const heartbeatIntervalMs = acquired.heartbeatIntervalMs ?? config.heartbeatIntervalMs;
       return {
@@ -389,20 +444,7 @@ export async function acquireQaCredentialLease<TPayload>(
           assertConvexOk(heartbeatPayload, "heartbeat");
         },
         async release() {
-          const releasePayload = await postConvexBroker({
-            fetchImpl,
-            timeoutMs: config.httpTimeoutMs,
-            authToken: config.authToken,
-            url: config.releaseUrl,
-            body: {
-              kind: opts.kind,
-              ownerId: config.ownerId,
-              credentialId: acquired.credentialId,
-              leaseToken: acquired.leaseToken,
-              actorRole: config.role,
-            },
-          });
-          assertConvexOk(releasePayload, "release");
+          await releaseLease();
         },
       };
     } catch (error) {

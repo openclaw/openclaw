@@ -18,7 +18,7 @@ The implementation matches the contract documented in
 
 - Pool partitioning: by `kind` only
 - Selection: least-recently-leased (round-robin behavior)
-- Secrets: separate maintainer/CI secrets (shared fallback supported)
+- Secrets: separate maintainer/CI secrets
 - Outage behavior: callers fail fast
 - Lease event retention: 2 days (hourly cleanup cron)
 - Admin event retention: 30 days (hourly cleanup cron)
@@ -46,9 +46,10 @@ npx convex deploy
 - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
 - `OPENCLAW_QA_CONVEX_SECRET_CI`
 
-Optional fallback (lease endpoints only):
+Client URL policy:
 
-- `OPENCLAW_QA_CONVEX_SECRET` (shared secret accepted for either role)
+- `OPENCLAW_QA_CONVEX_SITE_URL` must use `https://` in normal use.
+- Local development may use loopback `http://` only when `OPENCLAW_QA_ALLOW_INSECURE_HTTP=1`.
 
 ## Manage credentials from qa-lab CLI
 

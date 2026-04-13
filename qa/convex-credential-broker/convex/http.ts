@@ -4,7 +4,6 @@ import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
 
 type ActorRole = "ci" | "maintainer";
-type AuthRole = ActorRole | "shared";
 
 class BrokerHttpError extends Error {
   code: string;
@@ -40,7 +39,7 @@ function parseBearerToken(request: Request) {
   return token;
 }
 
-function resolveAuthRole(token: string | null): AuthRole {
+function resolveAuthRole(token: string | null): ActorRole {
   if (!token) {
     throw new BrokerHttpError(
       401,
@@ -50,13 +49,12 @@ function resolveAuthRole(token: string | null): AuthRole {
   }
   const maintainerSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim();
   const ciSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
-  const sharedSecret = process.env.OPENCLAW_QA_CONVEX_SECRET?.trim();
 
-  if (!maintainerSecret && !ciSecret && !sharedSecret) {
+  if (!maintainerSecret && !ciSecret) {
     throw new BrokerHttpError(
       500,
       "SERVER_MISCONFIGURED",
-      "No Convex broker shared secret is configured on this deployment.",
+      "No Convex broker role secrets are configured on this deployment.",
     );
   }
   if (maintainerSecret && token === maintainerSecret) {
@@ -65,10 +63,7 @@ function resolveAuthRole(token: string | null): AuthRole {
   if (ciSecret && token === ciSecret) {
     return "ci";
   }
-  if (sharedSecret && token === sharedSecret) {
-    return "shared";
-  }
-  throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker shared secret is invalid.");
+  throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker secret is invalid.");
 }
 
 function assertMaintainerAdminAuth(token: string | null) {
@@ -91,15 +86,14 @@ function assertMaintainerAdminAuth(token: string | null) {
     return;
   }
   const ciSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
-  const sharedSecret = process.env.OPENCLAW_QA_CONVEX_SECRET?.trim();
-  if ((ciSecret && token === ciSecret) || (sharedSecret && token === sharedSecret)) {
+  if (ciSecret && token === ciSecret) {
     throw new BrokerHttpError(
       403,
       "AUTH_ROLE_MISMATCH",
       "Admin endpoints require maintainer credentials.",
     );
   }
-  throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker shared secret is invalid.");
+  throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker secret is invalid.");
 }
 
 function asObject(value: unknown) {
@@ -219,10 +213,7 @@ function parseActorRole(body: Record<string, unknown>) {
   return actorRole as ActorRole;
 }
 
-function assertRoleAllowed(tokenRole: AuthRole, requestedRole: ActorRole) {
-  if (tokenRole === "shared") {
-    return;
-  }
+function assertRoleAllowed(tokenRole: ActorRole, requestedRole: ActorRole) {
   if (tokenRole !== requestedRole) {
     throw new BrokerHttpError(
       403,

@@ -114,7 +114,7 @@ describe("credential lease runtime", () => {
       source: "convex",
       env: {
         OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-        OPENCLAW_QA_CONVEX_SECRET: "shared-secret",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
         OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "90000",
       },
       fetchImpl,
@@ -134,6 +134,104 @@ describe("credential lease runtime", () => {
     expect(sleeps.length).toBe(2);
     expect(sleeps[0]).toBeGreaterThanOrEqual(100);
     expect(sleeps[1]).toBeGreaterThan(sleeps[0] ?? 0);
+  });
+
+  it("rejects non-https convex site URLs unless local insecure opt-in is enabled", async () => {
+    await expect(
+      acquireQaCredentialLease({
+        kind: "telegram",
+        source: "convex",
+        env: {
+          OPENCLAW_QA_CONVEX_SITE_URL: "http://qa-cred.example.convex.site",
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+        },
+        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+        parsePayload: (payload) =>
+          payload as { groupId: string; driverToken: string; sutToken: string },
+      }),
+    ).rejects.toThrow("must use https://");
+  });
+
+  it("allows loopback http URLs when OPENCLAW_QA_ALLOW_INSECURE_HTTP is enabled", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        status: "ok",
+        credentialId: "cred-local",
+        leaseToken: "lease-local",
+        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
+      }),
+    );
+
+    await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      role: "maintainer",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "http://127.0.0.1:3210",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+        OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
+      },
+      fetchImpl,
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    const firstCall = fetchImpl.mock.calls[0];
+    expect(firstCall?.[0]).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
+  });
+
+  it("rejects unsafe endpoint prefix overrides", async () => {
+    await expect(
+      acquireQaCredentialLease({
+        kind: "telegram",
+        source: "convex",
+        env: {
+          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+          OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX: "//evil.example",
+        },
+        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+        parsePayload: (payload) =>
+          payload as { groupId: string; driverToken: string; sutToken: string },
+      }),
+    ).rejects.toThrow("OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path");
+  });
+
+  it("releases acquired lease when payload parsing fails", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "ok",
+          credentialId: "cred-parse-fail",
+          leaseToken: "lease-parse-fail",
+          payload: { broken: true },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+
+    await expect(
+      acquireQaCredentialLease({
+        kind: "telegram",
+        source: "convex",
+        role: "maintainer",
+        env: {
+          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+        },
+        fetchImpl,
+        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+        parsePayload: () => {
+          throw new Error("bad payload shape");
+        },
+      }),
+    ).rejects.toThrow("bad payload shape");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+      "https://qa-cred.example.convex.site/qa-credentials/v1/release",
+    );
   });
 
   it("fails convex mode when auth secret is missing", async () => {

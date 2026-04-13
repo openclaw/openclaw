@@ -117,6 +117,9 @@ Optional env vars:
 - `OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS` (default `15000`)
 - `OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX` (default `/qa-credentials/v1`)
 - `OPENCLAW_QA_CREDENTIAL_OWNER_ID` (optional trace id)
+- `OPENCLAW_QA_ALLOW_INSECURE_HTTP=1` allows loopback `http://` Convex URLs for local-only development.
+
+`OPENCLAW_QA_CONVEX_SITE_URL` should use `https://` in normal operation.
 
 Maintainer admin commands (pool add/remove/list) require
 `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` specifically.

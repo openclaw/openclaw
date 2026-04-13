@@ -78,6 +78,58 @@ describe("qa credential admin runtime", () => {
     } satisfies Partial<QaCredentialAdminError>);
   });
 
+  it("rejects non-https admin site URLs unless local insecure opt-in is enabled", async () => {
+    await expect(
+      listQaCredentialSets({
+        siteUrl: "http://qa-cred.example.convex.site",
+        env: {
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+        },
+        fetchImpl: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      name: "QaCredentialAdminError",
+      code: "INVALID_SITE_URL",
+    } satisfies Partial<QaCredentialAdminError>);
+  });
+
+  it("allows loopback http admin site URLs when OPENCLAW_QA_ALLOW_INSECURE_HTTP is enabled", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({
+        status: "ok",
+        count: 0,
+        credentials: [],
+      }),
+    );
+
+    await listQaCredentialSets({
+      siteUrl: "http://127.0.0.1:3210",
+      env: {
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+        OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
+      },
+      fetchImpl,
+    });
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://127.0.0.1:3210/qa-credentials/v1/admin/list");
+  });
+
+  it("rejects unsafe endpoint-prefix overrides", async () => {
+    await expect(
+      listQaCredentialSets({
+        siteUrl: "https://first-schnauzer-821.convex.site",
+        endpointPrefix: "//evil.example",
+        env: {
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+        },
+        fetchImpl: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      name: "QaCredentialAdminError",
+      code: "INVALID_ARGUMENT",
+    } satisfies Partial<QaCredentialAdminError>);
+  });
+
   it("surfaces broker error codes for remove", async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       jsonResponse(
