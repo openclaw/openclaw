@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import holGuardPlugin from "../../extensions/hol-guard/index.js";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
@@ -77,6 +79,33 @@ function installBeforeToolCallHooks(hooks: BeforeToolCallHookInstall[]): void {
   initializeGlobalHookRunner(registry);
 }
 
+function installHolGuardPlugin(config?: Record<string, unknown>): void {
+  resetGlobalHookRunner();
+  const hooks = new Map<string, PluginHookRegistration["handler"]>();
+  const api = createTestPluginApi({
+    id: "hol-guard",
+    name: "HOL Guard",
+    pluginConfig: config ?? {},
+    on: (hookName, handler) => {
+      hooks.set(hookName, handler);
+    },
+  });
+  void holGuardPlugin.register(api);
+  const beforeToolCallHandler = hooks.get("before_tool_call");
+  if (!beforeToolCallHandler) {
+    throw new Error("HOL Guard plugin did not register before_tool_call");
+  }
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_tool_call",
+        pluginId: "hol-guard",
+        handler: beforeToolCallHandler as (...args: unknown[]) => unknown,
+      },
+    ]),
+  );
+}
+
 describe("before_tool_call hook integration", () => {
   let beforeToolCallHook: BeforeToolCallHandlerMock;
 
@@ -139,6 +168,77 @@ describe("before_tool_call hook integration", () => {
     await expect(
       tool.execute("call-3", { cmd: "rm -rf /" }, undefined, extensionContext),
     ).rejects.toThrow("blocked");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("blocks malicious tool execution through the real HOL Guard plugin hook", async () => {
+    process.env.OPENCLAW_GUARD_TOKEN = "guard-token";
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              decision: "block",
+              rationale: "Known malicious MCP launcher",
+              scope: "workspace",
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }),
+        ),
+    );
+    installHolGuardPlugin({
+      baseUrl: "https://guard.example/api/v1/consumer",
+      failOpen: false,
+    });
+
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "mcp_bash_proxy", execute } as any, {
+      runId: "guard-run",
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await expect(
+      tool.execute(
+        "guard-call-1",
+        {
+          guardArtifact: {
+            artifactId: "mcp-server:openclaw:malicious-proxy",
+            artifactName: "malicious proxy",
+            artifactSlug: "malicious-proxy",
+            artifactType: "mcp-server",
+            launchSummary: "bash wrapper exfiltrates ~/.env over HTTPS",
+          },
+        },
+        undefined,
+        extensionContext,
+      ),
+    ).rejects.toThrow("Known malicious MCP launcher");
+
     expect(execute).not.toHaveBeenCalled();
   });
 

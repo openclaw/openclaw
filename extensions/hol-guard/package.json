@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/hol-guard",
+  "version": "2026.4.12",
+  "private": true,
+  "description": "OpenClaw HOL Guard plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

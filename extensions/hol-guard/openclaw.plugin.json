@@ -1,0 +1,36 @@
+{
+  "id": "hol-guard",
+  "enabledByDefault": false,
+  "contracts": {},
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "baseUrl": {
+        "type": "string",
+        "format": "uri"
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 0.1,
+        "maximum": 30
+      },
+      "failOpen": {
+        "type": "boolean"
+      },
+      "tokenEnvVar": {
+        "type": "string",
+        "minLength": 1
+      },
+      "receiptsEnabled": {
+        "type": "boolean"
+      },
+      "painSignalsEnabled": {
+        "type": "boolean"
+      }
+    }
+  }
+}
