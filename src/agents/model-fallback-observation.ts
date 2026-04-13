@@ -61,9 +61,7 @@ export function logModelFallbackDecision(params: {
     ? ` providerErrorType=${sanitizeForLog(observedError.providerErrorType)}`
     : "";
   const detailSuffix = detailText ? ` detail=${sanitizeForLog(detailText)}` : "";
-  decisionLog.warn("model fallback decision", {
-    event: "model_fallback_decision",
-    tags: ["error_handling", "model_fallback", params.decision],
+  const sharedPayload = {
     runId: params.runId,
     decision: params.decision,
     requestedProvider: params.requestedProvider,
@@ -91,8 +89,25 @@ export function logModelFallbackDecision(params: {
       code: attempt.code,
       ...buildErrorObservationFields(attempt.error),
     })),
+  };
+  decisionLog.warn("model fallback decision", {
+    event: "model_fallback_decision",
+    tags: ["error_handling", "model_fallback", params.decision],
+    ...sharedPayload,
     consoleMessage:
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
       `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}`,
+  });
+  if (params.reason !== "timeout") {
+    return;
+  }
+  decisionLog.error("model fallback timeout loud", {
+    event: "model_fallback_timeout_loud",
+    tags: ["error_handling", "timeout", "model_fallback", params.decision],
+    ...sharedPayload,
+    consoleMessage:
+      `[TIMEOUT LOUD] model fallback: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
+      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} next=${nextText} ` +
+      `status=${params.status ?? "-"}${detailSuffix}`,
   });
 }
