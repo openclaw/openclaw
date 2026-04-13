@@ -160,8 +160,7 @@ describe("delivery context helpers", () => {
       channel: "telegram",
       conversationId: "42",
       parentConversationId: "-10099",
-      // Bundled Telegram plugin resolves thread parents to raw chat ids (not `channel:`-prefixed).
-      expected: { to: "-10099", threadId: "42" },
+      expected: { to: "channel:-10099", threadId: "42" },
     },
     {
       channel: "mattermost",
