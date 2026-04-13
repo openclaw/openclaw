@@ -15,18 +15,11 @@ function cacheKey(chatId: number | string, threadId: number | string): string {
 }
 
 function evictOldest(): void {
-  if (cache.size <= MAX_ENTRIES) {
-    return;
-  }
-  let oldestKey: string | undefined;
-  let oldestTime = Infinity;
-  for (const [key, entry] of cache) {
-    if (entry.updatedAt < oldestTime) {
-      oldestTime = entry.updatedAt;
-      oldestKey = key;
+  while (cache.size > MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) {
+      return;
     }
-  }
-  if (oldestKey) {
     cache.delete(oldestKey);
   }
 }
@@ -48,6 +41,7 @@ export function updateTopicName(
   if (!merged.name) {
     return;
   }
+  cache.delete(key);
   cache.set(key, merged);
   evictOldest();
 }
@@ -56,9 +50,16 @@ export function getTopicName(
   chatId: number | string,
   threadId: number | string,
 ): string | undefined {
-  const entry = cache.get(cacheKey(chatId, threadId));
+  const key = cacheKey(chatId, threadId);
+  const entry = cache.get(key);
   if (entry) {
-    entry.updatedAt = Date.now();
+    const refreshedEntry: TopicEntry = {
+      ...entry,
+      updatedAt: Date.now(),
+    };
+    cache.delete(key);
+    cache.set(key, refreshedEntry);
+    return refreshedEntry.name;
   }
   return entry?.name;
 }
