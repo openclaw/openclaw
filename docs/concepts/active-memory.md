@@ -547,14 +547,14 @@ The most important fields are:
 
 Useful tuning fields:
 
-| Key                           | Type     | Meaning                                                       |
-| ----------------------------- | -------- | ------------------------------------------------------------- |
-| `config.maxSummaryChars`      | `number` | Maximum total characters allowed in the active-memory summary |
-| `config.recentUserTurns`      | `number` | Prior user turns to include when `queryMode` is `recent`      |
-| `config.recentAssistantTurns` | `number` | Prior assistant turns to include when `queryMode` is `recent` |
-| `config.recentUserChars`      | `number` | Max chars per recent user turn                                |
-| `config.recentAssistantChars` | `number` | Max chars per recent assistant turn                           |
-| `config.cacheTtlMs`           | `number` | Cache reuse for repeated identical queries                    |
+| Key                           | Type     | Meaning                                                                            |
+| ----------------------------- | -------- | ---------------------------------------------------------------------------------- |
+| `config.maxSummaryChars`      | `number` | Maximum total characters allowed in the active-memory summary                      |
+| `config.recentUserTurns`      | `number` | Prior user turns to include when `queryMode` is `recent`                           |
+| `config.recentAssistantTurns` | `number` | Prior assistant turns to include when `queryMode` is `recent`                      |
+| `config.recentUserChars`      | `number` | Max chars per recent user turn                                                     |
+| `config.recentAssistantChars` | `number` | Max chars per recent assistant turn                                                |
+| `config.cacheTtlMs`           | `number` | Cache reuse for repeated identical queries (range: 1000-120000 ms; default: 15000) |
 
 ## Recommended setup
 
