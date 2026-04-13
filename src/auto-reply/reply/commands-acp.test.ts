@@ -1144,6 +1144,7 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain(
       "ACP error (ACP_TURN_FAILED): Gateway disconnected: 1006: connection lost",
     );
+    expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
     expect(hoisted.closeMock).toHaveBeenCalled();
     expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
@@ -1151,6 +1152,18 @@ describe("/acp command", () => {
         method: "sessions.delete",
       }),
     );
+  });
+
+  it("does not fail spawn when runtime capability lookup would fail after init", async () => {
+    hoisted.getCapabilitiesMock.mockRejectedValueOnce(new Error("capability probe failed"));
+
+    const result = await runDiscordAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.getCapabilitiesMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.closeMock).not.toHaveBeenCalled();
   });
 
   it("persists ACP spawn labels without a nested gateway self-call", async () => {

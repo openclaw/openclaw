@@ -520,6 +520,16 @@ export async function handleAcpSpawnAction(
   let initializedBackend = "";
   let initializedMeta: SessionAcpMeta | undefined;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
+  let initializedStatusProbe:
+    | {
+        runtime: {
+          getStatus?: (params: {
+            handle: { sessionKey: string; backend: string; runtimeSessionName: string };
+          }) => Promise<unknown>;
+        };
+        handle: { sessionKey: string; backend: string; runtimeSessionName: string };
+      }
+    | undefined;
   try {
     const initialized = await acpManager.initializeSession({
       cfg: params.cfg,
@@ -529,6 +539,10 @@ export async function handleAcpSpawnAction(
       cwd: spawn.cwd,
     });
     initializedRuntime = {
+      runtime: initialized.runtime,
+      handle: initialized.handle,
+    };
+    initializedStatusProbe = {
       runtime: initialized.runtime,
       handle: initialized.handle,
     };
@@ -545,10 +559,11 @@ export async function handleAcpSpawnAction(
   }
 
   try {
-    await acpManager.getSessionStatus({
-      cfg: params.cfg,
-      sessionKey,
-    });
+    if (initializedStatusProbe?.runtime.getStatus) {
+      await initializedStatusProbe.runtime.getStatus({
+        handle: initializedStatusProbe.handle,
+      });
+    }
   } catch (err) {
     await cleanupFailedSpawn({
       cfg: params.cfg,
