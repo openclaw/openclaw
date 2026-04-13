@@ -464,8 +464,8 @@ export async function runTui(opts: TuiOptions) {
   root.addChild(chatLog);
   root.addChild(statusContainer);
   root.addChild(footer);
-  root.addChild(statusLineContainer);
   root.addChild(editor);
+  root.addChild(statusLineContainer);
 
   const updateAutocompleteProvider = () => {
     editor.setAutocompleteProvider(
