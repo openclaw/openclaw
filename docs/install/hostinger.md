@@ -87,3 +87,8 @@ Send "Hi" to your assistant on the channel you connected. OpenClaw will reply an
 **Docker container keeps restarting** -- Open Docker Manager logs and look for configuration errors (missing tokens, invalid API keys).
 
 **Telegram bot not responding** -- Send your pairing code message from Telegram directly as a message inside your OpenClaw chat to complete the connection.
+
+## Next steps
+
+- [Channels](/channels) -- connect Telegram, WhatsApp, Discord, and more
+- [Gateway configuration](/gateway/configuration) -- all config optionss
