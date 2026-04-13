@@ -450,7 +450,7 @@ export async function runTui(opts: TuiOptions) {
       refreshInterval: config.ui?.statusLine?.refreshInterval,
       timeout: config.ui?.statusLine?.timeout,
       onOutput: (output) => {
-        const trimmed = output.replace(/\n$/, "");
+        const trimmed = output.trimEnd();
         if (statusLineText) {
           statusLineText.setText(trimmed);
           tui.requestRender();

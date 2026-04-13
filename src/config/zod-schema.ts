@@ -418,6 +418,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        statusLine: z
+          .object({
+            command: z.string().optional(),
+            refreshInterval: z.number().min(500).optional(),
+            timeout: z.number().min(100).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

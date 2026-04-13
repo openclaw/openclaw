@@ -39,6 +39,7 @@ export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
   let timer: NodeJS.Timeout | null = null;
   let executing = false;
   let lastOutput = "";
+  let currentChild: ChildProcess | null = null;
 
   function execute(): void {
     if (executing) {
@@ -62,6 +63,8 @@ export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
       stdio: ["ignore", "pipe", "ignore"],
     });
 
+    currentChild = child;
+
     const killTimer = setTimeout(() => {
       if (!killed) {
         killed = true;
@@ -79,6 +82,7 @@ export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
     child.on("close", (code: number | null) => {
       clearTimeout(killTimer);
       executing = false;
+      currentChild = null;
 
       if (killed) {
         return;
@@ -96,6 +100,7 @@ export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
     child.on("error", () => {
       clearTimeout(killTimer);
       executing = false;
+      currentChild = null;
     });
   }
 
@@ -111,6 +116,10 @@ export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
       if (timer) {
         clearInterval(timer);
         timer = null;
+      }
+      if (currentChild) {
+        currentChild.kill("SIGTERM");
+        currentChild = null;
       }
     },
   };
