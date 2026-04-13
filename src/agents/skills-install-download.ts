@@ -136,11 +136,19 @@ async function downloadFile(params: {
   rootDir: string;
   relativePath: string;
   timeoutMs: number;
+  beforeTempWrite?: () => Promise<void>;
   beforeFinalCopy?: () => Promise<void>;
   afterFinalCopy?: () => Promise<void>;
 }): Promise<{ bytes: number }> {
+  const runBeforeTempWrite = async (): Promise<void> => {
+    if (params.beforeTempWrite) {
+      await params.beforeTempWrite();
+    }
+  };
+
   const destPath = path.resolve(params.rootDir, params.relativePath);
   const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
+  await runBeforeTempWrite();
   await ensureDir(stagingDir);
   await assertCanonicalPathWithinBase({
     baseDir: params.rootDir,
@@ -156,6 +164,7 @@ async function downloadFile(params: {
     if (!response.ok || !response.body) {
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
+    await runBeforeTempWrite();
     const file = fs.createWriteStream(tempPath);
     const body = response.body as unknown;
     const readable = isNodeReadableStream(body)
@@ -270,6 +279,7 @@ export async function installDownloadSpec(params: {
       rootDir: canonicalSafeRoot,
       relativePath: archiveRelativePath,
       timeoutMs,
+      beforeTempWrite: assertTargetDirStillPinned,
       beforeFinalCopy: assertTargetDirStillPinned,
       afterFinalCopy: assertTargetDirStillPinned,
     });

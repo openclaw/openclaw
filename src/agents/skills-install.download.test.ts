@@ -305,6 +305,52 @@ describe("installDownloadSpec extraction safety", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "fails closed before streaming when default targetDir root is rebound during download",
+    async () => {
+      const entry = buildEntry("base-rebind-default-target");
+      const safeRoot = resolveSkillToolsRootDir(entry);
+      const outsideRoot = path.join(workspaceDir, "outside-root-default-target");
+      await fs.mkdir(path.join(outsideRoot, ".openclaw-download-staging"), { recursive: true });
+
+      let streamPulls = 0;
+      fetchWithSsrFGuardMock.mockImplementation(async () => {
+        const reboundRoot = `${safeRoot}-rebound`;
+        await fs.rename(safeRoot, reboundRoot);
+        await fs.symlink(outsideRoot, safeRoot);
+        return {
+          response: new Response(
+            new ReadableStream({
+              pull(controller) {
+                streamPulls += 1;
+                controller.enqueue(new Uint8Array(Buffer.from("payload")));
+                controller.close();
+              },
+            }),
+            { status: 200 },
+          ),
+          release: async () => undefined,
+        };
+      });
+
+      const result = await installDownloadSpec({
+        entry,
+        spec: {
+          kind: "download",
+          id: "dl",
+          url: "https://example.invalid/payload.bin",
+          extract: false,
+        },
+        timeoutMs: 30_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr.toLowerCase()).toContain("directory changed during install");
+      expect(streamPulls).toBe(0);
+      expect(await fileExists(path.join(outsideRoot, "payload.bin"))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "fails closed when targetDir is replaced with a different directory inode during download",
     async () => {
       const entry = buildEntry("targetdir-inode-rebind");
