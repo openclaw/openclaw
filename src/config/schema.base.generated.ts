@@ -4314,15 +4314,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     properties: {
                       enabled: {
                         type: "boolean",
+                        title: "Enable Tool Result Micro-Compression",
+                        description:
+                          "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). Disable to preserve current pruning behavior exactly.",
                       },
                       stripAnsi: {
                         type: "boolean",
+                        title: "Strip ANSI Escape Codes",
+                        description:
+                          "Strips ANSI escape sequences from prunable tool-result text before pruning (default: true). Disable only if terminal color codes themselves are semantically important.",
                       },
                       trimTrailingWhitespace: {
                         type: "boolean",
+                        title: "Trim Trailing Tool Output Whitespace",
+                        description:
+                          "Removes trailing spaces and tabs from each line of prunable tool-result text before pruning (default: true). Keep enabled unless exact whitespace at line ends matters to the tool output.",
                       },
                       collapseBlankLines: {
                         type: "boolean",
+                        title: "Collapse Repeated Blank Lines",
+                        description:
+                          "Collapses runs of three or more blank lines down to two in prunable tool-result text before pruning (default: true). Disable if repeated blank-line spacing carries meaning in your tool output.",
                       },
                     },
                     additionalProperties: false,
@@ -23703,6 +23715,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Tool Allowlist Additions",
       help: "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
       tags: ["access"],
+    },
+    "agents.defaults.contextPruning.microCompress.enabled": {
+      label: "Enable Tool Result Micro-Compression",
+      help: "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). Disable to preserve current pruning behavior exactly.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.contextPruning.microCompress.stripAnsi": {
+      label: "Strip ANSI Escape Codes",
+      help: "Strips ANSI escape sequences from prunable tool-result text before pruning (default: true). Disable only if terminal color codes themselves are semantically important.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.contextPruning.microCompress.trimTrailingWhitespace": {
+      label: "Trim Trailing Tool Output Whitespace",
+      help: "Removes trailing spaces and tabs from each line of prunable tool-result text before pruning (default: true). Keep enabled unless exact whitespace at line ends matters to the tool output.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.contextPruning.microCompress.collapseBlankLines": {
+      label: "Collapse Repeated Blank Lines",
+      help: "Collapses runs of three or more blank lines down to two in prunable tool-result text before pruning (default: true). Disable if repeated blank-line spacing carries meaning in your tool output.",
+      tags: ["advanced"],
     },
     "tools.byProvider": {
       label: "Tool Policy by Provider",
