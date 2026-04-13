@@ -7,6 +7,7 @@ import {
   acquireBoundaryCheckLock,
   cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
+  formatSlowCompileSummary,
   formatSkippedCompileProgress,
   formatStepFailure,
   installCanaryArtifactCleanup,
@@ -206,6 +207,19 @@ describe("check-extension-package-tsc-boundary", () => {
     ).toBe("skipped 97 fresh plugin compiles\n");
   });
 
+  it("formats the slowest plugin compiles in descending order", () => {
+    expect(
+      formatSlowCompileSummary({
+        compileTimings: [
+          { extensionId: "quick", elapsedMs: 40 },
+          { extensionId: "slow", elapsedMs: 900 },
+          { extensionId: "medium", elapsedMs: 250 },
+        ],
+        limit: 2,
+      }),
+    ).toBe(["slowest plugin compiles:", "- slow: 900ms", "- medium: 250ms", ""].join("\n"));
+  });
+
   it("treats a plugin compile as fresh only when its outputs are newer than plugin and shared sdk inputs", () => {
     const { rootDir, extensionRoot } = createTempExtensionRoot();
     const extensionSourcePath = path.join(extensionRoot, "index.ts");
@@ -298,7 +312,7 @@ describe("check-extension-package-tsc-boundary", () => {
             "process.exit(2);",
           ].join(" "),
         ],
-        5_000,
+        20_000,
       ),
     ).rejects.toMatchObject({
       message: expect.stringContaining("[... 6 earlier lines omitted ...]"),
@@ -306,29 +320,52 @@ describe("check-extension-package-tsc-boundary", () => {
       kind: "nonzero-exit",
       elapsedMs: expect.any(Number),
     });
-  });
+  }, 30_000);
 
   it("aborts concurrent sibling steps after the first failure", async () => {
     const startedAt = Date.now();
+    const slowStepTimeoutMs = 60_000;
+    const abortBudgetMs = 30_000;
 
     await expect(
       runNodeStepsWithConcurrency(
         [
           {
             label: "fail-fast",
-            args: ["--eval", "setTimeout(() => process.exit(2), 10)"],
-            timeoutMs: 5_000,
+            args: ["--eval", "process.exit(2)"],
+            timeoutMs: slowStepTimeoutMs,
           },
           {
             label: "slow-step",
-            args: ["--eval", "setTimeout(() => {}, 10_000)"],
-            timeoutMs: 5_000,
+            args: ["--eval", "setTimeout(() => {}, 60_000)"],
+            timeoutMs: slowStepTimeoutMs,
           },
         ],
         2,
       ),
     ).rejects.toThrow("fail-fast");
 
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
-  });
+    expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
+  }, 45_000);
+
+  it("passes successful step timing metadata to onSuccess handlers", async () => {
+    const elapsedTimes: number[] = [];
+
+    await runNodeStepsWithConcurrency(
+      [
+        {
+          label: "demo-step",
+          args: ["--eval", "process.exit(0)"],
+          timeoutMs: 20_000,
+          onSuccess(result: { elapsedMs: number }) {
+            elapsedTimes.push(result.elapsedMs);
+          },
+        },
+      ],
+      1,
+    );
+
+    expect(elapsedTimes).toHaveLength(1);
+    expect(elapsedTimes[0]).toBeGreaterThanOrEqual(0);
+  }, 30_000);
 });

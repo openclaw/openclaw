@@ -1,11 +1,11 @@
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
-  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+  return (list ?? []).map((entry) => normalizeOptionalString(String(entry)) ?? "").filter(Boolean);
 }
 
 export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
-  return normalizeStringEntries(list).map((entry) => entry.toLowerCase());
+  return normalizeStringEntries(list).map((entry) => normalizeOptionalLowercaseString(entry) ?? "");
 }
 
 export function normalizeTrimmedStringList(value: unknown): string[] {
@@ -40,7 +40,7 @@ export function normalizeSingleOrTrimmedStringList(value: unknown): string[] {
 
 export function normalizeCsvOrLooseStringList(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map((entry) => String(entry).trim()).filter(Boolean);
+    return normalizeStringEntries(value);
   }
   if (typeof value === "string") {
     return value

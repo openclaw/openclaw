@@ -108,7 +108,7 @@ export async function channelsLogsCommand(
   }
   for (const line of lines) {
     const ts = line.time ? `${line.time} ` : "";
-    const level = line.level ? `${line.level.toLowerCase()} ` : "";
+    const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
     runtime.log(`${ts}${level}${line.message}`.trim());
   }
 }

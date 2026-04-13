@@ -13,7 +13,10 @@ import {
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
@@ -57,7 +60,7 @@ function resolveDiscordOutboundTarget(params: {
   if (params.threadId == null) {
     return params.to;
   }
-  const threadId = String(params.threadId).trim();
+  const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
   if (!threadId) {
     return params.to;
   }
@@ -86,7 +89,7 @@ async function maybeSendDiscordWebhookText(params: {
   if (params.threadId == null) {
     return null;
   }
-  const threadId = String(params.threadId).trim();
+  const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
   if (!threadId) {
     return null;
   }

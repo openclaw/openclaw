@@ -48,7 +48,8 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayAuthResult } from "../../auth.js";
 import { isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
@@ -99,6 +100,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
+import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
@@ -159,6 +161,10 @@ export function attachGatewayWsMessageHandler(params: {
   upgradeReq: IncomingMessage;
   connId: string;
   remoteAddr?: string;
+  remotePort?: number;
+  localAddr?: string;
+  localPort?: number;
+  endpoint?: string;
   forwardedFor?: string;
   realIp?: string;
   requestHost?: string;
@@ -167,6 +173,7 @@ export function attachGatewayWsMessageHandler(params: {
   canvasHostUrl?: string;
   connectNonce: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
+  getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
@@ -194,6 +201,10 @@ export function attachGatewayWsMessageHandler(params: {
     upgradeReq,
     connId,
     remoteAddr,
+    remotePort,
+    localAddr,
+    localPort,
+    endpoint,
     forwardedFor,
     realIp,
     requestHost,
@@ -202,6 +213,7 @@ export function attachGatewayWsMessageHandler(params: {
     canvasHostUrl,
     connectNonce,
     getResolvedAuth,
+    getRequiredSharedGatewaySessionGeneration,
     rateLimiter,
     browserRateLimiter,
     gatewayMethods,
@@ -244,6 +256,7 @@ export function attachGatewayWsMessageHandler(params: {
     trustedProxies,
     allowRealIpFallback,
   });
+  const peerLabel = endpoint ?? remoteAddr ?? "n/a";
 
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
@@ -254,7 +267,6 @@ export function attachGatewayWsMessageHandler(params: {
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
   const hostIsLocalish = isLocalishHost(requestHost);
   const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
-
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -365,7 +377,7 @@ export function attachGatewayWsMessageHandler(params: {
             });
           } else {
             logWsControl.warn(
-              `invalid handshake conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"}`,
+              `invalid handshake conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} fwd=${formatForLog(forwardedFor ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")}`,
             );
           }
           const closeReason = truncateCloseReason(handshakeError || "invalid handshake");
@@ -379,12 +391,17 @@ export function attachGatewayWsMessageHandler(params: {
 
         const frame = parsed;
         const connectParams = frame.params as ConnectParams;
+        const resolvedAuth = getResolvedAuth();
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
         const clientMeta = {
           client: connectParams.client.id,
           clientDisplayName: connectParams.client.displayName,
           mode: connectParams.client.mode,
           version: connectParams.client.version,
+          platform: connectParams.client.platform,
+          deviceFamily: connectParams.client.deviceFamily,
+          modelIdentifier: connectParams.client.modelIdentifier,
+          instanceId: connectParams.client.instanceId,
         };
         const markHandshakeFailure = (cause: string, meta?: Record<string, unknown>) => {
           setHandshakeState("failed");
@@ -441,7 +458,6 @@ export function attachGatewayWsMessageHandler(params: {
         const isControlUi = isOperatorUiClient(connectParams.client);
         const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
         const isWebchat = isWebchatConnect(connectParams);
-        const resolvedAuth = getResolvedAuth();
         if (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
@@ -525,9 +541,17 @@ export function attachGatewayWsMessageHandler(params: {
             authProvided,
             authReason: failedAuth.reason,
             allowTailscale: resolvedAuth.allowTailscale,
+            peer: peerLabel,
+            remoteAddr,
+            remotePort,
+            localAddr,
+            localPort,
+            role,
+            scopeCount: scopes.length,
+            hasDeviceIdentity: Boolean(device),
           });
           logWsControl.warn(
-            `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} reason=${failedAuth.reason ?? "unknown"}`,
+            `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"}`,
           );
           const authMessage = formatGatewayAuthFailureMessage({
             authMode: resolvedAuth.mode,
@@ -719,6 +743,22 @@ export function attachGatewayWsMessageHandler(params: {
           rejectUnauthorized(authResult);
           return;
         }
+        if (authMethod === "token" || authMethod === "password") {
+          const sharedGatewaySessionGeneration =
+            resolveSharedGatewaySessionGeneration(resolvedAuth);
+          const requiredSharedGatewaySessionGeneration =
+            getRequiredSharedGatewaySessionGeneration?.();
+          if (
+            requiredSharedGatewaySessionGeneration !== undefined &&
+            sharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration
+          ) {
+            setCloseCause("gateway-auth-rotated", {
+              authGenerationStale: true,
+            });
+            close(4001, "gateway auth changed");
+            return;
+          }
+        }
         const issuedBootstrapProfile =
           authMethod === "bootstrap-token" && bootstrapTokenCandidate
             ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
@@ -797,8 +837,6 @@ export function attachGatewayWsMessageHandler(params: {
             displayName: connectParams.client.displayName,
             clientId: connectParams.client.id,
             clientMode: connectParams.client.mode,
-            role,
-            scopes,
             remoteIp: reportedClientIp,
           };
           const requirePairing = async (
@@ -853,9 +891,6 @@ export function attachGatewayWsMessageHandler(params: {
               isWebchat,
               reason,
             });
-            // QR bootstrap onboarding stays single-use, but the first node bootstrap handshake
-            // should seed bounded device tokens and only consume the bootstrap token once the
-            // hello-ok path succeeds so reconnects can recover from pre-hello failures.
             const allowSilentBootstrapPairing =
               authMethod === "bootstrap-token" &&
               reason === "not-paired" &&
@@ -975,10 +1010,6 @@ export function attachGatewayWsMessageHandler(params: {
           const isPaired = paired?.publicKey === devicePublicKey;
           if (!isPaired) {
             if (!(skipLocalBackendSelfPairing || skipControlUiPairingForDevice)) {
-              // Initial local backend/control-ui self-pairing can bypass the
-              // pairing prompt, but only while the device is still unpaired.
-              // Once a device is paired, reconnects must stay inside the
-              // approved role/scope baseline below.
               const ok = await requirePairing("not-paired", paired);
               if (!ok) {
                 return;
@@ -1174,10 +1205,13 @@ export function attachGatewayWsMessageHandler(params: {
           snapshot.health = cachedHealth;
           snapshot.stateVersion.health = getHealthVersion();
         }
-        const canvasCapability =
-          role === "node" && canvasHostUrl ? mintCanvasCapabilityToken() : undefined;
+        const canvasCapability = canvasHostUrl ? mintCanvasCapabilityToken() : undefined;
         const canvasCapabilityExpiresAtMs = canvasCapability
           ? Date.now() + CANVAS_CAPABILITY_TTL_MS
+          : undefined;
+        const usesSharedGatewayAuth = authMethod === "token" || authMethod === "password";
+        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth)
           : undefined;
         const scopedCanvasHostUrl =
           canvasHostUrl && canvasCapability
@@ -1216,7 +1250,8 @@ export function attachGatewayWsMessageHandler(params: {
           socket,
           connect: connectParams,
           connId,
-          usesSharedGatewayAuth: authMethod === "token" || authMethod === "password",
+          usesSharedGatewayAuth,
+          sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
           canvasHostUrl,
@@ -1345,6 +1380,21 @@ export function attachGatewayWsMessageHandler(params: {
       }
       const req = parsed;
       logWs("in", "req", { connId, id: req.id, method: req.method });
+      if (client.usesSharedGatewayAuth) {
+        const requiredSharedGatewaySessionGeneration =
+          getRequiredSharedGatewaySessionGeneration?.();
+        if (
+          requiredSharedGatewaySessionGeneration !== undefined &&
+          client.sharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration
+        ) {
+          setCloseCause("gateway-auth-rotated", {
+            authGenerationStale: true,
+            method: req.method,
+          });
+          close(4001, "gateway auth changed");
+          return;
+        }
+      }
       const respond = (
         ok: boolean,
         payload?: unknown,

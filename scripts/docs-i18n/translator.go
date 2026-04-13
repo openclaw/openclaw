@@ -19,7 +19,8 @@ const (
 var errEmptyTranslation = errors.New("empty translation")
 
 type PiTranslator struct {
-	client *docsPiClient
+	client        docsPiPromptClient
+	clientFactory docsPiClientFactory
 }
 
 type docsTranslator interface {
@@ -30,15 +31,26 @@ type docsTranslator interface {
 
 type docsTranslatorFactory func(string, string, []GlossaryEntry, string) (docsTranslator, error)
 
+type docsPiPromptClient interface {
+	promptRunner
+	Close() error
+}
+
+type docsPiClientFactory func(context.Context) (docsPiPromptClient, error)
+
 func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*PiTranslator, error) {
-	client, err := startDocsPiClient(context.Background(), docsPiClientOptions{
+	options := docsPiClientOptions{
 		SystemPrompt: translationPrompt(srcLang, tgtLang, glossary),
 		Thinking:     normalizeThinking(thinking),
-	})
+	}
+	clientFactory := func(ctx context.Context) (docsPiPromptClient, error) {
+		return startDocsPiClient(ctx, options)
+	}
+	client, err := clientFactory(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	return &PiTranslator{client: client}, nil
+	return &PiTranslator{client: client, clientFactory: clientFactory}, nil
 }
 
 func (t *PiTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
@@ -78,6 +90,12 @@ func (t *PiTranslator) translateWithRetry(ctx context.Context, run func(context.
 		}
 		lastErr = err
 		if attempt+1 < translateMaxAttempts {
+			if shouldRestartPiClientForError(err) {
+				if err := t.restartClient(ctx); err != nil {
+					return "", fmt.Errorf("%w (pi client restart failed: %v)", lastErr, err)
+				}
+				continue
+			}
 			delay := translateBaseDelay * time.Duration(attempt+1)
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return "", err
@@ -132,7 +150,41 @@ func isRetryableTranslateError(err error) bool {
 	if strings.Contains(message, "authentication failed") {
 		return false
 	}
-	return strings.Contains(message, "placeholder missing") || strings.Contains(message, "rate limit") || strings.Contains(message, "429")
+	return strings.Contains(message, "placeholder missing") ||
+		strings.Contains(message, "rate limit") ||
+		strings.Contains(message, "429") ||
+		shouldRestartPiClientForError(err)
+}
+
+func shouldRestartPiClientForError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "pi error: terminated") ||
+		strings.Contains(message, "stopreason=cancelled") ||
+		strings.Contains(message, "stopreason=canceled") ||
+		strings.Contains(message, "stopreason=aborted") ||
+		strings.Contains(message, "stopreason=terminated") ||
+		strings.Contains(message, "stopreason=error") ||
+		strings.Contains(message, "pi process closed") ||
+		strings.Contains(message, "pi event stream closed")
+}
+
+func (t *PiTranslator) restartClient(ctx context.Context) error {
+	if t.clientFactory == nil {
+		return errors.New("pi client restart unavailable")
+	}
+	if t.client != nil {
+		_ = t.client.Close()
+		t.client = nil
+	}
+	client, err := t.clientFactory(ctx)
+	if err != nil {
+		return err
+	}
+	t.client = client
+	return nil
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {

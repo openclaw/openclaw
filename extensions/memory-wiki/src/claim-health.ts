@@ -61,14 +61,12 @@ function clampDaysSinceTouch(daysSinceTouch: number): number {
 }
 
 function normalizeClaimTextKey(text: string): string {
-  return text.trim().replace(/\s+/g, " ").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(text.replace(/\s+/g, " "));
 }
 
 function normalizeTextKey(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+  return normalizeLowercaseStringOrEmpty(text)
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
     .replace(/\s+/g, " ");
 }
 

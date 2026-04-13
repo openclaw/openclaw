@@ -233,11 +233,11 @@ export async function runBeforeToolCallHook(args: {
         }
       };
       try {
-        const requestResult = await callGatewayTool<{
+        const requestResult: {
           id?: string;
           status?: string;
           decision?: string | null;
-        }>(
+        } = await callGatewayTool(
           "plugin.approval.request",
           // Buffer beyond the approval timeout so the gateway can clean up
           // and respond before the client-side RPC timeout fires.
@@ -281,10 +281,10 @@ export async function runBeforeToolCallHook(args: {
         } else {
           // Wait for the decision, but abort early if the agent run is cancelled
           // so the user isn't blocked for the full approval timeout.
-          const waitPromise = callGatewayTool<{
+          const waitPromise: Promise<{
             id?: string;
             decision?: string | null;
-          }>(
+          }> = callGatewayTool(
             "plugin.approval.waitDecision",
             // Buffer beyond the approval timeout so the gateway can clean up
             // and respond before the client-side RPC timeout fires.

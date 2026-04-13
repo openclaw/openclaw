@@ -1,24 +1,29 @@
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-import { type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
-import { normalizeMSTeamsConversationId } from "./inbound.js";
-import type { MSTeamsAdapter } from "./messenger.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
+import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
+export type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { getPendingUploadFs, removePendingUploadFs } from "./pending-uploads-fs.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import {
+  handleSigninTokenExchangeInvoke,
+  handleSigninVerifyStateInvoke,
+  parseSigninTokenExchangeValue,
+  parseSigninVerifyStateValue,
+} from "./sso.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
-
-export type MSTeamsAccessTokenProvider = {
-  getAccessToken: (scope: string) => Promise<string>;
-};
+export type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 
 export type MSTeamsActivityHandler = {
   onMessage: (
@@ -34,19 +39,6 @@ export type MSTeamsActivityHandler = {
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   run?: (context: unknown) => Promise<void>;
-};
-
-export type MSTeamsMessageHandlerDeps = {
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  appId: string;
-  adapter: MSTeamsAdapter;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  textLimit: number;
-  mediaMaxBytes: number;
-  conversationStore: MSTeamsConversationStore;
-  pollStore: MSTeamsPollStore;
-  log: MSTeamsMonitorLogger;
 };
 
 function serializeAdaptiveCardActionValue(value: unknown): string | null {
@@ -133,7 +125,20 @@ async function handleFileConsentInvoke(
     typeof consentResponse.context?.uploadId === "string"
       ? consentResponse.context.uploadId
       : undefined;
-  const pendingFile = getPendingUpload(uploadId);
+  // Prefer the in-memory store (same-process reply path); fall back to the
+  // FS-backed store so CLI `message send --media` flows work even when the
+  // invoke callback is delivered to a different process.
+  const inMemoryFile = getPendingUpload(uploadId);
+  const fsFile = inMemoryFile ? undefined : await getPendingUploadFs(uploadId);
+  const pendingFile:
+    | {
+        buffer: Buffer;
+        filename: string;
+        contentType?: string;
+        conversationId: string;
+        consentCardActivityId?: string;
+      }
+    | undefined = inMemoryFile ?? fsFile;
   if (pendingFile) {
     const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
     const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
@@ -174,10 +179,31 @@ async function handleFileConsentInvoke(
           fileType: consentResponse.uploadInfo.fileType,
         });
 
-        await context.sendActivity({
-          type: "message",
-          attachments: [fileInfoCard],
-        });
+        // Only send a new file info message if we can't replace the consent card in-place
+        if (!pendingFile.consentCardActivityId) {
+          await context.sendActivity({
+            type: "message",
+            attachments: [fileInfoCard],
+          });
+        }
+
+        // Replace the original FileConsentCard with the file info card so the
+        // consent prompt no longer shows as pending in the chat
+        if (pendingFile.consentCardActivityId) {
+          try {
+            await context.updateActivity({
+              id: pendingFile.consentCardActivityId,
+              type: "message",
+              attachments: [fileInfoCard],
+            });
+          } catch {
+            // Non-fatal fallback: if update fails, send as new message
+            await context.sendActivity({
+              type: "message",
+              attachments: [fileInfoCard],
+            });
+          }
+        }
 
         log.info("file upload complete", {
           uploadId,
@@ -189,6 +215,7 @@ async function handleFileConsentInvoke(
         await context.sendActivity("File upload failed. Please try again.");
       } finally {
         removePendingUpload(uploadId);
+        await removePendingUploadFs(uploadId);
       }
     } else {
       log.debug?.("pending file not found for consent", { uploadId });
@@ -198,6 +225,7 @@ async function handleFileConsentInvoke(
     // User declined
     log.debug?.("user declined file consent", { uploadId });
     removePendingUpload(uploadId);
+    await removePendingUploadFs(uploadId);
   }
 
   return true;
@@ -257,7 +285,8 @@ async function handleFeedbackInvoke(
   }
 
   // Strip ;messageid=... suffix to match the normalized ID used by the message handler.
-  const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
+  const rawConversationId = activity.conversation?.id ?? "unknown";
+  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
   const isNegative = reaction === "dislike";
@@ -277,6 +306,22 @@ async function handleFeedbackInvoke(
       id: isDirectMessage ? senderId : conversationId,
     },
   });
+
+  // Match the thread-aware session key used by the message handler so feedback
+  // events land in the correct per-thread transcript. For channel threads, the
+  // thread root ID comes from the ;messageid= suffix on the conversation ID or
+  // from activity.replyToId.
+  const feedbackThreadId = isChannel
+    ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId ?? undefined)
+    : undefined;
+  if (feedbackThreadId) {
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: feedbackThreadId,
+      parentSessionKey: route.sessionKey,
+    });
+    route.sessionKey = threadKeys.sessionKey;
+  }
 
   // Log feedback event to session JSONL
   const feedbackEvent = buildFeedbackEvent({
@@ -367,6 +412,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   deps: MSTeamsMessageHandlerDeps,
 ): T {
   const handleTeamsMessage = createMSTeamsMessageHandler(deps);
+  const handleReaction = createMSTeamsReactionHandler(deps);
 
   // Wrap the original run method to intercept invokes
   const originalRun = handler.run;
@@ -419,6 +465,90 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
           return;
         }
         deps.log.debug?.("skipping adaptive card action invoke without value payload");
+      }
+
+      // Bot Framework OAuth SSO: Teams sends signin/tokenExchange (with a
+      // Teams-provided exchangeable token) or signin/verifyState (magic
+      // code fallback) after an oauthCard is presented. We must ack with
+      // HTTP 200 and, if configured, exchange the token with the Bot
+      // Framework User Token service and persist it for downstream tools.
+      if (
+        ctx.activity?.type === "invoke" &&
+        (ctx.activity?.name === "signin/tokenExchange" ||
+          ctx.activity?.name === "signin/verifyState")
+      ) {
+        // Always ack immediately — silently dropping the invoke causes
+        // the Teams card UI to report "Something went wrong".
+        await ctx.sendActivity({ type: "invokeResponse", value: { status: 200, body: {} } });
+
+        if (!deps.sso) {
+          deps.log.debug?.("signin invoke received but msteams.sso is not configured", {
+            name: ctx.activity.name,
+          });
+          return;
+        }
+
+        const user = {
+          userId: ctx.activity.from?.aadObjectId ?? ctx.activity.from?.id ?? "",
+          channelId: ctx.activity.channelId ?? "msteams",
+        };
+
+        try {
+          if (ctx.activity.name === "signin/tokenExchange") {
+            const parsed = parseSigninTokenExchangeValue(ctx.activity.value);
+            if (!parsed) {
+              deps.log.debug?.("invalid signin/tokenExchange invoke value");
+              return;
+            }
+            const result = await handleSigninTokenExchangeInvoke({
+              value: parsed,
+              user,
+              deps: deps.sso,
+            });
+            if (result.ok) {
+              deps.log.info("msteams sso token exchanged", {
+                userId: user.userId,
+                hasExpiry: Boolean(result.expiresAt),
+              });
+            } else {
+              deps.log.error("msteams sso token exchange failed", {
+                code: result.code,
+                status: result.status,
+                message: result.message,
+              });
+            }
+            return;
+          }
+
+          // signin/verifyState
+          const parsed = parseSigninVerifyStateValue(ctx.activity.value);
+          if (!parsed) {
+            deps.log.debug?.("invalid signin/verifyState invoke value");
+            return;
+          }
+          const result = await handleSigninVerifyStateInvoke({
+            value: parsed,
+            user,
+            deps: deps.sso,
+          });
+          if (result.ok) {
+            deps.log.info("msteams sso verifyState succeeded", {
+              userId: user.userId,
+              hasExpiry: Boolean(result.expiresAt),
+            });
+          } else {
+            deps.log.error("msteams sso verifyState failed", {
+              code: result.code,
+              status: result.status,
+              message: result.message,
+            });
+          }
+        } catch (err) {
+          deps.log.error("msteams sso invoke handler error", {
+            error: formatUnknownError(err),
+          });
+        }
+        return;
       }
 
       return originalRun.call(handler, context);
@@ -482,6 +612,24 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       } else {
         deps.log.debug?.("member added", { member: member.id });
       }
+    }
+    await next();
+  });
+
+  handler.onReactionsAdded(async (context, next) => {
+    try {
+      await handleReaction(context as MSTeamsTurnContext, "added");
+    } catch (err) {
+      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+    }
+    await next();
+  });
+
+  handler.onReactionsRemoved(async (context, next) => {
+    try {
+      await handleReaction(context as MSTeamsTurnContext, "removed");
+    } catch (err) {
+      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });

@@ -14,8 +14,9 @@ import {
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
 
@@ -70,9 +71,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       const text = result.payloads[0]?.text;
       if (text) {
         // Clean up the response - extract just the slug
-        const slug = text
-          .trim()
-          .toLowerCase()
+        const slug = normalizeLowercaseStringOrEmpty(text)
           .replace(/[^a-z0-9-]/g, "-")
           .replace(/-+/g, "-")
           .replace(/^-|-$/g, "")

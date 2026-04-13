@@ -672,6 +672,22 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "trace",
+      nativeName: "trace",
+      description: "Toggle plugin trace lines.",
+      textAlias: "/trace",
+      category: "options",
+      args: [
+        {
+          name: "mode",
+          description: "on or off",
+          type: "string",
+          choices: ["on", "off"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "fast",
       nativeName: "fast",
       description: "Toggle fast mode.",
@@ -832,7 +848,6 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
   registerAlias(commands, "reasoning", "/reason");
   registerAlias(commands, "elevated", "/elev");
   registerAlias(commands, "steer", "/tell");
-
   assertCommandRegistry(commands);
   return commands;
 }

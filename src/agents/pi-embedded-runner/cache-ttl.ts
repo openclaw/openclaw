@@ -1,5 +1,12 @@
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
-import { isAnthropicFamilyCacheTtlEligible } from "./anthropic-family-cache-semantics.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
+import {
+  isAnthropicFamilyCacheTtlEligible,
+  isAnthropicModelRef,
+} from "./anthropic-family-cache-semantics.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
@@ -12,13 +19,18 @@ export type CacheTtlEntryData = {
   modelId?: string;
 };
 
+type CacheTtlContext = {
+  provider?: string;
+  modelId?: string;
+};
+
 export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
   modelApi?: string,
 ): boolean {
-  const normalizedProvider = provider.toLowerCase();
-  const normalizedModelId = modelId.toLowerCase();
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   const pluginEligibility = resolveProviderCacheTtlEligibility({
     provider: normalizedProvider,
     context: {
@@ -35,11 +47,38 @@ export function isCacheTtlEligibleProvider(
       provider: normalizedProvider,
       modelId: normalizedModelId,
       modelApi,
-    }) || isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
+    }) ||
+    (normalizedProvider === "kilocode" && isAnthropicModelRef(normalizedModelId)) ||
+    isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
   );
 }
 
-export function readLastCacheTtlTimestamp(sessionManager: unknown): number | null {
+function normalizeCacheTtlKey(value: string | undefined): string | undefined {
+  return normalizeOptionalLowercaseString(value);
+}
+
+function matchesCacheTtlContext(
+  data: Partial<CacheTtlEntryData> | undefined,
+  context: CacheTtlContext | undefined,
+): boolean {
+  if (!context) {
+    return true;
+  }
+  const expectedProvider = normalizeCacheTtlKey(context.provider);
+  if (expectedProvider && normalizeCacheTtlKey(data?.provider) !== expectedProvider) {
+    return false;
+  }
+  const expectedModelId = normalizeCacheTtlKey(context.modelId);
+  if (expectedModelId && normalizeCacheTtlKey(data?.modelId) !== expectedModelId) {
+    return false;
+  }
+  return true;
+}
+
+export function readLastCacheTtlTimestamp(
+  sessionManager: unknown,
+  context?: CacheTtlContext,
+): number | null {
   const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
   if (!sm?.getEntries) {
     return null;
@@ -53,6 +92,9 @@ export function readLastCacheTtlTimestamp(sessionManager: unknown): number | nul
         continue;
       }
       const data = entry?.data as Partial<CacheTtlEntryData> | undefined;
+      if (!matchesCacheTtlContext(data, context)) {
+        continue;
+      }
       const ts = typeof data?.timestamp === "number" ? data.timestamp : null;
       if (ts && Number.isFinite(ts)) {
         last = ts;

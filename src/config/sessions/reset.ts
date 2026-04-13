@@ -28,7 +28,7 @@ export const DEFAULT_RESET_AT_HOUR = 4;
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 
 export function isThreadSessionKey(sessionKey?: string | null): boolean {
-  return Boolean(resolveSessionThreadInfo(sessionKey).threadId);
+  return Boolean(resolveSessionThreadInfo(sessionKey, { bundledFallback: false }).threadId);
 }
 
 export function resolveSessionResetType(params: {
@@ -133,7 +133,7 @@ export function resolveChannelResetConfig(params: {
   if (!key) {
     return undefined;
   }
-  return resetByChannel[key] ?? resetByChannel[key.toLowerCase()];
+  return resetByChannel[key];
 }
 
 export function evaluateSessionFreshness(params: {

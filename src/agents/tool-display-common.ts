@@ -104,7 +104,7 @@ export function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
+    const firstLine = normalizeOptionalString(trimmed.split(/\r?\n/)[0]) ?? "";
     if (!firstLine) {
       return undefined;
     }
@@ -231,8 +231,7 @@ export function resolveWriteDetail(toolKey: string, args: unknown): string | und
     return undefined;
   }
 
-  const path =
-    resolvePathArg(record) ?? (typeof record.url === "string" ? record.url.trim() : undefined);
+  const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
     return undefined;
   }
@@ -264,7 +263,7 @@ export function resolveWebSearchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const query = typeof record.query === "string" ? record.query.trim() : undefined;
+  const query = normalizeOptionalString(record.query);
   const count =
     typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
       ? Math.floor(record.count)
@@ -283,12 +282,12 @@ export function resolveWebFetchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const url = typeof record.url === "string" ? record.url.trim() : undefined;
+  const url = normalizeOptionalString(record.url);
   if (!url) {
     return undefined;
   }
 
-  const mode = typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
+  const mode = normalizeOptionalString(record.extractMode);
   const maxChars =
     typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
       ? Math.floor(record.maxChars)

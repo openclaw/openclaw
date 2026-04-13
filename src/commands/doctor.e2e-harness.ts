@@ -72,10 +72,16 @@ export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unk
 export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
+export const collectRelevantDoctorPluginIds = vi.fn(() => []) as unknown as MockFn;
 export const listPluginDoctorLegacyConfigRules = vi.fn(() => []) as unknown as MockFn;
 export const runDoctorHealthContributions = vi.fn(
   defaultRunDoctorHealthContributions,
 ) as unknown as MockFn;
+export const maybeRepairMemoryRecallHealth = vi
+  .fn()
+  .mockResolvedValue(undefined) as unknown as MockFn;
+export const noteMemorySearchHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const noteMemoryRecallHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
   changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -244,7 +250,9 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
+  isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  resolveRuntimePluginRegistry: () => null,
 }));
 
 vi.mock("../config/config.js", async () => {
@@ -256,6 +264,16 @@ vi.mock("../config/config.js", async () => {
     readConfigFileSnapshot,
     writeConfigFile,
     migrateLegacyConfig,
+  };
+});
+
+vi.mock("../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  return {
+    ...actual,
+    createConfigIO,
+    readConfigFileSnapshot,
+    writeConfigFile,
   };
 });
 
@@ -339,7 +357,14 @@ vi.mock("../flows/doctor-health-contributions.js", () => ({
   runDoctorHealthContributions,
 }));
 
+vi.mock("./doctor-memory-search.js", () => ({
+  maybeRepairMemoryRecallHealth,
+  noteMemorySearchHealth,
+  noteMemoryRecallHealth,
+}));
+
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectRelevantDoctorPluginIds,
   listPluginDoctorLegacyConfigRules,
 }));
 
@@ -494,6 +519,9 @@ beforeEach(() => {
   runGatewayUpdate.mockReset().mockResolvedValue(createGatewayUpdateResult());
   listPluginDoctorLegacyConfigRules.mockReset().mockReturnValue([]);
   runDoctorHealthContributions.mockReset().mockImplementation(defaultRunDoctorHealthContributions);
+  maybeRepairMemoryRecallHealth.mockReset().mockResolvedValue(undefined);
+  noteMemorySearchHealth.mockReset().mockResolvedValue(undefined);
+  noteMemoryRecallHealth.mockReset().mockResolvedValue(undefined);
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
   createConfigIO.mockReset().mockImplementation(() => ({
     readConfigFileSnapshot: legacyReadConfigFileSnapshot,

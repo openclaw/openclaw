@@ -21,7 +21,7 @@ import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
 
 function normalizeUserId(raw?: string | null): string {
-  const trimmed = raw?.trim() ?? "";
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
@@ -45,7 +45,7 @@ export function isSenderAllowed(
   const normalizedSenderId = normalizeUserId(senderId);
   const normalizedEmail = normalizeLowercaseStringOrEmpty(senderEmail ?? "");
   return allowFrom.some((entry) => {
-    const normalized = normalizeLowercaseStringOrEmpty(String(entry));
+    const normalized = normalizeLowercaseStringOrEmpty(entry);
     if (!normalized) {
       return false;
     }
@@ -129,13 +129,16 @@ const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
 const warnedMutableGroupKeys = new Set<string>();
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
-  const deprecated = entries.map((v) => String(v).trim()).filter((v) => /^users\/.+@.+/i.test(v));
+  const deprecated = entries
+    .map((v) => normalizeOptionalString(v))
+    .filter((v): v is string => Boolean(v))
+    .filter((v) => /^users\/.+@.+/i.test(v));
   if (deprecated.length === 0) {
     return;
   }
   const key = deprecated
     .map((v) => normalizeLowercaseStringOrEmpty(v))
-    .toSorted()
+    .toSorted((a, b) => a.localeCompare(b))
     .join(",");
   if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
     return;
@@ -158,7 +161,7 @@ function warnMutableGroupKeysConfigured(
   }
   const warningKey = mutableKeys
     .map((key) => normalizeLowercaseStringOrEmpty(key))
-    .toSorted()
+    .toSorted((a, b) => a.localeCompare(b))
     .join(",");
   if (warnedMutableGroupKeys.has(warningKey)) {
     return;

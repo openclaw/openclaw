@@ -2254,7 +2254,7 @@ for usage/billing and raise limits as needed.
     Quickest setup:
 
     1. Install Ollama from `https://ollama.com/download`
-    2. Pull a local model such as `ollama pull glm-4.7-flash`
+    2. Pull a local model such as `ollama pull gemma4`
     3. If you want cloud models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`
@@ -3192,13 +3192,14 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
 <AccordionGroup>
   <Accordion title="How do I stop internal system messages from showing in chat?">
-    Most internal or tool messages only appear when **verbose** or **reasoning** is enabled
+    Most internal or tool messages only appear when **verbose**, **trace**, or **reasoning** is enabled
     for that session.
 
     Fix in the chat where you see it:
 
     ```
     /verbose off
+    /trace off
     /reasoning off
     ```
 

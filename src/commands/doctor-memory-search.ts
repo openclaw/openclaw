@@ -7,22 +7,26 @@ import {
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/engine-embeddings.js";
 import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
+  auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata,
   listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
+  repairDreamingArtifacts,
   repairShortTermPromotionArtifacts,
+  type DreamingArtifactsAuditSummary,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
 import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -87,6 +91,22 @@ function buildMemoryRecallIssueNote(audit: ShortTermAuditSummary): string | null
   ].join("\n");
 }
 
+function buildDreamingArtifactIssueNote(audit: DreamingArtifactsAuditSummary): string | null {
+  if (audit.issues.length === 0) {
+    return null;
+  }
+  const issueLines = audit.issues.map((issue) => `- ${issue.message}`);
+  const hasFixableIssue = audit.issues.some((issue) => issue.fixable);
+  return [
+    "Dreaming artifacts need attention:",
+    ...issueLines,
+    `Dream corpus: ${audit.sessionCorpusDir}`,
+    hasFixableIssue
+      ? `Fix: ${formatCliCommand("openclaw doctor --fix")} or ${formatCliCommand("openclaw memory status --fix")}`
+      : `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+  ].join("\n");
+}
+
 export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
   try {
     const context = await resolveRuntimeMemoryAuditContext(cfg);
@@ -107,6 +127,11 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
     const message = buildMemoryRecallIssueNote(audit);
     if (message) {
       note(message, "Memory search");
+    }
+    const dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+    const dreamingMessage = buildDreamingArtifactIssueNote(dreamingAudit);
+    if (dreamingMessage) {
+      note(dreamingMessage, "Memory search");
     }
   } catch (err) {
     note(`Memory recall audit could not be completed: ${formatErrorMessage(err)}`, "Memory search");
@@ -133,33 +158,57 @@ export async function maybeRepairMemoryRecallHealth(params: {
             }
           : undefined,
     });
-    const hasFixableIssue = audit.issues.some((issue) => issue.fixable);
-    if (!hasFixableIssue) {
+    const hasFixableRecallIssue = audit.issues.some((issue) => issue.fixable);
+    if (hasFixableRecallIssue) {
+      const approved = await params.prompter.confirmRuntimeRepair({
+        message: "Normalize memory recall artifacts and remove stale promotion locks?",
+        initialValue: true,
+      });
+      if (approved) {
+        const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+        if (repair.changed) {
+          const lines = [
+            "Memory recall artifacts repaired:",
+            repair.rewroteStore
+              ? `- rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid entries)` : ""}`
+              : null,
+            repair.removedStaleLock ? "- removed stale promotion lock" : null,
+            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          ].filter(Boolean);
+          note(lines.join("\n"), "Doctor changes");
+        }
+      }
+    }
+
+    const dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+    const hasFixableDreamingIssue = dreamingAudit.issues.some((issue) => issue.fixable);
+    if (!hasFixableDreamingIssue) {
       return;
     }
-    const approved = await params.prompter.confirmRuntimeRepair({
-      message: "Normalize memory recall artifacts and remove stale promotion locks?",
+    const approvedDreamingRepair = await params.prompter.confirmRuntimeRepair({
+      message: "Archive contaminated dreaming artifacts and reset derived dream corpus state?",
       initialValue: true,
     });
-    if (!approved) {
+    if (!approvedDreamingRepair) {
       return;
     }
-    const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
-    if (!repair.changed) {
+    const dreamingRepair = await repairDreamingArtifacts({ workspaceDir });
+    if (!dreamingRepair.changed) {
       return;
     }
     const lines = [
-      "Memory recall artifacts repaired:",
-      repair.rewroteStore
-        ? `- rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid entries)` : ""}`
-        : null,
-      repair.removedStaleLock ? "- removed stale promotion lock" : null,
+      "Dreaming artifacts repaired:",
+      dreamingRepair.archivedSessionCorpus ? "- archived session corpus" : null,
+      dreamingRepair.archivedSessionIngestion ? "- archived session-ingestion state" : null,
+      dreamingRepair.archivedDreamsDiary ? "- archived dream diary" : null,
+      dreamingRepair.archiveDir ? `- archive dir: ${dreamingRepair.archiveDir}` : null,
+      ...dreamingRepair.warnings.map((warning) => `- warning: ${warning}`),
       `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
     ].filter(Boolean);
     note(lines.join("\n"), "Doctor changes");
   } catch (err) {
     note(
-      `Memory recall repair could not be completed: ${formatErrorMessage(err)}`,
+      `Memory artifact repair could not be completed: ${formatErrorMessage(err)}`,
       "Memory search",
     );
   }
@@ -266,6 +315,25 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
+    if (resolved.provider === "lmstudio") {
+      if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+        return;
+      }
+      const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
+      note(
+        [
+          gatewayProbeWarning
+            ? 'Memory search provider "lmstudio" is configured, but the gateway reports embeddings are not ready.'
+            : 'Memory search provider "lmstudio" is configured, but the gateway could not confirm embeddings are ready.',
+          gatewayProbeWarning,
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Memory search",
+      );
+      return;
+    }
     // Remote provider — check for API key
     if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;
@@ -358,7 +426,8 @@ export async function noteMemorySearchHealth(
  */
 function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = false): boolean {
   const modelPath =
-    local.modelPath?.trim() || (useDefaultFallback ? DEFAULT_LOCAL_MODEL : undefined);
+    normalizeOptionalString(local.modelPath) ||
+    (useDefaultFallback ? DEFAULT_LOCAL_MODEL : undefined);
   if (!modelPath) {
     return false;
   }

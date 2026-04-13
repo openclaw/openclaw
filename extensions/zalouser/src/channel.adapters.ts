@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   checkZcaAuthenticated,
@@ -218,10 +219,10 @@ export const zalouserResolverAdapter = {
     runtime,
   }: {
     cfg: OpenClawConfig;
-    accountId?: string;
+    accountId?: string | null;
     inputs: string[];
     kind: "user" | "group";
-    runtime: { error?: (msg: string) => void };
+    runtime: RuntimeEnv;
   }) => {
     const results = [];
     for (const input of inputs) {
@@ -282,8 +283,8 @@ export const zalouserAuthAdapter = {
     runtime,
   }: {
     cfg: OpenClawConfig;
-    accountId?: string;
-    runtime: { log: (msg: string) => void };
+    accountId?: string | null;
+    runtime: RuntimeEnv;
   }) => {
     const { startZaloQrLogin, waitForZaloQrLogin } = await loadZalouserChannelRuntime();
     const account = resolveZalouserAccountSync({
@@ -321,8 +322,12 @@ export const zalouserAuthAdapter = {
 
 export const zalouserSecurityAdapter = {
   resolveDmPolicy: resolveZalouserDmPolicy,
-  collectAuditFindings: async (params: unknown) =>
-    (await loadZalouserChannelRuntime()).collectZalouserSecurityAuditFindings(params),
+  collectAuditFindings: async (params: {
+    accountId?: string | null;
+    account: ResolvedZalouserAccount;
+    orderedAccountIds: string[];
+    hasExplicitAccountPath: boolean;
+  }) => (await loadZalouserChannelRuntime()).collectZalouserSecurityAuditFindings(params),
 };
 
 export const zalouserThreadingAdapter = {
@@ -350,7 +355,11 @@ export const zalouserOutboundAdapter = {
   deliveryMode: "direct" as const,
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown" as const,
-  sendPayload: async (ctx: Parameters<typeof sendPayloadWithChunkedTextAndMedia>[0]) =>
+  sendPayload: async (
+    ctx: { payload: object } & Parameters<
+      NonNullable<typeof zalouserRawSendResultAdapter.sendText>
+    >[0],
+  ) =>
     await sendPayloadWithChunkedTextAndMedia({
       ctx,
       sendText: (nextCtx) => zalouserRawSendResultAdapter.sendText!(nextCtx),

@@ -2,6 +2,10 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectRealExitWinsOverSigkillFallback,
+  expectWaitStaysPendingUntilSigkillFallback,
+} from "./test-support.js";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -25,12 +29,23 @@ function createStubChild(pid = 1234) {
   child.stderr = new PassThrough() as ChildProcess["stderr"];
   Object.defineProperty(child, "pid", { value: pid, configurable: true });
   Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
+  Object.defineProperty(child, "exitCode", { value: null, configurable: true, writable: true });
+  Object.defineProperty(child, "signalCode", { value: null, configurable: true, writable: true });
   const killMock = vi.fn(() => true);
   child.kill = killMock as ChildProcess["kill"];
   const emitClose = (code: number | null, signal: NodeJS.Signals | null = null) => {
     child.emit("close", code, signal);
   };
-  return { child, killMock, emitClose };
+  const emitExit = (code: number | null, signal: NodeJS.Signals | null = null) => {
+    Object.defineProperty(child, "exitCode", { value: code, configurable: true, writable: true });
+    Object.defineProperty(child, "signalCode", {
+      value: signal,
+      configurable: true,
+      writable: true,
+    });
+    child.emit("exit", code, signal);
+  };
+  return { child, killMock, emitClose, emitExit };
 }
 
 async function createAdapterHarness(params?: {
@@ -53,6 +68,14 @@ async function createAdapterHarness(params?: {
 
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+  const setPlatform = (platform: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: platform,
+    });
+  };
 
   beforeAll(async () => {
     ({ createChildAdapter } = await import("./child.js"));
@@ -74,6 +97,9 @@ describe("createChildAdapter", () => {
   });
 
   afterEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
     vi.useRealTimers();
   });
 
@@ -113,20 +139,9 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     const { adapter } = await createAdapterHarness({ pid: 4567 });
 
-    const waitPromise = adapter.wait();
-    const settled = vi.fn();
-    void waitPromise.then(() => settled());
-
-    adapter.kill();
-
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(3999);
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
+      adapter.kill();
+    });
   });
 
   it("prefers real child close over the SIGKILL fallback settle", async () => {
@@ -144,15 +159,47 @@ describe("createChildAdapter", () => {
       return { ...stub, adapter };
     })();
 
-    const waitPromise = adapter.wait();
-    adapter.kill();
-    emitClose(0, "SIGKILL");
-
-    await expect(waitPromise).resolves.toEqual({ code: 0, signal: "SIGKILL" });
-
-    await vi.advanceTimersByTimeAsync(4_001);
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: "SIGKILL" });
+    await expectRealExitWinsOverSigkillFallback({
+      waitPromise: adapter.wait(),
+      triggerKill: () => {
+        adapter.kill();
+      },
+      emitExit: () => {
+        emitClose(0, "SIGKILL");
+      },
+      expected: { code: 0, signal: "SIGKILL" },
+    });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("settles wait from exit state on Windows even when close never arrives", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+
+    const { adapter, emitExit, child } = await (async () => {
+      const stub = createStubChild(8642);
+      spawnWithFallbackMock.mockResolvedValue({
+        child: stub.child,
+        usedFallback: false,
+      });
+      const adapter = await createChildAdapter({
+        argv: ["openclaw", "version"],
+        stdinMode: "pipe-closed",
+      });
+      return { ...stub, adapter };
+    })();
+
+    const settled = vi.fn();
+    void adapter.wait().then((result) => {
+      settled(result);
+    });
+
+    emitExit(0, null);
+    child.stdout?.emit("end");
+    child.stderr?.emit("end");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
   it("disables detached mode in service-managed runtime", async () => {

@@ -5,7 +5,6 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLegacyStateDirs,
   resolveNewStateDir,
@@ -16,6 +15,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import type { SessionScope } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildAgentMainSessionKey,
@@ -216,7 +216,7 @@ function canonicalizeSessionKeyForAgent(params: {
   }
   if (rawLower.startsWith("subagent:")) {
     const rest = raw.slice("subagent:".length);
-    return `agent:${agentId}:subagent:${rest}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:subagent:${rest}`);
   }
   // Channel-owned legacy shapes must win before the generic group/channel
   // fallback. WhatsApp shipped channel-qualified group sessions, so
@@ -233,12 +233,12 @@ function canonicalizeSessionKeyForAgent(params: {
     }
   }
   if (rawLower.startsWith("group:") || rawLower.startsWith("channel:")) {
-    return `agent:${agentId}:unknown:${raw}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
   if (isSurfaceGroupKey(raw)) {
-    return `agent:${agentId}:${raw}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
   }
-  return `agent:${agentId}:${raw}`.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
 }
 
 function pickLatestLegacyDirectEntry(

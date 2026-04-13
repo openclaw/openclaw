@@ -4,6 +4,10 @@ import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 /** Maximum file size accepted by the QQ Bot API. */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
@@ -12,9 +16,18 @@ export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
 export const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
 
 const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
-  "*.myqcloud.com",
+  // QQ富媒体
   "*.qpic.cn",
   "*.qq.com",
+  "*.weiyun.com",
+  "*.qq.com.cn",
+
+  // QQ机器人
+  "*.ugcimg.cn",
+
+  // 腾讯云COS
+  "*.myqcloud.com",
+  "*.tencentcos.cn",
   "*.tencentcos.com",
 ];
 
@@ -92,7 +105,7 @@ export function formatFileSize(bytes: number): string {
 
 /** Infer a MIME type from the file extension. */
 export function getMimeType(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   const mimeTypes: Record<string, string> = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -145,9 +158,11 @@ export async function downloadFile(
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
     });
 
-    let filename = originalFilename?.trim() || "";
+    let filename = normalizeOptionalString(originalFilename) ?? "";
     if (!filename) {
-      filename = fetched.fileName?.trim() || path.basename(parsedUrl.pathname) || "download";
+      filename =
+        (normalizeOptionalString(fetched.fileName) ?? path.basename(parsedUrl.pathname)) ||
+        "download";
     }
 
     const ts = Date.now();

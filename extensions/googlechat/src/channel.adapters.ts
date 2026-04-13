@@ -9,8 +9,12 @@ import {
   listResolvedDirectoryUserEntriesFromAllowFrom,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   type ResolvedGoogleChatAccount,
   chunkTextForOutbound,
@@ -99,9 +103,10 @@ export const googlechatSecurityAdapter = {
 
 export const googlechatThreadingAdapter = {
   scopedAccountReplyToMode: {
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string) =>
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
       resolveGoogleChatAccount({ cfg, accountId }),
-    resolveReplyToMode: (account: ResolvedGoogleChatAccount) => account.config.replyToMode,
+    resolveReplyToMode: (account: ResolvedGoogleChatAccount, _chatType?: string | null) =>
+      account.config.replyToMode,
     fallback: "off" as const,
   },
 };
@@ -119,7 +124,7 @@ export const googlechatPairingTextAdapter = {
     cfg: OpenClawConfig;
     id: string;
     message: string;
-    accountId?: string;
+    accountId?: string | null;
   }) => {
     const account = resolveGoogleChatAccount({ cfg: cfg, accountId });
     if (account.credentialSource === "none") {
@@ -145,7 +150,7 @@ export const googlechatOutboundAdapter = {
     textChunkLimit: 4000,
     sanitizeText: ({ text }: { text: string }) => sanitizeForPlainText(text),
     resolveTarget: ({ to }: { to?: string }) => {
-      const trimmed = to?.trim() ?? "";
+      const trimmed = normalizeOptionalString(to) ?? "";
 
       if (trimmed) {
         const normalized = normalizeGoogleChatTarget(trimmed);
@@ -177,16 +182,17 @@ export const googlechatOutboundAdapter = {
       cfg: OpenClawConfig;
       to: string;
       text: string;
-      accountId?: string;
-      replyToId?: string;
-      threadId?: string;
+      accountId?: string | null;
+      replyToId?: string | null;
+      threadId?: string | number | null;
     }) => {
       const account = resolveGoogleChatAccount({
         cfg: cfg,
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = threadId ?? replyToId ?? undefined;
+      const thread =
+        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
       const result = await sendGoogleChatMessage({
         account,
@@ -215,12 +221,12 @@ export const googlechatOutboundAdapter = {
       to: string;
       text?: string;
       mediaUrl?: string;
-      mediaAccess?: unknown;
-      mediaLocalRoots?: string[];
-      mediaReadFile?: unknown;
-      accountId?: string;
-      replyToId?: string;
-      threadId?: string;
+      mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
+      mediaLocalRoots?: OutboundMediaLoadOptions["mediaLocalRoots"];
+      mediaReadFile?: OutboundMediaLoadOptions["mediaReadFile"];
+      accountId?: string | null;
+      replyToId?: string | null;
+      threadId?: string | number | null;
     }) => {
       if (!mediaUrl) {
         throw new Error("Google Chat mediaUrl is required.");
@@ -230,7 +236,8 @@ export const googlechatOutboundAdapter = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = threadId ?? replyToId ?? undefined;
+      const thread =
+        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>

@@ -61,8 +61,19 @@ describe("resolveAutoMediaKeyProviders", () => {
 
 describe("providerSupportsNativePdfDocument", () => {
   it("reads native PDF support from provider metadata", () => {
-    expect(providerSupportsNativePdfDocument({ providerId: "anthropic" })).toBe(true);
-    expect(providerSupportsNativePdfDocument({ providerId: "google" })).toBe(true);
-    expect(providerSupportsNativePdfDocument({ providerId: "openai" })).toBe(false);
+    const providerRegistry = new Map([
+      ["anthropic", { id: "anthropic", nativeDocumentInputs: ["pdf" as const] }],
+      ["google", { id: "google", nativeDocumentInputs: ["pdf" as const] }],
+      ["openai", { id: "openai", nativeDocumentInputs: [] }],
+    ]);
+    expect(providerSupportsNativePdfDocument({ providerId: "anthropic", providerRegistry })).toBe(
+      true,
+    );
+    expect(providerSupportsNativePdfDocument({ providerId: "google", providerRegistry })).toBe(
+      true,
+    );
+    expect(providerSupportsNativePdfDocument({ providerId: "openai", providerRegistry })).toBe(
+      false,
+    );
   });
 });

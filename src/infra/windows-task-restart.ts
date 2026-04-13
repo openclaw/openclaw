@@ -6,7 +6,7 @@ import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { resolveTaskScriptPath } from "../daemon/schtasks.js";
 import { formatErrorMessage } from "./errors.js";
-import type { RestartAttempt } from "./restart.js";
+import type { RestartAttempt } from "./restart.types.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const TASK_RESTART_RETRY_LIMIT = 12;

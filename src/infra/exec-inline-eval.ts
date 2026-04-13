@@ -218,7 +218,7 @@ export function detectInterpreterInlineEvalArgv(
       if (rawPrefixFlag) {
         return createInlineEvalHit(executable, argv, rawPrefixFlag.label);
       }
-      const lower = token.toLowerCase();
+      const lower = normalizeLowercaseStringOrEmpty(token);
       if (spec.exactFlags.has(lower)) {
         return createInlineEvalHit(executable, argv, lower);
       }

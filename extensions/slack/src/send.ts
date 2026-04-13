@@ -11,7 +11,10 @@ import {
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
@@ -108,24 +111,25 @@ async function postSlackMessageBestEffort(params: {
     thread_ts: params.threadTs,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
+  const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
     // Build payloads in explicit branches so TS and runtime stay aligned.
     if (params.identity?.iconUrl) {
-      return await params.client.chat.postMessage({
+      return await postChatMessage({
         ...basePayload,
         ...(params.identity.username ? { username: params.identity.username } : {}),
         icon_url: params.identity.iconUrl,
       });
     }
     if (params.identity?.iconEmoji) {
-      return await params.client.chat.postMessage({
+      return await postChatMessage({
         ...basePayload,
         ...(params.identity.username ? { username: params.identity.username } : {}),
         icon_emoji: params.identity.iconEmoji,
       });
     }
-    return await params.client.chat.postMessage({
+    return await postChatMessage({
       ...basePayload,
       ...(params.identity?.username ? { username: params.identity.username } : {}),
     });
@@ -134,7 +138,7 @@ async function postSlackMessageBestEffort(params: {
       throw err;
     }
     logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
-    return params.client.chat.postMessage(basePayload);
+    return postChatMessage(basePayload);
   }
 }
 
@@ -308,7 +312,7 @@ export async function sendMessageSlack(
   message: string,
   opts: SlackSendOpts = {},
 ): Promise<SlackSendResult> {
-  const trimmedMessage = message?.trim() ?? "";
+  const trimmedMessage = normalizeOptionalString(message) ?? "";
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return { messageId: "suppressed", channelId: "" };

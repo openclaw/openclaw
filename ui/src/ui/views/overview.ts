@@ -6,6 +6,7 @@ import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
 import type { UiSettings } from "../storage.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   AttentionItem,
   CronJob,
@@ -196,7 +197,7 @@ export function renderOverview(props: OverviewProps) {
     if (props.connected || !props.lastError || !props.warnQueryToken) {
       return null;
     }
-    const lower = props.lastError.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(props.lastError);
     const authFailed = lower.includes("unauthorized") || lower.includes("device identity required");
     if (!authFailed) {
       return null;

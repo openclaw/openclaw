@@ -227,7 +227,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       config: {
         ...synologyChatConfigAdapter,
       },
-      auth: synologyChatApprovalAuth,
+      approvalCapability: synologyChatApprovalAuth,
       messaging: {
         normalizeTarget: (target: string) => {
           const trimmed = target.trim();
