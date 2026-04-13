@@ -285,6 +285,18 @@ export async function launchOpenClawChrome(
     log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
   }
 
+  // Remove stale lock files from crashed Chrome instances.
+  // Chrome checks SingletonLock to detect concurrent instances and refuses to start
+  // if it exists, even if the old process is gone (e.g., container restart, SIGKILL).
+  for (const lockFile of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    const lockPath = path.join(userDataDir, lockFile);
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      // ignore: file may not exist
+    }
+  }
+
   const proc = spawnOnce();
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
