@@ -402,16 +402,27 @@ export function chunkMarkdown(
       // Second pass: if a segment's *weighted* size still exceeds the budget
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
-      for (let start = 0; start < line.length; start += maxChars) {
-        const coarse = line.slice(start, start + maxChars);
+      let start = 0;
+      while (start < line.length) {
+        let coarseEnd = start + maxChars;
+        // Avoid splitting inside a UTF-16 surrogate pair (CJK Extension B+) at the
+        // coarse boundary. If the character before coarseEnd is a high surrogate,
+        // extend by one to include the low surrogate.
+        if (coarseEnd < line.length) {
+          const code = line.charCodeAt(coarseEnd - 1);
+          if (code >= 0xd800 && code <= 0xdbff) {
+            coarseEnd += 1; // include the low surrogate
+          }
+        }
+        const coarse = line.slice(start, coarseEnd);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
           for (let j = 0; j < coarse.length; ) {
             let end = Math.min(j + fineStep, coarse.length);
             // Avoid splitting inside a UTF-16 surrogate pair (CJK Extension B+).
             if (end < coarse.length) {
-              const code = coarse.charCodeAt(end - 1);
-              if (code >= 0xd800 && code <= 0xdbff) {
+              const fineCode = coarse.charCodeAt(end - 1);
+              if (fineCode >= 0xd800 && fineCode <= 0xdbff) {
                 end += 1; // include the low surrogate
               }
             }
@@ -421,6 +432,7 @@ export function chunkMarkdown(
         } else {
           segments.push(coarse);
         }
+        start = coarseEnd; // advance to the next boundary
       }
     }
     for (const segment of segments) {

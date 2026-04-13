@@ -53,6 +53,46 @@ const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
 
+/**
+ * Replace lone UTF-16 surrogates with Unicode replacement character U+FFFD.
+ * This prevents embedding API failures when text contains unpaired surrogates.
+ * See: https://github.com/openclaw/openclaw/issues/65782
+ */
+export function stripUnpairedSurrogates(text: string): string {
+  // Fast path: string contains no surrogates at all
+  if (!/[\uD800-\uDBFF]/.test(text) && !/[\uDC00-\uDFFF]/.test(text)) {
+    return text;
+  }
+
+  const result: string[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    // High surrogate (0xD800–0xDBFF)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      // Check if followed by low surrogate
+      if (i + 1 < text.length) {
+        const nextCode = text.charCodeAt(i + 1);
+        if (nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+          // Valid surrogate pair, keep both
+          result.push(text[i], text[i + 1]);
+          i += 1; // skip the low surrogate on next iteration
+          continue;
+        }
+      }
+      // Lone high surrogate, replace
+      result.push("\uFFFD");
+      continue;
+    }
+    // Low surrogate without preceding high surrogate
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      result.push("\uFFFD");
+      continue;
+    }
+    result.push(text[i]);
+  }
+  return result.join("");
+}
+
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureCount: number;
   protected abstract batchFailureLastError?: string;
@@ -238,16 +278,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
+    // Strip lone surrogates as defense-in-depth (issue #65782)
+    const sanitizedTexts = texts.map((t) => stripUnpairedSurrogates(t));
     return await runMemoryEmbeddingRetryLoop({
       run: async () => {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: batch start", {
           provider: provider.id,
-          items: texts.length,
+          items: sanitizedTexts.length,
           timeoutMs,
         });
         return await this.withTimeout(
-          provider.embedBatch(texts),
+          provider.embedBatch(sanitizedTexts),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
@@ -270,16 +312,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!embedBatchInputs) {
       return await this.embedBatchWithRetry(inputs.map((input) => input.text));
     }
+    // Strip lone surrogates as defense-in-depth (issue #65782)
+    const sanitizedInputs = inputs.map((input) => ({
+      ...input,
+      text: stripUnpairedSurrogates(input.text),
+    }));
     return await runMemoryEmbeddingRetryLoop({
       run: async () => {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: structured batch start", {
           provider: provider.id,
-          items: inputs.length,
+          items: sanitizedInputs.length,
           timeoutMs,
         });
         return await this.withTimeout(
-          embedBatchInputs(inputs),
+          embedBatchInputs(sanitizedInputs),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
@@ -315,10 +362,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!this.provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
+    // Strip lone surrogates as defense-in-depth (issue #65782)
+    const sanitized = stripUnpairedSurrogates(text);
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
     return await this.withTimeout(
-      this.provider.embedQuery(text),
+      this.provider.embedQuery(sanitized),
       timeoutMs,
       `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
     );
