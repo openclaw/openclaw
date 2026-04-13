@@ -80,6 +80,47 @@ import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-search.js";
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
 
+function resetMemoryRecallMocks() {
+  auditShortTermPromotionArtifacts.mockReset();
+  auditShortTermPromotionArtifacts.mockResolvedValue({
+    storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
+    lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
+    exists: true,
+    entryCount: 1,
+    promotedCount: 0,
+    spacedEntryCount: 0,
+    conceptTaggedEntryCount: 1,
+    invalidEntryCount: 0,
+    issues: [],
+  });
+  auditDreamingArtifacts.mockReset();
+  auditDreamingArtifacts.mockResolvedValue({
+    sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
+    sessionCorpusFileCount: 0,
+    suspiciousSessionCorpusFileCount: 0,
+    suspiciousSessionCorpusLineCount: 0,
+    sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
+    sessionIngestionExists: false,
+    issues: [],
+  });
+  repairDreamingArtifacts.mockReset();
+  repairDreamingArtifacts.mockResolvedValue({
+    changed: false,
+    archivedDreamsDiary: false,
+    archivedSessionCorpus: false,
+    archivedSessionIngestion: false,
+    archivedPaths: [],
+    warnings: [],
+  });
+  repairShortTermPromotionArtifacts.mockReset();
+  repairShortTermPromotionArtifacts.mockResolvedValue({
+    changed: false,
+    removedInvalidEntries: 0,
+    rewroteStore: false,
+    removedStaleLock: false,
+  });
+}
+
 describe("noteMemorySearchHealth", () => {
   const cfg = {} as OpenClawConfig;
 
@@ -115,44 +156,7 @@ describe("noteMemorySearchHealth", () => {
     });
     checkQmdBinaryAvailability.mockReset();
     checkQmdBinaryAvailability.mockResolvedValue({ available: true });
-    auditShortTermPromotionArtifacts.mockReset();
-    auditShortTermPromotionArtifacts.mockResolvedValue({
-      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
-      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
-      exists: true,
-      entryCount: 1,
-      promotedCount: 0,
-      spacedEntryCount: 0,
-      conceptTaggedEntryCount: 1,
-      invalidEntryCount: 0,
-      issues: [],
-    });
-    auditDreamingArtifacts.mockReset();
-    auditDreamingArtifacts.mockResolvedValue({
-      sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
-      sessionCorpusFileCount: 0,
-      suspiciousSessionCorpusFileCount: 0,
-      suspiciousSessionCorpusLineCount: 0,
-      sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
-      sessionIngestionExists: false,
-      issues: [],
-    });
-    repairDreamingArtifacts.mockReset();
-    repairDreamingArtifacts.mockResolvedValue({
-      changed: false,
-      archivedDreamsDiary: false,
-      archivedSessionCorpus: false,
-      archivedSessionIngestion: false,
-      archivedPaths: [],
-      warnings: [],
-    });
-    repairShortTermPromotionArtifacts.mockReset();
-    repairShortTermPromotionArtifacts.mockResolvedValue({
-      changed: false,
-      removedInvalidEntries: 0,
-      rewroteStore: false,
-      removedStaleLock: false,
-    });
+    resetMemoryRecallMocks();
   });
 
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
@@ -340,6 +344,53 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn for lmstudio when gateway probe is ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when lmstudio gateway probe reports embeddings are not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "LM API token missing" },
+    });
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "lmstudio" is configured');
+    expect(message).toContain("embeddings are not ready");
+  });
+
+  it("warns when lmstudio gateway probe is unavailable", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false },
+    });
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "lmstudio" is configured');
+    expect(message).toContain("could not confirm embeddings are ready");
+    expect(message).toContain("openclaw memory status --deep");
+  });
+
   it("notes when gateway probe reports embeddings ready and CLI API key is missing", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",
@@ -452,44 +503,7 @@ describe("memory recall doctor integration", () => {
 
   beforeEach(() => {
     note.mockClear();
-    auditShortTermPromotionArtifacts.mockReset();
-    auditShortTermPromotionArtifacts.mockResolvedValue({
-      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
-      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
-      exists: true,
-      entryCount: 1,
-      promotedCount: 0,
-      spacedEntryCount: 0,
-      conceptTaggedEntryCount: 1,
-      invalidEntryCount: 0,
-      issues: [],
-    });
-    auditDreamingArtifacts.mockReset();
-    auditDreamingArtifacts.mockResolvedValue({
-      sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
-      sessionCorpusFileCount: 0,
-      suspiciousSessionCorpusFileCount: 0,
-      suspiciousSessionCorpusLineCount: 0,
-      sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
-      sessionIngestionExists: false,
-      issues: [],
-    });
-    repairDreamingArtifacts.mockReset();
-    repairDreamingArtifacts.mockResolvedValue({
-      changed: false,
-      archivedDreamsDiary: false,
-      archivedSessionCorpus: false,
-      archivedSessionIngestion: false,
-      archivedPaths: [],
-      warnings: [],
-    });
-    repairShortTermPromotionArtifacts.mockReset();
-    repairShortTermPromotionArtifacts.mockResolvedValue({
-      changed: false,
-      removedInvalidEntries: 0,
-      rewroteStore: false,
-      removedStaleLock: false,
-    });
+    resetMemoryRecallMocks();
   });
 
   function createPrompter(overrides: Partial<DoctorPrompter> = {}): DoctorPrompter {

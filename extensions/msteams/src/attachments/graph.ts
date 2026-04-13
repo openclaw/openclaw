@@ -302,6 +302,10 @@ export async function downloadMSTeamsGraphMedia(params: {
   try {
     accessToken = await params.tokenProvider.getAccessToken("https://graph.microsoft.com");
   } catch (err) {
+    debugLog?.debug?.("graph media token acquisition failed", {
+      messageUrl,
+      error: err instanceof Error ? err.message : String(err),
+    });
     params.logger?.warn?.("msteams graph token acquisition failed", {
       error: err instanceof Error ? err.message : String(err),
     });
@@ -412,6 +416,10 @@ export async function downloadMSTeamsGraphMedia(params: {
       await release();
     }
   } catch (err) {
+    debugLog?.debug?.("graph media message fetch failed", {
+      messageUrl,
+      error: err instanceof Error ? err.message : String(err),
+    });
     params.logger?.warn?.("msteams graph message fetch failed", {
       error: err instanceof Error ? err.message : String(err),
     });
