@@ -5,6 +5,24 @@ import {
   parseMessageWithAttachments,
 } from "./chat-attachments.js";
 
+vi.mock("../media/store.js", () => ({
+  saveMediaBuffer: vi.fn(
+    async (
+      _buf: Buffer,
+      contentType?: string,
+      _subdir?: string,
+      _maxBytes?: number,
+      originalFilename?: string,
+    ) => ({
+      id: originalFilename ?? "mock-id.png",
+      path: `/mock/media/inbound/${originalFilename ?? "mock-id.png"}`,
+      size: _buf?.byteLength ?? 0,
+      contentType,
+    }),
+  ),
+  deleteMediaBuffer: vi.fn(async () => {}),
+}));
+
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
@@ -176,5 +194,80 @@ describe("shared attachment validation", () => {
     } finally {
       fromSpy.mockRestore();
     }
+  });
+});
+
+describe("parseMessageWithAttachments supportsImages: false", () => {
+  it("saves images to disk and injects filesystem path markers", async () => {
+    const { saveMediaBuffer } = await import("../media/store.js");
+    const parsed = await parseMessageWithAttachments(
+      "describe this",
+      [
+        {
+          type: "image",
+          mimeType: "image/png",
+          fileName: "dot.png",
+          content: PNG_1x1,
+        },
+      ],
+      { supportsImages: false, log: { warn: () => {} } },
+    );
+
+    expect(saveMediaBuffer).toHaveBeenCalled();
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.message).toContain("[media attached:");
+    expect(parsed.message).toContain("/mock/media/inbound/");
+    expect(parsed.message).toContain("(image/png)");
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
+    expect(parsed.imageOrder).toEqual(["offloaded"]);
+  });
+
+  it("does not use media:// URIs in markers", async () => {
+    const parsed = await parseMessageWithAttachments(
+      "see this",
+      [
+        {
+          type: "image",
+          mimeType: "image/png",
+          fileName: "dot.png",
+          content: PNG_1x1,
+        },
+      ],
+      { supportsImages: false, log: { warn: () => {} } },
+    );
+
+    expect(parsed.message).not.toContain("media://");
+  });
+
+  it("handles multiple images", async () => {
+    const parsed = await parseMessageWithAttachments(
+      "what are these",
+      [
+        { type: "image", mimeType: "image/png", fileName: "a.png", content: PNG_1x1 },
+        { type: "image", mimeType: "image/png", fileName: "b.png", content: PNG_1x1 },
+      ],
+      { supportsImages: false, log: { warn: () => {} } },
+    );
+
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(2);
+    expect(parsed.imageOrder).toEqual(["offloaded", "offloaded"]);
+    const markers = parsed.message.match(/\[media attached:/g);
+    expect(markers).toHaveLength(2);
+  });
+
+  it("still drops non-image payloads", async () => {
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const logs: string[] = [];
+    const parsed = await parseMessageWithAttachments(
+      "x",
+      [{ type: "file", mimeType: "image/png", fileName: "not-image.pdf", content: pdf }],
+      { supportsImages: false, log: { warn: (w) => logs.push(w) } },
+    );
+
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(0);
+    expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
   });
 });

@@ -304,17 +304,11 @@ export async function parseMessageWithAttachments(
     return { message, images: [], imageOrder: [], offloadedRefs: [] };
   }
 
-  // For text-only models drop all attachments cleanly. Do not save files or
-  // inject media:// markers that would never be resolved and would leak
-  // internal path references into the model's prompt.
-  if (opts?.supportsImages === false) {
-    if (attachments.length > 0) {
-      log?.warn(
-        `parseMessageWithAttachments: ${attachments.length} attachment(s) dropped — model does not support images`,
-      );
-    }
-    return { message, images: [], imageOrder: [], offloadedRefs: [] };
-  }
+  // When the model does not support native image input, save all images to
+  // disk and inject filesystem-path markers so the model can invoke the
+  // `image` tool.  media:// URIs are NOT used here because the image tool
+  // rejects non-standard URI schemes.
+  const textOnlyMode = opts?.supportsImages === false;
 
   const images: ChatImageContent[] = [];
   const imageOrder: PromptImageOrderEntry[] = [];
@@ -377,10 +371,12 @@ export async function parseMessageWithAttachments(
 
       let isOffloaded = false;
 
-      if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
-        const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
-
-        if (!isSupportedForOffload) {
+      // In textOnlyMode every image is saved to disk so the model can reference
+      // it by filesystem path (for the `image` tool).  In normal mode only
+      // images exceeding the inline threshold are offloaded.
+      if (textOnlyMode || sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
+        // In normal mode, large unsupported formats cannot be offloaded.
+        if (!textOnlyMode && !SUPPORTED_OFFLOAD_MIMES.has(finalMime)) {
           // Passing this inline would reintroduce the OOM risk this PR prevents.
           throw new Error(
             `attachment ${label}: format ${finalMime} is too large to pass inline ` +
@@ -413,12 +409,22 @@ export async function parseMessageWithAttachments(
           // Track for cleanup if a subsequent attachment fails.
           savedMediaIds.push(savedMedia.id);
 
-          // Opaque URI — compatible with workspaceOnly sandboxes and decouples
-          // the Gateway from the agent's filesystem layout.
-          const mediaRef = `media://inbound/${savedMedia.id}`;
+          // In textOnlyMode use the real filesystem path so the `image` tool
+          // can load the file directly.  In normal mode use an opaque URI that
+          // is compatible with workspaceOnly sandboxes.
+          if (textOnlyMode && !savedMedia.path) {
+            throw new Error(`attachment ${label}: saved to disk but no filesystem path returned`);
+          }
+          const mediaRef = textOnlyMode ? savedMedia.path! : `media://inbound/${savedMedia.id}`;
 
-          updatedMessage += `\n[media attached: ${mediaRef}]`;
-          log?.info?.(`[Gateway] Intercepted large image payload. Saved: ${mediaRef}`);
+          // In textOnlyMode include the MIME type in the marker so the model
+          // has full context (matches the Telegram `[media attached: ...]`
+          // format).  Normal mode keeps the existing marker shape.
+          const marker = textOnlyMode
+            ? `[media attached: ${mediaRef} (${finalMime})]`
+            : `[media attached: ${mediaRef}]`;
+          updatedMessage += `\n${marker}`;
+          log?.info?.(`[Gateway] Intercepted image payload. Saved: ${mediaRef}`);
 
           // Record for transcript metadata — separate from `images` because
           // these are not passed inline to the model.
@@ -445,6 +451,8 @@ export async function parseMessageWithAttachments(
         continue;
       }
 
+      // textOnlyMode images are always offloaded above; this path is only
+      // reached when the model supports native image input.
       images.push({ type: "image", data: b64, mimeType: finalMime });
       imageOrder.push("inline");
     }
