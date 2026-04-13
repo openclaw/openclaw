@@ -189,8 +189,9 @@ export class VoiceCallWebhookServer {
     );
     const normalizedRemoteIp = normalizeProxyIp(remoteIp);
     const fromTrustedProxy =
-      normalizedTrustedProxyIps.size === 0 ||
-      (normalizedRemoteIp ? normalizedTrustedProxyIps.has(normalizedRemoteIp) : false);
+      normalizedTrustedProxyIps.size > 0 &&
+      normalizedRemoteIp !== undefined &&
+      normalizedTrustedProxyIps.has(normalizedRemoteIp);
     const shouldTrustForwardingHeaders =
       this.config.webhookSecurity.trustForwardingHeaders && fromTrustedProxy;
 

@@ -307,6 +307,27 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
     expect(ip).toBe("198.51.100.10");
   });
 
+  it("ignores forwarded IPs when no trusted proxy is configured", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: [],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10",
+          "x-real-ip": "198.51.100.11",
+        },
+        socket: { remoteAddress: "127.0.0.1" },
+      },
+    );
+
+    expect(ip).toBe("127.0.0.1");
+  });
+
   it("matches trusted proxies when the remote uses an IPv4-mapped form", () => {
     const ip = resolveMediaStreamClientIp(
       {
