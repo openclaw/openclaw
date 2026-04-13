@@ -354,17 +354,76 @@ export async function sanitizeToolResultImages(
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
 
-  // Check if there are any image or text blocks to process (skip audio/video)
+  // Check if there are any image or text blocks to process
   if (!content.some((b) => isImageBlock(b) || isTextBlock(b))) {
     return result;
   }
 
-  // Filter out audio/video blocks, only sanitize image blocks
-  const blocksToSanitize = content.filter((b) => isImageBlock(b) || isTextBlock(b));
-  const otherBlocks = content.filter((b) => !isImageBlock(b) && !isTextBlock(b));
+  const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
+  const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
+  
+  const sanitizedContent: ToolContentBlock[] = [];
+  let mediaPathHint: string | undefined;
 
-  const sanitizedBlocks = await sanitizeContentBlocksImages(blocksToSanitize, label, opts);
+  // Process blocks in order, sanitizing only image blocks
+  for (const block of content) {
+    if (isTextBlock(block)) {
+      const mediaPath = parseMediaPathFromText(block.text);
+      if (mediaPath) {
+        mediaPathHint = mediaPath;
+      }
+      sanitizedContent.push(block);
+      continue;
+    }
 
-  // Combine sanitized blocks with untouched audio/video blocks
-  return { ...result, content: [...sanitizedBlocks, ...otherBlocks] };
+    if (!isImageBlock(block)) {
+      // Pass through audio/video blocks untouched, preserving their position
+      sanitizedContent.push(block);
+      continue;
+    }
+
+    const data = block.data.trim();
+    if (!data) {
+      sanitizedContent.push({
+        type: "text",
+        text: `[${label}] omitted empty image payload`,
+      } satisfies TextContentBlock);
+      continue;
+    }
+    
+    const canonicalData = canonicalizeBase64(data);
+    if (!canonicalData) {
+      sanitizedContent.push({
+        type: "text",
+        text: `[${label}] omitted image payload: invalid base64`,
+      } satisfies TextContentBlock);
+      continue;
+    }
+
+    try {
+      const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
+      const mimeType = inferredMimeType ?? block.mimeType;
+      const fileName = inferImageFileName({ block, label, mediaPathHint });
+      const resized = await resizeImageBase64IfNeeded({
+        base64: canonicalData,
+        mimeType,
+        maxDimensionPx,
+        maxBytes,
+        label,
+        fileName,
+      });
+      sanitizedContent.push({
+        ...block,
+        data: resized.base64,
+        mimeType: resized.resized ? resized.mimeType : mimeType,
+      });
+    } catch (err) {
+      sanitizedContent.push({
+        type: "text",
+        text: `[${label}] omitted image payload: ${String(err)}`,
+      } satisfies TextContentBlock);
+    }
+  }
+
+  return { ...result, content: sanitizedContent };
 }
