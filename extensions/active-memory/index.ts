@@ -1483,6 +1483,37 @@ function stripRecalledContextNoise(text: string): string {
   return cleanedLines.join(" ").replace(/\s+/g, " ").trim();
 }
 
+function stripInjectedActiveMemoryPrefixOnly(text: string): string {
+  const lines = text.split("\n");
+  const cleanedLines: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]?.trim() ?? "";
+    if (!line) {
+      continue;
+    }
+    if (line === ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER) {
+      const nextLine = lines[index + 1]?.trim() ?? "";
+      if (nextLine === ACTIVE_MEMORY_OPEN_TAG) {
+        let closeIndex = -1;
+        for (let probe = index + 2; probe < lines.length; probe += 1) {
+          if ((lines[probe]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
+            closeIndex = probe;
+            break;
+          }
+        }
+        if (closeIndex !== -1) {
+          index = closeIndex;
+          continue;
+        }
+      }
+    }
+    cleanedLines.push(line);
+  }
+
+  return cleanedLines.join(" ").replace(/\s+/g, " ").trim();
+}
+
 function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   const turns: ActiveRecallRecentTurn[] = [];
   for (const message of messages) {
@@ -1495,7 +1526,8 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
       continue;
     }
     const rawText = extractTextContent(typed.content);
-    const text = stripRecalledContextNoise(rawText);
+    const text =
+      role === "assistant" ? stripRecalledContextNoise(rawText) : stripInjectedActiveMemoryPrefixOnly(rawText);
     if (!text) {
       continue;
     }

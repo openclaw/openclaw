@@ -1606,6 +1606,46 @@ describe("active-memory plugin", () => {
     );
   });
 
+  it("does not drop ordinary user text that starts with active-memory-like prefixes", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "what should i remember?",
+        messages: [
+          {
+            role: "user",
+            content:
+              "Active Memory: I really do want you to remember that I prefer aisle seats.",
+          },
+          {
+            role: "user",
+            content: "Memory Search: this is just me describing my own workflow in plain text.",
+          },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain(
+      "user: Active Memory: I really do want you to remember that I prefer aisle seats.",
+    );
+    expect(prompt).toContain(
+      "user: Memory Search: this is just me describing my own workflow in plain text.",
+    );
+  });
+
   it("trusts the subagent's relevance decision for explicit preference recall prompts", async () => {
     runEmbeddedPiAgent.mockResolvedValueOnce({
       payloads: [{ text: "User prefers aisle seats and extra buffer on connections." }],
