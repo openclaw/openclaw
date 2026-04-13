@@ -358,6 +358,38 @@ describe("discordPlugin outbound", () => {
   });
 });
 
+describe("discordPlugin explicit target parsing", () => {
+  it("preserves user-prefixed explicit DM targets", () => {
+    const parsed = discordPlugin.messaging?.parseExplicitTarget?.({
+      raw: "user:123456789012345678",
+    });
+
+    expect(parsed).toEqual({
+      to: "user:123456789012345678",
+      chatType: "direct",
+    });
+  });
+
+  it("preserves channel-prefixed explicit channel targets", () => {
+    const parsed = discordPlugin.messaging?.parseExplicitTarget?.({
+      raw: "channel:987654321098765432",
+    });
+
+    expect(parsed).toEqual({
+      to: "channel:987654321098765432",
+      chatType: "channel",
+    });
+  });
+
+  it("infers direct chat type from normalized explicit DM targets", () => {
+    const chatType = discordPlugin.messaging?.inferTargetChatType?.({
+      to: "user:123456789012345678",
+    });
+
+    expect(chatType).toBe("direct");
+  });
+});
+
 describe("discordPlugin bindings", () => {
   it("derives DM current conversation ids from direct sender context", () => {
     const result = discordPlugin.bindings?.resolveCommandConversation?.({
