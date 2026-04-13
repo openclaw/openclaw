@@ -1657,6 +1657,10 @@ export async function runEmbeddedPiAgent(
                   `total=${visibleText.length} rewriting=${textToRewrite.length} ` +
                   `preserved=${preservedHead.length}`,
               );
+              // Only forward execution auth profile IDs when the personality
+              // provider matches the execution provider. Cross-provider profile
+              // forwarding would cause auth resolution to fail silently.
+              const sameProvider = pProvider === executionProvider;
               const closeoutResult = await runPersonalityCloseout({
                 cfg: params.config,
                 personalityProvider: pProvider,
@@ -1665,8 +1669,8 @@ export async function runEmbeddedPiAgent(
                 workspaceDir: resolvedWorkspace,
                 executionText: textToRewrite,
                 signal: params.abortSignal,
-                profileId: lastProfileId,
-                preferredProfile: preferredProfileId,
+                profileId: sameProvider ? lastProfileId : undefined,
+                preferredProfile: sameProvider ? preferredProfileId : undefined,
               });
               if (closeoutResult) {
                 // Accumulate the closeout's token usage into the run total
