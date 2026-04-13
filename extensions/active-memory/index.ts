@@ -1879,6 +1879,11 @@ export default definePluginEntry({
     };
     api.registerCommand({
       name: "active-memory",
+      // Telegram's BotFather command registration only accepts
+      // `^[a-z0-9_]+$` names, so expose an underscore alias for the
+      // Telegram native surface. Other surfaces keep the canonical
+      // hyphen form. (#65985)
+      nativeNames: { telegram: "active_memory" },
       description: "Enable, disable, or inspect Active Memory for this session.",
       acceptsArgs: true,
       handler: async (ctx) => {
