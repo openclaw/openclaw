@@ -48,6 +48,29 @@ let cachedDatabase: FlowRegistryDatabase | null = null;
 const FLOW_REGISTRY_DIR_MODE = 0o700;
 const FLOW_REGISTRY_FILE_MODE = 0o600;
 const FLOW_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+const FLOW_RUNS_TABLE_SCHEMA = `
+  CREATE TABLE flow_runs (
+    flow_id TEXT PRIMARY KEY,
+    shape TEXT,
+    sync_mode TEXT NOT NULL DEFAULT 'managed',
+    owner_key TEXT NOT NULL,
+    requester_origin_json TEXT,
+    controller_id TEXT,
+    revision INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    notify_policy TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    current_step TEXT,
+    blocked_task_id TEXT,
+    blocked_summary TEXT,
+    state_json TEXT,
+    wait_json TEXT,
+    cancel_requested_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    ended_at INTEGER
+  );
+`;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
@@ -224,91 +247,154 @@ function hasFlowRunsColumn(db: DatabaseSync, columnName: string): boolean {
   return rows.some((row) => row.name === columnName);
 }
 
-function ensureSchema(db: DatabaseSync) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS flow_runs (
-      flow_id TEXT PRIMARY KEY,
-      shape TEXT,
-      sync_mode TEXT NOT NULL DEFAULT 'managed',
-      owner_key TEXT NOT NULL,
-      requester_origin_json TEXT,
-      controller_id TEXT,
-      revision INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL,
-      notify_policy TEXT NOT NULL,
-      goal TEXT NOT NULL,
-      current_step TEXT,
-      blocked_task_id TEXT,
-      blocked_summary TEXT,
-      state_json TEXT,
-      wait_json TEXT,
-      cancel_requested_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      ended_at INTEGER
-    );
-  `);
-  if (!hasFlowRunsColumn(db, "owner_key") && hasFlowRunsColumn(db, "owner_session_key")) {
+function addFlowRunsColumnIfMissing(db: DatabaseSync, columnName: string, definition: string) {
+  if (!hasFlowRunsColumn(db, columnName)) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN ${definition};`);
+  }
+}
+
+function createFlowRunsTable(db: DatabaseSync) {
+  db.exec(
+    FLOW_RUNS_TABLE_SCHEMA.replace(
+      "CREATE TABLE flow_runs",
+      "CREATE TABLE IF NOT EXISTS flow_runs",
+    ),
+  );
+}
+
+function backfillOwnerKey(db: DatabaseSync) {
+  if (!hasFlowRunsColumn(db, "owner_key")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN owner_key TEXT;`);
+  }
+  if (!hasFlowRunsColumn(db, "owner_session_key")) {
     db.exec(`
       UPDATE flow_runs
-      SET owner_key = owner_session_key
-      WHERE owner_key IS NULL
+      SET owner_key = trim(owner_key)
+      WHERE owner_key <> trim(owner_key)
     `);
+    return;
   }
-  if (!hasFlowRunsColumn(db, "shape")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN shape TEXT;`);
-  }
-  if (!hasFlowRunsColumn(db, "sync_mode")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN sync_mode TEXT;`);
-    if (hasFlowRunsColumn(db, "shape")) {
-      db.exec(`
-        UPDATE flow_runs
-        SET sync_mode = CASE
-          WHEN shape = 'single_task' THEN 'task_mirrored'
-          ELSE 'managed'
-        END
-        WHERE sync_mode IS NULL
-      `);
-    } else {
-      db.exec(`
-        UPDATE flow_runs
-        SET sync_mode = 'managed'
-        WHERE sync_mode IS NULL
-      `);
-    }
-  }
-  if (!hasFlowRunsColumn(db, "controller_id")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN controller_id TEXT;`);
-  }
+  db.exec(`
+    UPDATE flow_runs
+    SET owner_key = CASE
+      WHEN trim(COALESCE(owner_key, '')) <> '' THEN trim(owner_key)
+      ELSE trim(owner_session_key)
+    END
+    WHERE owner_key IS NULL
+      OR trim(COALESCE(owner_key, '')) = ''
+      OR owner_key <> trim(owner_key)
+  `);
+}
+
+function backfillSyncMode(db: DatabaseSync) {
+  db.exec(`
+    UPDATE flow_runs
+    SET sync_mode = CASE
+      WHEN trim(COALESCE(sync_mode, '')) IN ('managed', 'task_mirrored') THEN trim(sync_mode)
+      WHEN shape = 'single_task' THEN 'task_mirrored'
+      ELSE 'managed'
+    END
+    WHERE sync_mode IS NULL
+      OR trim(sync_mode) = ''
+      OR trim(sync_mode) NOT IN ('managed', 'task_mirrored')
+  `);
+}
+
+function backfillControllerId(db: DatabaseSync) {
   db.exec(`
     UPDATE flow_runs
     SET controller_id = 'core/legacy-restored'
     WHERE sync_mode = 'managed'
       AND (controller_id IS NULL OR trim(controller_id) = '')
   `);
-  if (!hasFlowRunsColumn(db, "revision")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN revision INTEGER;`);
+}
+
+function backfillRevision(db: DatabaseSync) {
+  db.exec(`
+    UPDATE flow_runs
+    SET revision = 0
+    WHERE revision IS NULL
+  `);
+}
+
+function rebuildFlowRunsTableWithoutLegacyOwnerColumn(db: DatabaseSync) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`ALTER TABLE flow_runs RENAME TO flow_runs_legacy_owner_session_key;`);
+    db.exec(FLOW_RUNS_TABLE_SCHEMA);
     db.exec(`
-      UPDATE flow_runs
-      SET revision = 0
-      WHERE revision IS NULL
+      INSERT INTO flow_runs (
+        flow_id,
+        shape,
+        sync_mode,
+        owner_key,
+        requester_origin_json,
+        controller_id,
+        revision,
+        status,
+        notify_policy,
+        goal,
+        current_step,
+        blocked_task_id,
+        blocked_summary,
+        state_json,
+        wait_json,
+        cancel_requested_at,
+        created_at,
+        updated_at,
+        ended_at
+      )
+      SELECT
+        flow_id,
+        shape,
+        sync_mode,
+        owner_key,
+        requester_origin_json,
+        controller_id,
+        revision,
+        status,
+        notify_policy,
+        goal,
+        current_step,
+        blocked_task_id,
+        blocked_summary,
+        state_json,
+        wait_json,
+        cancel_requested_at,
+        created_at,
+        updated_at,
+        ended_at
+      FROM flow_runs_legacy_owner_session_key
     `);
+    db.exec(`DROP TABLE flow_runs_legacy_owner_session_key;`);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
-  if (!hasFlowRunsColumn(db, "blocked_task_id")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN blocked_task_id TEXT;`);
-  }
-  if (!hasFlowRunsColumn(db, "blocked_summary")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN blocked_summary TEXT;`);
-  }
-  if (!hasFlowRunsColumn(db, "state_json")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN state_json TEXT;`);
-  }
-  if (!hasFlowRunsColumn(db, "wait_json")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN wait_json TEXT;`);
-  }
-  if (!hasFlowRunsColumn(db, "cancel_requested_at")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN cancel_requested_at INTEGER;`);
+}
+
+function ensureSchema(db: DatabaseSync) {
+  createFlowRunsTable(db);
+  const hasLegacyOwnerSessionKey = hasFlowRunsColumn(db, "owner_session_key");
+  backfillOwnerKey(db);
+  addFlowRunsColumnIfMissing(db, "shape", "shape TEXT");
+  addFlowRunsColumnIfMissing(db, "sync_mode", "sync_mode TEXT");
+  backfillSyncMode(db);
+  addFlowRunsColumnIfMissing(db, "requester_origin_json", "requester_origin_json TEXT");
+  addFlowRunsColumnIfMissing(db, "controller_id", "controller_id TEXT");
+  backfillControllerId(db);
+  addFlowRunsColumnIfMissing(db, "revision", "revision INTEGER");
+  backfillRevision(db);
+  addFlowRunsColumnIfMissing(db, "current_step", "current_step TEXT");
+  addFlowRunsColumnIfMissing(db, "blocked_task_id", "blocked_task_id TEXT");
+  addFlowRunsColumnIfMissing(db, "blocked_summary", "blocked_summary TEXT");
+  addFlowRunsColumnIfMissing(db, "state_json", "state_json TEXT");
+  addFlowRunsColumnIfMissing(db, "wait_json", "wait_json TEXT");
+  addFlowRunsColumnIfMissing(db, "cancel_requested_at", "cancel_requested_at INTEGER");
+  addFlowRunsColumnIfMissing(db, "ended_at", "ended_at INTEGER");
+  if (hasLegacyOwnerSessionKey) {
+    rebuildFlowRunsTableWithoutLegacyOwnerColumn(db);
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);`);
