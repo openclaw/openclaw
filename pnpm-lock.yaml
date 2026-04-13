@@ -148,6 +148,9 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
       file-type:
         specifier: 22.0.1
         version: 22.0.1
@@ -190,6 +193,9 @@ importers:
       matrix-js-sdk:
         specifier: 41.3.0
         version: 41.3.0
+      music-metadata:
+        specifier: ^11.12.3
+        version: 11.12.3
       mpg123-decoder:
         specifier: ^1.0.3
         version: 1.0.3

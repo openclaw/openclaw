@@ -87,6 +87,19 @@ describe("bundled plugin build entries", () => {
     );
   });
 
+  it("keeps Matrix source runtime dependencies resolvable from the root package", () => {
+    const rootPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
+    const matrixPackage = JSON.parse(fs.readFileSync("extensions/matrix/package.json", "utf8"));
+    const rootRuntimeDeps = {
+      ...rootPackage.dependencies,
+      ...rootPackage.optionalDependencies,
+    };
+
+    for (const depName of Object.keys(matrixPackage.dependencies ?? {})) {
+      expect(rootRuntimeDeps).toHaveProperty(depName);
+    }
+  });
+
   it("keeps private QA bundles out of required npm pack artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
