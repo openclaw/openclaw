@@ -168,8 +168,7 @@ export class FeishuStreamingSession {
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private updateThrottleMs = 0; // No throttling - Feishu API handles rapid updates
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -341,10 +340,6 @@ export class FeishuStreamingSession {
     }
     this.pendingText = null;
     this.lastUpdateTime = now;
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
 
     this.queue = this.queue.then(async () => {
       if (!this.state || this.closed) {
@@ -395,10 +390,6 @@ export class FeishuStreamingSession {
       return;
     }
     this.closed = true;
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
     await this.queue;
 
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
