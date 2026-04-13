@@ -57,7 +57,7 @@ import {
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
-import { ADMIN_SCOPE } from "../../method-scopes.js";
+import { ADMIN_SCOPE, MESH_SCOPE } from "../../method-scopes.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -66,6 +66,7 @@ import {
 } from "../../net.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
   resolveDeviceAuthConnectErrorDetailCode,
@@ -529,6 +530,20 @@ export function attachGatewayWsMessageHandler(params: {
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
         });
+        const isMeshBackendClient =
+          connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+        const requestedMeshOnly = scopes.every((scope) => scope === MESH_SCOPE);
+        const canSkipDeviceViaTailscaleMesh =
+          authOk &&
+          authMethod === "tailscale" &&
+          isMeshBackendClient &&
+          requestedMeshOnly &&
+          role === "operator";
+        if (canSkipDeviceViaTailscaleMesh && scopes.length === 0) {
+          scopes = [MESH_SCOPE];
+          connectParams.scopes = scopes;
+        }
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
             resolveUnauthorizedHandshakeContext({
@@ -576,6 +591,9 @@ export function attachGatewayWsMessageHandler(params: {
           }
         };
         const handleMissingDeviceIdentity = (): boolean => {
+          if (!device && canSkipDeviceViaTailscaleMesh) {
+            return true;
+          }
           const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
             isControlUi,
             role,
@@ -1254,6 +1272,8 @@ export function attachGatewayWsMessageHandler(params: {
           sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
+          authUser: authResult.user,
+          authMethod,
           canvasHostUrl,
           canvasCapability,
           canvasCapabilityExpiresAtMs,

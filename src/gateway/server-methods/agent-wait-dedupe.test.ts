@@ -65,7 +65,10 @@ describe("agent wait dedupe helper", () => {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      summary: undefined,
+      outputText: undefined,
       error: undefined,
+      sessionKey: undefined,
     });
     expect(__testing.getWaiterCount(runId)).toBe(0);
   });
@@ -143,7 +146,10 @@ describe("agent wait dedupe helper", () => {
       status: "ok",
       startedAt: 1,
       endedAt: 2,
+      summary: undefined,
+      outputText: undefined,
       error: undefined,
+      sessionKey: undefined,
     });
   });
 
@@ -193,7 +199,10 @@ describe("agent wait dedupe helper", () => {
       status: "ok",
       startedAt: 123,
       endedAt: 456,
+      summary: undefined,
+      outputText: undefined,
       error: undefined,
+      sessionKey: undefined,
     });
   });
 
@@ -226,7 +235,10 @@ describe("agent wait dedupe helper", () => {
       status: "error",
       startedAt: 30,
       endedAt: 40,
+      summary: undefined,
+      outputText: undefined,
       error: "chat failed",
+      sessionKey: undefined,
     });
 
     const dedupeReverse = new Map();
@@ -254,7 +266,45 @@ describe("agent wait dedupe helper", () => {
       status: "timeout",
       startedAt: 3,
       endedAt: 4,
+      summary: undefined,
+      outputText: undefined,
       error: "still running",
+      sessionKey: undefined,
+    });
+  });
+
+  it("preserves summary, outputText, and sessionKey from terminal agent entries", () => {
+    const dedupe = new Map();
+    const runId = "run-mesh-details";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 10,
+        endedAt: 20,
+        summary: "completed",
+        outputText: "mesh output",
+        sessionKey: "mesh:caller@example.com",
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 10,
+      endedAt: 20,
+      summary: "completed",
+      outputText: "mesh output",
+      error: undefined,
+      sessionKey: "mesh:caller@example.com",
     });
   });
 

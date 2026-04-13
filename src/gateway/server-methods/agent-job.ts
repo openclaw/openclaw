@@ -18,7 +18,10 @@ type AgentRunSnapshot = {
   status: "ok" | "error" | "timeout";
   startedAt?: number;
   endedAt?: number;
+  summary?: string;
+  outputText?: string;
   error?: string;
+  sessionKey?: string;
   ts: number;
 };
 

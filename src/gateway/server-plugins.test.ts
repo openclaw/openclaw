@@ -596,6 +596,31 @@ describe("loadGatewayPlugins", () => {
     expect((generated as string).length).toBeGreaterThan(0);
   });
 
+  test("passes terminal wait metadata through the subagent runtime", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, {
+        status: "ok",
+        summary: "completed",
+        outputText: "mesh result",
+        sessionKey: "mesh:caller@example.com",
+      });
+    });
+
+    await expect(
+      runtime.waitForRun({
+        runId: "run-mesh",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toEqual({
+      status: "ok",
+      summary: "completed",
+      outputText: "mesh result",
+      sessionKey: "mesh:caller@example.com",
+    });
+  });
+
   test("rejects provider/model overrides for fallback runs without explicit authorization", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

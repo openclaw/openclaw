@@ -3,6 +3,7 @@ import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-poli
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
+  MESH_SCOPE,
   PAIRING_SCOPE,
   READ_SCOPE,
   TALK_SECRETS_SCOPE,
@@ -13,6 +14,7 @@ import {
 export {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
+  MESH_SCOPE,
   PAIRING_SCOPE,
   READ_SCOPE,
   TALK_SECRETS_SCOPE,
@@ -65,6 +67,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "device.token.revoke",
     "node.rename",
   ],
+  [MESH_SCOPE]: [],
   [READ_SCOPE]: [
     "health",
     "doctor.memory.status",

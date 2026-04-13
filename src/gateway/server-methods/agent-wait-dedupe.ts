@@ -4,7 +4,10 @@ export type AgentWaitTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
   startedAt?: number;
   endedAt?: number;
+  summary?: string;
+  outputText?: string;
   error?: string;
+  sessionKey?: string;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -21,6 +24,39 @@ function parseRunIdFromDedupeKey(key: string): string | null {
 
 function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function extractPayloadText(payloads: unknown): string | undefined {
+  if (!Array.isArray(payloads)) {
+    return undefined;
+  }
+  for (let index = payloads.length - 1; index >= 0; index -= 1) {
+    const payload = payloads[index];
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      continue;
+    }
+    const text = asNonEmptyString((payload as Record<string, unknown>).text);
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function extractResultOutputText(result: unknown): string | undefined {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  const meta =
+    record.meta && typeof record.meta === "object" && !Array.isArray(record.meta)
+      ? (record.meta as Record<string, unknown>)
+      : undefined;
+  return asNonEmptyString(meta?.finalAssistantVisibleText) ?? extractPayloadText(record.payloads);
 }
 
 function removeWaiter(runId: string, waiter: () => void): void {
@@ -70,8 +106,11 @@ export function readTerminalSnapshotFromDedupeEntry(
         status?: unknown;
         startedAt?: unknown;
         endedAt?: unknown;
+        outputText?: unknown;
+        sessionKey?: unknown;
         error?: unknown;
         summary?: unknown;
+        result?: unknown;
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -81,6 +120,10 @@ export function readTerminalSnapshotFromDedupeEntry(
 
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
+  const summary = asNonEmptyString(payload?.summary);
+  const outputText =
+    asNonEmptyString(payload?.outputText) ?? extractResultOutputText(payload?.result);
+  const sessionKey = asNonEmptyString(payload?.sessionKey);
   const errorMessage =
     typeof payload?.error === "string"
       ? payload.error
@@ -93,7 +136,10 @@ export function readTerminalSnapshotFromDedupeEntry(
       status,
       startedAt,
       endedAt,
+      summary,
+      outputText,
       error: status === "timeout" ? errorMessage : undefined,
+      sessionKey,
     };
   }
   if (status === "error" || !entry.ok) {
@@ -101,7 +147,10 @@ export function readTerminalSnapshotFromDedupeEntry(
       status: "error",
       startedAt,
       endedAt,
+      summary,
+      outputText,
       error: errorMessage,
+      sessionKey,
     };
   }
   return null;

@@ -21,7 +21,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { getAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -205,6 +205,56 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
+  const setRunDedupeEntry = (entry: {
+    ok: boolean;
+    payload: Record<string, unknown>;
+    error?: ReturnType<typeof errorShape>;
+  }) => {
+    const sharedEntry = {
+      ts: Date.now(),
+      ok: entry.ok,
+      payload: entry.payload,
+      ...(entry.error ? { error: entry.error } : {}),
+    };
+    setGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      key: `agent:${params.idempotencyKey}`,
+      entry: sharedEntry,
+    });
+    setGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      key: `agent:${params.runId}`,
+      entry: sharedEntry,
+    });
+  };
+  const extractOutputText = (result: unknown): string | undefined => {
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      return undefined;
+    }
+    const record = result as Record<string, unknown>;
+    const meta =
+      record.meta && typeof record.meta === "object" && !Array.isArray(record.meta)
+        ? (record.meta as Record<string, unknown>)
+        : undefined;
+    const finalAssistantVisibleText = meta?.finalAssistantVisibleText;
+    if (typeof finalAssistantVisibleText === "string" && finalAssistantVisibleText.trim()) {
+      return finalAssistantVisibleText.trim();
+    }
+    if (!Array.isArray(record.payloads)) {
+      return undefined;
+    }
+    for (let index = record.payloads.length - 1; index >= 0; index -= 1) {
+      const payload = record.payloads[index];
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        continue;
+      }
+      const text = (payload as Record<string, unknown>).text;
+      if (typeof text === "string" && text.trim()) {
+        return text.trim();
+      }
+    }
+    return undefined;
+  };
   const inputProvenance = normalizeInputProvenance(params.ingressOpts.inputProvenance);
   const shouldTrackTask =
     params.ingressOpts.sessionKey?.trim() && inputProvenance?.kind !== "inter_session";
@@ -237,16 +287,13 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         status: "ok" as const,
         summary: "completed",
+        outputText: extractOutputText(result),
+        sessionKey: params.ingressOpts.sessionKey,
         result,
       };
-      setGatewayDedupeEntry({
-        dedupe: params.context.dedupe,
-        key: `agent:${params.idempotencyKey}`,
-        entry: {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        },
+      setRunDedupeEntry({
+        ok: true,
+        payload,
       });
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
@@ -258,16 +305,12 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         status: "error" as const,
         summary: String(err),
+        sessionKey: params.ingressOpts.sessionKey,
       };
-      setGatewayDedupeEntry({
-        dedupe: params.context.dedupe,
-        key: `agent:${params.idempotencyKey}`,
-        entry: {
-          ts: Date.now(),
-          ok: false,
-          payload,
-          error,
-        },
+      setRunDedupeEntry({
+        ok: false,
+        payload,
+        error,
       });
       params.respond(false, payload, error, {
         runId: params.runId,
@@ -792,16 +835,23 @@ export const agentHandlers: GatewayRequestHandlers = {
       runId,
       status: "accepted" as const,
       acceptedAt: Date.now(),
+      sessionKey: resolvedSessionKey,
     };
     // Store an in-flight ack so retries do not spawn a second run.
+    const acceptedEntry = {
+      ts: Date.now(),
+      ok: true,
+      payload: accepted,
+    };
     setGatewayDedupeEntry({
       dedupe: context.dedupe,
       key: `agent:${idem}`,
-      entry: {
-        ts: Date.now(),
-        ok: true,
-        payload: accepted,
-      },
+      entry: acceptedEntry,
+    });
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${runId}`,
+      entry: acceptedEntry,
     });
     respond(true, accepted, undefined, { runId });
 
@@ -980,7 +1030,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         status: cachedGatewaySnapshot.status,
         startedAt: cachedGatewaySnapshot.startedAt,
         endedAt: cachedGatewaySnapshot.endedAt,
+        summary: cachedGatewaySnapshot.summary,
+        outputText: cachedGatewaySnapshot.outputText,
         error: cachedGatewaySnapshot.error,
+        sessionKey: cachedGatewaySnapshot.sessionKey ?? getAgentRunContext(runId)?.sessionKey,
       });
       return;
     }
@@ -1034,7 +1087,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       status: snapshot.status,
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
+      summary: snapshot.summary,
+      outputText: snapshot.outputText,
       error: snapshot.error,
+      sessionKey: snapshot.sessionKey ?? getAgentRunContext(runId)?.sessionKey,
     });
   },
 };

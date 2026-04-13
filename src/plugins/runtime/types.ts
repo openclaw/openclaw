@@ -27,7 +27,10 @@ export type SubagentWaitParams = {
 
 export type SubagentWaitResult = {
   status: "ok" | "error" | "timeout";
+  summary?: string;
+  outputText?: string;
   error?: string;
+  sessionKey?: string;
 };
 
 export type SubagentGetSessionMessagesParams = {

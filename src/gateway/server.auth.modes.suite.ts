@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
+  BACKEND_GATEWAY_CLIENT,
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
@@ -170,6 +171,18 @@ export function registerAuthModesSuite(): void {
       const res = await connectReq(ws, { skipDefaultAuth: true, device: null });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("device identity required");
+      ws.close();
+    });
+
+    test("allows mesh-only backend clients without device identity when tailscale auth is available", async () => {
+      const ws = await openTailscaleWs(port);
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        device: null,
+        scopes: ["operator.mesh"],
+        client: { ...BACKEND_GATEWAY_CLIENT },
+      });
+      expect(res.ok).toBe(true);
       ws.close();
     });
 

@@ -11,7 +11,10 @@ import { coreGatewayHandlers } from "./server-methods.js";
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
 
-function setPluginGatewayMethodScope(method: string, scope: "operator.read" | "operator.write") {
+function setPluginGatewayMethodScope(
+  method: string,
+  scope: "operator.read" | "operator.write" | "operator.mesh",
+) {
   const registry = createEmptyPluginRegistry();
   registry.gatewayMethodScopes = {
     [method]: scope,
@@ -122,6 +125,18 @@ describe("operator scope authorization", () => {
     });
     expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
       allowed: true,
+    });
+  });
+
+  it("requires mesh scope for mesh methods", () => {
+    setPluginGatewayMethodScope("mesh.send_task", "operator.mesh");
+
+    expect(authorizeOperatorScopesForMethod("mesh.send_task", ["operator.mesh"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("mesh.send_task", ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.mesh",
     });
   });
 
