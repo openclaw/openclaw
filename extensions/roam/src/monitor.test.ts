@@ -1,5 +1,6 @@
+import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { monitorRoamProvider } from "./monitor.js";
+import { monitorRoamProvider, verifyStandardWebhookSignature } from "./monitor.js";
 import type { CoreConfig } from "./types.js";
 
 const { mockResolveRoamAccount, mockResolveLoggerBackedRuntime } = vi.hoisted(() => ({
@@ -46,7 +47,7 @@ vi.mock("./inbound.js", () => ({
 
 vi.mock("../runtime-api.js", () => ({
   createWebhookInFlightLimiter: () => ({ acquire: vi.fn(), release: vi.fn() }),
-  readJsonWebhookBodyOrReject: vi.fn(),
+  readWebhookBodyOrReject: vi.fn(),
   registerWebhookTargetWithPluginRoute: () => ({ unregister: mockRegisterUnregister }),
   resolveWebhookPath: (opts: {
     webhookPath?: string;
@@ -334,5 +335,145 @@ describe("monitorRoamProvider", () => {
     );
     expect(subscribeCall).toBeDefined();
     expect(subscribeCall![0]).toBe("https://api.account.dev/v1/webhook.subscribe");
+  });
+});
+
+describe("verifyStandardWebhookSignature", () => {
+  const secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
+  // Base64-decode the secret (after stripping whsec_ prefix)
+  const secretBytes = Buffer.from("MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", "base64");
+
+  function signPayload(msgId: string, timestamp: string, body: string): string {
+    const content = `${msgId}.${timestamp}.${body}`;
+    const sig = createHmac("sha256", secretBytes).update(content).digest("base64");
+    return `v1,${sig}`;
+  }
+
+  it("accepts a valid signature", () => {
+    const msgId = "msg_abc123";
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const body = '{"type":"message","userId":"u1"}';
+    const signature = signPayload(msgId, timestamp, body);
+
+    const result = verifyStandardWebhookSignature(
+      secret,
+      {
+        "webhook-id": msgId,
+        "webhook-timestamp": timestamp,
+        "webhook-signature": signature,
+      },
+      body,
+    );
+
+    expect(result).toBe(true);
+  });
+
+  it("accepts secret without whsec_ prefix", () => {
+    const rawSecret = "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
+    const msgId = "msg_abc123";
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const body = '{"test":true}';
+    const signature = signPayload(msgId, timestamp, body);
+
+    const result = verifyStandardWebhookSignature(
+      rawSecret,
+      {
+        "webhook-id": msgId,
+        "webhook-timestamp": timestamp,
+        "webhook-signature": signature,
+      },
+      body,
+    );
+
+    expect(result).toBe(true);
+  });
+
+  it("rejects an invalid signature", () => {
+    const msgId = "msg_abc123";
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const body = '{"type":"message"}';
+
+    const result = verifyStandardWebhookSignature(
+      secret,
+      {
+        "webhook-id": msgId,
+        "webhook-timestamp": timestamp,
+        "webhook-signature": "v1,invalidsignature==",
+      },
+      body,
+    );
+
+    expect(result).toBe(false);
+  });
+
+  it("rejects when headers are missing", () => {
+    expect(verifyStandardWebhookSignature(secret, {}, '{"test":true}')).toBe(false);
+    expect(verifyStandardWebhookSignature(secret, { "webhook-id": "msg_1" }, '{"test":true}')).toBe(
+      false,
+    );
+    expect(
+      verifyStandardWebhookSignature(
+        secret,
+        { "webhook-id": "msg_1", "webhook-timestamp": "123" },
+        '{"test":true}',
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects stale timestamps (replay protection)", () => {
+    const msgId = "msg_abc123";
+    const staleTimestamp = String(Math.floor(Date.now() / 1000) - 600); // 10 min ago
+    const body = '{"type":"message"}';
+    const signature = signPayload(msgId, staleTimestamp, body);
+
+    const result = verifyStandardWebhookSignature(
+      secret,
+      {
+        "webhook-id": msgId,
+        "webhook-timestamp": staleTimestamp,
+        "webhook-signature": signature,
+      },
+      body,
+    );
+
+    expect(result).toBe(false);
+  });
+
+  it("accepts multiple signatures (picks correct one)", () => {
+    const msgId = "msg_abc123";
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const body = '{"type":"message"}';
+    const validSig = signPayload(msgId, timestamp, body);
+
+    const result = verifyStandardWebhookSignature(
+      secret,
+      {
+        "webhook-id": msgId,
+        "webhook-timestamp": timestamp,
+        "webhook-signature": `v1,oldsig== ${validSig}`,
+      },
+      body,
+    );
+
+    expect(result).toBe(true);
+  });
+
+  it("rejects tampered body", () => {
+    const msgId = "msg_abc123";
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const originalBody = '{"type":"message","userId":"u1"}';
+    const signature = signPayload(msgId, timestamp, originalBody);
+
+    const result = verifyStandardWebhookSignature(
+      secret,
+      {
+        "webhook-id": msgId,
+        "webhook-timestamp": timestamp,
+        "webhook-signature": signature,
+      },
+      '{"type":"message","userId":"attacker"}',
+    );
+
+    expect(result).toBe(false);
   });
 });

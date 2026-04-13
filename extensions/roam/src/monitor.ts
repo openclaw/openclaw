@@ -1,9 +1,10 @@
+import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import {
   type RuntimeEnv,
   createWebhookInFlightLimiter,
-  readJsonWebhookBodyOrReject,
+  readWebhookBodyOrReject,
   registerWebhookTargetWithPluginRoute,
   resolveWebhookPath,
   withResolvedWebhookRequestPipeline,
@@ -16,6 +17,9 @@ import type { CoreConfig, RoamBotIdentity, RoamInboundMessage, RoamWebhookEvent 
 
 const DEFAULT_WEBHOOK_PATH_PREFIX = "/roam-webhook";
 
+/** Max age for webhook timestamps before rejecting as replay (5 minutes). */
+const WEBHOOK_TIMESTAMP_TOLERANCE_S = 300;
+
 type RoamWebhookTarget = {
   account: ResolvedRoamAccount;
   config: CoreConfig;
@@ -23,8 +27,58 @@ type RoamWebhookTarget = {
   path: string;
   /** Bot's chat address ID for self-message filtering. */
   botId?: string;
+  /** Standard-webhooks signing secret for verifying inbound payloads. */
+  secret?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
+
+/**
+ * Verify a standard-webhooks signature (https://www.standardwebhooks.com).
+ * Returns true if the signature is valid, false otherwise.
+ */
+export function verifyStandardWebhookSignature(
+  secret: string,
+  headers: IncomingMessage["headers"],
+  rawBody: string,
+): boolean {
+  const msgId = headers["webhook-id"] as string | undefined;
+  const msgTimestamp = headers["webhook-timestamp"] as string | undefined;
+  const msgSignature = headers["webhook-signature"] as string | undefined;
+
+  if (!msgId || !msgTimestamp || !msgSignature) {
+    return false;
+  }
+
+  // Reject stale timestamps (replay protection)
+  const timestampSec = Number.parseInt(msgTimestamp, 10);
+  if (Number.isNaN(timestampSec)) {
+    return false;
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSec - timestampSec) > WEBHOOK_TIMESTAMP_TOLERANCE_S) {
+    return false;
+  }
+
+  // Decode the secret key (strip "whsec_" prefix if present, then base64-decode)
+  const secretPayload = secret.startsWith("whsec_") ? secret.slice(6) : secret;
+  const secretBytes = Buffer.from(secretPayload, "base64");
+
+  // Compute expected signature: HMAC-SHA256(key, "${msgId}.${msgTimestamp}.${rawBody}")
+  const signedContent = `${msgId}.${msgTimestamp}.${rawBody}`;
+  const expectedSig = createHmac("sha256", secretBytes).update(signedContent).digest("base64");
+
+  // The header may contain multiple space-separated "v1,<base64>" signatures
+  const signatures = msgSignature.split(" ");
+  for (const sig of signatures) {
+    const parts = sig.split(",");
+    if (parts[0] === "v1" && parts[1] === expectedSig) {
+      return true;
+    }
+  }
+  return false;
+}
+
+let warnedNoSecret = false;
 
 const webhookTargets = new Map<string, RoamWebhookTarget[]>();
 const webhookInFlightLimiter = createWebhookInFlightLimiter();
@@ -47,15 +101,17 @@ function webhookEventToInbound(
   event: RoamWebhookEvent,
   chatType: "direct" | "group",
 ): RoamInboundMessage {
+  // Roam timestamps are microsecond-precision; convert to milliseconds for downstream use.
+  const timestampMs = Math.floor(event.timestamp / 1000);
   const msg: RoamInboundMessage = {
     messageId: event.messageId ?? String(event.timestamp),
     chatId: event.chatId,
     senderId: event.userId,
     senderName: "",
     text: event.text,
-    timestamp: event.timestamp,
+    timestamp: timestampMs,
     chatType,
-    threadTimestamp: event.threadTimestamp,
+    threadTimestamp: event.threadTimestamp ? Math.floor(event.threadTimestamp / 1000) : undefined,
   };
 
   // Extract media URLs from attached items
@@ -89,31 +145,58 @@ async function handleRoamWebhookRequest(
     requireJsonContentType: true,
     inFlightLimiter: webhookInFlightLimiter,
     handle: async ({ targets }) => {
-      const body = await readJsonWebhookBodyOrReject({
+      // Read raw body first — needed for standard-webhooks signature verification.
+      const rawResult = await readWebhookBodyOrReject({
         req,
         res,
         profile: "post-auth",
-        emptyObjectOnEmpty: false,
-        invalidJsonMessage: "invalid payload",
+        invalidBodyMessage: "invalid payload",
       });
-      if (!body.ok) {
+      if (!rawResult.ok) {
         return true;
       }
+      const rawBody = rawResult.value;
 
-      const event = parseRoamWebhookEvent(body.value);
-      if (!event) {
-        res.statusCode = 400;
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("invalid event payload");
-        return true;
-      }
-
-      // Roam webhook events don't include per-account routing info,
-      // so dispatch to the first registered target on this path.
+      // Resolve the target for this path.
       const target = targets[0];
       if (!target) {
         res.statusCode = 404;
         res.end("no target");
+        return true;
+      }
+
+      // Verify standard-webhooks signature when a secret is configured.
+      if (target.secret) {
+        if (!verifyStandardWebhookSignature(target.secret, req.headers, rawBody)) {
+          res.statusCode = 401;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("invalid webhook signature");
+          return true;
+        }
+      } else if (!warnedNoSecret) {
+        warnedNoSecret = true;
+        target.runtime.log?.(
+          "roam: no webhookSecret configured — webhook requests are not authenticated. " +
+            "Set channels.roam.webhookSecret with your Roam signing key for production use.",
+        );
+      }
+
+      // Parse JSON body.
+      let parsed: unknown;
+      try {
+        parsed = rawBody.trim() ? JSON.parse(rawBody) : undefined;
+      } catch {
+        res.statusCode = 400;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("invalid JSON payload");
+        return true;
+      }
+
+      const event = parseRoamWebhookEvent(parsed);
+      if (!event) {
+        res.statusCode = 400;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("invalid event payload");
         return true;
       }
 
@@ -124,7 +207,7 @@ async function handleRoamWebhookRequest(
       res.setHeader("Content-Type", "application/json");
       res.end("{}");
 
-      const rawObj = body.value as Record<string, unknown>;
+      const rawObj = parsed as Record<string, unknown>;
       const chatType: "direct" | "group" = rawObj.chatType === "dm" ? "direct" : "group";
 
       const message = webhookEventToInbound(event, chatType);
@@ -314,6 +397,7 @@ export async function monitorRoamProvider(opts: RoamMonitorOptions): Promise<{ s
     runtime,
     path: webhookPath,
     botId: botIdentity?.id,
+    secret: account.config.webhookSecret?.trim() || undefined,
     statusSink: opts.statusSink,
   });
 

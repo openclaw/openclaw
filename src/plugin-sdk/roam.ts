@@ -114,6 +114,7 @@ export {
 export {
   createWebhookInFlightLimiter,
   readJsonWebhookBodyOrReject,
+  readWebhookBodyOrReject,
   registerWebhookTargetWithPluginRoute,
   resolveWebhookPath,
   type WebhookInFlightLimiter,

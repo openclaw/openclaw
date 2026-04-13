@@ -75,10 +75,17 @@ Set `webhookUrl` to the full public URL of your gateway webhook endpoint. OpenCl
     roam: {
       apiKey: "your-token",
       webhookUrl: "https://your-gateway-host.example.com/roam-webhook",
+      webhookSecret: "whsec_your-signing-key-from-roam-admin",
     },
   },
 }
 ```
+
+### Webhook security
+
+Roam uses the [Standard Webhooks](https://www.standardwebhooks.com) signing scheme. Set `webhookSecret` to the signing key from Roam Administration to verify that inbound payloads are authentic. When configured, OpenClaw checks the `webhook-id`, `webhook-timestamp`, and `webhook-signature` headers on every request and rejects invalid or stale signatures.
+
+If `webhookSecret` is not set, webhook requests are accepted without signature verification. This is acceptable for local development but should be configured for production deployments.
 
 ### Manual subscription
 
@@ -185,19 +192,20 @@ Configure multiple Roam bot accounts under `accounts`. Each account gets its own
 
 ## Configuration reference
 
-| Key              | Type     | Default             | Description                                   |
-| ---------------- | -------- | ------------------- | --------------------------------------------- |
-| `apiKey`         | secret   | —                   | Roam bot API token                            |
-| `apiKeyFile`     | string   | —                   | Path to file containing the API key           |
-| `apiBaseUrl`     | string   | `https://api.ro.am` | Override API base URL (per-account supported) |
-| `webhookUrl`     | string   | —                   | Full public URL for auto-subscription         |
-| `webhookPath`    | string   | `/roam-webhook`     | Local HTTP route path                         |
-| `dmPolicy`       | string   | `pairing`           | `open`, `pairing`, or `allowlist`             |
-| `groupPolicy`    | string   | `allowlist`         | `open`, `allowlist`, or `disabled`            |
-| `allowFrom`      | string[] | —                   | DM sender allowlist (Roam user UUIDs)         |
-| `groupAllowFrom` | string[] | —                   | Group sender allowlist                        |
-| `groups`         | object   | —                   | Per-group config (keyed by group UUID or `*`) |
-| `blockStreaming` | boolean  | —                   | Disable block streaming for this account      |
+| Key              | Type     | Default             | Description                                    |
+| ---------------- | -------- | ------------------- | ---------------------------------------------- |
+| `apiKey`         | secret   | —                   | Roam bot API token                             |
+| `apiKeyFile`     | string   | —                   | Path to file containing the API key            |
+| `apiBaseUrl`     | string   | `https://api.ro.am` | Override API base URL (per-account supported)  |
+| `webhookUrl`     | string   | —                   | Full public URL for auto-subscription          |
+| `webhookSecret`  | string   | —                   | Standard-webhooks signing key for verification |
+| `webhookPath`    | string   | `/roam-webhook`     | Local HTTP route path                          |
+| `dmPolicy`       | string   | `pairing`           | `open`, `pairing`, or `allowlist`              |
+| `groupPolicy`    | string   | `allowlist`         | `open`, `allowlist`, or `disabled`             |
+| `allowFrom`      | string[] | —                   | DM sender allowlist (Roam user UUIDs)          |
+| `groupAllowFrom` | string[] | —                   | Group sender allowlist                         |
+| `groups`         | object   | —                   | Per-group config (keyed by group UUID or `*`)  |
+| `blockStreaming` | boolean  | —                   | Disable block streaming for this account       |
 
 ### Per-group keys
 

@@ -62,6 +62,8 @@ export type RoamAccountConfig = {
   apiBaseUrl?: string;
   /** Full webhook callback URL for auto-subscription (e.g. "https://example.com/roam-webhook"). */
   webhookUrl?: string;
+  /** Standard-webhooks signing secret for verifying inbound webhook payloads. From Roam admin. */
+  webhookSecret?: string;
 };
 
 export type RoamConfig = {
