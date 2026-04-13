@@ -674,8 +674,6 @@ export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
-  // Cast to any to bypass the strict content type checking since we use a
-  // different image content format than the upstream library expects
   return {
     ...base,
     execute: async (toolCallId, params, signal) => {
@@ -698,6 +696,25 @@ export function createOpenClawReadTool(
         ? cleanPath
         : path.resolve(rootDir, cleanPath);
 
+      // 🔒 SECURITY: Validate sandbox boundary BEFORE any file operations
+      try {
+        await assertSandboxPath({ 
+          filePath: inputPath, 
+          cwd: rootDir, 
+          root: rootDir 
+        });
+      } catch (err) {
+        const error = err as Error;
+        return {
+          toolCallId,
+          content: [{ 
+            type: "text", 
+            text: `Access denied: ${error.message}` 
+          }],
+          details: { isError: true, path: inputPath },
+        };
+      }
+
       try {
         const stats = await fs.stat(inputPath);
 
@@ -715,10 +732,10 @@ export function createOpenClawReadTool(
         const mediaUrl = `http://localhost:18791${inputPath}`;
 
         if (IMAGE_EXTENSIONS.has(ext)) {
+          // Now safe to read after sandbox validation
           const fileBuffer = await fs.readFile(inputPath);
           const mimeType = getImageMimeType(ext);
 
-          // Return format that matches our working display code
           return {
             toolCallId,
             content: [
@@ -736,9 +753,10 @@ export function createOpenClawReadTool(
               },
             ],
             details: { path: inputPath, size: stats.size },
-          } as any; // Type assertion to bypass upstream ImageContent type check
+          } as any;
         }
 
+        // Similar handling for audio/video would also be protected
         if (AUDIO_EXTENSIONS.has(ext)) {
           return {
             toolCallId,
@@ -790,7 +808,7 @@ export function createOpenClawReadTool(
         };
       }
     },
-  } as AnyAgentTool; // Cast the entire tool to bypass type checking
+  } as AnyAgentTool;
 }
 
 function createSandboxReadOperations(params: SandboxToolParams) {
