@@ -175,6 +175,10 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: (cfg: unknown) => cfg,
   summarizeExistingConfig: () => "summary",
   handleReset: async () => {},
+  isOnboardingInterrupted: vi.fn(async () => false),
+  backupInterruptedConfig: vi.fn(async () => undefined),
+  markOnboardingInProgress: vi.fn(async () => {}),
+  clearOnboardingInProgress: vi.fn(async () => {}),
   randomToken: () => "test-token",
   normalizeGatewayTokenInput: (value: unknown) => ({
     ok: true,
