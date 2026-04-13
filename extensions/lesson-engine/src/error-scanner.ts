@@ -10,6 +10,10 @@ const FINGERPRINT_LEN = 16;
 
 /** Default location for the per-agent session log directory. */
 export function sessionsDir(agent: string): string {
+  const envRoot = process.env.OPENCLAW_SESSIONS_ROOT;
+  if (envRoot && envRoot.length > 0) {
+    return path.join(envRoot, agent, "sessions");
+  }
   return path.join(os.homedir(), ".openclaw", "agents", agent, "sessions");
 }
 

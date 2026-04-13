@@ -67,10 +67,19 @@ export interface CliOptions {
 }
 
 export interface MaintenanceStatePerAgent {
+  lastScanAt?: string;
+  lastDistillAt?: string;
+  lastGateAt?: string;
   lastMigrateAt?: string;
   lastDedupeAt?: string;
   lastForgetAt?: string;
+  lastInjectAt?: string;
   lastMaintenanceAt?: string;
+  scanSeeds?: number;
+  distillCandidates?: number;
+  distillSkipped?: number;
+  gatePromoted?: number;
+  gateRejected?: number;
   dedupeMerged?: number;
   forgetStale?: number;
   forgetArchived?: number;

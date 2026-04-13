@@ -7,3 +7,4 @@ export * from "./forget.js";
 export * from "./error-scanner.js";
 export * from "./distill.js";
 export * from "./gate.js";
+export * from "./inject.js";
