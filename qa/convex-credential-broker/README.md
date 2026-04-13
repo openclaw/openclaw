@@ -134,6 +134,12 @@ curl -sS -X POST "<site-url>/qa-credentials/v1/admin/add" \
   }'
 ```
 
+For `kind: "telegram"`, broker `admin/add` validates that payload includes:
+
+- `groupId` as a numeric chat id string
+- non-empty `driverToken`
+- non-empty `sutToken`
+
 Admin list (default redacted):
 
 ```bash

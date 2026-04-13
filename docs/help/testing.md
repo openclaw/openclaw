@@ -161,6 +161,7 @@ Payload shape for Telegram kind:
 
 - `{ groupId: string, driverToken: string, sutToken: string }`
 - `groupId` must be a numeric Telegram chat id string.
+- `admin/add` validates this shape for `kind: "telegram"` and rejects malformed payloads.
 
 ### Adding a channel to QA
 
