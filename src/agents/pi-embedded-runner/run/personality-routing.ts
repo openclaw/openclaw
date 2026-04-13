@@ -231,6 +231,8 @@ export async function runPersonalityCloseout(params: {
   workspaceDir?: string;
   executionText: string;
   signal?: AbortSignal;
+  profileId?: string;
+  preferredProfile?: string;
 }): Promise<PersonalityCloseoutResult | null> {
   try {
     const prepared = await prepareSimpleCompletionModel({
@@ -238,6 +240,8 @@ export async function runPersonalityCloseout(params: {
       provider: params.personalityProvider,
       modelId: params.personalityModelId,
       agentDir: params.agentDir,
+      profileId: params.profileId,
+      preferredProfile: params.preferredProfile,
     });
     if ("error" in prepared) {
       return null;

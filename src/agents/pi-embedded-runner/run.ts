@@ -1665,6 +1665,8 @@ export async function runEmbeddedPiAgent(
                 workspaceDir: resolvedWorkspace,
                 executionText: textToRewrite,
                 signal: params.abortSignal,
+                profileId: lastProfileId,
+                preferredProfile: preferredProfileId,
               });
               if (closeoutResult) {
                 // Accumulate the closeout's token usage into the run total
