@@ -19,7 +19,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
@@ -84,12 +84,25 @@ function collectSessionIdMatchesForRequest(opts: {
   };
 
   addMatches(opts.sessionStore, opts.storePath, { primary: true });
+  const scannedAgentIds = new Set<string>();
+  if (opts.storeAgentId) {
+    scannedAgentIds.add(opts.storeAgentId);
+  }
   for (const agentId of listAgentIds(opts.cfg)) {
-    if (agentId === opts.storeAgentId) {
+    if (scannedAgentIds.has(agentId)) {
       continue;
     }
+    scannedAgentIds.add(agentId);
     const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
     addMatches(loadSessionStore(candidateStorePath), candidateStorePath);
+  }
+  // Also scan the legacy "main" store when the resolved agent differs, so that
+  // sessionId resume can find sessions stored under the old default agent.
+  if (!scannedAgentIds.has(DEFAULT_AGENT_ID)) {
+    const legacyStorePath = resolveStorePath(opts.cfg.session?.store, {
+      agentId: DEFAULT_AGENT_ID,
+    });
+    addMatches(loadSessionStore(legacyStorePath), legacyStorePath);
   }
 
   return { matches, primaryStoreMatches, storeByKey };
