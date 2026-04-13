@@ -153,7 +153,6 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       "ws", "http" -> 18789
       else -> 443
     }
-  val standardTransportPort = if (tls) 443 else 80
   val displayPort =
     when (scheme) {
       "wss", "https" -> 443
@@ -169,8 +168,8 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       "${if (tls) "https" else "http"}://$displayHost:$port"
     }
   val transportUrl =
-    if (port == standardTransportPort) {
-      "${if (tls) "wss" else "ws"}://$displayHost"
+    if (tls && port == 443) {
+      "wss://$displayHost"
     } else {
       "${if (tls) "wss" else "ws"}://$displayHost:$port"
     }

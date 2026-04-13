@@ -45,8 +45,15 @@ internal fun PairingAutoRetryEffect(enabled: Boolean, onRetry: () -> Unit) {
 
   LaunchedEffect(enabled, lifecycleStarted, retryGeneration) {
     val shouldRetry = shouldTriggerPairingRetry(previousEnabled, enabled)
+    if (!enabled) {
+      previousEnabled = false
+      return@LaunchedEffect
+    }
+    if (!lifecycleStarted) {
+      return@LaunchedEffect
+    }
     previousEnabled = enabled
-    if (!shouldRetry || !lifecycleStarted) {
+    if (!shouldRetry) {
       return@LaunchedEffect
     }
     delay(PAIRING_AUTO_RETRY_MS)

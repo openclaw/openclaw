@@ -217,7 +217,23 @@ class GatewayConfigResolverTest {
         port = 80,
         tls = false,
         displayUrl = "http://localhost:80",
-        transportUrl = "ws://localhost",
+        transportUrl = "ws://localhost:80",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointPreservesExplicitCleartextPort80InTransportUrl() {
+    val parsed = parseGatewayEndpoint("ws://localhost:80")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "localhost",
+        port = 80,
+        tls = false,
+        displayUrl = "http://localhost:80",
+        transportUrl = "ws://localhost:80",
       ),
       parsed,
     )

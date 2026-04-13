@@ -19,4 +19,12 @@ class GatewayPairingRetryLogicTest {
   fun blocksRetryWhenPairingIsNotRequired() {
     assertFalse(shouldTriggerPairingRetry(previousPairingRequired = false, pairingRequired = false))
   }
+
+  @Test
+  fun preservesPendingRetryWhenPairingStartsWhileStopped() {
+    val shouldRetryWhileStopped = shouldTriggerPairingRetry(previousPairingRequired = false, pairingRequired = true)
+    assertTrue(shouldRetryWhileStopped)
+    val shouldRetryAfterResume = shouldTriggerPairingRetry(previousPairingRequired = false, pairingRequired = true)
+    assertTrue(shouldRetryAfterResume)
+  }
 }
