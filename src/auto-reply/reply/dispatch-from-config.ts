@@ -1,18 +1,16 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { parseSessionThreadInfo } from "../../config/sessions/delivery-info.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
   deriveInboundMessageHookContext,
   toPluginInboundClaimContext,
@@ -22,6 +20,7 @@ import {
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -38,12 +37,34 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import {
+  normalizeTtsAutoMode,
+  resolveConfiguredTtsMode,
+  shouldAttemptTtsPayload,
+} from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import type { BlockReplyContext } from "../get-reply-options.types.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
+import { normalizeVerboseLevel } from "../thinking.js";
+import {
+  createInternalHookEvent,
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+  triggerInternalHook,
+} from "./dispatch-from-config.runtime.js";
+import type {
+  DispatchFromConfigParams,
+  DispatchFromConfigResult,
+} from "./dispatch-from-config.types.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
-import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
@@ -51,7 +72,6 @@ let getReplyFromConfigRuntimePromise: Promise<
   typeof import("./get-reply-from-config.runtime.js")
 > | null = null;
 let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
-let dispatchAcpRuntimePromise: Promise<typeof import("./dispatch-acp.runtime.js")> | null = null;
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
 
 function loadRouteReplyRuntime() {
@@ -69,19 +89,25 @@ function loadAbortRuntime() {
   return abortRuntimePromise;
 }
 
-function loadDispatchAcpRuntime() {
-  dispatchAcpRuntimePromise ??= import("./dispatch-acp.runtime.js");
-  return dispatchAcpRuntimePromise;
-}
-
 function loadTtsRuntime() {
   ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
   return ttsRuntimePromise;
 }
 
+async function maybeApplyTtsToReplyPayload(
+  params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
+) {
+  if (!shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto })) {
+    return params.payload;
+  }
+  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  return maybeApplyTtsToPayload(params);
+}
+
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
-const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+const normalizeMediaType = (value: string): string =>
+  normalizeOptionalLowercaseString(value.split(";")[0]) ?? "";
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -118,11 +144,14 @@ const resolveSessionStoreLookup = (
   cfg: OpenClawConfig,
 ): {
   sessionKey?: string;
+  storePath?: string;
   entry?: SessionEntry;
 } => {
   const targetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
-  const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
+    ctx.CommandSource === "native"
+      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+      : undefined;
+  const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
     return {};
   }
@@ -132,32 +161,49 @@ const resolveSessionStoreLookup = (
     const store = loadSessionStore(storePath);
     return {
       sessionKey,
+      storePath,
       entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
     };
   } catch {
     return {
       sessionKey,
+      storePath,
     };
   }
 };
 
-export type DispatchFromConfigResult = {
-  queuedFinal: boolean;
-  counts: Record<ReplyDispatchKind, number>;
+const createShouldEmitVerboseProgress = (params: {
+  sessionKey?: string;
+  storePath?: string;
+  fallbackLevel: string;
+}) => {
+  return () => {
+    if (params.sessionKey && params.storePath) {
+      try {
+        const store = loadSessionStore(params.storePath);
+        const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+        const currentLevel = normalizeVerboseLevel(entry?.verboseLevel ?? "");
+        if (currentLevel) {
+          return currentLevel !== "off";
+        }
+      } catch {
+        // Ignore transient store read failures and fall back to the current dispatch snapshot.
+      }
+    }
+    return params.fallbackLevel !== "off";
+  };
 };
+export type {
+  DispatchFromConfigParams,
+  DispatchFromConfigResult,
+} from "./dispatch-from-config.types.js";
 
-export async function dispatchReplyFromConfig(params: {
-  ctx: FinalizedMsgContext;
-  cfg: OpenClawConfig;
-  dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
-  replyResolver?: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
-  /** Optional config override passed to getReplyFromConfig (e.g. per-sender timezone). */
-  configOverride?: OpenClawConfig;
-}): Promise<DispatchFromConfigResult> {
+export async function dispatchReplyFromConfig(
+  params: DispatchFromConfigParams,
+): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
-  const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
+  const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
@@ -216,12 +262,25 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
+  const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
+  const shouldEmitVerboseProgress = createShouldEmitVerboseProgress({
+    sessionKey: acpDispatchSessionKey,
+    storePath: sessionStoreEntry.storePath,
+    fallbackLevel:
+      normalizeVerboseLevel(
+        sessionStoreEntry.entry?.verboseLevel ??
+          sessionAgentCfg?.verboseDefault ??
+          cfg.agents?.defaults?.verboseDefault ??
+          "",
+      ) ?? "off",
+  });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
   // stale route after thread delivery was intentionally cleared.
   const routeThreadId =
-    ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
+    ctx.MessageThreadId ?? parseSessionThreadInfoFast(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -247,26 +306,61 @@ export async function dispatchReplyFromConfig(params: {
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const originatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
-  const originatingTo = ctx.OriginatingTo;
-  const providerChannel = normalizeMessageChannel(ctx.Provider);
-  const surfaceChannel = normalizeMessageChannel(ctx.Surface);
-  // Prefer provider channel because surface may carry origin metadata in relayed flows.
-  const currentSurface = providerChannel ?? surfaceChannel;
+  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
+  const normalizedOriginatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
+  const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
+  const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);
+  const normalizedCurrentSurface = normalizedProviderChannel ?? normalizedSurfaceChannel;
   const isInternalWebchatTurn =
-    currentSurface === INTERNAL_MESSAGE_CHANNEL &&
-    (surfaceChannel === INTERNAL_MESSAGE_CHANNEL || !surfaceChannel) &&
+    normalizedCurrentSurface === INTERNAL_MESSAGE_CHANNEL &&
+    (normalizedSurfaceChannel === INTERNAL_MESSAGE_CHANNEL || !normalizedSurfaceChannel) &&
     ctx.ExplicitDeliverRoute !== true;
-  const routeReplyRuntime = await loadRouteReplyRuntime();
-  const shouldRouteToOriginating = Boolean(
+  const hasRouteReplyCandidate = Boolean(
+    !suppressAcpChildUserDelivery &&
     !isInternalWebchatTurn &&
-    routeReplyRuntime.isRoutableChannel(originatingChannel) &&
-    originatingTo &&
-    originatingChannel !== currentSurface,
+    normalizedOriginatingChannel &&
+    ctx.OriginatingTo &&
+    normalizedOriginatingChannel !== normalizedCurrentSurface,
   );
-  const shouldSuppressTyping =
-    shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
+  const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
+  const { originatingChannel, currentSurface, shouldRouteToOriginating, shouldSuppressTyping } =
+    resolveReplyRoutingDecision({
+      provider: ctx.Provider,
+      surface: ctx.Surface,
+      explicitDeliverRoute: ctx.ExplicitDeliverRoute,
+      originatingChannel: ctx.OriginatingChannel,
+      originatingTo: ctx.OriginatingTo,
+      suppressDirectUserDelivery: suppressAcpChildUserDelivery,
+      isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
+    });
+  const originatingTo = ctx.OriginatingTo;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
+
+  const routeReplyToOriginating = async (
+    payload: ReplyPayload,
+    options?: { abortSignal?: AbortSignal; mirror?: boolean },
+  ) => {
+    if (!shouldRouteToOriginating || !originatingChannel || !originatingTo || !routeReplyRuntime) {
+      return null;
+    }
+    return await routeReplyRuntime.routeReply({
+      payload,
+      channel: originatingChannel,
+      to: originatingTo,
+      sessionKey: ctx.SessionKey,
+      accountId: ctx.AccountId,
+      requesterSenderId: ctx.SenderId,
+      requesterSenderName: ctx.SenderName,
+      requesterSenderUsername: ctx.SenderUsername,
+      requesterSenderE164: ctx.SenderE164,
+      threadId: routeThreadId,
+      cfg,
+      abortSignal: options?.abortSignal,
+      mirror: options?.mirror,
+      isGroup,
+      groupId,
+    });
+  };
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -279,28 +373,19 @@ export async function dispatchReplyFromConfig(params: {
     abortSignal?: AbortSignal,
     mirror?: boolean,
   ): Promise<void> => {
-    // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
-    // but they're guaranteed non-null when this function is called.
-    if (!originatingChannel || !originatingTo) {
+    // Keep the runtime guard explicit because this helper is called from nested
+    // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
+    if (!routeReplyRuntime || !originatingChannel || !originatingTo) {
       return;
     }
     if (abortSignal?.aborted) {
       return;
     }
-    const result = await routeReplyRuntime.routeReply({
-      payload,
-      channel: originatingChannel,
-      to: originatingTo,
-      sessionKey: ctx.SessionKey,
-      accountId: ctx.AccountId,
-      threadId: routeThreadId,
-      cfg,
+    const result = await routeReplyToOriginating(payload, {
       abortSignal,
       mirror,
-      isGroup,
-      groupId,
     });
-    if (!result.ok) {
+    if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
   };
@@ -309,18 +394,8 @@ export async function dispatchReplyFromConfig(params: {
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
-    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-      const result = await routeReplyRuntime.routeReply({
-        payload,
-        channel: originatingChannel,
-        to: originatingTo,
-        sessionKey: ctx.SessionKey,
-        accountId: ctx.AccountId,
-        threadId: routeThreadId,
-        cfg,
-        isGroup,
-        groupId,
-      });
+    const result = await routeReplyToOriginating(payload);
+    if (result) {
       if (!result.ok) {
         logVerbose(
           `dispatch-from-config: route-reply (plugin binding notice) failed: ${result.error ?? "unknown error"}`,
@@ -337,7 +412,12 @@ export async function dispatchReplyFromConfig(params: {
     inboundClaimContext.conversationId && inboundClaimContext.channelId
       ? resolveConversationBindingRecord({
           channel: inboundClaimContext.channelId,
-          accountId: inboundClaimContext.accountId ?? "default",
+          accountId:
+            inboundClaimContext.accountId ??
+            ((
+              cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+            )?.[inboundClaimContext.channelId]?.defaultAccount as string | undefined) ??
+            "default",
           conversationId: inboundClaimContext.conversationId,
           parentConversationId: inboundClaimContext.parentConversationId,
         })
@@ -446,26 +526,22 @@ export async function dispatchReplyFromConfig(params: {
   markProcessing();
 
   try {
-    const abortRuntime = await loadAbortRuntime();
-    const fastAbort = await abortRuntime.tryFastAbortFromMessage({ ctx, cfg });
+    const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
+    const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
+    const formatAbortReplyTextResolver =
+      params.formatAbortReplyTextResolver ?? abortRuntime?.formatAbortReplyText;
+    if (!fastAbortResolver || !formatAbortReplyTextResolver) {
+      throw new Error("abort runtime unavailable");
+    }
+    const fastAbort = await fastAbortResolver({ ctx, cfg });
     if (fastAbort.handled) {
       const payload = {
-        text: abortRuntime.formatAbortReplyText(fastAbort.stoppedSubagents),
+        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReplyRuntime.routeReply({
-          payload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: routeThreadId,
-          cfg,
-          isGroup,
-          groupId,
-        });
+      const result = await routeReplyToOriginating(payload);
+      if (result) {
         queuedFinal = result.ok;
         if (result.ok) {
           routedFinalCount += 1;
@@ -485,9 +561,6 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal, counts };
     }
 
-    const dispatchAcpRuntime = await loadDispatchAcpRuntime();
-    const bypassAcpForCommand = dispatchAcpRuntime.shouldBypassAcpDispatchForCommand(ctx, cfg);
-
     const sendPolicy = resolveSendPolicy({
       cfg,
       entry: sessionStoreEntry.entry,
@@ -500,7 +573,109 @@ export async function dispatchReplyFromConfig(params: {
         undefined,
       chatType: sessionStoreEntry.entry?.chatType,
     });
-    if (sendPolicy === "deny" && !bypassAcpForCommand) {
+
+    const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const sendFinalPayload = async (
+      payload: ReplyPayload,
+    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+      const ttsPayload = await maybeApplyTtsToReplyPayload({
+        payload,
+        cfg,
+        channel: ttsChannel,
+        kind: "final",
+        inboundAudio,
+        ttsAuto: sessionTtsAuto,
+      });
+      const result = await routeReplyToOriginating(ttsPayload);
+      if (result) {
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+        return {
+          queuedFinal: result.ok,
+          routedFinalCount: result.ok ? 1 : 0,
+        };
+      }
+      return {
+        queuedFinal: dispatcher.sendFinalReply(ttsPayload),
+        routedFinalCount: 0,
+      };
+    };
+
+    // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
+    if (hookRunner?.hasHooks("before_dispatch")) {
+      const beforeDispatchResult = await hookRunner.runBeforeDispatch(
+        {
+          content: hookContext.content,
+          body: hookContext.bodyForAgent ?? hookContext.body,
+          channel: hookContext.channelId,
+          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+          senderId: hookContext.senderId,
+          isGroup: hookContext.isGroup,
+          timestamp: hookContext.timestamp,
+        },
+        {
+          channelId: hookContext.channelId,
+          accountId: hookContext.accountId,
+          conversationId: inboundClaimContext.conversationId,
+          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+          senderId: hookContext.senderId,
+        },
+      );
+      if (beforeDispatchResult?.handled) {
+        const text = beforeDispatchResult.text;
+        let queuedFinal = false;
+        let routedFinalCount = 0;
+        if (text) {
+          const handledReply = await sendFinalPayload({ text });
+          queuedFinal = handledReply.queuedFinal;
+          routedFinalCount += handledReply.routedFinalCount;
+        }
+        const counts = dispatcher.getQueuedCounts();
+        counts.final += routedFinalCount;
+        recordProcessed("completed", { reason: "before_dispatch_handled" });
+        markIdle("message_completed");
+        return { queuedFinal, counts };
+      }
+    }
+
+    if (hookRunner?.hasHooks("reply_dispatch")) {
+      const replyDispatchResult = await hookRunner.runReplyDispatch(
+        {
+          ctx,
+          runId: params.replyOptions?.runId,
+          sessionKey: acpDispatchSessionKey,
+          inboundAudio,
+          sessionTtsAuto,
+          ttsChannel,
+          suppressUserDelivery: suppressAcpChildUserDelivery,
+          shouldRouteToOriginating,
+          originatingChannel,
+          originatingTo,
+          shouldSendToolSummaries,
+          sendPolicy,
+        },
+        {
+          cfg,
+          dispatcher,
+          abortSignal: params.replyOptions?.abortSignal,
+          onReplyStart: params.replyOptions?.onReplyStart,
+          recordProcessed,
+          markIdle,
+        },
+      );
+      if (replyDispatchResult?.handled) {
+        return {
+          queuedFinal: replyDispatchResult.queuedFinal,
+          counts: replyDispatchResult.counts,
+        };
+      }
+    }
+
+    if (sendPolicy === "deny") {
       logVerbose(
         `Send blocked by policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
       );
@@ -510,35 +685,104 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
-    const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
-      ctx,
-      cfg,
-      dispatcher,
-      sessionKey: acpDispatchSessionKey,
-      abortSignal: params.replyOptions?.abortSignal,
-      inboundAudio,
-      sessionTtsAuto,
-      ttsChannel,
-      shouldRouteToOriginating,
-      originatingChannel,
-      originatingTo,
-      shouldSendToolSummaries,
-      bypassForCommand: bypassAcpForCommand,
-      onReplyStart: params.replyOptions?.onReplyStart,
-      recordProcessed,
-      markIdle,
-    });
-    if (acpDispatch) {
-      return acpDispatch;
-    }
-
+    const toolStartStatusesSent = new Set<string>();
+    let toolStartStatusCount = 0;
+    const normalizeWorkingLabel = (label: string) => {
+      const collapsed = label.replace(/\s+/g, " ").trim();
+      if (collapsed.length <= 80) {
+        return collapsed;
+      }
+      return `${collapsed.slice(0, 77).trimEnd()}...`;
+    };
+    const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
+      const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
+      const steps = (payload.steps ?? [])
+        .map((step) => step.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const parts: string[] = [];
+      if (explanation) {
+        parts.push(explanation);
+      }
+      if (steps.length > 0) {
+        parts.push(steps.map((step, index) => `${index + 1}. ${step}`).join("\n"));
+      }
+      return parts.join("\n\n").trim() || "Planning next steps.";
+    };
+    const maybeSendWorkingStatus = async (label: string): Promise<void> => {
+      const normalizedLabel = normalizeWorkingLabel(label);
+      if (
+        !shouldEmitVerboseProgress() ||
+        !shouldSendToolStartStatuses ||
+        !normalizedLabel ||
+        toolStartStatusCount >= 2 ||
+        toolStartStatusesSent.has(normalizedLabel)
+      ) {
+        return;
+      }
+      toolStartStatusesSent.add(normalizedLabel);
+      toolStartStatusCount += 1;
+      const payload: ReplyPayload = {
+        text: `Working: ${normalizedLabel}`,
+      };
+      if (shouldRouteToOriginating) {
+        await sendPayloadAsync(payload, undefined, false);
+        return;
+      }
+      dispatcher.sendToolResult(payload);
+    };
+    const sendPlanUpdate = async (payload: {
+      explanation?: string;
+      steps?: string[];
+    }): Promise<void> => {
+      if (!shouldEmitVerboseProgress()) {
+        return;
+      }
+      const replyPayload: ReplyPayload = {
+        text: formatPlanUpdateText(payload),
+      };
+      if (shouldRouteToOriginating) {
+        await sendPayloadAsync(replyPayload, undefined, false);
+        return;
+      }
+      dispatcher.sendToolResult(replyPayload);
+    };
+    const summarizeApprovalLabel = (payload: {
+      status?: string;
+      command?: string;
+      message?: string;
+    }) => {
+      if (payload.status === "pending") {
+        const command = normalizeOptionalString(payload.command);
+        if (command) {
+          return normalizeWorkingLabel(`awaiting approval: ${command}`);
+        }
+        return "awaiting approval";
+      }
+      if (payload.status === "unavailable") {
+        const message = normalizeOptionalString(payload.message);
+        if (message) {
+          return normalizeWorkingLabel(message);
+        }
+        return "approval unavailable";
+      }
+      return "";
+    };
+    const summarizePatchLabel = (payload: { summary?: string; title?: string }) => {
+      const summary = normalizeOptionalString(payload.summary);
+      if (summary) {
+        return normalizeWorkingLabel(summary);
+      }
+      const title = normalizeOptionalString(payload.title);
+      if (title) {
+        return normalizeWorkingLabel(title);
+      }
+      return "";
+    };
     // Track accumulated block text for TTS generation after streaming completes.
     // When block streaming succeeds, there's no final reply, so we need to generate
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
     let blockCount = 0;
-    const { maybeApplyTtsToPayload } = await loadTtsRuntime();
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
@@ -588,7 +832,7 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
+            const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
               channel: ttsChannel,
@@ -608,6 +852,32 @@ export async function dispatchReplyFromConfig(params: {
           };
           return run();
         },
+        onPlanUpdate: async ({ phase, explanation, steps }) => {
+          if (phase !== "update") {
+            return;
+          }
+          await sendPlanUpdate({ explanation, steps });
+        },
+        onApprovalEvent: async ({ phase, status, command, message }) => {
+          if (phase !== "requested") {
+            return;
+          }
+          const label = summarizeApprovalLabel({ status, command, message });
+          if (!label) {
+            return;
+          }
+          await maybeSendWorkingStatus(label);
+        },
+        onPatchSummary: async ({ phase, summary, title }) => {
+          if (phase !== "end") {
+            return;
+          }
+          const label = summarizePatchLabel({ summary, title });
+          if (!label) {
+            return;
+          }
+          await maybeSendWorkingStatus(label);
+        },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
             // Suppress reasoning payloads — channels using this generic dispatch
@@ -626,7 +896,19 @@ export async function dispatchReplyFromConfig(params: {
               accumulatedBlockText += payload.text;
               blockCount++;
             }
-            const ttsPayload = await maybeApplyTtsToPayload({
+            // Channels that keep a live draft preview may need to rotate their
+            // preview state at the logical block boundary before queued block
+            // delivery drains asynchronously through the dispatcher.
+            const payloadMetadata = getReplyPayloadMetadata(payload);
+            const queuedContext =
+              payloadMetadata?.assistantMessageIndex !== undefined
+                ? {
+                    ...context,
+                    assistantMessageIndex: payloadMetadata.assistantMessageIndex,
+                  }
+                : context;
+            await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
+            const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
               channel: ttsChannel,
@@ -650,26 +932,37 @@ export async function dispatchReplyFromConfig(params: {
       // Command handling prepared a trailing prompt after ACP in-place reset.
       // Route that tail through ACP now (same turn) instead of embedded dispatch.
       ctx.AcpDispatchTailAfterReset = false;
-      const acpTailDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
-        ctx,
-        cfg,
-        dispatcher,
-        sessionKey: acpDispatchSessionKey,
-        abortSignal: params.replyOptions?.abortSignal,
-        inboundAudio,
-        sessionTtsAuto,
-        ttsChannel,
-        shouldRouteToOriginating,
-        originatingChannel,
-        originatingTo,
-        shouldSendToolSummaries,
-        bypassForCommand: false,
-        onReplyStart: params.replyOptions?.onReplyStart,
-        recordProcessed,
-        markIdle,
-      });
-      if (acpTailDispatch) {
-        return acpTailDispatch;
+      if (hookRunner?.hasHooks("reply_dispatch")) {
+        const tailDispatchResult = await hookRunner.runReplyDispatch(
+          {
+            ctx,
+            runId: params.replyOptions?.runId,
+            sessionKey: acpDispatchSessionKey,
+            inboundAudio,
+            sessionTtsAuto,
+            ttsChannel,
+            shouldRouteToOriginating,
+            originatingChannel,
+            originatingTo,
+            shouldSendToolSummaries,
+            sendPolicy: "allow",
+            isTailDispatch: true,
+          },
+          {
+            cfg,
+            dispatcher,
+            abortSignal: params.replyOptions?.abortSignal,
+            onReplyStart: params.replyOptions?.onReplyStart,
+            recordProcessed,
+            markIdle,
+          },
+        );
+        if (tailDispatchResult?.handled) {
+          return {
+            queuedFinal: tailDispatchResult.queuedFinal,
+            counts: tailDispatchResult.counts,
+          };
+        }
       }
     }
 
@@ -683,39 +976,9 @@ export async function dispatchReplyFromConfig(params: {
       if (reply.isReasoning === true) {
         continue;
       }
-      const ttsReply = await maybeApplyTtsToPayload({
-        payload: reply,
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: sessionTtsAuto,
-      });
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        // Route final reply to originating channel.
-        const result = await routeReplyRuntime.routeReply({
-          payload: ttsReply,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: routeThreadId,
-          cfg,
-          isGroup,
-          groupId,
-        });
-        if (!result.ok) {
-          logVerbose(
-            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
-          );
-        }
-        queuedFinal = result.ok || queuedFinal;
-        if (result.ok) {
-          routedFinalCount += 1;
-        }
-      } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
-      }
+      const finalReply = await sendFinalPayload(reply);
+      queuedFinal = finalReply.queuedFinal || queuedFinal;
+      routedFinalCount += finalReply.routedFinalCount;
     }
 
     const ttsMode = resolveConfiguredTtsMode(cfg);
@@ -729,7 +992,7 @@ export async function dispatchReplyFromConfig(params: {
       accumulatedBlockText.trim()
     ) {
       try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
+        const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
           payload: { text: accumulatedBlockText },
           cfg,
           channel: ttsChannel,
@@ -744,18 +1007,8 @@ export async function dispatchReplyFromConfig(params: {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
-          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-            const result = await routeReplyRuntime.routeReply({
-              payload: ttsOnlyPayload,
-              channel: originatingChannel,
-              to: originatingTo,
-              sessionKey: ctx.SessionKey,
-              accountId: ctx.AccountId,
-              threadId: routeThreadId,
-              cfg,
-              isGroup,
-              groupId,
-            });
+          const result = await routeReplyToOriginating(ttsOnlyPayload);
+          if (result) {
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
               routedFinalCount += 1;
@@ -772,7 +1025,7 @@ export async function dispatchReplyFromConfig(params: {
         }
       } catch (err) {
         logVerbose(
-          `dispatch-from-config: accumulated block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+          `dispatch-from-config: accumulated block TTS failed: ${formatErrorMessage(err)}`,
         );
       }
     }

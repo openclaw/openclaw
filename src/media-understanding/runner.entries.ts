@@ -5,9 +5,13 @@ import {
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import {
+  mergeProviderRequestOverrides,
+  sanitizeConfiguredProviderRequest,
+} from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -15,17 +19,19 @@ import type {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
-  DEFAULT_AUDIO_MODELS,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
+  resolveDefaultMediaModel,
 } from "./defaults.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
-import { describeImageWithModel } from "./image.js";
+import { describeImageWithModel } from "./image-runtime.js";
 import { extractGeminiResponse } from "./output-extract.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
@@ -210,6 +216,38 @@ async function resolveCliOutput(params: {
   return params.stdout.trim();
 }
 
+async function resolveCliMediaPath(params: {
+  capability: MediaUnderstandingCapability;
+  command: string;
+  mediaPath: string;
+  outputDir: string;
+}): Promise<string> {
+  const commandId = commandBase(params.command);
+  if (params.capability !== "audio" || commandId !== "whisper-cli") {
+    return params.mediaPath;
+  }
+
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(params.mediaPath));
+  if (ext === ".wav") {
+    return params.mediaPath;
+  }
+
+  const wavPath = path.join(params.outputDir, `${path.parse(params.mediaPath).name}.wav`);
+  await runFfmpeg([
+    "-y",
+    "-i",
+    params.mediaPath,
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-c:a",
+    "pcm_s16le",
+    wavPath,
+  ]);
+  return wavPath;
+}
+
 type ProviderQuery = Record<string, string | number | boolean>;
 
 function normalizeProviderQuery(
@@ -335,6 +373,20 @@ function resolveEntryRunOptions(params: {
   return { maxBytes, maxChars, timeoutMs, prompt };
 }
 
+function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefined): {
+  prompt?: string;
+  language?: string;
+} {
+  const overrides = (config ?? {}) as MediaUnderstandingConfig & {
+    _requestPromptOverride?: string;
+    _requestLanguageOverride?: string;
+  };
+  return {
+    prompt: overrides._requestPromptOverride,
+    language: overrides._requestLanguageOverride,
+  };
+}
+
 async function resolveProviderExecutionAuth(params: {
   providerId: string;
   cfg: OpenClawConfig;
@@ -377,7 +429,11 @@ async function resolveProviderExecutionContext(params: {
     ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
-  return { apiKeys, baseUrl, headers };
+  const request = mergeProviderRequestOverrides(
+    sanitizeConfiguredProviderRequest(params.config?.request),
+    sanitizeConfiguredProviderRequest(params.entry.request),
+  );
+  return { apiKeys, baseUrl, headers, request };
 }
 
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
@@ -388,19 +444,49 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
   const provider = typeof chosen?.provider === "string" ? chosen.provider.trim() : undefined;
   const model = typeof chosen?.model === "string" ? chosen.model.trim() : undefined;
   const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
-  const reason = attachments
-    .flatMap((entry) => {
-      const attempts = Array.isArray(entry?.attempts) ? entry.attempts : [];
-      return attempts
-        .map((attempt) => (typeof attempt?.reason === "string" ? attempt.reason : undefined))
-        .filter((value): value is string => Boolean(value));
-    })
-    .find((value) => value.trim().length > 0);
-  const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
+  const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
+  const shortReason = summarizeDecisionReason(reason);
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
   const viaLabel = modelLabel ? ` via ${modelLabel}` : "";
   const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
   return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
+}
+
+export function findDecisionReason(
+  decision: MediaUnderstandingDecision,
+  outcome?: MediaUnderstandingModelDecision["outcome"],
+): string | undefined {
+  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
+  for (const attachment of attachments) {
+    const attempts = Array.isArray(attachment?.attempts) ? attachment.attempts : [];
+    for (const attempt of attempts) {
+      if (outcome && attempt.outcome !== outcome) {
+        continue;
+      }
+      if (typeof attempt.reason !== "string" || attempt.reason.trim().length === 0) {
+        continue;
+      }
+      return attempt.reason;
+    }
+  }
+  return undefined;
+}
+
+export function normalizeDecisionReason(reason?: string): string | undefined {
+  const trimmed = typeof reason === "string" ? reason.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/^Error:\s*/i, "").trim();
+  return normalized || undefined;
+}
+
+export function summarizeDecisionReason(reason?: string): string | undefined {
+  const normalized = normalizeDecisionReason(reason);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.split(":")[0]?.trim() || undefined;
 }
 
 function assertMinAudioSize(params: { size: number; attachmentIndex: number }): void {
@@ -489,13 +575,14 @@ export async function runProviderEntry(params: {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
     const transcribeAudio = provider.transcribeAudio;
+    const requestOverrides = resolveAudioRequestOverrides(params.config);
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+    const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
       providerId,
       cfg,
       entry,
@@ -507,7 +594,14 @@ export async function runProviderEntry(params: {
       config: params.config,
       entry,
     });
-    const model = entry.model?.trim() || DEFAULT_AUDIO_MODELS[providerId] || entry.model;
+    const model =
+      entry.model?.trim() ||
+      resolveDefaultMediaModel({
+        cfg,
+        providerId,
+        capability: "audio",
+      }) ||
+      entry.model;
     const result = await executeWithApiKeyRotation({
       provider: providerId,
       apiKeys,
@@ -519,9 +613,14 @@ export async function runProviderEntry(params: {
           apiKey,
           baseUrl,
           headers,
+          request,
           model,
-          language: entry.language ?? params.config?.language ?? cfg.tools?.media?.audio?.language,
-          prompt,
+          language:
+            requestOverrides.language ??
+            entry.language ??
+            params.config?.language ??
+            cfg.tools?.media?.audio?.language,
+          prompt: requestOverrides.prompt ?? prompt,
           query: providerQuery,
           timeoutMs,
           fetchFn,
@@ -553,7 +652,7 @@ export async function runProviderEntry(params: {
       `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
     );
   }
-  const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+  const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
     providerId,
     cfg,
     entry,
@@ -571,6 +670,7 @@ export async function runProviderEntry(params: {
         apiKey,
         baseUrl,
         headers,
+        request,
         model: entry.model,
         prompt,
         timeoutMs,
@@ -601,6 +701,7 @@ export async function runCliEntry(params: {
   if (!command) {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
+  const requestOverrides = resolveAudioRequestOverrides(params.config);
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -619,7 +720,12 @@ export async function runCliEntry(params: {
   const outputDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
   );
-  const mediaPath = pathResult.path;
+  const mediaPath = await resolveCliMediaPath({
+    capability,
+    command,
+    mediaPath: pathResult.path,
+    outputDir,
+  });
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
   const templCtx: MsgContext = {
@@ -628,7 +734,8 @@ export async function runCliEntry(params: {
     MediaDir: path.dirname(mediaPath),
     OutputDir: outputDir,
     OutputBase: outputBase,
-    Prompt: prompt,
+    Prompt: requestOverrides.prompt ?? prompt,
+    ...(requestOverrides.language ? { Language: requestOverrides.language } : {}),
     MaxChars: maxChars,
   };
   const argv = [command, ...args].map((part, index) =>

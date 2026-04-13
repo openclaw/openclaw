@@ -1,9 +1,15 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { type MessagingToolSend } from "./pi-embedded-messaging.js";
+import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
@@ -31,7 +37,7 @@ function normalizeToolErrorText(text: string): string | undefined {
 }
 
 function isErrorLikeStatus(status: string): boolean {
-  const normalized = status.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(status);
   if (!normalized) {
     return false;
   }
@@ -76,7 +82,7 @@ function extractErrorField(value: unknown): string | undefined {
   if (direct) {
     return direct;
   }
-  const status = typeof record.status === "string" ? record.status.trim() : "";
+  const status = normalizeOptionalString(record.status) ?? "";
   if (!status || !isErrorLikeStatus(status)) {
     return undefined;
   }
@@ -97,12 +103,12 @@ export function sanitizeToolResult(result: unknown): unknown {
       return item;
     }
     const entry = item as Record<string, unknown>;
-    const type = typeof entry.type === "string" ? entry.type : undefined;
+    const type = readStringValue(entry.type);
     if (type === "text" && typeof entry.text === "string") {
       return { ...entry, text: truncateToolText(entry.text) };
     }
     if (type === "image") {
-      const data = typeof entry.data === "string" ? entry.data : undefined;
+      const data = readStringValue(entry.data);
       const bytes = data ? data.length : undefined;
       const cleaned = { ...entry };
       delete cleaned.data;
@@ -146,6 +152,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "memory_get",
   "memory_search",
   "message",
+  "music_generate",
   "nodes",
   "process",
   "read",
@@ -156,10 +163,15 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "sessions_spawn",
   "subagents",
   "tts",
+  "video_generate",
   "web_fetch",
   "web_search",
+  "x_search",
   "write",
 ]);
+const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set(
+  pluginRegistrationContractRegistry.flatMap((entry) => entry.toolNames),
+);
 const HTTP_URL_RE = /^https?:\/\//i;
 
 function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
@@ -170,6 +182,11 @@ function readToolResultDetails(result: unknown): Record<string, unknown> | undef
   return record.details && typeof record.details === "object" && !Array.isArray(record.details)
     ? (record.details as Record<string, unknown>)
     : undefined;
+}
+
+function readToolResultStatus(result: unknown): string | undefined {
+  const status = readToolResultDetails(result)?.status;
+  return normalizeOptionalLowercaseString(status);
 }
 
 function isExternalToolResult(result: unknown): boolean {
@@ -185,7 +202,9 @@ export function isToolResultMediaTrusted(toolName?: string, result?: unknown): b
     return false;
   }
   const normalized = normalizeToolName(toolName);
-  return TRUSTED_TOOL_RESULT_MEDIA.has(normalized);
+  return (
+    TRUSTED_TOOL_RESULT_MEDIA.has(normalized) || TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.has(normalized)
+  );
 }
 
 export function filterToolResultMediaUrls(
@@ -299,7 +318,7 @@ export function extractToolResultMediaArtifact(
   // structured media details or MEDIA: text.
   if (hasImageContent) {
     const details = record.details as Record<string, unknown> | undefined;
-    const p = typeof details?.path === "string" ? details.path.trim() : "";
+    const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {
       return { mediaUrls: [p] };
     }
@@ -313,20 +332,19 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
 }
 
 export function isToolResultError(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
+  const normalized = readToolResultStatus(result);
+  if (!normalized) {
     return false;
   }
-  const record = result as { details?: unknown };
-  const details = record.details;
-  if (!details || typeof details !== "object") {
-    return false;
-  }
-  const status = (details as { status?: unknown }).status;
-  if (typeof status !== "string") {
-    return false;
-  }
-  const normalized = status.trim().toLowerCase();
   return normalized === "error" || normalized === "timeout";
+}
+
+export function isToolResultTimedOut(result: unknown): boolean {
+  const normalizedStatus = readToolResultStatus(result);
+  if (normalizedStatus === "timeout") {
+    return true;
+  }
+  return readToolResultDetails(result)?.timedOut === true;
 }
 
 export function extractToolErrorMessage(result: unknown): string | undefined {
@@ -359,11 +377,11 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
 }
 
 function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
-  const toRaw = typeof args.to === "string" ? args.to : undefined;
+  const toRaw = readStringValue(args.to);
   if (toRaw) {
     return toRaw;
   }
-  return typeof args.target === "string" ? args.target : undefined;
+  return readStringValue(args.target);
 }
 
 export function extractMessagingToolSend(
@@ -371,9 +389,8 @@ export function extractMessagingToolSend(
   args: Record<string, unknown>,
 ): MessagingToolSend | undefined {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
-  const action = typeof args.action === "string" ? args.action.trim() : "";
-  const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-  const accountId = accountIdRaw ? accountIdRaw : undefined;
+  const action = normalizeOptionalString(args.action) ?? "";
+  const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
     if (action !== "send" && action !== "thread-reply") {
       return undefined;
@@ -382,11 +399,11 @@ export function extractMessagingToolSend(
     if (!toRaw) {
       return undefined;
     }
-    const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
-    const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
+    const providerRaw = normalizeOptionalString(args.provider) ?? "";
+    const channelRaw = normalizeOptionalString(args.channel) ?? "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
-    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
+    const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }

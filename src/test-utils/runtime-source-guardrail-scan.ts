@@ -13,13 +13,15 @@ const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
   /\.test-helpers\.tsx?$/,
   /\.test-utils\.tsx?$/,
   /\.test-harness\.tsx?$/,
+  /\.test-support\.tsx?$/,
   /\.suite\.tsx?$/,
   /\.e2e\.tsx?$/,
   /\.d\.ts$/,
-  /[\\/](?:__tests__|tests|test-utils)[\\/]/,
+  /[\\/](?:__tests__|tests|test-helpers|test-utils|test-support)[\\/]/,
   /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
   /[\\/][^\\/]*test-utils(?:\.[^\\/]+)?\.ts$/,
   /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-support(?:\.[^\\/]+)?\.ts$/,
 ];
 
 const runtimeSourceGuardrailCache = new Map<string, Promise<RuntimeSourceGuardrailFile[]>>();

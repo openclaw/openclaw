@@ -1,23 +1,32 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import {
+  createEmbeddedRunReplayState,
+  mergeEmbeddedRunReplayState,
+} from "./pi-embedded-runner/replay-state.js";
+import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
 import { consumePendingToolMediaIntoReply } from "./pi-embedded-subscribe.handlers.messages.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
@@ -26,6 +35,30 @@ import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const log = createSubsystemLogger("agent/embedded");
+
+function collectPendingMediaFromInternalEvents(
+  events: SubscribeEmbeddedPiSessionParams["internalEvents"],
+): string[] {
+  if (!events?.length) {
+    return [];
+  }
+  const pending: string[] = [];
+  const seen = new Set<string>();
+  for (const event of events) {
+    if (!Array.isArray(event.mediaUrls)) {
+      continue;
+    }
+    for (const mediaUrl of event.mediaUrls) {
+      const normalized = normalizeOptionalString(mediaUrl) ?? "";
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      pending.push(normalized);
+    }
+  }
+  return pending;
+}
 
 export type {
   BlockReplyChunking,
@@ -37,11 +70,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const reasoningMode = params.reasoningMode ?? "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
+  const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
+    itemActiveIds: new Set(),
+    itemStartedCount: 0,
+    itemCompletedCount: 0,
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
@@ -72,6 +109,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
+    replayState: createEmbeddedRunReplayState(params.initialReplayState),
+    livenessState: "working",
+    hadDeterministicSideEffect: false,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -80,8 +120,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
-    pendingToolMediaUrls: [],
+    pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
+    deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
   };
   const usageTotals = {
@@ -103,22 +144,45 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
+  const pendingBlockReplyTasks = new Set<Promise<void>>();
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
+  const shouldAllowSilentTurnText = (text: string | undefined) =>
+    Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
+    options?: { assistantMessageIndex?: number },
   ) => {
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
+    try {
+      const taggedPayload =
+        options?.assistantMessageIndex !== undefined
+          ? setReplyPayloadMetadata(payload, {
+              assistantMessageIndex: options.assistantMessageIndex,
+            })
+          : payload;
+      const maybeTask = params.onBlockReply(taggedPayload);
+      if (!isPromiseLike<void>(maybeTask)) {
+        return;
+      }
+      const task = Promise.resolve(maybeTask).catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
+      pendingBlockReplyTasks.add(task);
+      void task.finally(() => {
+        pendingBlockReplyTasks.delete(task);
+      });
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
-  const emitBlockReply = (payload: BlockReplyPayload) => {
-    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload));
+  const emitBlockReply = (
+    payload: BlockReplyPayload,
+    options?: { assistantMessageIndex?: number },
+  ) => {
+    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload), options);
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -172,6 +236,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const pushAssistantText = (text: string) => {
     if (!text) {
+      return;
+    }
+    if (params.silentExpected && !shouldAllowSilentTurnText(text)) {
       return;
     }
     if (shouldSkipAssistantText(text)) {
@@ -486,8 +553,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     return output;
   };
 
-  const emitBlockChunk = (text: string) => {
-    if (state.suppressBlockChunks) {
+  const emitBlockChunk = (text: string, options?: { assistantMessageIndex?: number }) => {
+    if (state.suppressBlockChunks || params.silentExpected) {
       return;
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
@@ -513,8 +580,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
 
     state.lastBlockReplyText = chunk;
-    assistantTexts.push(chunk);
-    rememberAssistantText(chunk);
+    pushAssistantText(chunk);
     if (!params.onBlockReply) {
       return;
     }
@@ -534,14 +600,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       return;
     }
-    emitBlockReply({
-      text: cleanedText,
-      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    });
+    emitBlockReply(
+      {
+        text: cleanedText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      },
+      {
+        assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+      },
+    );
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
@@ -549,22 +620,33 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const consumePartialReplyDirectives = (text: string, options?: { final?: boolean }) =>
     partialReplyDirectiveAccumulator.consume(text, options);
 
-  const flushBlockReplyBuffer = () => {
+  const flushBlockReplyBuffer = (options?: {
+    assistantMessageIndex?: number;
+  }): void | Promise<void> => {
     if (!params.onBlockReply) {
       return;
     }
     if (blockChunker?.hasBuffered()) {
-      blockChunker.drain({ force: true, emit: emitBlockChunk });
+      blockChunker.drain({ force: true, emit: (text) => emitBlockChunk(text, options) });
       blockChunker.reset();
-      return;
-    }
-    if (state.blockBuffer.length > 0) {
-      emitBlockChunk(state.blockBuffer);
+    } else if (state.blockBuffer.length > 0) {
+      emitBlockChunk(state.blockBuffer, options);
       state.blockBuffer = "";
     }
+    if (pendingBlockReplyTasks.size === 0) {
+      return;
+    }
+    return (async () => {
+      while (pendingBlockReplyTasks.size > 0) {
+        await Promise.allSettled(pendingBlockReplyTasks);
+      }
+    })();
   };
 
   const emitReasoningStream = (text: string) => {
+    if (params.silentExpected) {
+      return;
+    }
     if (!state.streamReasoning || !params.onReasoningStream) {
       return;
     }
@@ -597,10 +679,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const resetForCompactionRetry = () => {
+    state.hadDeterministicSideEffect =
+      state.hadDeterministicSideEffect === true ||
+      messagingToolSentTexts.length > 0 ||
+      messagingToolSentMediaUrls.length > 0 ||
+      state.successfulCronAdds > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
+    state.itemActiveIds.clear();
+    state.itemStartedCount = 0;
+    state.itemCompletedCount = 0;
     state.lastToolError = undefined;
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
@@ -612,7 +702,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
+    state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
+    state.livenessState = "working";
     resetAssistantMessageState(0);
   };
 
@@ -694,12 +787,24 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts,
     toolMetas,
     unsubscribe,
+    setTerminalLifecycleMeta: (meta: {
+      replayInvalid?: boolean;
+      livenessState?: EmbeddedRunLivenessState;
+    }) => {
+      if (typeof meta.replayInvalid === "boolean") {
+        state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
+      }
+      if (meta.livenessState) {
+        state.livenessState = meta.livenessState;
+      }
+    },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
     isCompactionInFlight: () => state.compactionInFlight,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     getSuccessfulCronAdds: () => state.successfulCronAdds,
+    getReplayState: () => ({ ...state.replayState }),
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
@@ -708,6 +813,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    getItemLifecycle: () => ({
+      startedCount: state.itemStartedCount,
+      completedCount: state.itemCompletedCount,
+      activeCount: state.itemActiveIds.size,
+    }),
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success
       if (state.unsubscribed) {

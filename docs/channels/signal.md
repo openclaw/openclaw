@@ -142,7 +142,7 @@ signal-cli -a +<BOT_PHONE_NUMBER> verify <VERIFICATION_CODE>
 
 ```bash
 # If you run the gateway as a user systemd service:
-systemctl --user restart openclaw-gateway
+systemctl --user restart openclaw-gateway.service
 
 # Then verify:
 openclaw doctor
@@ -327,3 +327,11 @@ Related global options:
 - `agents.list[].groupChat.mentionPatterns` (Signal does not support native mentions).
 - `messages.groupChat.mentionPatterns` (global fallback).
 - `messages.responsePrefix`.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
-import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import {
   jsonResult,
   readNumberParam,
@@ -9,16 +8,25 @@ import {
   readStringOrNumberParam,
   readStringParam,
   resolvePollMaxSelections,
-  type OpenClawConfig,
-  type TelegramActionConfig,
-} from "../runtime-api.js";
+  resolveReactionMessageId,
+} from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
+import {
+  fitsTelegramCallbackData,
+  TELEGRAM_CALLBACK_DATA_MAX_BYTES,
+} from "./approval-callback-data.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
+import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
   createForumTopicTelegram,
@@ -47,6 +55,9 @@ export const telegramActionRuntime = {
 };
 
 const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = ["danger", "success", "primary"];
+const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
+  0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
+] as const;
 const TELEGRAM_ACTION_ALIASES = {
   createForumTopic: "createForumTopic",
   delete: "deleteMessage",
@@ -68,23 +79,25 @@ const TELEGRAM_ACTION_ALIASES = {
 } as const;
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
+type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
+type RawTelegramButton = {
+  callback_data?: unknown;
+  style?: unknown;
+  text?: unknown;
+};
 
-function resolveTelegramPollVisibility(params: {
-  pollAnonymous?: boolean;
-  pollPublic?: boolean;
-}): boolean | undefined {
-  if (params.pollAnonymous && params.pollPublic) {
-    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
+function readTelegramForumTopicIconColor(
+  params: Record<string, unknown>,
+): TelegramForumTopicIconColor | undefined {
+  const iconColor = readNumberParam(params, "iconColor", { integer: true });
+  if (iconColor == null) {
+    return undefined;
   }
-  if (params.pollAnonymous) {
-    return true;
+  if (!TELEGRAM_FORUM_TOPIC_ICON_COLORS.includes(iconColor as TelegramForumTopicIconColor)) {
+    throw new Error("iconColor must be one of Telegram's supported forum topic colors.");
   }
-  if (params.pollPublic) {
-    return false;
-  }
-  return undefined;
+  return iconColor as TelegramForumTopicIconColor;
 }
-
 export function readTelegramButtons(
   params: Record<string, unknown>,
 ): TelegramInlineButtons | undefined {
@@ -103,24 +116,19 @@ export function readTelegramButtons(
       if (!button || typeof button !== "object") {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] must be an object`);
       }
-      const text =
-        typeof (button as { text?: unknown }).text === "string"
-          ? (button as { text: string }).text.trim()
-          : "";
-      const callbackData =
-        typeof (button as { callback_data?: unknown }).callback_data === "string"
-          ? (button as { callback_data: string }).callback_data.trim()
-          : "";
+      const rawButton = button as RawTelegramButton;
+      const text = normalizeOptionalString(rawButton.text) ?? "";
+      const callbackData = normalizeOptionalString(rawButton.callback_data) ?? "";
       if (!text || !callbackData) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
       }
-      if (callbackData.length > 64) {
+      if (!fitsTelegramCallbackData(callbackData)) {
         throw new Error(
-          `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max 64 chars)`,
+          `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} bytes)`,
         );
       }
-      const styleRaw = (button as { style?: unknown }).style;
-      const style = typeof styleRaw === "string" ? styleRaw.trim().toLowerCase() : undefined;
+      const styleRaw = rawButton.style;
+      const style = normalizeOptionalLowercaseString(styleRaw);
       if (styleRaw !== undefined && !style) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] style must be string`);
       }
@@ -197,6 +205,7 @@ export async function handleTelegramAction(
   cfg: OpenClawConfig,
   options?: {
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -348,6 +357,7 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
       mediaLocalRoots: options?.mediaLocalRoots,
+      mediaReadFile: options?.mediaReadFile,
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
@@ -575,7 +585,7 @@ export async function handleTelegramAction(
     }
     const chatId = readTelegramChatId(params);
     const name = readStringParam(params, "name", { required: true });
-    const iconColor = readNumberParam(params, "iconColor", { integer: true });
+    const iconColor = readTelegramForumTopicIconColor(params);
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
@@ -587,7 +597,7 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
-      iconColor: iconColor ?? undefined,
+      iconColor,
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
     });
     return jsonResult({
@@ -629,5 +639,5 @@ export async function handleTelegramAction(
     return jsonResult(result);
   }
 
-  throw new Error(`Unsupported Telegram action: ${action}`);
+  throw new Error(`Unsupported Telegram action: ${String(action)}`);
 }

@@ -1,10 +1,11 @@
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.js";
+import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
+  cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
   promptTokens?: number;
   usage?: {
@@ -30,11 +31,16 @@ export type EmbeddedPiAgentMeta = {
   };
 };
 
+export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
+
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
+  finalAssistantVisibleText?: string;
+  replayInvalid?: boolean;
+  livenessState?: EmbeddedRunLivenessState;
   error?: {
     kind:
       | "context_overflow"
@@ -61,6 +67,8 @@ export type EmbeddedPiRunResult = {
     mediaUrls?: string[];
     replyToId?: string;
     isError?: boolean;
+    isReasoning?: boolean;
+    audioAsVoice?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
   // True if a messaging tool (telegram, whatsapp, discord, slack, sessions_send)
@@ -89,6 +97,8 @@ export type EmbeddedPiCompactResult = {
   };
 };
 
+export type EmbeddedFullAccessBlockedReason = "sandbox" | "host-policy" | "channel" | "runtime";
+
 export type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
@@ -96,10 +106,11 @@ export type EmbeddedSandboxInfo = {
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
   browserBridgeUrl?: string;
-  browserNoVncUrl?: string;
   hostBrowserAllowed?: boolean;
   elevated?: {
     allowed: boolean;
     defaultLevel: "on" | "off" | "ask" | "full";
+    fullAccessAvailable: boolean;
+    fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
   };
 };

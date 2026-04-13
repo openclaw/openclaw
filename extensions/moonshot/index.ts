@@ -1,8 +1,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingType,
-} from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   applyMoonshotConfig,
@@ -13,6 +12,10 @@ import { buildMoonshotProvider } from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
+const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "openai-compatible",
+});
+const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -55,13 +58,10 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
     },
-    wrapStreamFn: (ctx) => {
-      const thinkingType = resolveMoonshotThinkingType({
-        configuredThinking: ctx.extraParams?.thinking,
-        thinkingLevel: ctx.thinkingLevel,
-      });
-      return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
-    },
+    applyNativeStreamingUsageCompat: ({ providerConfig }) =>
+      applyMoonshotNativeStreamingUsageCompat(providerConfig),
+    ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+    ...MOONSHOT_THINKING_STREAM_HOOKS,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);

@@ -36,45 +36,14 @@ vi.mock("ajv", () => ({
   },
 }));
 
-vi.mock("../api.js", () => ({
-  formatXHighModelHint: () => "provider models that advertise xhigh reasoning",
-  normalizeThinkLevel: (raw?: string | null) => {
-    if (!raw) {
-      return undefined;
-    }
-    const key = raw.trim().toLowerCase();
-    const collapsed = key.replace(/[\s_-]+/g, "");
-    if (collapsed === "adaptive" || collapsed === "auto") {
-      return "adaptive";
-    }
-    if (collapsed === "xhigh" || collapsed === "extrahigh") {
-      return "xhigh";
-    }
-    if (["off"].includes(key)) {
-      return "off";
-    }
-    if (["on", "enable", "enabled"].includes(key)) {
-      return "low";
-    }
-    if (["min", "minimal", "think"].includes(key)) {
-      return "minimal";
-    }
-    if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
-      return "low";
-    }
-    if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
-      return "medium";
-    }
-    if (
-      ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-    ) {
-      return "high";
-    }
-    return undefined;
-  },
-  resolvePreferredOpenClawTmpDir: () => "/tmp",
-  supportsXHighThinking: () => false,
-}));
+vi.mock("../api.js", async () => {
+  const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
+  return {
+    ...actual,
+    resolvePreferredOpenClawTmpDir: () => "/tmp",
+    supportsXHighThinking: () => false,
+  };
+});
 
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
@@ -83,7 +52,6 @@ const runEmbeddedPiAgent = vi.fn(async () => ({
   payloads: [{ text: "{}" }],
 }));
 
-// oxlint-disable-next-line typescript/no-explicit-any
 function fakeApi(overrides: any = {}) {
   return {
     id: "llm-task",
@@ -106,7 +74,6 @@ function fakeApi(overrides: any = {}) {
 }
 
 function mockEmbeddedRunJson(payload: unknown) {
-  // oxlint-disable-next-line typescript/no-explicit-any
   (runEmbeddedPiAgent as any).mockResolvedValueOnce({
     meta: {},
     payloads: [{ text: JSON.stringify(payload) }],
@@ -116,7 +83,6 @@ function mockEmbeddedRunJson(payload: unknown) {
 async function executeEmbeddedRun(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
-  // oxlint-disable-next-line typescript/no-explicit-any
   return (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
 }
 
@@ -124,31 +90,26 @@ describe("llm-task tool (json-only)", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("returns parsed json", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
     const tool = createLlmTaskTool(fakeApi());
     const res = await tool.execute("id", { prompt: "return foo" });
-    // oxlint-disable-next-line typescript/no-explicit-any
     expect((res as any).details.json).toEqual({ foo: "bar" });
   });
 
   it("strips fenced json", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: '```json\n{"ok":true}\n```' }],
     });
     const tool = createLlmTaskTool(fakeApi());
     const res = await tool.execute("id", { prompt: "return ok" });
-    // oxlint-disable-next-line typescript/no-explicit-any
     expect((res as any).details.json).toEqual({ ok: true });
   });
 
   it("validates schema", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
@@ -161,12 +122,10 @@ describe("llm-task tool (json-only)", () => {
       additionalProperties: false,
     };
     const res = await tool.execute("id", { prompt: "return foo", schema });
-    // oxlint-disable-next-line typescript/no-explicit-any
     expect((res as any).details.json).toEqual({ foo: "bar" });
   });
 
   it("throws on invalid json", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: "not-json" }],
@@ -176,7 +135,6 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on schema mismatch", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: 1 }) }],

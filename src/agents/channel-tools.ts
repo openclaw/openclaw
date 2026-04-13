@@ -5,9 +5,12 @@ import {
   resolveMessageActionDiscoveryChannelId,
   __testing as messageActionTesting,
 } from "../channels/plugins/message-action-discovery.js";
-import type { ChannelAgentTool, ChannelMessageActionName } from "../channels/plugins/types.js";
+import type {
+  ChannelAgentTool,
+  ChannelMessageActionName,
+} from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type ChannelAgentToolMeta = {
   channelId: string;
@@ -41,6 +44,7 @@ export function listChannelSupportedActions(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): ChannelMessageActionName[] {
   const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
   if (!channelId) {
@@ -71,6 +75,7 @@ export function listAllChannelSupportedActions(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
   for (const plugin of listChannelPlugins()) {
@@ -126,6 +131,49 @@ export function resolveChannelMessageToolHints(params: {
   return (resolve({ cfg, accountId: params.accountId }) ?? [])
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+export function resolveChannelMessageToolCapabilities(params: {
+  cfg?: OpenClawConfig;
+  channel?: string | null;
+  accountId?: string | null;
+}): string[] {
+  const channelId = normalizeAnyChannelId(params.channel);
+  if (!channelId) {
+    return [];
+  }
+  const resolve = getChannelPlugin(channelId)?.agentPrompt?.messageToolCapabilities;
+  if (!resolve) {
+    return [];
+  }
+  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  return (resolve({ cfg, accountId: params.accountId }) ?? [])
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function resolveChannelReactionGuidance(params: {
+  cfg?: OpenClawConfig;
+  channel?: string | null;
+  accountId?: string | null;
+}): { level: "minimal" | "extensive"; channel: string } | undefined {
+  const channelId = normalizeAnyChannelId(params.channel);
+  if (!channelId) {
+    return undefined;
+  }
+  const resolve = getChannelPlugin(channelId)?.agentPrompt?.reactionGuidance;
+  if (!resolve) {
+    return undefined;
+  }
+  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  const resolved = resolve({ cfg, accountId: params.accountId });
+  if (!resolved?.level) {
+    return undefined;
+  }
+  return {
+    level: resolved.level,
+    channel: resolved.channelLabel?.trim() || channelId,
+  };
 }
 
 export const __testing = {

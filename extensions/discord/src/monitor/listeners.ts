@@ -9,11 +9,14 @@ import {
   type User,
 } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { formatDurationSeconds } from "openclaw/plugin-sdk/infra-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createSubsystemLogger,
+  danger,
+  formatDurationSeconds,
+  logVerbose,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
@@ -452,7 +455,7 @@ async function handleDiscordReactionEvent(
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
     const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => String(roleId))
+      ? data.rawMember.roles.map((roleId: string) => roleId)
       : [];
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,

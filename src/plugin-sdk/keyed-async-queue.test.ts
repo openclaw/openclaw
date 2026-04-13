@@ -43,10 +43,10 @@ describe("enqueueKeyedTask", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(order).toContain("a1:start");
-      expect(order).toContain("b1:start");
-    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toContain("a1:start");
+    expect(order).toContain("b1:start");
     expect(order).not.toContain("a2:start");
 
     gate.resolve();
@@ -57,23 +57,25 @@ describe("enqueueKeyedTask", () => {
 
   it("keeps queue alive after task failures", async () => {
     const tails = new Map<string, Promise<void>>();
-    await expect(
-      enqueueKeyedTask({
-        tails,
-        key: "a",
-        task: async () => {
-          throw new Error("boom");
-        },
-      }),
-    ).rejects.toThrow("boom");
+    const runs = [
+      () =>
+        enqueueKeyedTask({
+          tails,
+          key: "a",
+          task: async () => {
+            throw new Error("boom");
+          },
+        }),
+      () =>
+        enqueueKeyedTask({
+          tails,
+          key: "a",
+          task: async () => "ok",
+        }),
+    ];
 
-    await expect(
-      enqueueKeyedTask({
-        tails,
-        key: "a",
-        task: async () => "ok",
-      }),
-    ).resolves.toBe("ok");
+    await expect(runs[0]()).rejects.toThrow("boom");
+    await expect(runs[1]()).resolves.toBe("ok");
   });
 
   it("runs enqueue/settle hooks once per task", async () => {

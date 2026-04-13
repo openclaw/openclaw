@@ -1,11 +1,16 @@
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "../plugins/provider-model-defaults.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import {
   normalizeSecretInput,
@@ -32,7 +37,7 @@ function normalizeContextWindowForCustomModel(value: unknown): number {
 function isAzureFoundryUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(url.hostname);
     return host.endsWith(".services.ai.azure.com");
   } catch {
     return false;
@@ -42,7 +47,7 @@ function isAzureFoundryUrl(baseUrl: string): boolean {
 function isAzureOpenAiUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(url.hostname);
     return host.endsWith(".openai.azure.com");
   } catch {
     return false;
@@ -60,8 +65,8 @@ function isAzureUrl(baseUrl: string): boolean {
  * The api-version will be handled by the Azure OpenAI client or as a query param.
  *
  * Example:
- *   https://my-resource.services.ai.azure.com + gpt-5-nano
- *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5-nano
+ *   https://my-resource.services.ai.azure.com + gpt-5.4-nano
+ *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5.4-nano
  */
 function transformAzureUrl(baseUrl: string, modelId: string): string {
   const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
@@ -92,7 +97,10 @@ function transformAzureConfigUrl(baseUrl: string): string {
 
 function hasSameHost(a: string, b: string): boolean {
   try {
-    return new URL(a).hostname.toLowerCase() === new URL(b).hostname.toLowerCase();
+    return (
+      normalizeLowercaseStringOrEmpty(new URL(a).hostname) ===
+      normalizeLowercaseStringOrEmpty(new URL(b).hostname)
+    );
   } catch {
     return false;
   }
@@ -185,7 +193,7 @@ const COMPATIBILITY_OPTIONS: Array<{
 ];
 
 function normalizeEndpointId(raw: string): string {
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return "";
   }
@@ -195,7 +203,7 @@ function normalizeEndpointId(raw: string): string {
 function buildEndpointIdFromUrl(baseUrl: string): string {
   try {
     const url = new URL(baseUrl);
-    const host = url.hostname.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(url.hostname.replace(/[^a-z0-9]+/gi, "-"));
     const port = url.port ? `-${url.port}` : "";
     const candidate = `custom-${host}${port}`;
     return normalizeEndpointId(candidate) || "custom";
@@ -246,7 +254,7 @@ function resolveAliasError(params: {
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
-  const aliasKey = normalized.toLowerCase();
+  const aliasKey = normalizeLowercaseStringOrEmpty(normalized);
   const existing = aliasIndex.byAlias.get(aliasKey);
   if (!existing) {
     return undefined;
@@ -438,12 +446,7 @@ async function promptBaseUrlAndKey(params: {
     initialValue: params.initialBaseUrl ?? OLLAMA_DEFAULT_BASE_URL,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
-      try {
-        new URL(val);
-        return undefined;
-      } catch {
-        return "Please enter a valid URL (e.g. http://...)";
-      }
+      return URL.canParse(val) ? undefined : "Please enter a valid URL (e.g. http://...)";
     },
   });
   const baseUrl = baseUrlInput.trim();
@@ -524,7 +527,7 @@ function resolveProviderApi(
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
-  const compatibilityRaw = raw?.trim().toLowerCase();
+  const compatibilityRaw = normalizeOptionalLowercaseString(raw);
   if (!compatibilityRaw) {
     return "openai";
   }
@@ -569,8 +572,8 @@ export function resolveCustomProviderId(
 export function parseNonInteractiveCustomApiFlags(
   params: ParseNonInteractiveCustomApiFlagsParams,
 ): ParsedNonInteractiveCustomApiFlags {
-  const baseUrl = params.baseUrl?.trim() ?? "";
-  const modelId = params.modelId?.trim() ?? "";
+  const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
+  const modelId = normalizeOptionalString(params.modelId) ?? "";
   if (!baseUrl || !modelId) {
     throw new CustomApiError(
       "missing_required",
@@ -581,8 +584,8 @@ export function parseNonInteractiveCustomApiFlags(
     );
   }
 
-  const apiKey = params.apiKey?.trim();
-  const providerId = params.providerId?.trim();
+  const apiKey = normalizeOptionalString(params.apiKey);
+  const providerId = normalizeOptionalString(params.providerId);
   if (providerId && !normalizeEndpointId(providerId)) {
     throw new CustomApiError(
       "invalid_provider_id",
@@ -599,10 +602,8 @@ export function parseNonInteractiveCustomApiFlags(
 }
 
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
-  const baseUrl = params.baseUrl.trim();
-  try {
-    new URL(baseUrl);
-  } catch {
+  const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
+  if (!URL.canParse(baseUrl)) {
     throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
   }
 
@@ -613,7 +614,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     );
   }
 
-  const modelId = params.modelId.trim();
+  const modelId = normalizeOptionalString(params.modelId) ?? "";
   if (!modelId) {
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
   }
@@ -631,7 +632,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const providers = params.config.models?.providers ?? {};
 
   const modelRef = modelKey(providerId, modelId);
-  const alias = params.alias?.trim() ?? "";
+  const alias = normalizeOptionalString(params.alias) ?? "";
   const aliasError = resolveAliasError({
     raw: alias,
     cfg: params.config,
@@ -687,7 +688,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     normalizeOptionalProviderApiKey(existingApiKey);
 
   const providerApi = isAzureOpenAi
-    ? ("openai-responses" as const)
+    ? ("azure-openai-responses" as const)
     : resolveProviderApi(params.compatibility);
   const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
 

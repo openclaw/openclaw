@@ -55,17 +55,28 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import type { ChatSideResult } from "./chat/side-result.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
+import type {
+  DreamingStatus,
+  WikiImportInsights,
+  WikiMemoryPalace,
+} from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillMessage } from "./controllers/skills.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import type { SidebarContent } from "./sidebar-content.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
@@ -84,6 +95,7 @@ import type {
   ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
+  SessionCompactionCheckpoint,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
@@ -149,6 +161,9 @@ export class OpenClawApp extends LitElement {
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
+  @state() localMediaPreviewRoots: string[] = [];
+  @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
+  @state() allowExternalEmbedUrls = false;
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
@@ -161,6 +176,7 @@ export class OpenClawApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
+  @state() chatSideResult: ChatSideResult | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
@@ -177,7 +193,7 @@ export class OpenClawApp extends LitElement {
 
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
-  @state() sidebarContent: string | null = null;
+  @state() sidebarContent: SidebarContent | null = null;
   @state() sidebarError: string | null = null;
   @state() splitRatio = this.settings.splitRatio;
 
@@ -216,6 +232,23 @@ export class OpenClawApp extends LitElement {
   @state() configUiHints: ConfigUiHints = {};
   @state() configForm: Record<string, unknown> | null = null;
   @state() configFormOriginal: Record<string, unknown> | null = null;
+  @state() dreamingStatusLoading = false;
+  @state() dreamingStatusError: string | null = null;
+  @state() dreamingStatus: DreamingStatus | null = null;
+  @state() dreamingModeSaving = false;
+  @state() dreamDiaryLoading = false;
+  @state() dreamDiaryActionLoading = false;
+  @state() dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() dreamDiaryActionArchivePath: string | null = null;
+  @state() dreamDiaryError: string | null = null;
+  @state() dreamDiaryPath: string | null = null;
+  @state() dreamDiaryContent: string | null = null;
+  @state() wikiImportInsightsLoading = false;
+  @state() wikiImportInsightsError: string | null = null;
+  @state() wikiImportInsights: WikiImportInsights | null = null;
+  @state() wikiMemoryPalaceLoading = false;
+  @state() wikiMemoryPalaceError: string | null = null;
+  @state() wikiMemoryPalace: WikiMemoryPalace | null = null;
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";
@@ -300,6 +333,11 @@ export class OpenClawApp extends LitElement {
   @state() sessionsPage = 0;
   @state() sessionsPageSize = 25;
   @state() sessionsSelectedKeys: Set<string> = new Set();
+  @state() sessionsExpandedCheckpointKey: string | null = null;
+  @state() sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};
+  @state() sessionsCheckpointLoadingKey: string | null = null;
+  @state() sessionsCheckpointBusyKey: string | null = null;
+  @state() sessionsCheckpointErrorByKey: Record<string, string> = {};
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
@@ -413,6 +451,16 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
   @state() skillsDetailKey: string | null = null;
+  @state() clawhubSearchQuery = "";
+  @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
+  @state() clawhubSearchLoading = false;
+  @state() clawhubSearchError: string | null = null;
+  @state() clawhubDetail: ClawHubSkillDetail | null = null;
+  @state() clawhubDetailSlug: string | null = null;
+  @state() clawhubDetailLoading = false;
+  @state() clawhubDetailError: string | null = null;
+  @state() clawhubInstallSlug: string | null = null;
+  @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -457,6 +505,7 @@ export class OpenClawApp extends LitElement {
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
   refreshSessionsAfterChat = new Set<string>();
+  chatSideResultTerminalRuns = new Set<string>();
   basePath = "";
   private popStateHandler = () =>
     onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
@@ -690,13 +739,14 @@ export class OpenClawApp extends LitElement {
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
-      await this.client.request("exec.approval.resolve", {
+      const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
+      await this.client.request(method, {
         id: active.id,
         decision,
       });
       this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
     } catch (err) {
-      this.execApprovalError = `Exec approval failed: ${String(err)}`;
+      this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
       this.execApprovalBusy = false;
     }
@@ -724,7 +774,7 @@ export class OpenClawApp extends LitElement {
   }
 
   // Sidebar handlers for tool output viewing
-  handleOpenSidebar(content: string) {
+  handleOpenSidebar(content: SidebarContent) {
     if (this.sidebarCloseTimer != null) {
       window.clearTimeout(this.sidebarCloseTimer);
       this.sidebarCloseTimer = null;

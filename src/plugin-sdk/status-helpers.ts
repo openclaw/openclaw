@@ -1,7 +1,10 @@
 import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
-import type { ChannelStatusIssue } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+export type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+export type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
 export { isRecord } from "../channels/plugins/status-issues/shared.js";
 export {
   appendMatchMetadata,
@@ -13,6 +16,21 @@ export {
 
 type RuntimeLifecycleSnapshot = {
   running?: boolean | null;
+  connected?: boolean | null;
+  restartPending?: boolean | null;
+  reconnectAttempts?: number | null;
+  lastConnectedAt?: number | null;
+  lastDisconnect?:
+    | string
+    | {
+        at: number;
+        status?: number;
+        error?: string;
+        loggedOut?: boolean;
+      }
+    | null;
+  lastEventAt?: number | null;
+  healthState?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
@@ -39,6 +57,11 @@ type ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit> = {
 
 type ComputedAccountStatusSnapshot<TExtra extends StatusSnapshotExtra = StatusSnapshotExtra> =
   ComputedAccountStatusBase & { extra?: TExtra };
+
+type ConfigIssueAccount = {
+  accountId?: string | null;
+  configured?: boolean | null;
+} & Record<string, unknown>;
 
 /** Create the baseline runtime snapshot shape used by channel/account status stores. */
 export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
@@ -100,6 +123,24 @@ export function buildProbeChannelStatusSummary<TExtra extends Record<string, unk
     probe: snapshot.probe,
     lastProbeAt: snapshot.lastProbeAt ?? null,
   };
+}
+
+/** Build webhook channel summaries with a stable default mode. */
+export function buildWebhookChannelStatusSummary<TExtra extends StatusSnapshotExtra>(
+  snapshot: {
+    configured?: boolean | null;
+    mode?: string | null;
+    running?: boolean | null;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+  },
+  extra?: TExtra,
+) {
+  return buildBaseChannelStatusSummary(snapshot, {
+    mode: snapshot.mode ?? "webhook",
+    ...(extra ?? ({} as TExtra)),
+  });
 }
 
 /** Build the standard per-account status payload from config metadata plus runtime state. */
@@ -256,6 +297,19 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
     lastStopAt: runtime?.lastStopAt ?? null,
     lastError: runtime?.lastError ?? null,
     probe,
+    ...(typeof runtime?.connected === "boolean" ? { connected: runtime.connected } : {}),
+    ...(typeof runtime?.restartPending === "boolean"
+      ? { restartPending: runtime.restartPending }
+      : {}),
+    ...(typeof runtime?.reconnectAttempts === "number"
+      ? { reconnectAttempts: runtime.reconnectAttempts }
+      : {}),
+    ...(typeof runtime?.lastConnectedAt === "number"
+      ? { lastConnectedAt: runtime.lastConnectedAt }
+      : {}),
+    ...(runtime?.lastDisconnect ? { lastDisconnect: runtime.lastDisconnect } : {}),
+    ...(typeof runtime?.lastEventAt === "number" ? { lastEventAt: runtime.lastEventAt } : {}),
+    ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }
@@ -288,6 +342,39 @@ export function buildTokenChannelStatusSummary(
     ...base,
     mode: snapshot.mode ?? null,
   };
+}
+
+/** Build a config-issue collector from snapshot-safe source metadata only. */
+export function createDependentCredentialStatusIssueCollector(options: {
+  channel: string;
+  dependencySourceKey: string;
+  missingPrimaryMessage: string;
+  missingDependentMessage: string;
+  isDependencyConfigured?: ((value: unknown) => boolean) | undefined;
+}) {
+  const isDependencyConfigured =
+    options.isDependencyConfigured ??
+    ((value: unknown) => {
+      const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+      return Boolean(normalized && normalized !== "none");
+    });
+
+  return (accounts: ConfigIssueAccount[]): ChannelStatusIssue[] =>
+    accounts.flatMap((account) => {
+      if (account.configured !== false) {
+        return [];
+      }
+      return [
+        {
+          channel: options.channel,
+          accountId: account.accountId ?? "",
+          kind: "config",
+          message: isDependencyConfigured(account[options.dependencySourceKey])
+            ? options.missingDependentMessage
+            : options.missingPrimaryMessage,
+        },
+      ];
+    });
 }
 
 /** Convert account runtime errors into the generic channel status issue format. */

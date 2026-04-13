@@ -1,13 +1,12 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import type {
-  SandboxContext,
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
-import { resolveWritableRenameTargetsForBridge } from "openclaw/plugin-sdk/sandbox";
-import type { OpenShellSandboxBackend } from "./backend.js";
+import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
+import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
@@ -17,25 +16,22 @@ type ResolvedMountPath = SandboxResolvedPath & {
 };
 
 export function createOpenShellFsBridge(params: {
-  sandbox: SandboxContext;
+  sandbox: OpenShellFsBridgeContext;
   backend: OpenShellSandboxBackend;
 }): SandboxFsBridge {
   return new OpenShellFsBridge(params.sandbox, params.backend);
 }
 
 class OpenShellFsBridge implements SandboxFsBridge {
+  private readonly resolveRenameTargets = createWritableRenameTargetResolver(
+    (target) => this.resolveTarget(target),
+    (target, action) => this.ensureWritable(target, action),
+  );
+
   constructor(
-    private readonly sandbox: SandboxContext,
+    private readonly sandbox: OpenShellFsBridgeContext,
     private readonly backend: OpenShellSandboxBackend,
   ) {}
-
-  private resolveRenameTargets(params: { from: string; to: string; cwd?: string }) {
-    return resolveWritableRenameTargetsForBridge(
-      params,
-      (target) => this.resolveTarget(target),
-      (target, action) => this.ensureWritable(target, action),
-    );
-  }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);
@@ -324,7 +320,7 @@ async function assertLocalPathSafety(params: {
     .slice(0, Math.max(0, relative.split(path.sep).filter(Boolean).length));
   let cursor = params.root;
   for (let index = 0; index < segments.length; index += 1) {
-    cursor = path.join(cursor, segments[index]!);
+    cursor = path.join(cursor, segments[index]);
     const stats = await fsPromises.lstat(cursor).catch(() => null);
     if (!stats) {
       if (index === segments.length - 1 && params.allowMissingLeaf) {

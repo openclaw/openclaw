@@ -1,10 +1,12 @@
 import type { TUI } from "@mariozechner/pi-tui";
+import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
@@ -70,7 +72,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.sessionScope = result.scope ?? state.sessionScope;
     state.agents = result.agents.map((agent) => ({
       id: normalizeAgentId(agent.id),
-      name: agent.name?.trim() || undefined,
+      name: normalizeOptionalString(agent.name),
     }));
     agentNames.clear();
     for (const agent of state.agents) {
@@ -121,21 +123,14 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const resolveModelSelection = (entry?: SessionInfoEntry) => {
-    if (entry?.modelProvider || entry?.model) {
-      return {
-        modelProvider: entry.modelProvider ?? state.sessionInfo.modelProvider,
-        model: entry.model ?? state.sessionInfo.model,
-      };
-    }
-    const overrideModel = entry?.modelOverride?.trim();
-    if (overrideModel) {
-      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
-      return { modelProvider: overrideProvider, model: overrideModel };
-    }
-    return {
-      modelProvider: state.sessionInfo.modelProvider,
-      model: state.sessionInfo.model,
-    };
+    return resolveSessionInfoModelSelection({
+      currentProvider: state.sessionInfo.modelProvider,
+      currentModel: state.sessionInfo.model,
+      entryProvider: entry?.modelProvider,
+      entryModel: entry?.model,
+      overrideProvider: entry?.providerOverride,
+      overrideModel: entry?.modelOverride,
+    });
   };
 
   const applySessionInfo = (params: {
@@ -176,6 +171,9 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.verboseLevel !== undefined) {
       next.verboseLevel = entry.verboseLevel;
+    }
+    if (entry?.traceLevel !== undefined) {
+      next.traceLevel = entry.traceLevel;
     }
     if (entry?.reasoningLevel !== undefined) {
       next.reasoningLevel = entry.reasoningLevel;
@@ -297,11 +295,13 @@ export function createSessionActions(context: SessionActionContext) {
         thinkingLevel?: string;
         fastMode?: boolean;
         verboseLevel?: string;
+        traceLevel?: string;
       };
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
       state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
+      state.sessionInfo.traceLevel = record.traceLevel ?? state.sessionInfo.traceLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
       btw.clear();
@@ -368,6 +368,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
+    setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
     // so refresh data for the newly selected session isn't rejected as stale.

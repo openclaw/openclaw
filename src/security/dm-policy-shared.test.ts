@@ -56,7 +56,7 @@ describe("security/dm-policy-shared", () => {
 
   it("normalizes config + store allow entries and counts distinct senders", async () => {
     const state = await resolveDmAllowState({
-      provider: "telegram",
+      provider: "demo-channel-a" as never,
       accountId: "default",
       allowFrom: [" * ", " alice ", "ALICE", "bob"],
       normalizeEntry: (value) => value.toLowerCase(),
@@ -70,7 +70,7 @@ describe("security/dm-policy-shared", () => {
 
   it("handles empty allowlists and store failures", async () => {
     const state = await resolveDmAllowState({
-      provider: "slack",
+      provider: "demo-channel-b" as never,
       accountId: "default",
       allowFrom: undefined,
       readStore: async (_provider, _accountId) => {
@@ -83,20 +83,25 @@ describe("security/dm-policy-shared", () => {
     expect(state.isMultiUserDm).toBe(false);
   });
 
-  it("skips pairing-store reads when dmPolicy is allowlist", async () => {
-    await expectStoreReadSkipped({
-      provider: "telegram",
-      accountId: "default",
-      dmPolicy: "allowlist",
-    });
-  });
-
-  it("skips pairing-store reads when shouldRead=false", async () => {
-    await expectStoreReadSkipped({
-      provider: "slack",
-      accountId: "default",
-      shouldRead: false,
-    });
+  it.each([
+    {
+      name: "dmPolicy is allowlist",
+      params: {
+        provider: "demo-channel-a",
+        accountId: "default",
+        dmPolicy: "allowlist" as const,
+      },
+    },
+    {
+      name: "shouldRead=false",
+      params: {
+        provider: "demo-channel-b",
+        accountId: "default",
+        shouldRead: false,
+      },
+    },
+  ] as const)("skips pairing-store reads when $name", async ({ params }) => {
+    await expectStoreReadSkipped(params);
   });
 
   it("builds effective DM/group allowlists from config + pairing store", () => {
@@ -143,25 +148,27 @@ describe("security/dm-policy-shared", () => {
     expect(pinnedOwner).toBe("u123");
   });
 
-  it("does not infer pinned owner for wildcard/multi-owner/non-main scope", () => {
+  it.each([
+    {
+      name: "wildcard allowlist",
+      dmScope: "main" as const,
+      allowFrom: ["*"],
+    },
+    {
+      name: "multi-owner allowlist",
+      dmScope: "main" as const,
+      allowFrom: ["u123", "u456"],
+    },
+    {
+      name: "non-main scope",
+      dmScope: "per-channel-peer" as const,
+      allowFrom: ["u123"],
+    },
+  ] as const)("does not infer pinned owner for $name", ({ dmScope, allowFrom }) => {
     expect(
       resolvePinnedMainDmOwnerFromAllowlist({
-        dmScope: "main",
-        allowFrom: ["*"],
-        normalizeEntry: (entry) => entry.trim(),
-      }),
-    ).toBeNull();
-    expect(
-      resolvePinnedMainDmOwnerFromAllowlist({
-        dmScope: "main",
-        allowFrom: ["u123", "u456"],
-        normalizeEntry: (entry) => entry.trim(),
-      }),
-    ).toBeNull();
-    expect(
-      resolvePinnedMainDmOwnerFromAllowlist({
-        dmScope: "per-channel-peer",
-        allowFrom: ["u123"],
+        dmScope,
+        allowFrom: [...allowFrom],
         normalizeEntry: (entry) => entry.trim(),
       }),
     ).toBeNull();
@@ -298,6 +305,14 @@ describe("security/dm-policy-shared", () => {
     expectedReactionAllowed: boolean;
   };
 
+  type DecisionCase = {
+    name: string;
+    input: Parameters<typeof resolveDmGroupAccessDecision>[0];
+    expected:
+      | ReturnType<typeof resolveDmGroupAccessDecision>
+      | Pick<ReturnType<typeof resolveDmGroupAccessDecision>, "decision">;
+  };
+
   function createParityCase({
     name,
     ...overrides
@@ -317,167 +332,194 @@ describe("security/dm-policy-shared", () => {
     };
   }
 
-  it("keeps message/reaction policy parity table across channels", () => {
-    const cases = [
-      createParityCase({
-        name: "dmPolicy=open",
-        dmPolicy: "open",
-        expectedDecision: "allow",
-        expectedReactionAllowed: true,
-      }),
-      createParityCase({
-        name: "dmPolicy=disabled",
-        dmPolicy: "disabled",
-        expectedDecision: "block",
-        expectedReactionAllowed: false,
-      }),
-      createParityCase({
-        name: "dmPolicy=allowlist unauthorized",
-        dmPolicy: "allowlist",
-        allowFrom: ["owner"],
-        isSenderAllowed: () => false,
-        expectedDecision: "block",
-        expectedReactionAllowed: false,
-      }),
-      createParityCase({
-        name: "dmPolicy=allowlist authorized",
-        dmPolicy: "allowlist",
-        allowFrom: ["owner"],
-        isSenderAllowed: () => true,
-        expectedDecision: "allow",
-        expectedReactionAllowed: true,
-      }),
-      createParityCase({
-        name: "dmPolicy=pairing unauthorized",
-        dmPolicy: "pairing",
-        isSenderAllowed: () => false,
-        expectedDecision: "pairing",
-        expectedReactionAllowed: false,
-      }),
-      createParityCase({
-        name: "groupPolicy=allowlist rejects DM-paired sender not in explicit group list",
-        isGroup: true,
-        dmPolicy: "pairing",
-        allowFrom: ["owner"],
-        groupAllowFrom: ["group-owner"],
-        storeAllowFrom: ["paired-user"],
-        isSenderAllowed: (allowFrom: string[]) => allowFrom.includes("paired-user"),
-        expectedDecision: "block",
-        expectedReactionAllowed: false,
-      }),
-    ];
+  function expectParityCase(channel: (typeof channels)[number], testCase: ParityCase) {
+    const access = resolveDmGroupAccessWithLists({
+      isGroup: testCase.isGroup,
+      dmPolicy: testCase.dmPolicy,
+      groupPolicy: testCase.groupPolicy,
+      allowFrom: testCase.allowFrom,
+      groupAllowFrom: testCase.groupAllowFrom,
+      storeAllowFrom: testCase.storeAllowFrom,
+      isSenderAllowed: testCase.isSenderAllowed,
+    });
+    const reactionAllowed = access.decision === "allow";
+    expect(access.decision, `[${channel}] ${testCase.name}`).toBe(testCase.expectedDecision);
+    expect(reactionAllowed, `[${channel}] ${testCase.name} reaction`).toBe(
+      testCase.expectedReactionAllowed,
+    );
+  }
 
-    for (const channel of channels) {
-      for (const testCase of cases) {
-        const access = resolveDmGroupAccessWithLists({
-          isGroup: testCase.isGroup,
-          dmPolicy: testCase.dmPolicy,
-          groupPolicy: testCase.groupPolicy,
-          allowFrom: testCase.allowFrom,
-          groupAllowFrom: testCase.groupAllowFrom,
-          storeAllowFrom: testCase.storeAllowFrom,
-          isSenderAllowed: testCase.isSenderAllowed,
-        });
-        const reactionAllowed = access.decision === "allow";
-        expect(access.decision, `[${channel}] ${testCase.name}`).toBe(testCase.expectedDecision);
-        expect(reactionAllowed, `[${channel}] ${testCase.name} reaction`).toBe(
-          testCase.expectedReactionAllowed,
-        );
-      }
-    }
-  });
+  it.each(
+    channels.flatMap((channel) =>
+      [
+        createParityCase({
+          name: "dmPolicy=open",
+          dmPolicy: "open",
+          expectedDecision: "allow",
+          expectedReactionAllowed: true,
+        }),
+        createParityCase({
+          name: "dmPolicy=disabled",
+          dmPolicy: "disabled",
+          expectedDecision: "block",
+          expectedReactionAllowed: false,
+        }),
+        createParityCase({
+          name: "dmPolicy=allowlist unauthorized",
+          dmPolicy: "allowlist",
+          allowFrom: ["owner"],
+          isSenderAllowed: () => false,
+          expectedDecision: "block",
+          expectedReactionAllowed: false,
+        }),
+        createParityCase({
+          name: "dmPolicy=allowlist authorized",
+          dmPolicy: "allowlist",
+          allowFrom: ["owner"],
+          isSenderAllowed: () => true,
+          expectedDecision: "allow",
+          expectedReactionAllowed: true,
+        }),
+        createParityCase({
+          name: "dmPolicy=pairing unauthorized",
+          dmPolicy: "pairing",
+          isSenderAllowed: () => false,
+          expectedDecision: "pairing",
+          expectedReactionAllowed: false,
+        }),
+        createParityCase({
+          name: "groupPolicy=allowlist rejects DM-paired sender not in explicit group list",
+          isGroup: true,
+          dmPolicy: "pairing",
+          allowFrom: ["owner"],
+          groupAllowFrom: ["group-owner"],
+          storeAllowFrom: ["paired-user"],
+          isSenderAllowed: (allowFrom: string[]) => allowFrom.includes("paired-user"),
+          expectedDecision: "block",
+          expectedReactionAllowed: false,
+        }),
+      ].map((testCase) => ({
+        channel,
+        testCase,
+      })),
+    ),
+  )(
+    "keeps message/reaction policy parity table across channels: [$channel] $testCase.name",
+    ({ channel, testCase }) => {
+      expectParityCase(channel, testCase);
+    },
+  );
 
-  for (const channel of channels) {
-    it(`[${channel}] blocks groups when group allowlist is empty`, () => {
-      const decision = resolveDmGroupAccessDecision({
+  const decisionCases: DecisionCase[] = [
+    {
+      name: "blocks groups when group allowlist is empty",
+      input: {
         isGroup: true,
         dmPolicy: "pairing",
         groupPolicy: "allowlist",
         effectiveAllowFrom: ["owner"],
         effectiveGroupAllowFrom: [],
         isSenderAllowed: () => false,
-      });
-      expect(decision).toEqual({
+      },
+      expected: {
         decision: "block",
         reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST,
         reason: "groupPolicy=allowlist (empty allowlist)",
-      });
-    });
-
-    it(`[${channel}] allows groups when group policy is open`, () => {
-      const decision = resolveDmGroupAccessDecision({
+      },
+    },
+    {
+      name: "allows groups when group policy is open",
+      input: {
         isGroup: true,
         dmPolicy: "pairing",
         groupPolicy: "open",
         effectiveAllowFrom: ["owner"],
         effectiveGroupAllowFrom: [],
         isSenderAllowed: () => false,
-      });
-      expect(decision).toEqual({
+      },
+      expected: {
         decision: "allow",
         reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,
         reason: "groupPolicy=open",
-      });
-    });
-
-    it(`[${channel}] blocks DM allowlist mode when allowlist is empty`, () => {
-      const decision = resolveDmGroupAccessDecision({
+      },
+    },
+    {
+      name: "blocks DM allowlist mode when allowlist is empty",
+      input: {
         isGroup: false,
         dmPolicy: "allowlist",
         groupPolicy: "allowlist",
         effectiveAllowFrom: [],
         effectiveGroupAllowFrom: [],
         isSenderAllowed: () => false,
-      });
-      expect(decision).toEqual({
+      },
+      expected: {
         decision: "block",
         reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED,
         reason: "dmPolicy=allowlist (not allowlisted)",
-      });
-    });
-
-    it(`[${channel}] uses pairing flow when DM sender is not allowlisted`, () => {
-      const decision = resolveDmGroupAccessDecision({
+      },
+    },
+    {
+      name: "uses pairing flow when DM sender is not allowlisted",
+      input: {
         isGroup: false,
         dmPolicy: "pairing",
         groupPolicy: "allowlist",
         effectiveAllowFrom: [],
         effectiveGroupAllowFrom: [],
         isSenderAllowed: () => false,
-      });
-      expect(decision).toEqual({
+      },
+      expected: {
         decision: "pairing",
         reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_PAIRING_REQUIRED,
         reason: "dmPolicy=pairing (not allowlisted)",
-      });
-    });
-
-    it(`[${channel}] allows DM sender when allowlisted`, () => {
-      const decision = resolveDmGroupAccessDecision({
+      },
+    },
+    {
+      name: "allows DM sender when allowlisted",
+      input: {
         isGroup: false,
         dmPolicy: "allowlist",
         groupPolicy: "allowlist",
         effectiveAllowFrom: ["owner"],
         effectiveGroupAllowFrom: [],
         isSenderAllowed: () => true,
-      });
-      expect(decision.decision).toBe("allow");
-    });
-
-    it(`[${channel}] blocks group allowlist mode when sender/group is not allowlisted`, () => {
-      const decision = resolveDmGroupAccessDecision({
+      },
+      expected: {
+        decision: "allow",
+      },
+    },
+    {
+      name: "blocks group allowlist mode when sender/group is not allowlisted",
+      input: {
         isGroup: true,
         dmPolicy: "pairing",
         groupPolicy: "allowlist",
         effectiveAllowFrom: ["owner"],
         effectiveGroupAllowFrom: ["group:abc"],
         isSenderAllowed: () => false,
-      });
-      expect(decision).toEqual({
+      },
+      expected: {
         decision: "block",
         reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED,
         reason: "groupPolicy=allowlist (not allowlisted)",
-      });
-    });
-  }
+      },
+    },
+  ];
+
+  it.each(
+    channels.flatMap((channel) =>
+      decisionCases.map((testCase) => ({
+        channel,
+        testCase,
+      })),
+    ),
+  )("[$channel] $testCase.name", ({ testCase }) => {
+    const decision = resolveDmGroupAccessDecision(testCase.input);
+    if ("reasonCode" in testCase.expected && "reason" in testCase.expected) {
+      expect(decision).toEqual(testCase.expected);
+      return;
+    }
+    expect(decision).toMatchObject(testCase.expected);
+  });
 });

@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SettingsManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
@@ -90,13 +93,13 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
     if (record.format !== "bundle" || settingsFiles.length === 0) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
     for (const relativePath of settingsFiles) {

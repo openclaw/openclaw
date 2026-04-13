@@ -1,17 +1,17 @@
 {
   "name": "@openclaw/irc",
-  "version": "2026.3.22",
+  "version": "2026.4.12",
   "description": "OpenClaw IRC channel plugin",
   "type": "module",
-  "dependencies": {
-    "zod": "^4.3.6"
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
     "install": {
-      "minHostVersion": ">=2026.3.22"
+      "minHostVersion": ">=2026.4.10"
     },
     "setupEntry": "./setup-entry.ts",
     "channel": {
@@ -22,7 +22,14 @@
       "docsPath": "/channels/irc",
       "docsLabel": "irc",
       "blurb": "classic IRC networks with DM/channel routing and pairing controls.",
-      "systemImage": "network"
+      "aliases": [
+        "internet-relay-chat"
+      ],
+      "systemImage": "network",
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasIrcConfiguredState"
+      }
     }
   }
 }

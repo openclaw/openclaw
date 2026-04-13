@@ -5,6 +5,13 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import {
+  hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
+import { asRecord } from "./record-shared.js";
 
 export type GatewayAttachment = {
   type: string;
@@ -95,12 +102,6 @@ function escapeResourceTitle(value: string): string {
   return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizeToolLocationPath(value: string): string | undefined {
   const trimmed = value.trim();
   if (
@@ -176,7 +177,7 @@ function collectLocationsFromTextMarkers(
   locations: Map<string, ToolCallLocation>,
 ): void {
   for (const match of text.matchAll(TOOL_RESULT_PATH_MARKER_RE)) {
-    const candidate = match[1]?.trim();
+    const candidate = normalizeOptionalString(match[1]);
     if (candidate) {
       addToolLocation(locations, candidate);
     }
@@ -306,14 +307,16 @@ export function formatToolTitle(
     const safe = raw.length > 100 ? `${raw.slice(0, 100)}...` : raw;
     return `${key}: ${safe}`;
   });
-  return `${base}: ${parts.join(", ")}`;
+  // Sanitize at the source so session updates and permission requests never
+  // inherit raw control bytes from untrusted tool arguments.
+  return escapeInlineControlChars(`${base}: ${parts.join(", ")}`);
 }
 
 export function inferToolKind(name?: string): ToolKind {
   if (!name) {
     return "other";
   }
-  const normalized = name.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(name);
   if (normalized.includes("read")) {
     return "read";
   }
@@ -339,7 +342,7 @@ export function inferToolKind(name?: string): ToolKind {
 }
 
 export function extractToolCallContent(value: unknown): ToolCallContent[] | undefined {
-  if (typeof value === "string") {
+  if (hasNonEmptyString(value)) {
     return value.trim()
       ? [
           {
@@ -362,7 +365,7 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
   const blocks = Array.isArray(record.content) ? record.content : [];
   for (const block of blocks) {
     const entry = asRecord(block);
-    if (entry?.type === "text" && typeof entry.text === "string" && entry.text.trim()) {
+    if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
       contents.push({
         type: "content",
         content: {
@@ -378,15 +381,11 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
   }
 
   const fallbackText =
-    typeof record.text === "string"
-      ? record.text
-      : typeof record.message === "string"
-        ? record.message
-        : typeof record.error === "string"
-          ? record.error
-          : undefined;
+    readStringValue(record.text) ??
+    readStringValue(record.message) ??
+    readStringValue(record.error);
 
-  if (!fallbackText?.trim()) {
+  if (!hasNonEmptyString(fallbackText)) {
     return undefined;
   }
 

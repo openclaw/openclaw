@@ -20,6 +20,7 @@ data class NodeRuntimeFlags(
   val locationEnabled: Boolean,
   val sendSmsAvailable: Boolean,
   val readSmsAvailable: Boolean,
+  val smsSearchPossible: Boolean,
   val callLogAvailable: Boolean,
   val voiceWakeEnabled: Boolean,
   val motionActivityAvailable: Boolean,
@@ -33,6 +34,7 @@ enum class InvokeCommandAvailability {
   LocationEnabled,
   SendSmsAvailable,
   ReadSmsAvailable,
+  RequestableSmsSearchAvailable,
   CallLogAvailable,
   MotionActivityAvailable,
   MotionPedometerAvailable,
@@ -199,7 +201,7 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawSmsCommand.Search.rawValue,
-        availability = InvokeCommandAvailability.ReadSmsAvailable,
+        availability = InvokeCommandAvailability.RequestableSmsSearchAvailable,
       ),
       InvokeCommandSpec(
         name = OpenClawCallLogCommand.Search.rawValue,
@@ -244,6 +246,7 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.LocationEnabled -> flags.locationEnabled
           InvokeCommandAvailability.SendSmsAvailable -> flags.sendSmsAvailable
           InvokeCommandAvailability.ReadSmsAvailable -> flags.readSmsAvailable
+          InvokeCommandAvailability.RequestableSmsSearchAvailable -> flags.smsSearchPossible
           InvokeCommandAvailability.CallLogAvailable -> flags.callLogAvailable
           InvokeCommandAvailability.MotionActivityAvailable -> flags.motionActivityAvailable
           InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable

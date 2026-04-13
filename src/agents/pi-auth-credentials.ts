@@ -1,5 +1,6 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export type PiApiKeyCredential = { type: "api_key"; key: string };
 export type PiOAuthCredential = {
@@ -14,7 +15,7 @@ export type PiCredentialMap = Record<string, PiCredential>;
 
 export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): PiCredential | null {
   if (cred.type === "api_key") {
-    const key = typeof cred.key === "string" ? cred.key.trim() : "";
+    const key = normalizeOptionalString(cred.key) ?? "";
     if (!key) {
       return null;
     }
@@ -22,7 +23,7 @@ export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): P
   }
 
   if (cred.type === "token") {
-    const token = typeof cred.token === "string" ? cred.token.trim() : "";
+    const token = normalizeOptionalString(cred.token) ?? "";
     if (!token) {
       return null;
     }
@@ -37,8 +38,8 @@ export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): P
   }
 
   if (cred.type === "oauth") {
-    const access = typeof cred.access === "string" ? cred.access.trim() : "";
-    const refresh = typeof cred.refresh === "string" ? cred.refresh.trim() : "";
+    const access = normalizeOptionalString(cred.access) ?? "";
+    const refresh = normalizeOptionalString(cred.refresh) ?? "";
     if (!access || !refresh || !Number.isFinite(cred.expires) || cred.expires <= 0) {
       return null;
     }
@@ -56,7 +57,7 @@ export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): P
 export function resolvePiCredentialMapFromStore(store: AuthProfileStore): PiCredentialMap {
   const credentials: PiCredentialMap = {};
   for (const credential of Object.values(store.profiles)) {
-    const provider = normalizeProviderId(String(credential.provider ?? "")).trim();
+    const provider = normalizeProviderId(credential.provider ?? "");
     if (!provider || credentials[provider]) {
       continue;
     }

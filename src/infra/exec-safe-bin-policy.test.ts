@@ -60,6 +60,10 @@ describe("exec safe bin policy jq", () => {
     expect(validateSafeBinArgv(["env"], jqProfile, { binName: "jq" })).toBe(false);
     expect(validateSafeBinArgv(["env.FOO"], jqProfile, { binName: "jq" })).toBe(false);
     expect(validateSafeBinArgv([".foo | env"], jqProfile, { binName: "jq" })).toBe(false);
+    expect(validateSafeBinArgv(["$ENV"], jqProfile, { binName: "jq" })).toBe(false);
+    expect(validateSafeBinArgv(["($ENV).OPENAI_API_KEY"], jqProfile, { binName: "jq" })).toBe(
+      false,
+    );
   });
 });
 

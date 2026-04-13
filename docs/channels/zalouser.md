@@ -12,19 +12,25 @@ Status: experimental. This integration automates a **personal Zalo account** via
 
 > **Warning:** This is an unofficial integration and may result in account suspension/ban. Use at your own risk.
 
-## Plugin required
+## Bundled plugin
 
-Zalo Personal ships as a plugin and is not bundled with the core install.
+Zalo Personal ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Zalo Personal,
+install it manually:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
-- Or from a source checkout: `openclaw plugins install ./extensions/zalouser`
+- Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 
 No external `zca`/`openzca` CLI binary is required.
 
 ## Quick setup (beginner)
 
-1. Install the plugin (see above).
+1. Ensure the Zalo Personal plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Login (QR, on the Gateway machine):
    - `openclaw channels login --channel zalouser`
    - Scan the QR code with the Zalo mobile app.
@@ -118,6 +124,7 @@ Example:
 - `channels.zalouser.groups.<group>.requireMention` controls whether group replies require a mention.
 - Resolution order: exact group id/name -> normalized group slug -> `*` -> default (`true`).
 - This applies both to allowlisted groups and open group mode.
+- Quoting a bot message counts as an implicit mention for group activation.
 - Authorized control commands (for example `/new`) can bypass mention gating.
 - When a group message is skipped because mention is required, OpenClaw stores it as pending group history and includes it on the next processed group message.
 - Group history limit defaults to `messages.groupChat.historyLimit` (fallback `50`). You can override per account with `channels.zalouser.historyLimit`.
@@ -179,3 +186,11 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
 
 - Remove any old external `zca` process assumptions.
 - The channel now runs fully in OpenClaw without external CLI binaries.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

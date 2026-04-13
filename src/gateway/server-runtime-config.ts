@@ -2,8 +2,8 @@ import type {
   GatewayAuthConfig,
   GatewayBindMode,
   GatewayTailscaleConfig,
-  loadConfig,
 } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -12,8 +12,8 @@ import {
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveHooksConfig } from "./hooks.js";
 import {
+  defaultGatewayBindMode,
   isLoopbackHost,
-  isTrustedProxyAddress,
   isValidIPv4,
   resolveGatewayBindHost,
 } from "./net.js";
@@ -38,7 +38,7 @@ export type GatewayRuntimeConfig = {
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   port: number;
   bind?: GatewayBindMode;
   host?: string;
@@ -48,7 +48,15 @@ export async function resolveGatewayRuntimeConfig(params: {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
-  const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
+  // Tailscale serve/funnel hard-requires loopback.  When bind is not
+  // explicitly set, we must resolve Tailscale mode *before* choosing the
+  // bind default so that container auto-detection does not override the
+  // Tailscale loopback constraint.
+  const tailscaleModeEarly =
+    (params.tailscale?.mode ?? params.cfg.gateway?.tailscale?.mode) || "off";
+  const bindExplicit = params.bind ?? params.cfg.gateway?.bind;
+  const bindMode =
+    bindExplicit ?? (tailscaleModeEarly !== "off" ? "loopback" : defaultGatewayBindMode());
   const customBindHost = params.cfg.gateway?.customBindHost;
   const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
@@ -151,16 +159,6 @@ export async function resolveGatewayRuntimeConfig(params: {
       throw new Error(
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
       );
-    }
-    if (isLoopbackHost(bindHost)) {
-      const hasLoopbackTrustedProxy =
-        isTrustedProxyAddress("127.0.0.1", trustedProxies) ||
-        isTrustedProxyAddress("::1", trustedProxies);
-      if (!hasLoopbackTrustedProxy) {
-        throw new Error(
-          "gateway auth mode=trusted-proxy with bind=loopback requires gateway.trustedProxies to include 127.0.0.1, ::1, or a loopback CIDR",
-        );
-      }
     }
   }
 

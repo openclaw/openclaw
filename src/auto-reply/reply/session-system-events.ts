@@ -1,5 +1,5 @@
 import { resolveUserTimezone } from "../../agents/date-time.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
   formatUtcTimestamp,
@@ -7,6 +7,10 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
 export async function drainFormattedSystemEvents(params: {
@@ -20,7 +24,7 @@ export async function drainFormattedSystemEvents(params: {
     if (!trimmed) {
       return null;
     }
-    const lower = trimmed.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(trimmed);
     if (lower.includes("reason periodic")) {
       return null;
     }
@@ -39,11 +43,11 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
-    const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
+    const raw = normalizeOptionalString(cfg.agents?.defaults?.envelopeTimezone);
     if (!raw) {
       return { mode: "local" as const };
     }
-    const lowered = raw.toLowerCase();
+    const lowered = normalizeLowercaseStringOrEmpty(raw);
     if (lowered === "utc" || lowered === "gmt") {
       return { mode: "utc" as const };
     }
@@ -81,32 +85,31 @@ export async function drainFormattedSystemEvents(params: {
   const systemLines: string[] = [];
   const queued = drainSystemEventEntries(params.sessionKey);
   systemLines.push(
-    ...queued
-      .map((event) => {
-        const compacted = compactSystemEvent(event.text);
-        if (!compacted) {
-          return null;
-        }
-        return `[${formatSystemEventTimestamp(event.ts, params.cfg)}] ${compacted}`;
-      })
-      .filter((v): v is string => Boolean(v)),
+    ...queued.flatMap((event) => {
+      const compacted = compactSystemEvent(event.text);
+      if (!compacted) {
+        return [];
+      }
+      const prefix = event.trusted === false ? "System (untrusted)" : "System";
+      const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
+      return compacted
+        .split("\n")
+        .map((subline, index) => `${prefix}: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+    }),
   );
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) {
-      systemLines.unshift(...summary);
+      systemLines.unshift(
+        ...summary.flatMap((line) => line.split("\n").map((subline) => `System: ${subline}`)),
+      );
     }
   }
   if (systemLines.length === 0) {
     return undefined;
   }
 
-  // Format events as trusted System: lines for the message timeline.
-  // Inbound sanitization rewrites any user-supplied "System:" to "System (untrusted):",
-  // so these gateway-originated lines are distinguishable by the model.
-  // Each sub-line of a multi-line event gets its own System: prefix so continuation
-  // lines can't be mistaken for user content.
-  return systemLines
-    .flatMap((line) => line.split("\n").map((subline) => `System: ${subline}`))
-    .join("\n");
+  // Each sub-line gets its own prefix so continuation lines can't be mistaken
+  // for regular user content.
+  return systemLines.join("\n");
 }

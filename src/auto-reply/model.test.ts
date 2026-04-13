@@ -24,9 +24,9 @@ describe("extractModelDirective", () => {
     });
 
     it("extracts /model with provider/model format", () => {
-      const result = extractModelDirective("/model anthropic/claude-opus-4-5");
+      const result = extractModelDirective("/model anthropic/claude-opus-4-6");
       expect(result.hasDirective).toBe(true);
-      expect(result.rawModel).toBe("anthropic/claude-opus-4-5");
+      expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
     });
 
     it("extracts /model with profile override", () => {

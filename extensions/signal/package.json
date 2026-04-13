@@ -1,9 +1,12 @@
 {
   "name": "@openclaw/signal",
-  "version": "2026.3.22",
+  "version": "2026.4.12",
   "private": true,
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -17,7 +20,8 @@
       "docsPath": "/channels/signal",
       "docsLabel": "signal",
       "blurb": "signal-cli linked device; more setup (David Reagans: \"Hop on Discord.\").",
-      "systemImage": "antenna.radiowaves.left.and.right"
+      "systemImage": "antenna.radiowaves.left.and.right",
+      "markdownCapable": true
     }
   }
 }

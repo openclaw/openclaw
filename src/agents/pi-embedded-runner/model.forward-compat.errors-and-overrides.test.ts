@@ -1,6 +1,39 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../../config/config.js";
+import { discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+
+vi.mock("../../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
+    "../../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    applyProviderResolvedModelCompatWithPlugins: () => undefined,
+    applyProviderResolvedTransportWithPlugin: () => undefined,
+    buildProviderUnknownModelHintWithPlugin: () => undefined,
+    clearProviderRuntimeHookCache: () => {},
+    normalizeProviderTransportWithPlugin: () => undefined,
+    normalizeProviderResolvedModelWithPlugin: () => undefined,
+    prepareProviderDynamicModel: async () => {},
+    runProviderDynamicModel: () => undefined,
+  };
+});
+
+vi.mock("../model-suppression.js", () => ({
+  shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
+    (provider === "openai" || provider === "azure-openai-responses") &&
+    id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
+  buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
+    if (
+      (provider !== "openai" && provider !== "azure-openai-responses") ||
+      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
+    ) {
+      return undefined;
+    }
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.`;
+  },
+}));
 
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
@@ -21,12 +54,12 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
-  resetMockDiscoverModels();
+  resetMockDiscoverModels(discoverModels);
 });
 
 function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
-    handledDynamicProviders: ["anthropic", "zai", "openai-codex"],
+    handledDynamicProviders: ["anthropic", "google-antigravity", "zai", "openai-codex"],
   });
 }
 
@@ -57,7 +90,7 @@ function createAnthropicTemplateModel() {
 }
 
 function resolveAnthropicModelWithProviderOverrides(overrides: Partial<ModelProviderConfig>) {
-  mockDiscoveredModel({
+  mockDiscoveredModel(discoverModels, {
     provider: "anthropic",
     modelId: "claude-sonnet-4-5",
     templateModel: createAnthropicTemplateModel(),
@@ -73,13 +106,14 @@ function resolveAnthropicModelWithProviderOverrides(overrides: Partial<ModelProv
 }
 
 describe("resolveModel forward-compat errors and overrides", () => {
-  it("resolves supported antigravity thinking model ids", () => {
+  it("builds a forward-compat fallback for supported antigravity thinking ids", () => {
     expectResolvedForwardCompatFallbackResult({
       result: resolveModelForTest("google-antigravity", "claude-opus-4-6-thinking", "/tmp/agent"),
       expectedModel: {
-        provider: "google-antigravity",
-        id: "claude-opus-4-6-thinking",
         api: "google-gemini-cli",
+        baseUrl: "https://cloudcode-pa.googleapis.com",
+        id: "claude-opus-4-6-thinking",
+        provider: "google-antigravity",
         reasoning: true,
       },
     });
@@ -166,7 +200,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
   });
 
   it("uses codex fallback when inline model omits api (#39682)", () => {
-    mockOpenAICodexTemplateModel();
+    mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {
       models: {
@@ -192,7 +226,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
   });
 
   it("normalizes openai-codex gpt-5.4 overrides away from /v1/responses", () => {
-    mockOpenAICodexTemplateModel();
+    mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {
       models: {
@@ -216,8 +250,8 @@ describe("resolveModel forward-compat errors and overrides", () => {
     });
   });
 
-  it("does not rewrite openai baseUrl when openai-codex api stays non-codex", () => {
-    mockOpenAICodexTemplateModel();
+  it("normalizes openai-codex gpt-5.4 back to codex transport", () => {
+    mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {
       models: {
@@ -233,8 +267,8 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expectResolvedForwardCompatFallbackResult({
       result: resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent", cfg),
       expectedModel: {
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
         provider: "openai-codex",
       },
@@ -284,7 +318,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
   });
 
   it("lets provider config override registry-found kimi user agent headers", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "kimi",
       modelId: "kimi-code",
       templateModel: {
@@ -325,7 +359,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
   });
 
   it("does not override when no provider config exists", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "anthropic",
       modelId: "claude-sonnet-4-5",
       templateModel: {

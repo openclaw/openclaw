@@ -1,12 +1,18 @@
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
-import { buildSingleProviderApiKeyCatalog } from "../plugins/provider-catalog.js";
-import type { ProviderPlugin, ProviderPluginWizardSetup } from "../plugins/types.js";
+import type {
+  ProviderPlugin,
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderPluginCatalog,
+  ProviderPluginWizardSetup,
+} from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
 } from "./plugin-entry.js";
+import { buildSingleProviderApiKeyCatalog } from "./provider-catalog-shared.js";
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
 
@@ -18,10 +24,19 @@ export type SingleProviderPluginApiKeyAuthOptions = Omit<
   wizard?: false | ProviderPluginWizardSetup;
 };
 
-export type SingleProviderPluginCatalogOptions = {
-  buildProvider: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
-  allowExplicitBaseUrl?: boolean;
-};
+export type SingleProviderPluginCatalogOptions =
+  | {
+      buildProvider: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
+      allowExplicitBaseUrl?: boolean;
+      run?: never;
+      order?: never;
+    }
+  | {
+      run: ProviderPluginCatalog["run"];
+      order?: ProviderPluginCatalog["order"];
+      buildProvider?: never;
+      allowExplicitBaseUrl?: never;
+    };
 
 export type SingleProviderPluginOptions = {
   id: string;
@@ -111,6 +126,26 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             ...(wizard ? { wizard } : {}),
           });
         });
+        let catalog: ProviderPluginCatalog;
+        if ("run" in provider.catalog) {
+          const catalogRun = provider.catalog.run;
+          catalog = {
+            order: provider.catalog.order ?? "simple",
+            run: catalogRun!,
+          };
+        } else {
+          const buildProvider = provider.catalog.buildProvider;
+          catalog = {
+            order: "simple",
+            run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> =>
+              buildSingleProviderApiKeyCatalog({
+                ctx,
+                providerId,
+                buildProvider,
+                ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
+              }),
+          };
+        }
         api.registerProvider({
           id: providerId,
           label: provider.label,
@@ -118,16 +153,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           ...(provider.aliases ? { aliases: provider.aliases } : {}),
           ...(envVars ? { envVars } : {}),
           auth,
-          catalog: {
-            order: "simple",
-            run: (ctx) =>
-              buildSingleProviderApiKeyCatalog({
-                ctx,
-                providerId,
-                buildProvider: provider.catalog.buildProvider,
-                ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
-              }),
-          },
+          catalog,
           ...Object.fromEntries(
             Object.entries(provider).filter(
               ([key]) =>

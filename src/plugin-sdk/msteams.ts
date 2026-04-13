@@ -1,5 +1,5 @@
 // Private helper surface for the bundled msteams plugin.
-// Keep this list additive and scoped to symbols used under extensions/msteams.
+// Keep this list additive and scoped to the bundled Teams surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
@@ -12,14 +12,18 @@ export {
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
 export { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export {
   resolveControlCommandGate,
   resolveDualTextControlCommandGate,
 } from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
-export { resolveMentionGating } from "../channels/mention-gating.js";
+export {
+  resolveInboundMentionDecision,
+  resolveMentionGating,
+  resolveMentionGatingWithBypass,
+} from "../channels/mention-gating.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export {
   formatAllowlistMatchMeta,
@@ -44,17 +48,19 @@ export {
 } from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export { resolveOutboundMediaUrls, resolveSendableOutboundReplyParts } from "./reply-payload.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export type {
   BaseProbeResult,
   ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelMessageActionName,
   ChannelOutboundAdapter,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export { resolveChannelContextVisibilityMode } from "../config/context-visibility.js";
 export { resolveToolsBySender } from "../config/group-policy.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -96,11 +102,15 @@ export {
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
+export {
+  filterSupplementalContextItems,
+  shouldIncludeSupplementalContext,
+} from "../security/context-visibility.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
 export { loadWebMedia } from "./web-media.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { keepHttpServerTaskAlive } from "./channel-lifecycle.js";
+export { keepHttpServerTaskAlive } from "./channel-lifecycle.core.js";
 export { withFileLock } from "./file-lock.js";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
