@@ -4317,7 +4317,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   idleTimeoutSeconds: {
                     description:
-                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 120 seconds.",
+                      "Idle timeout for LLM streaming responses in seconds. Applies between tokens once streaming has started. If no token is received within this time after the first token, the request is aborted. Set to 0 to disable. Default: 120 seconds.",
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  firstTokenTimeoutSeconds: {
+                    description:
+                      "First-token timeout for LLM streaming responses in seconds. Applies only while waiting for the very first token from the model, allowing cold model loads (or upstream heartbeat-backed routers) a longer warm-up window than mid-stream idle gaps. When unset, the first-token phase inherits idleTimeoutSeconds. Set to 0 to disable only the first-token timer (wait indefinitely for the first chunk; the idle timer still applies after the first chunk arrives).",
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,

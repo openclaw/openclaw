@@ -227,7 +227,11 @@ import {
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
-import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import {
+  resolveLlmFirstTokenTimeoutMs,
+  resolveLlmIdleTimeoutMs,
+  streamWithIdleTimeout,
+} from "./llm-idle-timeout.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
@@ -1267,21 +1271,27 @@ export async function runEmbeddedAttempt(
 
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
-      // Wrap stream with idle timeout detection
+      // Wrap stream with two-phase timeout detection.
+      // The first-token window covers cold model loads / proxy warm-ups;
+      // the idle window catches mid-stream hangs. When
+      // firstTokenTimeoutSeconds is unset, the first-token phase inherits
+      // idle (backwards-compatible single-phase behavior).
       const configuredRunTimeoutMs = resolveAgentTimeoutMs({
         cfg: params.config,
       });
-      const idleTimeoutMs = resolveLlmIdleTimeoutMs({
+      const resolveTimeoutParams = {
         cfg: params.config,
         trigger: params.trigger,
         runTimeoutMs: params.timeoutMs !== configuredRunTimeoutMs ? params.timeoutMs : undefined,
-      });
+      };
+      const idleTimeoutMs = resolveLlmIdleTimeoutMs(resolveTimeoutParams);
       if (idleTimeoutMs > 0) {
-        activeSession.agent.streamFn = streamWithIdleTimeout(
-          activeSession.agent.streamFn,
+        const firstTokenTimeoutMs = resolveLlmFirstTokenTimeoutMs(resolveTimeoutParams);
+        activeSession.agent.streamFn = streamWithIdleTimeout(activeSession.agent.streamFn, {
           idleTimeoutMs,
-          (error) => idleTimeoutTrigger?.(error),
-        );
+          firstTokenTimeoutMs,
+          onIdleTimeout: (error) => idleTimeoutTrigger?.(error),
+        });
       }
 
       try {
@@ -1388,6 +1398,7 @@ export async function runEmbeddedAttempt(
       let yieldAborted = false;
       let timedOut = false;
       let idleTimedOut = false;
+      let llmTimeoutPhase: "first-token" | "idle" | null = null;
       let timedOutDuringCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
@@ -1438,6 +1449,10 @@ export async function runEmbeddedAttempt(
       };
       idleTimeoutTrigger = (error) => {
         idleTimedOut = true;
+        // Error message comes from streamWithIdleTimeout and starts with
+        // "LLM first-token timeout (...)" or "LLM idle timeout (...)" — use
+        // it to track which knob the user should tune.
+        llmTimeoutPhase = error.message.includes("first-token") ? "first-token" : "idle";
         abortRun(true, error);
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
@@ -2366,6 +2381,7 @@ export async function runEmbeddedAttempt(
         externalAbort,
         timedOut,
         idleTimedOut,
+        llmTimeoutPhase,
         timedOutDuringCompaction,
         promptError,
         promptErrorSource,

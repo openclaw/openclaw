@@ -457,9 +457,23 @@ export type AgentCompactionMemoryFlushConfig = {
 export type AgentLlmConfig = {
   /**
    * Idle timeout for LLM streaming responses in seconds.
-   * If no token is received within this time, the request is aborted.
+   * Applies between tokens once the stream has started producing output.
+   * If no token is received within this time after the first token, the
+   * request is aborted.
    * Set to 0 to disable (never timeout).
    * If unset, OpenClaw uses the default LLM idle timeout.
    */
   idleTimeoutSeconds?: number;
+  /**
+   * First-token timeout for LLM streaming responses in seconds.
+   * Applies only while waiting for the very first token from the model.
+   * Useful when model loading (cold start, model warm-up, proxy keepalives)
+   * may legitimately take much longer than mid-stream token gaps.
+   * When unset, the first-token wait inherits `idleTimeoutSeconds`
+   * (backwards-compatible behavior).
+   * Set to 0 to disable only the first-token timer (wait indefinitely for
+   * the first chunk; the idle timer still applies once the first chunk
+   * arrives).
+   */
+  firstTokenTimeoutSeconds?: number;
 };

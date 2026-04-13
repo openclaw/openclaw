@@ -727,6 +727,7 @@ export async function runEmbeddedPiAgent(
             preflightRecovery,
             timedOut,
             idleTimedOut,
+            llmTimeoutPhase,
             timedOutDuringCompaction,
             sessionIdUsed,
             lastAssistant: sessionLastAssistant,
@@ -1527,11 +1528,20 @@ export async function runEmbeddedPiAgent(
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
           if (timedOut && !timedOutDuringCompaction && !payloadsWithToolMedia?.length) {
-            const timeoutText = idleTimedOut
-              ? "The model did not produce a response before the LLM idle timeout. " +
-                "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
-              : "Request timed out before a response was generated. " +
+            let timeoutText: string;
+            if (llmTimeoutPhase === "first-token") {
+              timeoutText =
+                "The model did not produce its first token before the LLM first-token timeout. " +
+                "Please try again, or increase `agents.defaults.llm.firstTokenTimeoutSeconds` in your config (set to 0 to wait indefinitely for the first token).";
+            } else if (idleTimedOut) {
+              timeoutText =
+                "The model did not produce a response before the LLM idle timeout. " +
+                "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable).";
+            } else {
+              timeoutText =
+                "Request timed out before a response was generated. " +
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
+            }
             const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState = resolveRunLivenessState({
               payloadCount: payloads.length,

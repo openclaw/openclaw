@@ -46,6 +46,13 @@ export type EmbeddedRunAttemptResult = {
   timedOut: boolean;
   /** True when the no-response LLM idle watchdog caused the timeout. */
   idleTimedOut: boolean;
+  /**
+   * Which LLM watchdog phase fired, if any. `"first-token"` means the model
+   * never produced its first chunk; `"idle"` means it stopped streaming
+   * mid-response. `null` when no LLM-phase timeout occurred. Used to point
+   * users at the correct config knob in error messages.
+   */
+  llmTimeoutPhase: "first-token" | "idle" | null;
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
   promptError: unknown;
