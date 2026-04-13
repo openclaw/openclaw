@@ -38,6 +38,7 @@ describe("hol-guard plugin", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     if (originalGuardToken === undefined) {
       delete process.env.OPENCLAW_GUARD_TOKEN;
     } else {
