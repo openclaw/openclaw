@@ -550,6 +550,17 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     expect(result).toBeNull();
   });
 
+  it("does not retry when 1 safe tool call is followed by answer prose joined with 'and'", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll explain and recommend a fix."),
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("does not retry when 1 tool call plus a bare 'i can do that' reply is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
