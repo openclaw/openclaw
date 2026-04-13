@@ -206,6 +206,7 @@ export async function launchOpenClawChrome(
       // Best-effort; older Chromes may ignore.
       args.push("--headless=new");
       args.push("--disable-gpu");
+      args.push("--window-size=1920,1080");
     }
     if (resolved.noSandbox) {
       args.push("--no-sandbox");
