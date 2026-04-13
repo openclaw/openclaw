@@ -26,6 +26,10 @@ export type SubagentRunRecord = {
   archiveAtMs?: number;
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
+  pendingAnnounceId?: string;
+  pendingAnnounceAt?: number;
+  lastAnnounceDeliveredId?: string;
+  lastAnnounceDeliveredAt?: number;
   suppressAnnounceReason?: "steer-restart" | "killed";
   expectsCompletionMessage?: boolean;
   announceRetryCount?: number;

@@ -311,6 +311,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     requesterOrigin: params.handle.requesterOrigin,
     completionDirectOrigin: params.handle.requesterOrigin,
     directOrigin: params.handle.requesterOrigin,
+    sourceRunId: params.handle.runId,
     sourceSessionKey: `${params.toolName}:${params.handle.taskId}`,
     sourceChannel: INTERNAL_MESSAGE_CHANNEL,
     sourceTool: params.toolName,

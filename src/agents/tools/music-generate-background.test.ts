@@ -102,6 +102,9 @@ describe("music generate background helpers", () => {
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceRunId: "tool:music_generate:abc" }),
+    );
   });
 
   it("delivers completed music directly to the requester channel when enabled", async () => {

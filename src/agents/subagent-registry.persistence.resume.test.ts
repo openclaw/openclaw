@@ -228,4 +228,64 @@ describe("subagent registry persistence resume", () => {
     expect(restored?.requesterOrigin?.channel).toBe("whatsapp");
     expect(restored?.requesterOrigin?.accountId).toBe("acct-main");
   });
+  it("clears stale pending announce state on restore", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    hoisted.registryPath = registryPath;
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(
+      registryPath,
+      `${JSON.stringify(
+        {
+          version: 2,
+          runs: {
+            "run-stale-pending": {
+              runId: "run-stale-pending",
+              childSessionKey: "agent:main:subagent:test-stale",
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              task: "stale pending announce",
+              cleanup: "keep",
+              createdAt: Date.now(),
+              pendingAnnounceId: "announce-stale",
+              pendingAnnounceAt: Date.now() - 1_000,
+              lastAnnounceDeliveredId: "announce-old",
+              lastAnnounceDeliveredAt: Date.now() - 2_000,
+            },
+          },
+        },
+        null,
+        2,
+      )}
+`,
+      "utf8",
+    );
+    await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:test-stale",
+      sessionId: "sess-stale",
+    });
+
+    mod.initSubagentRegistry();
+    await flushQueuedRegistryWork();
+
+    const persisted = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs?: Record<
+        string,
+        {
+          pendingAnnounceId?: string;
+          pendingAnnounceAt?: number;
+          lastAnnounceDeliveredId?: string;
+          lastAnnounceDeliveredAt?: number;
+        }
+      >;
+    };
+    const run = persisted.runs?.["run-stale-pending"];
+    expect(run).toBeDefined();
+    expect(run?.pendingAnnounceId).toBeUndefined();
+    expect(run?.pendingAnnounceAt).toBeUndefined();
+    expect(run?.lastAnnounceDeliveredId).toBe("announce-old");
+    expect(run?.lastAnnounceDeliveredAt).toBeDefined();
+  });
+
 });

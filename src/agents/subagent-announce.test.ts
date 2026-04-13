@@ -405,6 +405,7 @@ describe("subagent announce seam flow", () => {
     expect(params.to).toBeUndefined();
     expect(params.accountId).toBeUndefined();
     expect(params.threadId).toBeUndefined();
+    expect(params.sourceRunId).toBe("run-nested-subagent-direct-announce");
   });
 
   it("falls back to stored delivery target when mocked completion origins omit to", async () => {

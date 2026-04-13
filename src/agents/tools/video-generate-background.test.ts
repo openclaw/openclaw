@@ -102,6 +102,9 @@ describe("video generate background helpers", () => {
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceRunId: "tool:video_generate:abc" }),
+    );
   });
 
   it("delivers completed video directly to the requester channel when enabled", async () => {

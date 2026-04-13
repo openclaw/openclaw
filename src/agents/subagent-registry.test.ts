@@ -312,6 +312,40 @@ describe("subagent registry seam flow", () => {
     ).toBeUndefined();
   });
 
+  it("clears stale pending announce state when restoring runs from disk", async () => {
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+      mergeOnly?: boolean;
+    }) => {
+      params.runs.set("run-stale-pending", {
+        runId: "run-stale-pending",
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "stale pending announce",
+        cleanup: "keep",
+        createdAt: Date.parse("2026-03-24T11:58:00Z"),
+        startedAt: Date.parse("2026-03-24T11:59:00Z"),
+        pendingAnnounceId: "announce-stale",
+        pendingAnnounceAt: Date.parse("2026-03-24T11:59:30Z"),
+        expectsCompletionMessage: true,
+      });
+      return 1;
+    }) as never);
+
+    mod.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const restored = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-stale-pending");
+    expect(restored).toBeDefined();
+    expect(restored?.pendingAnnounceId).toBeUndefined();
+    expect(restored?.pendingAnnounceAt).toBeUndefined();
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+  });
+
   it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {
     mocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:parent": {
