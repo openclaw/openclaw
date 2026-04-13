@@ -24,6 +24,7 @@ async function loadStageBundledPluginRuntimeDeps(): Promise<StageBundledPluginRu
 
 async function loadPostinstallBundledPluginsModule(): Promise<{
   applyBaileysEncryptedStreamFinishHotfix: (params?: {
+    chmodSync?: (path: string, mode: number) => void;
     packageRoot?: string;
     createTempPath?: (targetPath: string) => string;
     writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
@@ -37,6 +38,7 @@ async function loadPostinstallBundledPluginsModule(): Promise<{
   const moduleUrl = new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url);
   return (await import(moduleUrl.href)) as {
     applyBaileysEncryptedStreamFinishHotfix: (params?: {
+      chmodSync?: (path: string, mode: number) => void;
       packageRoot?: string;
       createTempPath?: (targetPath: string) => string;
       writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
@@ -232,6 +234,44 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
       "await Promise.all([encFinishPromise, originalFinishPromise]);",
     );
+  });
+
+  it("preserves the original module read mode when replacing Baileys", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-hotfix-mode-");
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    writeRepoFile(
+      repoRoot,
+      "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+      ].join("\n"),
+    );
+    fs.chmodSync(targetPath, 0o644);
+
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({ packageRoot: repoRoot });
+
+    expect(result).toEqual({
+      applied: true,
+      reason: "patched",
+      targetPath,
+    });
+    expect(fs.statSync(targetPath).mode & 0o777).toBe(0o644);
   });
 
   it("refuses symlink targets for the Baileys hotfix", async () => {

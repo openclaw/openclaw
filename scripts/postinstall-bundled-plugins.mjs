@@ -8,6 +8,7 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   lstatSync,
@@ -198,6 +199,7 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
   const pathLstat = params.lstatSync ?? lstatSync;
   const readFile = params.readFileSync ?? readFileSync;
   const resolveRealPath = params.realpathSync ?? realpathSync;
+  const chmodFile = params.chmodSync ?? chmodSync;
   const openFile = params.openSync ?? openSync;
   const closeFile = params.closeSync ?? closeSync;
   const renameFile = params.renameSync ?? renameSync;
@@ -231,7 +233,7 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       return { ok: false, reason: "path_escape", targetPath };
     }
 
-    return { ok: true, targetPathReal };
+    return { ok: true, targetPathReal, mode: targetStats.mode & 0o777 };
   }
 
   try {
@@ -259,7 +261,7 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       BAILEYS_MEDIA_HOTFIX_REPLACEMENT,
     );
     const tempPath = createTempPath(targetPath);
-    const tempFd = openFile(tempPath, "wx", 0o600);
+    const tempFd = openFile(tempPath, "wx", initialTargetValidation.mode);
     let tempFdClosed = false;
     try {
       writeFile(tempFd, patchedText, "utf8");
@@ -270,6 +272,7 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
         return { applied: false, reason: finalTargetValidation.reason, targetPath };
       }
       renameFile(tempPath, targetPath);
+      chmodFile(targetPath, initialTargetValidation.mode);
     } finally {
       if (!tempFdClosed) {
         try {
