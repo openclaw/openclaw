@@ -114,7 +114,7 @@ export function createDiscordMessageHandler(
       if (!last) {
         return;
       }
-      const replayKeys = entries.map((entry) => entry.replayKey).filter(Boolean);
+      const replayKeys = entries.flatMap((entry) => (entry.replayKey ? [entry.replayKey] : []));
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
         releaseDiscordInboundReplay({
@@ -143,10 +143,12 @@ export function createDiscordMessageHandler(
           return;
         }
         const combinedBaseText = entries
-          .map((entry) =>
-            resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
-          )
-          .filter(Boolean)
+          .flatMap((entry) => {
+            const baseText = resolveDiscordMessageText(entry.data.message, {
+              includeForwarded: false,
+            });
+            return baseText ? [baseText] : [];
+          })
           .join("\n");
         const syntheticMessage = {
           ...last.data.message,
@@ -177,7 +179,10 @@ export function createDiscordMessageHandler(
         }
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
         if (entries.length > 1) {
-          const ids = entries.map((entry) => entry.data.message?.id).filter(Boolean) as string[];
+          const ids = entries.flatMap((entry) => {
+            const messageId = entry.data.message?.id?.trim();
+            return messageId ? [messageId] : [];
+          });
           if (ids.length > 0) {
             const ctxBatch = ctx as typeof ctx & {
               MessageSids?: string[];
