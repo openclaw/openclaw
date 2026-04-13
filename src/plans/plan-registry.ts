@@ -212,6 +212,44 @@ export function updatePlanRecordById(
   return clonePlanRecord(next);
 }
 
+export function upsertSessionDraftPlanRecord(params: {
+  sessionKey: string;
+  title: string;
+  content: string;
+  summary?: string;
+  updatedAt?: number;
+}): PlanRecord {
+  const sessionKey = params.sessionKey.trim();
+  const updatedAt = params.updatedAt ?? Date.now();
+  const existingDraft = listPlansForSessionKey(sessionKey).find(
+    (record) =>
+      record.ownerKey === sessionKey && record.scopeKind === "session" && record.status === "draft",
+  );
+  if (existingDraft) {
+    return (
+      updatePlanRecordById(existingDraft.planId, {
+        title: params.title,
+        summary: params.summary ?? "",
+        content: params.content,
+        format: "markdown",
+        updatedAt,
+      }) ?? clonePlanRecord(existingDraft)
+    );
+  }
+  return createPlanRecord({
+    ownerKey: sessionKey,
+    scopeKind: "session",
+    sessionKey,
+    title: params.title,
+    summary: params.summary,
+    content: params.content,
+    format: "markdown",
+    status: "draft",
+    createdAt: updatedAt,
+    updatedAt,
+  });
+}
+
 export function updatePlanStatus(params: UpdatePlanStatusParams): PlanStatusUpdateResult {
   const existing = plans.get(params.planId);
   if (!existing) {

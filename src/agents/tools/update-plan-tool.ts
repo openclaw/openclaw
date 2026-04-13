@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { upsertSessionDraftPlanRecord } from "../../plans/plan-registry.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   describeUpdatePlanTool,
@@ -37,6 +38,34 @@ type UpdatePlanStep = {
   step: string;
   status: (typeof PLAN_STEP_STATUSES)[number];
 };
+
+function derivePlanTitle(steps: UpdatePlanStep[], explanation?: string): string {
+  return (
+    steps.find((entry) => entry.status === "in_progress")?.step.trim() ||
+    steps.find((entry) => entry.status === "pending")?.step.trim() ||
+    explanation?.trim() ||
+    steps[0]?.step.trim() ||
+    "Execution plan"
+  );
+}
+
+function formatPlanStepStatus(status: UpdatePlanStep["status"]): " " | "x" | ">" {
+  if (status === "completed") {
+    return "x";
+  }
+  if (status === "in_progress") {
+    return ">";
+  }
+  return " ";
+}
+
+function buildPlanContent(steps: UpdatePlanStep[], explanation?: string): string {
+  const lines = steps.map((entry) => `- [${formatPlanStepStatus(entry.status)}] ${entry.step}`);
+  if (!explanation?.trim()) {
+    return lines.join("\n");
+  }
+  return `${explanation.trim()}\n\n${lines.join("\n")}`;
+}
 
 function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
   const rawPlan = params.plan;
@@ -97,6 +126,7 @@ export function createUpdatePlanTool(opts?: {
       const sessionKey = opts?.agentSessionKey?.trim();
       if (sessionKey) {
         const gatewayCall = opts?.callGateway ?? callGateway;
+        const updatedAt = Date.now();
         await gatewayCall({
           method: "sessions.patch",
           params: {
@@ -104,12 +134,19 @@ export function createUpdatePlanTool(opts?: {
             planMode: "active",
             planArtifact: {
               status: "active",
-              updatedAt: Date.now(),
+              updatedAt,
               ...(explanation ? { lastExplanation: explanation } : {}),
               steps: plan,
             },
           },
           config: opts?.config,
+        });
+        upsertSessionDraftPlanRecord({
+          sessionKey,
+          title: derivePlanTitle(plan, explanation),
+          summary: explanation,
+          content: buildPlanContent(plan, explanation),
+          updatedAt,
         });
       }
       return {
