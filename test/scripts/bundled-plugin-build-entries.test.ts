@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
+  listBundledPluginRuntimeDependencies,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 
 describe("bundled plugin build entries", () => {
@@ -71,6 +72,19 @@ describe("bundled plugin build entries", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
+  });
+
+  it("stages Matrix runtime dependencies for bundled Docker installs", () => {
+    const runtimeDependencies = listBundledPluginRuntimeDependencies();
+
+    expect(runtimeDependencies).toEqual(
+      expect.arrayContaining([
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "@matrix-org/matrix-sdk-crypto-wasm",
+        "fake-indexeddb",
+        "matrix-js-sdk",
+      ]),
+    );
   });
 
   it("keeps private QA bundles out of required npm pack artifacts", () => {
