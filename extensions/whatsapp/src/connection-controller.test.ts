@@ -132,4 +132,110 @@ describe("WhatsAppConnectionController", () => {
       await liveController.shutdown();
     }
   });
+
+  it("starts reconnect safety timer on close and clears on reopen", async () => {
+    vi.useFakeTimers();
+    try {
+      const infoSpy = vi.spyOn(await import("openclaw/plugin-sdk/runtime-env"), "info");
+      const sock = { ws: { close: vi.fn() } };
+      const listener = {
+        sendMessage: vi.fn(async () => ({ messageId: "m1" })),
+        sendPoll: vi.fn(async () => ({ messageId: "p1" })),
+        sendReaction: vi.fn(async () => {}),
+        sendComposingTo: vi.fn(async () => {}),
+      };
+      createWaSocketMock.mockResolvedValueOnce(sock as never);
+      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+      await controller.openConnection({
+        connectionId: "conn-guard",
+        createListener: async () => listener,
+      });
+
+      // Close the connection — safety timer should start
+      await controller.closeCurrentConnection();
+
+      // Advance past the safety timeout
+      await vi.advanceTimersByTimeAsync(91_000);
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.stringContaining("reconnect may be stuck"),
+      );
+
+      infoSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears reconnect safety timer when new connection opens", async () => {
+    vi.useFakeTimers();
+    try {
+      const infoSpy = vi.spyOn(await import("openclaw/plugin-sdk/runtime-env"), "info");
+      const sock = { ws: { close: vi.fn() } };
+      const listener = {
+        sendMessage: vi.fn(async () => ({ messageId: "m1" })),
+        sendPoll: vi.fn(async () => ({ messageId: "p1" })),
+        sendReaction: vi.fn(async () => {}),
+        sendComposingTo: vi.fn(async () => {}),
+      };
+
+      createWaSocketMock.mockResolvedValue(sock as never);
+      waitForWaConnectionMock.mockResolvedValue(undefined);
+
+      await controller.openConnection({
+        connectionId: "conn-1",
+        createListener: async () => listener,
+      });
+      await controller.closeCurrentConnection();
+
+      // Reopen before safety timer fires
+      await controller.openConnection({
+        connectionId: "conn-2",
+        createListener: async () => listener,
+      });
+
+      // Advance past the safety timeout — timer should have been cleared
+      await vi.advanceTimersByTimeAsync(91_000);
+      expect(infoSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("reconnect may be stuck"),
+      );
+
+      infoSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears reconnect safety timer on shutdown", async () => {
+    vi.useFakeTimers();
+    try {
+      const infoSpy = vi.spyOn(await import("openclaw/plugin-sdk/runtime-env"), "info");
+      const sock = { ws: { close: vi.fn() } };
+      const listener = {
+        sendMessage: vi.fn(async () => ({ messageId: "m1" })),
+        sendPoll: vi.fn(async () => ({ messageId: "p1" })),
+        sendReaction: vi.fn(async () => {}),
+        sendComposingTo: vi.fn(async () => {}),
+      };
+
+      createWaSocketMock.mockResolvedValueOnce(sock as never);
+      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+
+      await controller.openConnection({
+        connectionId: "conn-shutdown",
+        createListener: async () => listener,
+      });
+      await controller.closeCurrentConnection();
+      await controller.shutdown();
+
+      // Advance past the safety timeout — timer should have been cleared by shutdown
+      await vi.advanceTimersByTimeAsync(91_000);
+      expect(infoSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("reconnect may be stuck"),
+      );
+
+      infoSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
