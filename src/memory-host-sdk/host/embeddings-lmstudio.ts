@@ -12,7 +12,7 @@ import {
 } from "../../plugin-sdk/lmstudio-runtime.js";
 import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import { createRemoteEmbeddingProvider } from "./embeddings-remote-provider.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 

@@ -380,7 +380,7 @@ export async function promptAndConfigureLmstudioInteractive(params: {
     placeholder: LMSTUDIO_DEFAULT_BASE_URL,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
-  const baseUrl = resolveLmstudioInferenceBase(String(baseUrlRaw ?? ""));
+  const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw ?? "");
   let credentialInput: SecretInput | undefined;
   let credentialMode: SecretInputMode | undefined;
   const implicitRefMode = params.allowSecretRefPrompt === false && !params.secretInputMode;
