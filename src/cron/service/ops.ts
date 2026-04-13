@@ -25,7 +25,7 @@ import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 
 // Custom error for duplicate job IDs
-class DuplicateJobIdError extends Error {
+export class DuplicateJobIdError extends Error {
   constructor(jobId: string) {
     super(`Job with id "${jobId}" already exists`);
     this.name = "DuplicateJobIdError";
