@@ -49,6 +49,8 @@ function resolveIngestSourcePageIdentity(params: { sourcePath: string; title: st
   pageRelativePath: string;
 } {
   const titleSlug = slugifyWikiSegment(params.title);
+  // Bind identity to the resolved file path so same-source reingest stays stable.
+  // Moving the file intentionally creates a new source identity.
   const sourceHash = createHash("sha1")
     .update(path.resolve(params.sourcePath))
     .digest("hex")
