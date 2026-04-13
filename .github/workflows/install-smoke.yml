@@ -136,7 +136,12 @@ jobs:
             node -e "
               const Module = require(\"node:module\");
               const matrixPackage = require(\"/app/extensions/matrix/package.json\");
-              const requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
+              let requireFromMatrix;
+              if (matrixPackage.openclaw?.bundle?.stageRuntimeDependencies) {
+                requireFromMatrix = Module.createRequire(\"/app/dist/extensions/matrix/package.json\");
+              } else {
+                requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
+              }
               const runtimeDeps = Object.keys(matrixPackage.dependencies ?? {});
               if (runtimeDeps.length === 0) {
                 throw new Error(
