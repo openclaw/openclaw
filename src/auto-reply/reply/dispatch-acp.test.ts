@@ -1345,12 +1345,20 @@ describe("tryDispatchAcpReply", () => {
 });
 
 describe("isStaleSessionInitError", () => {
-  it("returns true for ACP_TURN_FAILED with Resource not found", () => {
+  it("returns true for ACP_TURN_FAILED with persistent session resume failure", () => {
+    const result = isStaleSessionInitError({
+      code: "ACP_TURN_FAILED",
+      message: "Persistent ACP session abc123 could not be resumed: Resource not found",
+    });
+    expect(result).toBe(true);
+  });
+
+  it("returns false for ACP_TURN_FAILED with generic Resource not found (too broad)", () => {
     const result = isStaleSessionInitError({
       code: "ACP_TURN_FAILED",
       message: "Resource not found",
     });
-    expect(result).toBe(true);
+    expect(result).toBe(false);
   });
 
   it("returns true for ACP_SESSION_INIT_FAILED with Resource not found", () => {
