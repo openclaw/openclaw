@@ -424,7 +424,9 @@ async function evaluateSystemRunPolicyPhase(
     approved: parsed.approved,
     isWindows,
     cmdInvocation,
-    shellWrapperInvocation: parsed.shellWrapperInvocation,
+    // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
+    // Env sanitization uses broader shell-wrapper detection in parse phase.
+    shellWrapperInvocation: parsed.shellPayload !== null,
   });
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
