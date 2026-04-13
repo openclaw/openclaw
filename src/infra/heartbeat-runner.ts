@@ -805,9 +805,9 @@ export async function runHeartbeatOnce(opts: {
     startedAt,
     heartbeatFileContent: preflight.heartbeatFileContent,
   });
-  const hasUntrustedPendingEvents = preflight.pendingEventEntries.some(
-    (event) => event.trusted === false,
-  );
+  const hasUntrustedPendingEvents =
+    preflight.shouldInspectPendingEvents &&
+    preflight.pendingEventEntries.some((event) => event.trusted === false);
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
