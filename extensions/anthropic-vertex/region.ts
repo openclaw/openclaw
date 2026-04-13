@@ -88,9 +88,6 @@ function resolveAnthropicVertexAdcCredentialsPathCandidate(
   if (explicit) {
     return explicit;
   }
-  if (env !== process.env) {
-    return undefined;
-  }
   return resolveAnthropicVertexDefaultAdcPath(env);
 }
 
