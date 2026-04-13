@@ -144,7 +144,40 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? mergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const compatProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+
+  // Strip custom models from providers that the pi SDK model registry would
+  // reject.  The registry requires `apiKey` when a `models` array is present;
+  // providers that authenticate differently (OAuth, aws-sdk with IAM role, etc.)
+  // may legitimately lack an apiKey yet still contribute models through plugin
+  // discovery.  If such an entry is written to models.json the registry rejects
+  // the *entire* file, silently hiding all custom-provider models from the
+  // catalog and /model picker.
+  //
+  // A provider is considered "auth-capable without apiKey" when it declares an
+  // alternative auth mode (`auth`, `authHeader`) — those providers are kept
+  // intact.  Only providers that have models, no apiKey, *and* no alternative
+  // auth signal are stripped.  The provider entry itself (baseUrl, compat,
+  // modelOverrides) is preserved for override-only use.
+  const finalProviders: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(compatProviders)) {
+    if (!provider || typeof provider !== "object") {
+      continue;
+    }
+    const hasModels = Array.isArray(provider.models) && provider.models.length > 0;
+    const hasApiKey = Boolean(provider.apiKey);
+    const hasAltAuth = Boolean(provider.auth || provider.authHeader);
+    if (hasModels && !hasApiKey && !hasAltAuth) {
+      const { models: _stripped, ...rest } = provider;
+      // Keep the provider entry only if it still has meaningful config
+      if (Object.keys(rest).length > 0) {
+        finalProviders[key] = rest as ProviderConfig;
+      }
+    } else {
+      finalProviders[key] = provider;
+    }
+  }
+
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
