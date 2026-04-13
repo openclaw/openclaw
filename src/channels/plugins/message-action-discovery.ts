@@ -1,5 +1,5 @@
 import type { TSchema } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -11,7 +11,7 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
-} from "./types.public.js";
+} from "./types.js";
 
 export type ChannelMessageActionDiscoveryInput = {
   cfg?: OpenClawConfig;
@@ -19,13 +19,14 @@ export type ChannelMessageActionDiscoveryInput = {
   currentChannelProvider?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
+  currentThreadRootId?: string | null;
+  currentParentConversationId?: string | null;
   currentMessageId?: string | number | null;
   accountId?: string | null;
   sessionKey?: string | null;
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 };
 
 type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
@@ -47,13 +48,14 @@ export function createMessageActionDiscoveryContext(
     currentChannelId: params.currentChannelId,
     currentChannelProvider,
     currentThreadTs: params.currentThreadTs,
+    currentThreadRootId: params.currentThreadRootId,
+    currentParentConversationId: params.currentParentConversationId,
     currentMessageId: params.currentMessageId,
     accountId: params.accountId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
     requesterSenderId: params.requesterSenderId,
-    senderIsOwner: params.senderIsOwner,
   };
 }
 
@@ -180,13 +182,14 @@ export function listChannelMessageCapabilitiesForChannel(params: {
   channel?: string;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
+  currentThreadRootId?: string | null;
+  currentParentConversationId?: string | null;
   currentMessageId?: string | number | null;
   accountId?: string | null;
   sessionKey?: string | null;
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 }): ChannelMessageCapability[] {
   const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
   if (!channelId) {
@@ -224,13 +227,14 @@ export function resolveChannelMessageToolSchemaProperties(params: {
   channel?: string;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
+  currentThreadRootId?: string | null;
+  currentParentConversationId?: string | null;
   currentMessageId?: string | number | null;
   accountId?: string | null;
   sessionKey?: string | null;
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 }): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
@@ -273,6 +277,8 @@ export function channelSupportsMessageCapabilityForChannel(
     channel?: string;
     currentChannelId?: string | null;
     currentThreadTs?: string | null;
+    currentThreadRootId?: string | null;
+    currentParentConversationId?: string | null;
     currentMessageId?: string | number | null;
     accountId?: string | null;
     sessionKey?: string | null;

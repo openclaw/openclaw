@@ -1,6 +1,14 @@
+import {
+  ACTION_APPROVAL_INTERACTIVE_DATA_KEY,
+  ACTION_APPROVAL_SCHEMA_VERSION,
+  buildActionApprovalInteractiveData,
+} from "openclaw/plugin-sdk/action-approval-runtime";
+import {
+  clearPluginInteractiveHandlers,
+  registerPluginInteractiveHandler,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
 import {
   type MSTeamsActivityHandler,
   type MSTeamsMessageHandlerDeps,
@@ -84,13 +92,8 @@ function createDeps(): MSTeamsMessageHandlerDeps {
     textLimit: 4000,
     mediaMaxBytes: 1024 * 1024,
     conversationStore: {
-      get: vi.fn(async () => null),
       upsert: vi.fn(async () => undefined),
-      list: vi.fn(async () => []),
-      remove: vi.fn(async () => false),
-      findPreferredDmByUserId: vi.fn(async () => null),
-      findByUserId: vi.fn(async () => null),
-    } satisfies MSTeamsConversationStore,
+    } as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
     pollStore: {
       recordVote: vi.fn(async () => null),
     } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
@@ -134,6 +137,7 @@ function createActivityHandler() {
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {
     runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    clearPluginInteractiveHandlers();
   });
 
   it("forwards adaptive card invoke values to the agent as message text", async () => {
@@ -196,5 +200,127 @@ describe("msteams adaptive card action invoke", () => {
         SenderId: "user-aad",
       },
     });
+  });
+
+  it("dispatches registered plugin interactive handlers before the generic fallback", async () => {
+    const deps = createDeps();
+    const interactiveHandler = vi.fn(async () => ({ handled: true }));
+    const interactiveData = buildActionApprovalInteractiveData({
+      namespace: "m365.approval",
+      payload: {
+        version: ACTION_APPROVAL_SCHEMA_VERSION,
+        ownerSessionKey: "agent:main:main",
+        flowId: "flow-1",
+        expectedRevision: 2,
+        snapshotHash: "abc123",
+        decision: "approve",
+        action: {
+          kind: "mail.reply",
+          title: "Reply to thread",
+          highRisk: true,
+        },
+      },
+    });
+    registerPluginInteractiveHandler("m365", {
+      channel: "msteams",
+      namespace: "m365.approval",
+      handler: interactiveHandler,
+    });
+    const { handler } = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await registered.run({
+      activity: {
+        id: "invoke-2",
+        type: "invoke",
+        name: "adaptiveCard/action",
+        channelId: "msteams",
+        serviceUrl: "https://service.example.test",
+        from: {
+          id: "user-bf",
+          aadObjectId: "user-aad",
+          name: "User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:personal-chat;messageid=abc123",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+        value: {
+          action: {
+            type: "Action.Submit",
+            data: {
+              [ACTION_APPROVAL_INTERACTIVE_DATA_KEY]: interactiveData,
+              decision: "approve",
+            },
+          },
+        },
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      sendActivities: async () => [],
+      updateActivity: vi.fn(async () => ({ id: "updated" })),
+      deleteActivity: vi.fn(async () => undefined),
+    } as unknown as MSTeamsTurnContext);
+
+    expect(interactiveHandler).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept non-reserved adaptive card payloads before the generic fallback", async () => {
+    const deps = createDeps();
+    const interactiveHandler = vi.fn(async () => ({ handled: true }));
+    registerPluginInteractiveHandler("m365", {
+      channel: "msteams",
+      namespace: "m365.approval",
+      handler: interactiveHandler,
+    });
+    const { handler } = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await registered.run({
+      activity: {
+        id: "invoke-3",
+        type: "invoke",
+        name: "adaptiveCard/action",
+        channelId: "msteams",
+        serviceUrl: "https://service.example.test",
+        from: {
+          id: "user-bf",
+          aadObjectId: "user-aad",
+          name: "User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:personal-chat;messageid=abc123",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+        value: {
+          data: "m365.approval:opaque-payload",
+        },
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      sendActivities: async () => [],
+      updateActivity: vi.fn(async () => ({ id: "updated" })),
+      deleteActivity: vi.fn(async () => undefined),
+    } as unknown as MSTeamsTurnContext);
+
+    expect(interactiveHandler).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
   });
 });

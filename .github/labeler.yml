@@ -75,6 +75,10 @@
           - "extensions/qa-lab/**"
           - "docs/concepts/qa-e2e-automation.md"
           - "docs/channels/qa-channel.md"
+"plugin: m365":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/m365/**"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
@@ -297,10 +301,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
-"extensions: codex":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/codex/**"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:

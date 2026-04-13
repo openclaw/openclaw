@@ -1,4 +1,16 @@
-import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
+
+function registerMSTeamsFullPlugin(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./runtime-api.js",
+    exportName: "registerMSTeamsFullPlugin",
+  });
+  register(api);
+}
 
 export default defineBundledChannelEntry({
   id: "msteams",
@@ -10,11 +22,14 @@ export default defineBundledChannelEntry({
     exportName: "msteamsPlugin",
   },
   secrets: {
-    specifier: "./secret-contract-api.js",
+    specifier: "./src/secret-contract.js",
     exportName: "channelSecrets",
   },
   runtime: {
     specifier: "./runtime-api.js",
     exportName: "setMSTeamsRuntime",
+  },
+  registerFull(api) {
+    registerMSTeamsFullPlugin(api);
   },
 });

@@ -1,0 +1,286 @@
+{
+  "id": "m365",
+  "name": "Microsoft 365",
+  "description": "Microsoft 365 Outlook inbox triage with Teams approval-gated replies.",
+  "providerAuthEnvVars": {
+    "m365": ["M365_TENANT_ID", "M365_CLIENT_ID", "M365_CLIENT_SECRET", "M365_MAILBOX_USER_ID"]
+  },
+  "uiHints": {
+    "tenantId": {
+      "label": "Tenant ID",
+      "help": "Microsoft Entra tenant id for Graph token requests. Fallback: M365_TENANT_ID."
+    },
+    "clientId": {
+      "label": "Client ID",
+      "help": "Microsoft Entra application client id. Fallback: M365_CLIENT_ID."
+    },
+    "clientSecret": {
+      "label": "Client Secret",
+      "help": "Microsoft Entra application secret for app-only Graph access or delegated token refresh. Fallback: M365_CLIENT_SECRET.",
+      "sensitive": true
+    },
+    "accounts": {
+      "label": "Accounts",
+      "help": "Configured Outlook mailboxes keyed by OpenClaw account id."
+    },
+    "allowedMailboxes": {
+      "label": "Allowed Mailboxes",
+      "help": "Explicit mailbox allowlist for app-only Outlook reply writes."
+    },
+    "mailWriteScopeProbeMailboxUserId": {
+      "label": "Mail Scope Proof Probe Mailbox",
+      "help": "A mailbox outside the allowed mailboxes list used at startup to verify app-only scope is denied."
+    },
+    "allowedCalendars": {
+      "label": "Allowed Calendars",
+      "help": "Explicit calendar allowlist for app-only calendar writes."
+    },
+    "approval.timeoutMs": {
+      "label": "Approval Timeout",
+      "help": "How long send approvals wait before denying the reply."
+    },
+    "approval.teamsUserIds": {
+      "label": "Teams Approvers",
+      "help": "Teams AAD user ids who receive approval cards for Outlook and Calendar writes."
+    },
+    "webhook.path": {
+      "label": "Webhook Path",
+      "help": "Plugin-owned Graph notification route path."
+    },
+    "webhook.clientState": {
+      "label": "Webhook Client State",
+      "help": "Secret clientState value Microsoft Graph sends back with notifications.",
+      "sensitive": true
+    }
+  },
+  "contracts": {
+    "tools": ["m365_mail_triage", "m365_mail_get_thread", "m365_mail_queue_reply"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "$defs": {
+      "secretRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["env", "file", "exec"]
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["source", "provider", "id"]
+      },
+      "secretInput": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "$ref": "#/$defs/secretRef"
+          }
+        ]
+      },
+      "account": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "authMode": {
+            "type": "string",
+            "enum": ["app-only", "delegated"]
+          },
+          "identityId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tenantId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "clientId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "clientSecret": {
+            "$ref": "#/$defs/secretInput"
+          },
+          "mailboxUserId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mailbox": {
+            "type": "string",
+            "minLength": 1
+          },
+          "folder": {
+            "type": "string",
+            "minLength": 1,
+            "default": "inbox"
+          },
+          "maxBodyChars": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 65536
+          },
+          "allowedReplyDomains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "defaultAccountId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "authMode": {
+        "type": "string",
+        "enum": ["app-only", "delegated"]
+      },
+      "identityId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "tenantId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "clientId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "clientSecret": {
+        "$ref": "#/$defs/secretInput"
+      },
+      "mailboxUserId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "graphBaseUrl": {
+        "type": "string",
+        "format": "uri"
+      },
+      "tokenBaseUrl": {
+        "type": "string",
+        "format": "uri"
+      },
+      "allowedMailboxes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "mailWriteScopeProbeMailboxUserId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "allowedCalendars": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/account"
+        }
+      },
+      "triage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "sinceMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "unreadOnly": {
+            "type": "boolean"
+          }
+        }
+      },
+      "approval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000
+          },
+          "previewChars": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 4000
+          },
+          "teamsUserIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "webhook": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "clientState": {
+            "$ref": "#/$defs/secretInput"
+          },
+          "notificationUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "expirationMinutes": {
+            "type": "integer",
+            "minimum": 15,
+            "maximum": 4230
+          },
+          "maxBodyBytes": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 1048576
+          }
+        }
+      }
+    }
+  }
+}
