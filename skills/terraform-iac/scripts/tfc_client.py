@@ -3888,7 +3888,7 @@ def cmd_outputs(args):
             return
         if r2.status_code >= 400:
             print(f"ERROR: Failed to fetch outputs for workspace '{args.workspace}' (HTTP {r2.status_code}).")
-            return
+            sys.exit(1)
         r2.raise_for_status()
         break
     else:
