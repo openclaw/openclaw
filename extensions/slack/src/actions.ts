@@ -310,6 +310,59 @@ export async function listSlackPins(
   return (result.items ?? []) as SlackPin[];
 }
 
+export type SlackSearchMatch = {
+  ts?: string;
+  text?: string;
+  user?: string;
+  username?: string;
+  channel?: { id?: string; name?: string };
+  permalink?: string;
+  thread_ts?: string;
+};
+
+export type SlackSearchResult = {
+  matches: SlackSearchMatch[];
+  total: number;
+  page: number;
+  pages: number;
+};
+
+export async function searchSlackMessages(
+  query: string,
+  opts: SlackActionClientOpts & {
+    count?: number;
+    sort?: "score" | "timestamp";
+    sortDir?: "asc" | "desc";
+    page?: number;
+  } = {},
+): Promise<SlackSearchResult> {
+  const client = await getClient(opts);
+  const result = await client.search.messages({
+    query,
+    count: opts.count,
+    sort: opts.sort,
+    sort_dir: opts.sortDir,
+    page: opts.page,
+  });
+  const messages = result.messages;
+  const paging = messages?.paging as { page?: number; pages?: number } | undefined;
+  const rawMatches = (messages?.matches ?? []) as Array<Record<string, unknown>>;
+  return {
+    matches: rawMatches.map((m) => ({
+      ts: m.ts as string | undefined,
+      text: m.text as string | undefined,
+      username: m.username as string | undefined,
+      user: m.user as string | undefined,
+      channel: m.channel as { id?: string; name?: string } | undefined,
+      permalink: m.permalink as string | undefined,
+      thread_ts: m.thread_ts as string | undefined,
+    })),
+    total: messages?.total ?? 0,
+    page: paging?.page ?? 1,
+    pages: paging?.pages ?? 1,
+  };
+}
+
 type SlackFileInfoSummary = {
   id?: string;
   name?: string;

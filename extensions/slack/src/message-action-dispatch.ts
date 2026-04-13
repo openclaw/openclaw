@@ -184,6 +184,28 @@ export async function handleSlackMessageAction(params: {
     return await invoke({ action: "emojiList", limit, accountId }, cfg);
   }
 
+  if (action === "search") {
+    const query = readStringParam(actionParams, "query", { required: true });
+    const count = readNumberParam(actionParams, "limit", { integer: true });
+    const sort = readStringParam(actionParams, "sort") as "score" | "timestamp" | undefined;
+    const sortDir = readStringParam(actionParams, "sortDir") as "asc" | "desc" | undefined;
+    const page = readNumberParam(actionParams, "page", { integer: true });
+    const channelId = readStringParam(actionParams, "channelId");
+    const fullQuery = channelId ? `${query} in:${channelId}` : query;
+    return await invoke(
+      {
+        action: "searchMessages",
+        query: fullQuery,
+        count: count ?? undefined,
+        sort: sort ?? undefined,
+        sortDir: sortDir ?? undefined,
+        page: page ?? undefined,
+        accountId,
+      },
+      cfg,
+    );
+  }
+
   if (action === "download-file") {
     const fileId = readStringParam(actionParams, "fileId", { required: true });
     const channelId =

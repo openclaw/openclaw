@@ -111,4 +111,30 @@ describe("Slack message tools", () => {
       "upload-file",
     ]);
   });
+
+  it("adds search when any enabled Slack account has a user token", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-root",
+          actions: {
+            messages: true,
+          },
+          accounts: {
+            default: {
+              botToken: "xoxb-default",
+              userToken: "xoxp-default",
+              actions: {
+                messages: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).toEqual(
+      expect.arrayContaining(["search"]),
+    );
+  });
 });

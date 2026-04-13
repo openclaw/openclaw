@@ -175,4 +175,37 @@ describe("handleSlackMessageAction", () => {
       expect.any(Object),
     );
   });
+
+  it("maps search to searchMessages and scopes channel queries", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "search",
+        cfg: {},
+        params: {
+          query: "hello world",
+          channelId: "C123",
+          limit: 10,
+          sort: "timestamp",
+          sortDir: "desc",
+          page: 2,
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "searchMessages",
+        query: "hello world in:C123",
+        count: 10,
+        sort: "timestamp",
+        sortDir: "desc",
+        page: 2,
+      }),
+      expect.any(Object),
+    );
+  });
 });

@@ -38,6 +38,10 @@ export function listSlackMessageActions(
     actions.add("delete");
     actions.add("download-file");
     actions.add("upload-file");
+    const allAccounts = listEnabledSlackAccounts(cfg);
+    if (allAccounts.some((account) => account.userToken?.trim())) {
+      actions.add("search");
+    }
   }
   if (isActionEnabled("pins")) {
     actions.add("pin");
