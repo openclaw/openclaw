@@ -65,7 +65,7 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://127.0.0.1:18789",
-        transportUrl = "ws://127.0.0.1",
+        transportUrl = "ws://127.0.0.1:18789",
       ),
       parsed,
     )
@@ -81,7 +81,7 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://localhost:18789",
-        transportUrl = "ws://localhost",
+        transportUrl = "ws://localhost:18789",
       ),
       parsed,
     )
@@ -97,7 +97,7 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://10.0.2.2:18789",
-        transportUrl = "ws://10.0.2.2",
+        transportUrl = "ws://10.0.2.2:18789",
       ),
       parsed,
     )
@@ -113,7 +113,7 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://192.168.1.20:18789",
-        transportUrl = "ws://192.168.1.20",
+        transportUrl = "ws://192.168.1.20:18789",
       ),
       parsed,
     )
@@ -129,7 +129,7 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://gateway.local:18789",
-        transportUrl = "ws://gateway.local",
+        transportUrl = "ws://gateway.local:18789",
       ),
       parsed,
     )
@@ -143,7 +143,7 @@ class GatewayConfigResolverTest {
     assertEquals(18789, parsed?.port)
     assertEquals(false, parsed?.tls)
     assertEquals("http://[::1]:18789", parsed?.displayUrl)
-    assertEquals("ws://[::1]", parsed?.transportUrl)
+    assertEquals("ws://[::1]:18789", parsed?.transportUrl)
   }
 
   @Test
@@ -154,7 +154,7 @@ class GatewayConfigResolverTest {
     assertEquals(18789, parsed?.port)
     assertEquals(false, parsed?.tls)
     assertEquals("http://[::ffff:127.0.0.1]:18789", parsed?.displayUrl)
-    assertEquals("ws://[::ffff:127.0.0.1]", parsed?.transportUrl)
+    assertEquals("ws://[::ffff:127.0.0.1]:18789", parsed?.transportUrl)
   }
 
   @Test
@@ -179,7 +179,7 @@ class GatewayConfigResolverTest {
     assertEquals(18789, parsed?.port)
     assertEquals(false, parsed?.tls)
     assertEquals("http://[fe80::1%25eth0]:18789", parsed?.displayUrl)
-    assertEquals("ws://[fe80::1%25eth0]", parsed?.transportUrl)
+    assertEquals("ws://[fe80::1%25eth0]:18789", parsed?.transportUrl)
   }
 
   @Test
@@ -217,7 +217,7 @@ class GatewayConfigResolverTest {
         port = 80,
         tls = false,
         displayUrl = "http://localhost:80",
-        transportUrl = "ws://localhost:80",
+        transportUrl = "ws://localhost",
       ),
       parsed,
     )
@@ -311,7 +311,7 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://192.168.1.20:18789",
-        transportUrl = "ws://192.168.1.20",
+        transportUrl = "ws://192.168.1.20:18789",
       ),
       parsed.config,
     )

@@ -50,3 +50,4 @@ openclaw qr --url wss://gateway.example/ws
 - After scanning, approve device pairing with:
   - `openclaw devices list`
   - `openclaw devices approve <requestId>`
+- During onboarding, a valid gateway route can still surface `pairing required` until you approve the pending request. If you see repeated fresh requests, that is client retry churn, not a routing failure. Approve the newest pending request and prefer the latest Android build with the pairing retry fix.
