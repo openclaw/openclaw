@@ -89,7 +89,7 @@ docs/internal/
 tmp/
 IDENTITY.md
 USER.md
-.tgz
+openclaw-*.tgz
 .idea
 
 # local tooling
