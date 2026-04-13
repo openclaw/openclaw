@@ -85,3 +85,5 @@ I've assigned the work to eleqtrizit.
   2026-04-13: Updated `src/infra/fs-safe.ts` so `openVerifiedLocalFile()` closes the opened handle before rethrowing when the `afterOpen` test hook fails, preventing descriptor leaks during deterministic race tests, and restricted `__setFsSafeTestHooksForTest()` to test runtimes only.
   2026-04-13: Added targeted regressions in `src/infra/fs-safe.test.ts` covering both the after-open handle-close path and the test-only hook guard.
   2026-04-13: Ran `corepack pnpm test src/infra/fs-safe.test.ts` and it passed (34 tests).
+  2026-04-13: Committed and pushed the follow-up fix on PR branch `423` as `b1a2036608` (`fix(fssafe): close afterOpen handle leaks`).
+  2026-04-13: Deleted stale review-trigger comments `IC 4239268526` and `IC 4239268527`, then posted one fresh `@greptile review` trigger comment `IC 4239388029` and one fresh `@codex review` trigger comment `IC 4239388040` on openclaw/openclaw#66079 for the new head commit.
