@@ -260,6 +260,62 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("resolves config-defined custom provider models when registry lookup misses", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, {
+        provider: "local-openai",
+        input: ["text", "image"],
+        modelFound: false,
+      });
+      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "custom provider summary" }],
+      } as never);
+
+      const cfg = {
+        models: {
+          providers: {
+            "local-openai": {
+              baseUrl: "http://127.0.0.1:8317/v1",
+              api: "openai-responses",
+              authHeader: true,
+              models: [
+                {
+                  id: "gpt-5.4-mini",
+                  name: "GPT-5.4 Mini (Local PDF Route)",
+                  api: "openai-responses",
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 272000,
+                  maxTokens: 128000,
+                },
+              ],
+            },
+          },
+        },
+        agents: { defaults: { pdfModel: { primary: "local-openai/gpt-5.4-mini" } } },
+      } as OpenClawConfig;
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        model: "local-openai/gpt-5.4-mini",
+      });
+
+      expect(extractSpy).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "custom provider summary" }],
+        details: { native: false, model: "local-openai/gpt-5.4-mini" },
+      });
+    });
+  });
+
   it("tool parameters have correct schema shape", async () => {
     await loadCreatePdfTool();
     const schema = PdfToolSchema;
