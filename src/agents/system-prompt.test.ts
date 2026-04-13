@@ -387,6 +387,62 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds update_plan guidance only when the tool is available", () => {
+    const promptWithPlan = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "update_plan"],
+    });
+    const promptWithoutPlan = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec"],
+    });
+
+    expect(promptWithPlan).toContain(
+      "For non-trivial multi-step work, keep a short plan updated with `update_plan`.",
+    );
+    expect(promptWithPlan).toContain(
+      "When you use `update_plan`, keep exactly one step `in_progress` until the work is done.",
+    );
+    expect(promptWithoutPlan).not.toContain("keep a short plan updated with `update_plan`");
+  });
+
+  it("adds plan-mode and tool-search guidance when those tools are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "update_plan", "EnterPlanMode", "ExitPlanMode", "tool_search"],
+    });
+
+    expect(prompt).toContain(
+      "start durable planning with `EnterPlanMode`, keep steps current with `update_plan`, and close it with `ExitPlanMode` when done.",
+    );
+    expect(prompt).toContain(
+      "When you are unsure which built-in or plugin tool fits the job, use `tool_search` first instead of guessing.",
+    );
+    expect(prompt).toContain(
+      "Use `tool_search` with `select:<tool>` only to confirm tool names after discovery; it does not activate hidden tools yet.",
+    );
+  });
+
+  it("adds worktree and team orchestration guidance when those tools are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: [
+        "exec",
+        "EnterWorktree",
+        "ExitWorktree",
+        "team_create",
+        "team_status",
+        "team_close",
+      ],
+    });
+
+    expect(prompt).toContain(
+      "When you need an isolated git checkout for risky edits or branch-specific work, use `EnterWorktree` and close it with `ExitWorktree` when done.",
+    );
+    expect(prompt).toContain(
+      "For multi-worker orchestration, use `team_create`, `team_status`, and `team_close` instead of tracking a swarm in free-form prose.",
+    );
+  });
   it("includes docs guidance when docsPath is provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

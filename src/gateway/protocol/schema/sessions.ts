@@ -291,6 +291,194 @@ export const SessionsControlParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const SessionsInspectSessionSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    sessionId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    updatedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    status: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    label: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    displayName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    modelProvider: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    kind: Type.Union([
+      Type.Literal("direct"),
+      Type.Literal("group"),
+      Type.Literal("global"),
+      Type.Literal("unknown"),
+    ]),
+    spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    parentSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    subagentRole: Type.Optional(
+      Type.Union([Type.Literal("orchestrator"), Type.Literal("leaf"), Type.Null()]),
+    ),
+    subagentControlScope: Type.Optional(
+      Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsInspectPlanSchema = Type.Object(
+  {
+    mode: Type.Union([SessionPlanModeSchema, Type.Null()]),
+    artifact: Type.Union([SessionPlanArtifactSchema, Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsInspectWorktreeSchema = Type.Object(
+  {
+    mode: Type.Union([SessionWorktreeModeSchema, Type.Null()]),
+    artifact: Type.Union([SessionWorktreeArtifactSchema, Type.Null()]),
+    preferredWorkspaceDir: Type.Union([NonEmptyString, Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+
+const TeamMemberStatusSchema = Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("accepted"),
+  Type.Literal("running"),
+  Type.Literal("done"),
+  Type.Literal("failed"),
+  Type.Literal("killed"),
+  Type.Literal("timeout"),
+  Type.Literal("error"),
+]);
+
+const SessionsInspectTeamCountsSchema = Type.Object(
+  {
+    pending: Type.Integer({ minimum: 0 }),
+    accepted: Type.Integer({ minimum: 0 }),
+    running: Type.Integer({ minimum: 0 }),
+    done: Type.Integer({ minimum: 0 }),
+    failed: Type.Integer({ minimum: 0 }),
+    killed: Type.Integer({ minimum: 0 }),
+    timeout: Type.Integer({ minimum: 0 }),
+    error: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsInspectTeamMemberSchema = Type.Object(
+  {
+    memberId: NonEmptyString,
+    label: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    task: NonEmptyString,
+    status: TeamMemberStatusSchema,
+    childSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    runId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    mode: Type.Union([Type.Literal("session"), Type.Literal("task"), Type.Null()]),
+    workspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    error: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    updatedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    finishedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsInspectTeamSchema = Type.Object(
+  {
+    teamId: NonEmptyString,
+    flowId: NonEmptyString,
+    flowStatus: Type.Union([
+      Type.Literal("queued"),
+      Type.Literal("running"),
+      Type.Literal("waiting"),
+      Type.Literal("blocked"),
+      Type.Literal("succeeded"),
+      Type.Literal("failed"),
+      Type.Literal("cancelled"),
+      Type.Literal("lost"),
+    ]),
+    currentStep: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    summary: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    worktreeDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    activeWorkers: Type.Integer({ minimum: 0 }),
+    counts: SessionsInspectTeamCountsSchema,
+    members: Type.Array(SessionsInspectTeamMemberSchema),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsInspectPolicySchema = Type.Object(
+  {
+    sendPolicy: Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
+    groupActivation: Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
+    execHost: Type.Union([Type.String(), Type.Null()]),
+    execSecurity: Type.Union([Type.String(), Type.Null()]),
+    execAsk: Type.Union([Type.String(), Type.Null()]),
+    execNode: Type.Union([Type.String(), Type.Null()]),
+    responseUsage: Type.Union([
+      Type.Literal("on"),
+      Type.Literal("off"),
+      Type.Literal("tokens"),
+      Type.Literal("full"),
+      Type.Null(),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsControlPlanResultSchema = Type.Object(
+  {
+    mode: SessionPlanModeSchema,
+    artifact: Type.Union([SessionPlanArtifactSchema, Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsControlWorktreeResultSchema = Type.Object(
+  {
+    status: SessionWorktreeModeSchema,
+    cleanup: SessionWorktreeCleanupPolicySchema,
+    removed: Type.Boolean(),
+    dirty: Type.Boolean(),
+    error: Type.Optional(Type.String()),
+    previousWorktreeDir: Type.Union([NonEmptyString, Type.Null()]),
+    resumedWorkspaceDir: Type.Union([NonEmptyString, Type.Null()]),
+    effectiveOnNextTurn: Type.Boolean(),
+    artifact: Type.Optional(Type.Union([SessionWorktreeArtifactSchema, Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsControlActionsSchema = Type.Object(
+  {
+    plan: Type.Optional(SessionsControlPlanResultSchema),
+    worktree: Type.Optional(SessionsControlWorktreeResultSchema),
+    team: Type.Optional(SessionsInspectTeamSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsInspectResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    exists: Type.Boolean(),
+    session: Type.Union([SessionsInspectSessionSchema, Type.Null()]),
+    plan: Type.Union([SessionsInspectPlanSchema, Type.Null()]),
+    worktree: Type.Union([SessionsInspectWorktreeSchema, Type.Null()]),
+    team: Type.Union([SessionsInspectTeamSchema, Type.Null()]),
+    policy: Type.Union([SessionsInspectPolicySchema, Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsControlResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    actions: SessionsControlActionsSchema,
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,

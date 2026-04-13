@@ -14,9 +14,14 @@ const hoisted = vi.hoisted(() => ({
   closeTeamFlowMock: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => ({}),
-}));
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  return {
+    ...actual,
+    loadConfig: () => ({}),
+  };
+});
 
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(

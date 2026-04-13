@@ -1619,6 +1619,62 @@ public struct SessionsCompactionRestoreResult: Codable, Sendable {
     }
 }
 
+public struct SessionsInspectParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct SessionsInspectResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let exists: Bool
+    public let session: AnyCodable
+    public let plan: AnyCodable
+    public let worktree: AnyCodable
+    public let team: AnyCodable
+    public let policy: AnyCodable
+
+    public init(
+        ok: Bool,
+        key: String,
+        exists: Bool,
+        session: AnyCodable,
+        plan: AnyCodable,
+        worktree: AnyCodable,
+        team: AnyCodable,
+        policy: AnyCodable)
+    {
+        self.ok = ok
+        self.key = key
+        self.exists = exists
+        self.session = session
+        self.plan = plan
+        self.worktree = worktree
+        self.team = team
+        self.policy = policy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case exists
+        case session
+        case plan
+        case worktree
+        case team
+        case policy
+    }
+}
+
 public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
@@ -1758,6 +1814,10 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let subagentcontrolscope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
+    public let planmode: AnyCodable?
+    public let planartifact: AnyCodable?
+    public let worktreemode: AnyCodable?
+    public let worktreeartifact: AnyCodable?
 
     public init(
         key: String,
@@ -1779,7 +1839,11 @@ public struct SessionsPatchParams: Codable, Sendable {
         subagentrole: AnyCodable?,
         subagentcontrolscope: AnyCodable?,
         sendpolicy: AnyCodable?,
-        groupactivation: AnyCodable?)
+        groupactivation: AnyCodable?,
+        planmode: AnyCodable?,
+        planartifact: AnyCodable?,
+        worktreemode: AnyCodable?,
+        worktreeartifact: AnyCodable?)
     {
         self.key = key
         self.label = label
@@ -1801,6 +1865,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.subagentcontrolscope = subagentcontrolscope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
+        self.planmode = planmode
+        self.planartifact = planartifact
+        self.worktreemode = worktreemode
+        self.worktreeartifact = worktreeartifact
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1824,6 +1892,58 @@ public struct SessionsPatchParams: Codable, Sendable {
         case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
+        case planmode = "planMode"
+        case planartifact = "planArtifact"
+        case worktreemode = "worktreeMode"
+        case worktreeartifact = "worktreeArtifact"
+    }
+}
+
+public struct SessionsControlParams: Codable, Sendable {
+    public let key: String
+    public let plan: [String: AnyCodable]?
+    public let worktree: [String: AnyCodable]?
+    public let team: [String: AnyCodable]?
+
+    public init(
+        key: String,
+        plan: [String: AnyCodable]?,
+        worktree: [String: AnyCodable]?,
+        team: [String: AnyCodable]?)
+    {
+        self.key = key
+        self.plan = plan
+        self.worktree = worktree
+        self.team = team
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case plan
+        case worktree
+        case team
+    }
+}
+
+public struct SessionsControlResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let actions: [String: AnyCodable]
+
+    public init(
+        ok: Bool,
+        key: String,
+        actions: [String: AnyCodable])
+    {
+        self.ok = ok
+        self.key = key
+        self.actions = actions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case actions
     }
 }
 
@@ -3209,6 +3329,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
     public let source: AnyCodable
     public let pluginid: String?
     public let channelid: String?
+    public let searchhint: String?
+    public let searchtags: [String]?
+    public let deferred: Bool?
 
     public init(
         id: String,
@@ -3217,7 +3340,10 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         rawdescription: String,
         source: AnyCodable,
         pluginid: String?,
-        channelid: String?)
+        channelid: String?,
+        searchhint: String?,
+        searchtags: [String]?,
+        deferred: Bool?)
     {
         self.id = id
         self.label = label
@@ -3226,6 +3352,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         self.source = source
         self.pluginid = pluginid
         self.channelid = channelid
+        self.searchhint = searchhint
+        self.searchtags = searchtags
+        self.deferred = deferred
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3236,6 +3365,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         case source
         case pluginid = "pluginId"
         case channelid = "channelId"
+        case searchhint = "searchHint"
+        case searchtags = "searchTags"
+        case deferred
     }
 }
 

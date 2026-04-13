@@ -509,6 +509,16 @@ export function buildAgentSystemPrompt(params: {
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
+  const hasUpdatePlanTool = availableTools.has("update_plan");
+  const hasToolSearchTool = availableTools.has("tool_search");
+  const hasEnterPlanModeTool = availableTools.has("enterplanmode");
+  const hasExitPlanModeTool = availableTools.has("exitplanmode");
+  const hasEnterWorktreeTool = availableTools.has("enterworktree");
+  const hasExitWorktreeTool = availableTools.has("exitworktree");
+  const hasTeamTools =
+    availableTools.has("team_create") &&
+    availableTools.has("team_status") &&
+    availableTools.has("team_close");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
@@ -537,7 +547,15 @@ export function buildAgentSystemPrompt(params: {
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
-  const extraSystemPrompt = params.extraSystemPrompt?.trim();
+  const toolSearchToolName = resolveToolName("tool_search");
+  const enterPlanModeToolName = resolveToolName("enterplanmode");
+  const exitPlanModeToolName = resolveToolName("exitplanmode");
+  const enterWorktreeToolName = resolveToolName("enterworktree");
+  const exitWorktreeToolName = resolveToolName("exitworktree");
+  const extraSystemPrompt =
+    typeof params.extraSystemPrompt === "string"
+      ? normalizeStructuredPromptSection(params.extraSystemPrompt)
+      : undefined;
   const promptContribution = params.promptContribution;
   const providerStablePrefix = normalizeProviderPromptBlock(promptContribution?.stablePrefix);
   const providerDynamicSuffix = normalizeProviderPromptBlock(promptContribution?.dynamicSuffix);
@@ -656,6 +674,43 @@ export function buildAgentSystemPrompt(params: {
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+    `For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use ${processToolName} to confirm completion, and use it for logs, status, input, or intervention.`,
+    ...(hasUpdatePlanTool
+      ? [
+          ...(hasEnterPlanModeTool && hasExitPlanModeTool
+            ? [
+                `For non-trivial multi-step work, start durable planning with \`${enterPlanModeToolName}\`, keep steps current with \`update_plan\`, and close it with \`${exitPlanModeToolName}\` when done.`,
+              ]
+            : hasEnterPlanModeTool
+              ? [
+                  `For non-trivial multi-step work, start durable planning with \`${enterPlanModeToolName}\` and keep steps current with \`update_plan\`.`,
+                ]
+              : ["For non-trivial multi-step work, keep a short plan updated with `update_plan`."]),
+          "Skip `update_plan` for simple tasks, obvious one-step fixes, or work you can finish in a few direct actions.",
+          "When you use `update_plan`, keep exactly one step `in_progress` until the work is done.",
+          "After calling `update_plan`, continue the work and do not repeat the full plan unless the user asks.",
+        ]
+      : []),
+    ...(hasToolSearchTool
+      ? [
+          `When you are unsure which built-in or plugin tool fits the job, use \`${toolSearchToolName}\` first instead of guessing.`,
+          `Use \`${toolSearchToolName}\` with \`select:<tool>\` only to confirm tool names after discovery; it does not activate hidden tools yet.`,
+        ]
+      : []),
+    ...(hasEnterWorktreeTool
+      ? [
+          hasExitWorktreeTool
+            ? `When you need an isolated git checkout for risky edits or branch-specific work, use \`${enterWorktreeToolName}\` and close it with \`${exitWorktreeToolName}\` when done.`
+            : `When you need an isolated git checkout for risky edits or branch-specific work, use \`${enterWorktreeToolName}\`.`,
+          "Worktree activation is session-scoped and typically takes effect on subsequent turns, so finish the current turn cleanly after changing worktree state.",
+        ]
+      : []),
+    ...(hasTeamTools
+      ? [
+          "For multi-worker orchestration, use `team_create`, `team_status`, and `team_close` instead of tracking a swarm in free-form prose.",
+          "Keep the team goal short, assign concrete worker tasks, and use `team_status` before re-steering or closing the team.",
+        ]
+      : []),
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed
       ? [

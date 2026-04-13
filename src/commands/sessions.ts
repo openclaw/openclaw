@@ -3,6 +3,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
+import type { SessionsControlResult, SessionsInspectResult } from "../gateway/protocol/index.js";
 import { classifySessionKey } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -280,7 +281,7 @@ export async function sessionsInspectCommand(
   opts: { key: string; json?: boolean; timeoutMs?: number },
   runtime: RuntimeEnv,
 ) {
-  const payload = await callGatewayForSessions<Record<string, unknown>>({
+  const payload = await callGatewayForSessions<SessionsInspectResult>({
     method: "sessions.inspect",
     params: {
       key: opts.key,
@@ -293,14 +294,14 @@ export async function sessionsInspectCommand(
     return;
   }
 
-  const session = (payload.session ?? null) as Record<string, unknown> | null;
-  const plan = (payload.plan ?? null) as Record<string, unknown> | null;
-  const worktree = (payload.worktree ?? null) as Record<string, unknown> | null;
-  const team = (payload.team ?? null) as Record<string, unknown> | null;
-  const policy = (payload.policy ?? null) as Record<string, unknown> | null;
+  const session = payload.session;
+  const plan = payload.plan;
+  const worktree = payload.worktree;
+  const team = payload.team;
+  const policy = payload.policy;
 
   runtime.log(info(`Session: ${formatMaybeValue(payload.key)}`));
-  runtime.log(info(`Exists: ${payload.exists === true ? "yes" : "no"}`));
+  runtime.log(info(`Exists: ${payload.exists ? "yes" : "no"}`));
 
   if (session) {
     logInspectSection(runtime, "Session", [
@@ -320,7 +321,7 @@ export async function sessionsInspectCommand(
   }
 
   if (plan) {
-    const artifact = (plan.artifact ?? null) as Record<string, unknown> | null;
+    const artifact = plan.artifact;
     logInspectSection(runtime, "Plan", [
       ["mode", plan.mode],
       ["status", artifact?.status],
@@ -332,7 +333,7 @@ export async function sessionsInspectCommand(
   }
 
   if (worktree) {
-    const artifact = (worktree.artifact ?? null) as Record<string, unknown> | null;
+    const artifact = worktree.artifact;
     logInspectSection(runtime, "Worktree", [
       ["mode", worktree.mode],
       ["status", artifact?.status],
@@ -415,7 +416,7 @@ export async function sessionsControlCommand(
     return;
   }
 
-  const payload = await callGatewayForSessions<Record<string, unknown>>({
+  const payload = await callGatewayForSessions<SessionsControlResult>({
     method: "sessions.control",
     params: {
       key: opts.key,
@@ -458,21 +459,21 @@ export async function sessionsControlCommand(
   }
 
   runtime.log(info(`Session: ${formatMaybeValue(payload.key)}`));
-  const actions = (payload.actions ?? null) as Record<string, unknown> | null;
+  const actions = payload.actions;
   if (!actions) {
     runtime.log("No actions applied.");
     return;
   }
 
   if (actions.plan) {
-    const plan = actions.plan as Record<string, unknown>;
-    const artifact = (plan.artifact ?? null) as Record<string, unknown> | null;
+    const plan = actions.plan;
+    const artifact = plan.artifact;
     runtime.log(
       `plan: mode=${formatMaybeValue(plan.mode)} status=${formatMaybeValue(artifact?.status)} summary=${formatMaybeValue(artifact?.summary)}`,
     );
   }
   if (actions.worktree) {
-    const worktree = actions.worktree as Record<string, unknown>;
+    const worktree = actions.worktree;
     runtime.log(
       `worktree: status=${formatMaybeValue(worktree.status)} cleanup=${formatMaybeValue(worktree.cleanup)} removed=${formatMaybeValue(worktree.removed)} dirty=${formatMaybeValue(worktree.dirty)}`,
     );
@@ -481,7 +482,7 @@ export async function sessionsControlCommand(
     }
   }
   if (actions.team) {
-    const team = actions.team as Record<string, unknown>;
+    const team = actions.team;
     runtime.log(
       `team: id=${formatMaybeValue(team.teamId)} flowStatus=${formatMaybeValue(team.flowStatus)} activeWorkers=${formatMaybeValue(team.activeWorkers)} counts=${formatInspectCounts(team.counts)}`,
     );

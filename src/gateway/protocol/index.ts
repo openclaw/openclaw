@@ -216,13 +216,17 @@ import {
   type SessionsCompactionRestoreParams,
   SessionsCompactionRestoreParamsSchema,
   type SessionsControlParams,
+  type SessionsControlResult,
   SessionsControlParamsSchema,
+  SessionsControlResultSchema,
   type SessionsCreateParams,
   SessionsCreateParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsInspectParams,
+  type SessionsInspectResult,
   SessionsInspectParamsSchema,
+  SessionsInspectResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsMessagesSubscribeParams,
@@ -380,6 +384,9 @@ export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
 export const validateSessionsInspectParams = ajv.compile<SessionsInspectParams>(
   SessionsInspectParamsSchema,
 );
+export const validateSessionsInspectResult = ajv.compile<SessionsInspectResult>(
+  SessionsInspectResultSchema,
+);
 export const validateSessionsCreateParams = ajv.compile<SessionsCreateParams>(
   SessionsCreateParamsSchema,
 );
@@ -395,6 +402,9 @@ export const validateSessionsPatchParams =
   ajv.compile<SessionsPatchParams>(SessionsPatchParamsSchema);
 export const validateSessionsControlParams = ajv.compile<SessionsControlParams>(
   SessionsControlParamsSchema,
+);
+export const validateSessionsControlResult = ajv.compile<SessionsControlResult>(
+  SessionsControlResultSchema,
 );
 export const validateSessionsResetParams =
   ajv.compile<SessionsResetParams>(SessionsResetParamsSchema);
@@ -592,6 +602,8 @@ export {
   SessionsListParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsResolveParamsSchema,
+  SessionsInspectParamsSchema,
+  SessionsInspectResultSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
@@ -600,6 +612,8 @@ export {
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
+  SessionsControlParamsSchema,
+  SessionsControlResultSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
@@ -778,7 +792,11 @@ export type {
   SessionsListParams,
   SessionsPreviewParams,
   SessionsResolveParams,
+  SessionsInspectParams,
+  SessionsInspectResult,
   SessionsPatchParams,
+  SessionsControlParams,
+  SessionsControlResult,
   SessionsPatchResult,
   SessionsResetParams,
   SessionsDeleteParams,
