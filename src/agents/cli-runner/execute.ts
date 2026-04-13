@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { requestHeartbeatNow as requestHeartbeatNowImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
@@ -94,6 +97,34 @@ function buildCliLogArgs(params: {
     }
   }
   return logArgs;
+}
+
+function isCodexCliBackend(context: PreparedCliRunContext): boolean {
+  return context.backendResolved.id === "codex-cli";
+}
+
+async function prepareCodexLastMessageArtifact(params: {
+  runId: string;
+}): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
+  const dir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-codex-last-message-"),
+  );
+  const safeRunId = params.runId.replace(/[^a-zA-Z0-9._-]+/g, "-") || "run";
+  const filePath = path.join(dir, `${safeRunId}.txt`);
+  return {
+    filePath,
+    cleanup: async () => {
+      await fs.rm(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function readCodexLastMessageArtifact(filePath: string): Promise<string> {
+  try {
+    return (await fs.readFile(filePath, "utf-8")).trim();
+  } catch {
+    return "";
+  }
 }
 
 const CLI_ENV_AUTH_LOG_KEYS = [
@@ -238,6 +269,14 @@ export async function executePreparedCliRun(
     promptArg: argsPrompt,
     useResume,
   });
+  const codexLastMessageArtifact = isCodexCliBackend(context)
+    ? await prepareCodexLastMessageArtifact({
+        runId: params.runId,
+      })
+    : undefined;
+  if (codexLastMessageArtifact) {
+    args.push("--output-last-message", codexLastMessageArtifact.filePath);
+  }
 
   const queueKey = resolveCliRunQueueKey({
     backendId: context.backendResolved.id,
@@ -462,10 +501,14 @@ export async function executePreparedCliRun(
           outputMode: useResume ? (backend.resumeOutput ?? backend.output) : backend.output,
           fallbackSessionId: resolvedSessionId,
         });
+        const artifactText = codexLastMessageArtifact
+          ? await readCodexLastMessageArtifact(codexLastMessageArtifact.filePath)
+          : "";
+        const finalText = artifactText || parsed.text;
         return {
           ...parsed,
           text: applyPluginTextReplacements(
-            parsed.text,
+            finalText,
             context.backendResolved.textTransforms?.output,
           ),
         };
@@ -475,6 +518,7 @@ export async function executePreparedCliRun(
     });
   } finally {
     await claudeSkillsPlugin.cleanup();
+    await codexLastMessageArtifact?.cleanup();
     if (systemPromptFile) {
       await systemPromptFile.cleanup();
     }

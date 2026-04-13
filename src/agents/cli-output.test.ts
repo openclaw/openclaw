@@ -279,6 +279,28 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("extracts Codex message text from jsonl content records", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        thread_id: "thread-123",
+        type: "message",
+        content: [{ type: "output_text", text: "Codex says hello" }],
+      }),
+      {
+        command: "codex",
+        output: "jsonl",
+        sessionIdFields: ["thread_id", "session_id"],
+      },
+      "codex-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Codex says hello",
+      sessionId: "thread-123",
+      usage: undefined,
+    });
+  });
+
   it("extracts nested Claude API errors from failed stream-json output", () => {
     const message =
       "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
