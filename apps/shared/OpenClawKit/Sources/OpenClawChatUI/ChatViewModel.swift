@@ -289,7 +289,8 @@ public final class OpenClawChatViewModel {
             toolCallId: message.toolCallId,
             toolName: message.toolName,
             usage: message.usage,
-            stopReason: message.stopReason)
+            stopReason: message.stopReason,
+            errorMessage: message.errorMessage)
     }
 
     private static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
@@ -368,7 +369,8 @@ public final class OpenClawChatViewModel {
                 toolCallId: message.toolCallId,
                 toolName: message.toolName,
                 usage: message.usage,
-                stopReason: message.stopReason)
+                stopReason: message.stopReason,
+                errorMessage: message.errorMessage)
         }
     }
 
