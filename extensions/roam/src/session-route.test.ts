@@ -80,6 +80,38 @@ describe("resolveRoamOutboundSessionRoute", () => {
     );
   });
 
+  it("uses resolvedTarget.kind='user' to detect DM even for bare target", () => {
+    resolveRoamOutboundSessionRoute({
+      cfg: baseCfg,
+      agentId: "default",
+      target: "roam:some-chat-id",
+      resolvedTarget: { to: "roam:some-chat-id", kind: "user", source: "normalized" as const },
+    });
+
+    expect(mockBuildRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "direct", id: "some-chat-id" },
+        chatType: "direct",
+      }),
+    );
+  });
+
+  it("uses resolvedTarget.kind='channel' to detect group", () => {
+    resolveRoamOutboundSessionRoute({
+      cfg: baseCfg,
+      agentId: "default",
+      target: "roam:dm:some-id",
+      resolvedTarget: { to: "roam:some-id", kind: "channel", source: "directory" as const },
+    });
+
+    expect(mockBuildRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "some-id" },
+        chatType: "group",
+      }),
+    );
+  });
+
   it("returns null for empty target", () => {
     const result = resolveRoamOutboundSessionRoute({
       cfg: baseCfg,

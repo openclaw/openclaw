@@ -7,7 +7,8 @@ import { stripRoamTargetPrefix } from "./normalize.js";
 /** Detect whether a raw target string refers to a DM (direct) or group chat. */
 function resolveTargetKind(raw: string): "direct" | "group" {
   const trimmed = raw.trim().replace(/^(roam|roam-hq):/i, "");
-  if (trimmed.startsWith("dm:") || trimmed.startsWith("user:")) {
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("dm:") || lower.startsWith("user:")) {
     return "direct";
   }
   return "group";
@@ -18,7 +19,14 @@ export function resolveRoamOutboundSessionRoute(params: ChannelOutboundSessionRo
   if (!chatId) {
     return null;
   }
-  const kind = resolveTargetKind(params.target);
+  // Prefer resolved target kind from directory/normalization; fall back to prefix parsing.
+  const resolvedKind = params.resolvedTarget?.kind;
+  const kind: "direct" | "group" =
+    resolvedKind === "user"
+      ? "direct"
+      : resolvedKind === "group" || resolvedKind === "channel"
+        ? "group"
+        : resolveTargetKind(params.target);
   const isGroup = kind === "group";
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,

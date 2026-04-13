@@ -107,12 +107,11 @@ function parseRoamWebhookEvent(raw: unknown): RoamWebhookEvent | null {
   return obj as unknown as RoamWebhookEvent;
 }
 
-function webhookEventToInbound(
-  event: RoamWebhookEvent,
-  chatType: "direct" | "group",
-): RoamInboundMessage {
+function webhookEventToInbound(event: RoamWebhookEvent): RoamInboundMessage {
   // Roam timestamps are microsecond-precision; convert to milliseconds for downstream use.
   const timestampMs = Math.floor(event.timestamp / 1000);
+  // Derive chat type from the event's chatType field ("dm" → "direct", "channel" → "group").
+  const chatType: "direct" | "group" = event.chatType === "dm" ? "direct" : "group";
   const msg: RoamInboundMessage = {
     messageId: event.messageId ?? String(event.timestamp),
     chatId: event.chatId,
@@ -217,12 +216,9 @@ async function handleRoamWebhookRequest(
       res.setHeader("Content-Type", "application/json");
       res.end("{}");
 
-      const rawObj = parsed as Record<string, unknown>;
-      const chatType: "direct" | "group" = rawObj.chatType === "dm" ? "direct" : "group";
-
-      const message = webhookEventToInbound(event, chatType);
+      const message = webhookEventToInbound(event);
       target.runtime.log?.(
-        `roam webhook event: type=${event.type} chatId=${message.chatId} sender=${message.senderId} chatType=${chatType}`,
+        `roam webhook event: type=${event.type} chatId=${message.chatId} sender=${message.senderId} chatType=${message.chatType}`,
       );
       const core = getRoamRuntime();
       core.channel.activity.record({
