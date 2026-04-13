@@ -3931,7 +3931,7 @@ def main():
 
     p_gen = sub.add_parser("generate")
     p_gen.add_argument("--resource", required=True, choices=["s3", "vpc", "ec2", "sg", "lambda", "iam-user", "budget", "cloudtrail", "cloudwatch", "efs", "landing-zone", "iam-role", "rg"])
-    p_gen.add_argument("--name", required=True)
+    p_gen.add_argument("--name", required=False)
     p_gen.add_argument("--workspace", required=True)
     p_gen.add_argument("--dir", required=True)
     p_gen.add_argument("--region", default=None)
