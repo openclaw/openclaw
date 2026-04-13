@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -70,6 +72,7 @@ import {
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaManualLaneCommand,
+  runQaParityReportCommand,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
 import { runQaMatrixCommand } from "./live-transports/matrix/cli.runtime.js";
@@ -169,6 +172,7 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
+      transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -272,6 +276,7 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
         providerMode: "live-frontier",
       }),
     );
@@ -287,6 +292,7 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
         scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
         concurrency: 3,
       }),
@@ -315,6 +321,28 @@ describe("qa cli runtime", () => {
     );
   });
 
+  it("expands the agentic parity pack onto the suite scenario list", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      parityPack: "agentic",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        scenarioIds: [
+          "channel-chat-baseline",
+          "approval-turn-tool-followthrough",
+          "model-switch-tool-continuity",
+          "source-docs-discovery-report",
+          "image-understanding-attachment",
+          "compaction-retry-mutating-tool",
+        ],
+      }),
+    );
+  });
+
   it("rejects unknown suite CLI auth modes", async () => {
     await expect(
       runQaSuiteCommand({
@@ -322,6 +350,40 @@ describe("qa cli runtime", () => {
         cliAuthMode: "magic",
       }),
     ).rejects.toThrow("--cli-auth-mode must be one of auto, api-key, subscription");
+  });
+
+  it("sets a failing exit code when the parity gate fails", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-parity-"));
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "candidate.json"),
+        JSON.stringify({
+          scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(repoRoot, "baseline.json"),
+        JSON.stringify({
+          scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
+        }),
+        "utf8",
+      );
+
+      await runQaParityReportCommand({
+        repoRoot,
+        candidateSummary: "candidate.json",
+        baselineSummary: "baseline.json",
+      });
+
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves character eval paths and passes model refs through", async () => {
@@ -438,6 +500,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaManualLane).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
@@ -464,6 +527,7 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-multipass"),
+      transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -492,6 +556,7 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.4",
         alternateModel: "openai/gpt-5.4",
@@ -520,6 +585,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaManualLane).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.4",
       alternateModel: "mock-openai/gpt-5.4-alt",
@@ -537,6 +603,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaManualLane).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
@@ -556,6 +623,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaManualLane).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "anthropic/claude-sonnet-4-6",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -575,6 +643,7 @@ describe("qa cli runtime", () => {
     expect(runQaManualLane).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.4",
         alternateModel: "openai/gpt-5.4",

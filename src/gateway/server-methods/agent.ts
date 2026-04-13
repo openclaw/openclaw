@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
+import {
+  buildSessionStartupContextPrelude,
+  shouldApplyStartupContext,
+} from "../../auto-reply/reply/startup-context.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -16,6 +20,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
@@ -37,7 +42,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-} from "../../utils/delivery-context.js";
+} from "../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -160,6 +165,7 @@ function emitSessionsChanged(
             thinkingLevel: sessionRow.thinkingLevel,
             fastMode: sessionRow.fastMode,
             verboseLevel: sessionRow.verboseLevel,
+            traceLevel: sessionRow.traceLevel,
             reasoningLevel: sessionRow.reasoningLevel,
             elevatedLevel: sessionRow.elevatedLevel,
             sendPolicy: sessionRow.sendPolicy,
@@ -488,10 +494,11 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedSessionId = normalizeOptionalString(request.sessionId);
     let sessionEntry: SessionEntry | undefined;
     let bestEffortDeliver = requestedBestEffortDeliver ?? false;
-    let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
+    let cfgForAgent: OpenClawConfig | undefined;
     let resolvedSessionKey = requestedSessionKey;
     let isNewSession = false;
     let skipTimestampInjection = false;
+    let shouldPrependStartupContext = false;
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
@@ -525,6 +532,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         // memory files; skip further timestamp injection to avoid duplication.
         message = buildBareSessionResetPrompt(cfg);
         skipTimestampInjection = true;
+        shouldPrependStartupContext = shouldApplyStartupContext({ cfg, action: resetReason });
       }
     }
 
@@ -590,6 +598,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         thinkingLevel: entry?.thinkingLevel,
         fastMode: entry?.fastMode,
         verboseLevel: entry?.verboseLevel,
+        traceLevel: entry?.traceLevel,
         reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
         sendPolicy: entry?.sendPolicy,
@@ -814,6 +823,22 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionKey: resolvedSessionKey,
         reason: "send",
       });
+    }
+
+    if (shouldPrependStartupContext && resolvedSessionKey) {
+      const sessionAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
+      const runtimeWorkspaceDir =
+        resolveIngressWorkspaceOverrideForSpawnedRun({
+          spawnedBy: spawnedByValue,
+          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+        }) ?? resolveAgentWorkspaceDir(cfgForAgent ?? cfg, sessionAgentId);
+      const startupContextPrelude = await buildSessionStartupContextPrelude({
+        workspaceDir: runtimeWorkspaceDir,
+        cfg: cfgForAgent ?? cfg,
+      });
+      if (startupContextPrelude) {
+        message = `${startupContextPrelude}\n\n${message}`;
+      }
     }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;

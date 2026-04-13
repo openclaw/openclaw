@@ -2,11 +2,12 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
-  resolveSessionPluginDebugLines,
+  resolveSessionPluginStatusLines,
+  resolveSessionPluginTraceLines,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
@@ -71,7 +72,12 @@ import type { TypingController } from "./typing.js";
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
 function buildInlinePluginStatusPayload(entry: SessionEntry | undefined): ReplyPayload | undefined {
-  const lines = resolveSessionPluginDebugLines(entry);
+  const statusLines =
+    entry?.verboseLevel && entry.verboseLevel !== "off"
+      ? resolveSessionPluginStatusLines(entry)
+      : [];
+  const traceLines = entry?.traceLevel === "on" ? resolveSessionPluginTraceLines(entry) : [];
+  const lines = [...statusLines, ...traceLines];
   if (lines.length === 0) {
     return undefined;
   }
@@ -806,14 +812,18 @@ export async function runReplyAgent(params: {
       }
     }
     const prefixPayloads = [...verboseNotices];
+    let trailingPluginStatusPayload: ReplyPayload | undefined;
     if (verboseEnabled) {
       const pluginStatusPayload = buildInlinePluginStatusPayload(activeSessionEntry);
       if (pluginStatusPayload) {
-        prefixPayloads.push(pluginStatusPayload);
+        trailingPluginStatusPayload = pluginStatusPayload;
       }
     }
     if (prefixPayloads.length > 0) {
       finalPayloads = [...prefixPayloads, ...finalPayloads];
+    }
+    if (trailingPluginStatusPayload) {
+      finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);

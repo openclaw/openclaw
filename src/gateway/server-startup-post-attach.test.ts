@@ -45,10 +45,16 @@ vi.mock("../agents/subagent-registry.js", () => ({
   scheduleSubagentOrphanRecovery: hoisted.scheduleSubagentOrphanRecovery,
 }));
 
-vi.mock("../config/paths.js", () => ({
-  STATE_DIR: "/tmp/openclaw-state",
-  resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
-}));
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return {
+    ...actual,
+    STATE_DIR: "/tmp/openclaw-state",
+    resolveConfigPath: vi.fn(() => "/tmp/openclaw-state/openclaw.json"),
+    resolveGatewayPort: vi.fn(() => 18789),
+    resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
+  };
+});
 
 vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
   startGmailWatcherWithLogs: hoisted.startGmailWatcherWithLogs,
@@ -117,8 +123,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.reconcilePendingSessionIdentities.mockClear();
   });
 
-  it("re-enables chat.history after post-attach sidecars start", async () => {
-    const unavailableGatewayMethods = new Set<string>(["chat.history"]);
+  it("re-enables startup-gated methods after post-attach sidecars start", async () => {
+    const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
 
     await startGatewayPostAttachRuntime({
       minimalTestGateway: false,
@@ -162,7 +168,7 @@ describe("startGatewayPostAttachRuntime", () => {
       unavailableGatewayMethods,
     });
 
-    expect(unavailableGatewayMethods.has("chat.history")).toBe(false);
+    expect([...unavailableGatewayMethods]).toEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
     expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(false);
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
