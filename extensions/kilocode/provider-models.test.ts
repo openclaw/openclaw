@@ -114,7 +114,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
       expect(mockFetch).toHaveBeenCalledWith(
         KILOCODE_MODELS_URL,
         expect.objectContaining({
-          headers: { Accept: "application/json" },
+          headers: expect.objectContaining({ Accept: "application/json" }),
         }),
       );
 
@@ -131,6 +131,58 @@ describe("discoverKilocodeModels (fetch path)", () => {
       expect(sonnet?.contextWindow).toBe(200000);
       expect(sonnet?.maxTokens).toBe(8192);
     });
+  });
+
+  it("sends Authorization header when KILOCODE_API_KEY is set", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAutoModel()] }),
+    });
+    const origApiKey = process.env.KILOCODE_API_KEY;
+    process.env.KILOCODE_API_KEY = "test-api-key-123";
+    try {
+      await withFetchPathTest(mockFetch, async () => {
+        await discoverKilocodeModels();
+        expect(mockFetch).toHaveBeenCalledWith(
+          KILOCODE_MODELS_URL,
+          expect.objectContaining({
+            headers: expect.objectContaining({
+              Accept: "application/json",
+              Authorization: "Bearer test-api-key-123",
+            }),
+          }),
+        );
+      });
+    } finally {
+      if (origApiKey === undefined) {
+        delete process.env.KILOCODE_API_KEY;
+      } else {
+        process.env.KILOCODE_API_KEY = origApiKey;
+      }
+    }
+  });
+
+  it("omits Authorization header when KILOCODE_API_KEY is not set", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAutoModel()] }),
+    });
+    const origApiKey = process.env.KILOCODE_API_KEY;
+    delete process.env.KILOCODE_API_KEY;
+    try {
+      await withFetchPathTest(mockFetch, async () => {
+        await discoverKilocodeModels();
+        const callArgs = mockFetch.mock.calls[0][1] as { headers: Record<string, string> };
+        expect(callArgs.headers).toEqual({ Accept: "application/json" });
+        expect(callArgs.headers).not.toHaveProperty("Authorization");
+      });
+    } finally {
+      if (origApiKey === undefined) {
+        delete process.env.KILOCODE_API_KEY;
+      } else {
+        process.env.KILOCODE_API_KEY = origApiKey;
+      }
+    }
   });
 
   it("falls back to static catalog on network error", async () => {
