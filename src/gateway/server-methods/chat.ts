@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveReasoningDefault, resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -1614,6 +1614,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const agentConfig = resolveAgentConfig(cfg, sessionAgentId);
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
@@ -1647,14 +1648,29 @@ export const chatHandlers: GatewayRequestHandlers = {
         `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
       );
     }
+    let catalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>> | undefined;
+    const loadCatalog = async () => {
+      catalog ??= await context.loadGatewayModelCatalog();
+      return catalog;
+    };
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await context.loadGatewayModelCatalog();
-      thinkingLevel = resolveThinkingDefault({
-        cfg,
+      thinkingLevel =
+        agentConfig?.thinkingDefault ??
+        resolveThinkingDefault({
+          cfg,
+          provider: resolvedSessionModel.provider,
+          model: resolvedSessionModel.model,
+          catalog: await loadCatalog(),
+        });
+    }
+    const explicitReasoningLevel = entry?.reasoningLevel ?? agentConfig?.reasoningDefault;
+    let reasoningLevel = explicitReasoningLevel ?? "off";
+    if (!explicitReasoningLevel && thinkingLevel === "off") {
+      reasoningLevel = resolveReasoningDefault({
         provider: resolvedSessionModel.provider,
         model: resolvedSessionModel.model,
-        catalog,
+        catalog: await loadCatalog(),
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
@@ -1663,6 +1679,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       messages: bounded.messages,
       thinkingLevel,
+      reasoningLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
     });

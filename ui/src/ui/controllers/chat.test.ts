@@ -15,6 +15,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
+    chatReasoningLevel: null,
     chatRunId: null,
     chatSending: false,
     chatStream: null,
@@ -530,7 +531,11 @@ describe("loadChatHistory", () => {
       { role: "assistant", text: "  NO_REPLY  " },
     ];
     const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low" }),
+      request: vi.fn().mockResolvedValue({
+        messages,
+        thinkingLevel: "low",
+        reasoningLevel: "stream",
+      }),
     };
     const state = createState({
       client: mockClient as unknown as ChatState["client"],
@@ -543,6 +548,7 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages[0]).toEqual(messages[0]);
     expect(state.chatMessages[1]).toEqual(messages[2]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatReasoningLevel).toBe("stream");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -698,6 +704,7 @@ describe("loadChatHistory", () => {
         .mockResolvedValueOnce({
           messages: [{ role: "assistant", content: [{ type: "text", text: "awake" }] }],
           thinkingLevel: "low",
+          reasoningLevel: "on",
         });
       const state = createState({
         connected: true,
@@ -717,6 +724,7 @@ describe("loadChatHistory", () => {
         { role: "assistant", content: [{ type: "text", text: "awake" }] },
       ]);
       expect(state.chatThinkingLevel).toBe("low");
+      expect(state.chatReasoningLevel).toBe("on");
       expect(state.chatLoading).toBe(false);
       expect(state.lastError).toBeNull();
     } finally {
@@ -766,19 +774,29 @@ describe("loadChatHistory", () => {
       client: { request } as unknown as ChatState["client"],
       chatMessages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }],
       chatThinkingLevel: "high",
+      chatReasoningLevel: "stream",
     });
 
     await loadChatHistory(state);
 
     expect(state.chatMessages).toEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatReasoningLevel).toBeNull();
     expect(state.lastError).toContain("operator.read");
     expect(state.chatLoading).toBe(false);
   });
 
   it("ignores stale history responses after switching sessions", async () => {
-    const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const mainRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+      reasoningLevel?: string;
+    }>();
+    const otherRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+      reasoningLevel?: string;
+    }>();
     const request = vi.fn((_method: string, params?: { sessionKey?: string }) => {
       if (params?.sessionKey === "main") {
         return mainRequest.promise;
@@ -801,6 +819,7 @@ describe("loadChatHistory", () => {
     mainRequest.resolve({
       messages: [{ role: "assistant", content: [{ type: "text", text: "main history" }] }],
       thinkingLevel: "high",
+      reasoningLevel: "stream",
     });
     await firstLoad;
 
@@ -809,10 +828,12 @@ describe("loadChatHistory", () => {
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatReasoningLevel).toBeNull();
 
     otherRequest.resolve({
       messages: [{ role: "assistant", content: [{ type: "text", text: "other history" }] }],
       thinkingLevel: "low",
+      reasoningLevel: "off",
     });
     await secondLoad;
 
@@ -821,5 +842,6 @@ describe("loadChatHistory", () => {
       { role: "assistant", content: [{ type: "text", text: "other history" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatReasoningLevel).toBe("off");
   });
 });

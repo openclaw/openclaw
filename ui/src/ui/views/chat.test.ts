@@ -158,6 +158,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     sessionKey: "main",
     onSessionKeyChange: () => undefined,
     thinkingLevel: null,
+    reasoningLevel: null,
     showThinking: false,
     showToolCalls: true,
     loading: false,
@@ -251,6 +252,58 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
 }
 
 describe("chat view", () => {
+  it("shows assistant reasoning blocks when the effective reasoning level is on", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: true,
+          reasoningLevel: "on",
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Internal reasoning", thinkingSignature: "sig-1" },
+                { type: "text", text: "Visible answer" },
+              ],
+              timestamp: 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-thinking")).not.toBeNull();
+    expect(container.textContent).toContain("Visible answer");
+  });
+
+  it("keeps assistant reasoning hidden when the effective reasoning level is off", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: true,
+          reasoningLevel: "off",
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Internal reasoning", thinkingSignature: "sig-1" },
+                { type: "text", text: "Visible answer" },
+              ],
+              timestamp: 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-thinking")).toBeNull();
+    expect(container.textContent).toContain("Visible answer");
+  });
+
   it("renders BTW side results outside transcript history", () => {
     const container = document.createElement("div");
     render(

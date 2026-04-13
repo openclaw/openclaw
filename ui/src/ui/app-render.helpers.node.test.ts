@@ -375,6 +375,7 @@ describe("switchChatSession", () => {
       chatToolMessages: [{ id: "tool-1" }],
       chatStreamSegments: [{ text: "segment", ts: 1 }],
       chatThinkingLevel: "high",
+      chatReasoningLevel: "stream",
       chatStream: "stream",
       chatSideResult: {
         kind: "btw",
@@ -412,6 +413,7 @@ describe("switchChatSession", () => {
 
     expect(state.chatSideResult).toBeNull();
     expect(state.chatSideResultTerminalRuns.size).toBe(0);
+    expect(state.chatReasoningLevel).toBeNull();
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
     expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
       client: undefined,
@@ -452,6 +454,7 @@ describe("switchChatSession", () => {
       chatToolMessages: [],
       chatStreamSegments: [],
       chatThinkingLevel: null,
+      chatReasoningLevel: null,
       chatStream: null,
       chatSideResult: null,
       lastError: null,

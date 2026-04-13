@@ -542,6 +542,49 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.history returns effective thinking and reasoning defaults for new agent sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-agent-defaults-"));
+    try {
+      testState.agentConfig = {
+        thinkingDefault: "low",
+      };
+      testState.agentsConfig = {
+        list: [
+          {
+            id: "ops",
+            reasoningDefault: "stream",
+          },
+        ],
+      };
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          "agent:ops:main": {
+            sessionId: "sess-ops-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const res = await rpcReq<{
+        messages?: unknown[];
+        thinkingLevel?: string;
+        reasoningLevel?: string;
+      }>(ws, "chat.history", {
+        sessionKey: "agent:ops:main",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.messages ?? []).toEqual([]);
+      expect(res.payload?.thinkingLevel).toBe("low");
+      expect(res.payload?.reasoningLevel).toBe("stream");
+    } finally {
+      testState.agentConfig = undefined;
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("chat.history hides commentary-only assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {

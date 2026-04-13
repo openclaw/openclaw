@@ -1855,6 +1855,7 @@ export function renderApp(state: AppViewState) {
                 switchChatSession(state, next);
               },
               thinkingLevel: state.chatThinkingLevel,
+              reasoningLevel: state.chatReasoningLevel,
               showThinking,
               showToolCalls,
               loading: state.chatLoading,
