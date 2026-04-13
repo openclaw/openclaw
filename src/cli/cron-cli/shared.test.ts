@@ -73,6 +73,24 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("isolated"))).toBe(true);
   });
 
+  it("handles jobs with missing runtime state (#65916)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const missingState = createBaseJob({
+      id: "missing-state",
+      sessionTarget: "main",
+    });
+    delete (missingState as unknown as { state?: unknown }).state;
+    const nullState = createBaseJob({
+      id: "null-state",
+      sessionTarget: "main",
+      state: null as unknown as CronJob["state"],
+    });
+
+    expect(() => printCronList([missingState, nullState], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("missing-state"))).toBe(true);
+    expect(logs.some((line) => line.includes("null-state"))).toBe(true);
+  });
+
   it("shows stagger label for cron schedules", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({

@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalThreadValue,
 } from "../../shared/string-coerce.js";
+import { ensureCronJobState } from "../job-state.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -360,8 +361,9 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   const { state, job, nowMs } = params;
   let changed = false;
 
-  if (!job.state) {
-    job.state = {};
+  const previousState = job.state;
+  const jobState = ensureCronJobState(job);
+  if (previousState !== jobState) {
     changed = true;
   }
 
@@ -380,29 +382,29 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   }
 
   if (!isJobEnabled(job)) {
-    if (job.state.nextRunAtMs !== undefined) {
-      job.state.nextRunAtMs = undefined;
+    if (jobState.nextRunAtMs !== undefined) {
+      jobState.nextRunAtMs = undefined;
       changed = true;
     }
-    if (job.state.runningAtMs !== undefined) {
-      job.state.runningAtMs = undefined;
+    if (jobState.runningAtMs !== undefined) {
+      jobState.runningAtMs = undefined;
       changed = true;
     }
     return { changed, skip: true };
   }
 
-  if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs) && job.state.nextRunAtMs !== undefined) {
-    job.state.nextRunAtMs = undefined;
+  if (!hasScheduledNextRunAtMs(jobState.nextRunAtMs) && jobState.nextRunAtMs !== undefined) {
+    jobState.nextRunAtMs = undefined;
     changed = true;
   }
 
-  const runningAt = job.state.runningAtMs;
+  const runningAt = jobState.runningAtMs;
   if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
     state.deps.log.warn(
       { jobId: job.id, runningAtMs: runningAt },
       "cron: clearing stuck running marker",
     );
-    job.state.runningAtMs = undefined;
+    jobState.runningAtMs = undefined;
     changed = true;
   }
 
@@ -868,10 +870,8 @@ function mergeCronFailureAlert(
 }
 
 export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
-  if (!job.state) {
-    job.state = {};
-  }
-  if (typeof job.state.runningAtMs === "number") {
+  const jobState = ensureCronJobState(job);
+  if (typeof jobState.runningAtMs === "number") {
     return false;
   }
   if (opts.forced) {
@@ -879,8 +879,8 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   }
   return (
     isJobEnabled(job) &&
-    hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
-    nowMs >= job.state.nextRunAtMs
+    hasScheduledNextRunAtMs(jobState.nextRunAtMs) &&
+    nowMs >= jobState.nextRunAtMs
   );
 }
 

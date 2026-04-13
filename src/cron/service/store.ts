@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { ensureCronJobState } from "../job-state.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
@@ -55,6 +56,7 @@ export async function ensureLoaded(
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
     jobs[index] = hydrated;
+    ensureCronJobState(hydrated);
     if (legacyJobIdIssue) {
       const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
       state.deps.log.warn(

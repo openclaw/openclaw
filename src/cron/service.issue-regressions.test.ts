@@ -102,6 +102,50 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("#65916 starts with persisted jobs missing runtime state", async () => {
+    const store = cronIssueRegressionFixtures.makeStorePath();
+    const now = Date.now();
+    const baseJob = {
+      name: "missing runtime state",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    };
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "missing-state",
+        ...baseJob,
+      },
+      {
+        id: "null-state",
+        ...baseJob,
+        state: null,
+      },
+    ]);
+
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      cronEnabled: true,
+    });
+
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs).toHaveLength(2);
+    expect(jobs.every((job) => typeof job.state.nextRunAtMs === "number")).toBe(true);
+
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: Array<{ id: string; state?: { nextRunAtMs?: number } | null }>;
+    };
+    expect(
+      persisted.jobs.every((job) => job.state && typeof job.state.nextRunAtMs === "number"),
+    ).toBe(true);
+
+    cron.stop();
+  });
+
   it("does not rewrite unchanged stores during startup", async () => {
     const store = cronIssueRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T11:00:00.000Z");

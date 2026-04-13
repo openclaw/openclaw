@@ -11,6 +11,7 @@ import {
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { createCronExecutionId } from "../run-id.js";
+import { ensureCronJobState } from "../job-state.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -855,26 +856,24 @@ function isRunnableJob(params: {
   allowCronMissedRunByLastRun?: boolean;
 }): boolean {
   const { job, nowMs } = params;
-  if (!job.state) {
-    job.state = {};
-  }
+  const jobState = ensureCronJobState(job);
   if (!isJobEnabled(job)) {
     return false;
   }
   if (params.skipJobIds?.has(job.id)) {
     return false;
   }
-  if (typeof job.state.runningAtMs === "number") {
+  if (typeof jobState.runningAtMs === "number") {
     return false;
   }
-  if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && job.state.lastStatus) {
+  if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && jobState.lastStatus) {
     // One-shot with terminal status: skip unless it's a transient-error retry.
     // Retries have nextRunAtMs > lastRunAtMs (scheduled after the failed run) (#24355).
     // ok/skipped or error-without-retry always skip (#13845).
-    const lastRun = job.state.lastRunAtMs;
-    const nextRun = job.state.nextRunAtMs;
+    const lastRun = jobState.lastRunAtMs;
+    const nextRun = jobState.nextRunAtMs;
     if (
-      job.state.lastStatus === "error" &&
+      jobState.lastStatus === "error" &&
       isJobEnabled(job) &&
       typeof nextRun === "number" &&
       typeof lastRun === "number" &&
@@ -884,7 +883,7 @@ function isRunnableJob(params: {
     }
     return false;
   }
-  const next = job.state.nextRunAtMs;
+  const next = jobState.nextRunAtMs;
   if (hasScheduledNextRunAtMs(next) && nowMs >= next) {
     return true;
   }
@@ -1312,12 +1311,10 @@ export async function executeJob(
   _nowMs: number,
   _opts: { forced: boolean },
 ) {
-  if (!job.state) {
-    job.state = {};
-  }
+  const jobState = ensureCronJobState(job);
   const startedAt = state.deps.nowMs();
-  job.state.runningAtMs = startedAt;
-  job.state.lastError = undefined;
+  jobState.runningAtMs = startedAt;
+  jobState.lastError = undefined;
   markCronJobActive(job.id);
   emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
