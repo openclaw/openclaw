@@ -189,6 +189,7 @@ export async function launchOpenClawChrome(
   const spawnOnce = () => {
     const args: string[] = [
       `--remote-debugging-port=${profile.cdpPort}`,
+      "--remote-allow-origins=*",
       `--user-data-dir=${userDataDir}`,
       "--no-first-run",
       "--no-default-browser-check",
