@@ -6,6 +6,7 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
+  getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "../../../../src/plugins/memory-embedding-providers.js";
 import "./test-runtime-mocks.js";
@@ -444,6 +445,17 @@ describe("memory index", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("registers builtin ollama memory embedding provider", () => {
+    expect(getRegisteredMemoryEmbeddingProvider("ollama")).toEqual(
+      expect.objectContaining({
+        adapter: expect.objectContaining({
+          id: "ollama",
+          defaultModel: "nomic-embed-text",
+        }),
+      }),
+    );
   });
 
   it("bootstraps an empty index on first search so session transcript hits are available", async () => {
