@@ -198,6 +198,62 @@ describe("applyCliProfileEnv", () => {
       path.join(resolvedHome, ".openclaw-work", "openclaw.json"),
     );
   });
+
+  it("clears conflicting OpenClaw-managed OPENCLAW_LAUNCHD_LABEL so --profile resolves correct plist", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.batch",
+    };
+    applyCliProfileEnv({
+      profile: "interactive",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_PROFILE).toBe("interactive");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+  });
+
+  it("preserves OPENCLAW_LAUNCHD_LABEL that matches the target profile", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
+    };
+    applyCliProfileEnv({
+      profile: "work",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
+  });
+
+  it("preserves custom OPENCLAW_LAUNCHD_LABEL override for the same profile", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
+    };
+    applyCliProfileEnv({
+      profile: "ops",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("com.custom.openclaw");
+  });
+
+  it("leaves empty OPENCLAW_LAUNCHD_LABEL for launchd resolution fallback", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_LAUNCHD_LABEL: "   ",
+    };
+    applyCliProfileEnv({
+      profile: "ops",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("   ");
+  });
+
+  it("does not set OPENCLAW_LAUNCHD_LABEL when it was absent", () => {
+    const env: Record<string, string | undefined> = {};
+    applyCliProfileEnv({ profile: "ops", env });
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+  });
 });
 
 describe("formatCliCommand", () => {

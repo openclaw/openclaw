@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { isValueToken } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -15,9 +16,15 @@ export type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
+const OPENCLAW_MANAGED_LAUNCHD_LABEL_PREFIX = "ai.openclaw.";
+
 function isCommandLocalProfileOption(out: string[]): boolean {
   const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
   return primary === "qa" && secondary === "matrix";
+}
+
+function isOpenClawManagedLaunchdLabel(label: string): boolean {
+  return label.startsWith(OPENCLAW_MANAGED_LAUNCHD_LABEL_PREFIX);
 }
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
@@ -97,6 +104,18 @@ export function applyCliProfileEnv(params: {
 
   // Convenience only: fill defaults, never override explicit env values.
   env.OPENCLAW_PROFILE = profile;
+
+  // Clear stale OpenClaw-managed labels so launchd re-derives from OPENCLAW_PROFILE.
+  // Custom operator labels remain explicit overrides.
+  const inheritedLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const profileLabel = resolveGatewayLaunchAgentLabel(profile);
+  if (
+    inheritedLabel &&
+    inheritedLabel !== profileLabel &&
+    isOpenClawManagedLaunchdLabel(inheritedLabel)
+  ) {
+    delete env.OPENCLAW_LAUNCHD_LABEL;
+  }
 
   const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
   const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
