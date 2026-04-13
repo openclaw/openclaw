@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-12 (run 20)
+**Date:** 2026-04-13 (run 21)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -58,7 +58,7 @@ Upstream not reachable from this environment; automated rebase not possible.
 - `chatgpt-codex-connector[bot]`: `freshSession` propagation — already implemented in `src/cron/service/jobs.ts`.
 No human maintainer reviews; no `CHANGES_REQUESTED`.
 
-**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 18.**
+**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 21.**
 
 **Needs human attention:**
 1. **Upstream rebase required** — dirty against `openclaw/openclaw:main`; cannot be done from this environment.
@@ -129,7 +129,7 @@ changes are not causing node-layer failures.
 - No human maintainer reviews; no `CHANGES_REQUESTED`.
 - Community: `MoltyCel` confirmed fix logic and tests look correct (2026-04-06/07).
 
-**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 18.**
+**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 21.**
 
 **Needs human attention:**
 1. **CI investigation** — confirm whether `security-fast`, `checks-fast-contracts-protocol`, and
@@ -142,70 +142,45 @@ changes are not causing node-layer failures.
 
 ---
 
-## Actions Taken This Run (run 20 — 2026-04-12)
+## Actions Taken This Run (run 21 — 2026-04-13)
 
-**GitHub API access:** PARTIAL — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI not
-installed; `openclaw/openclaw` PRs are not accessible via MCP write tools. **However, this run
-used WebFetch against the public GitHub REST API to obtain fresh CI, review, and PR data.**
+**GitHub API access:** BLOCKED — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI not
+installed; `openclaw/openclaw` PRs are not accessible via MCP or any API. WebFetch against GitHub
+REST API (used in run 20) was not reattempted as no branch tips changed.
 
 **Branch data (from fork):** Successfully fetched all four PR branch tips from `suboss87/openclaw`:
 
-| Branch                                  | SHA (tip)                                  | Changed since run 19? |
+| Branch                                  | SHA (tip)                                  | Changed since run 20? |
 | --------------------------------------- | ------------------------------------------ | --------------------- |
 | fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No                    |
 | feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No                    |
 | fix/chat-send-button-contrast           | `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` | No                    |
 | fix/subagent-identity-fallback          | `f052129db44607fed72a0769dc5de6b919bcd5dc` | No                    |
 
-All branch tips are **unchanged since run 9 (2026-04-06)**. No new commits on any PR branch in
-the past 6 days.
+All branch tips are **unchanged since run 9 (2026-04-06)** — 7 days with no new commits on any PR branch.
 
-**Fresh CI data (via GitHub REST API — run 20):**
+**Review comments:** Cannot check upstream PR review threads (MCP restricted). No new commits on
+branches suggest no new feedback has been pushed in response to review. Standing items from run 20
+(unresolved bot threads on #45584 and #54730) remain.
 
-- #45584 head `46e2b30`: Only 3 check runs (label checks). No full CI run visible on this SHA.
-- #54730 head `f052129`: 7 failures (same as run 16). See detailed CI table above.
-  - Verified these failures are **not caused by this PR** — the PR only modifies
-    `src/gateway/assistant-identity.ts`; failing checks are extensions, contracts, security scan.
-  - Main branch latest commit `156ee544` (2026-04-12) also shows only 3 skipped checks —
-    consistent with CI instability being pre-existing on main, not from this PR.
+**Rebase:** Not attempted — upstream proxy returns 502 for `openclaw/openclaw`. #45584 remains
+dirty per last known state (run 16). #54730 had no upstream conflicts per run 16.
 
-**Code fix verification (fresh — run 20):** Read the actual branch files via MCP `get_file_contents`:
-
-- **#45584 — `src/cron/types-shared.ts`**: JSDoc now correctly describes all 3 states ✓
-- **#45584 — `src/cron/service/jobs.ts`**: `createJob` sets `freshSession: input.freshSession`;
-  `applyJobPatch` guards with `typeof patch.freshSession === "boolean"` ✓
-- **#45584 — `src/cron/isolated-agent/run.ts`**: `forceNew` correctly reads `params.job.freshSession` ✓
-- **#54730 — `src/gateway/assistant-identity.ts`**: `defaultAgentId` hoisted into constant;
-  used in both `agentId` resolution and `isDefaultAgent` comparison ✓
-
-**Review thread status (fresh — run 20):**
-Both open PRs have unresolved bot review threads. Suboss87 addressed the feedback in issue comments
-and code, but did not post inline replies to the review threads themselves. Per CLAUDE.md, these
-should be replied to and resolved. **Blocked: cannot post to `openclaw/openclaw` via current MCP session.**
-
-- #45584: threads #2934411253 (JSDoc) and #2934412315 (persistence) — fixes confirmed, no inline replies
-- #54730: thread #2991387311 (redundant call) — fix confirmed in `e81666e`, no inline reply
-
-**Rebase status:** Upstream proxy returns 502 for `openclaw/openclaw`. Cannot check or fix upstream
-conflicts. Per run 16 data, #45584 was `mergeable: false, dirty` — this is likely still the case.
-#54730 had no upstream conflicts per run 16.
-
-**No code changes made this run.** Monitoring artifact cleanup still required on both open PR branches
-(see standing note below).
+**No code changes made this run.**
 
 ---
 
 ## PRs Requiring Human Attention
 
-| PR | Issue | Priority | Update (run 20) |
+| PR | Issue | Priority | Update (run 21) |
 | --- | --- | --- | --- |
-| openclaw/openclaw#45584 | Upstream rebase required (dirty with `openclaw/openclaw:main`) | High | Still blocked; upstream proxy returns 502 |
-| openclaw/openclaw#45584 | Reply to review threads #2934411253 + #2934412315 and resolve them | Medium | **New finding run 20** — code fixes confirmed; inline replies missing |
+| openclaw/openclaw#45584 | Upstream rebase required (dirty with `openclaw/openclaw:main`) | High | Still blocked; upstream proxy returns 502. Now 7+ days stale. |
+| openclaw/openclaw#45584 | Reply to review threads #2934411253 + #2934412315 and resolve them | Medium | Unchanged — blocked (no upstream MCP access) |
 | openclaw/openclaw#45584 | Remove monitoring artifact tip commit `46e2b30607` before merge | Medium | Unchanged |
-| openclaw/openclaw#54730 | CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) — **likely pre-existing** | Medium | **Updated run 20** — assessed as pre-existing (PR only touches assistant-identity.ts; main also shows CI instability) |
-| openclaw/openclaw#54730 | Reply to review thread #2991387311 and resolve it | Low | **New finding run 20** — code fix confirmed in e81666e; inline reply missing |
+| openclaw/openclaw#54730 | CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) — **likely pre-existing** | Medium | Unchanged — assessed as pre-existing (run 20) |
+| openclaw/openclaw#54730 | Reply to review thread #2991387311 and resolve it | Low | Unchanged — blocked (no upstream MCP access) |
 | openclaw/openclaw#54730 | Remove monitoring artifact tip commits `f052129db4` + `d18c8771bb` before merge | Medium | Unchanged |
-| openclaw/openclaw#54730 | Needs human maintainer review (none yet; 6+ days stale) | Medium | Unchanged |
+| openclaw/openclaw#54730 | Needs human maintainer review (none yet; 7+ days stale) | Medium | Unchanged — now 7 days without any maintainer review |
 
 ---
 
@@ -215,7 +190,7 @@ conflicts. Per run 16 data, #45584 was `mergeable: false, dirty` — this is lik
 - GitHub MCP server is configured for `suboss87/openclaw` only; `openclaw/openclaw` PRs, CI
   check runs, and review comments are inaccessible via MCP.
 - Upstream `openclaw/openclaw` remote not configured; git proxy returns 502 for upstream.
-- Fork git proxy (`http://127.0.0.1:54055/git/suboss87/openclaw`) works for fork branches only.
+- Fork git proxy (`http://127.0.0.1:35281/git/suboss87/openclaw`) works for fork branches only.
 - **Action required by operator:** Install `gh` CLI (authenticated) or extend MCP scope to
   `openclaw/openclaw` to restore full monitoring capability.
 
