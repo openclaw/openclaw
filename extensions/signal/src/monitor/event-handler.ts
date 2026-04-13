@@ -1,4 +1,5 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildMentionRegexes,
@@ -155,7 +156,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       channel: "Signal",
       from: fromLabel,
       timestamp: entry.timestamp ?? undefined,
-      body: entry.bodyText,
+      body: wrapExternalContent(`UNTRUSTED Signal message body\n${entry.bodyText.trim()}`, {
+        source: "unknown",
+        includeWarning: false,
+      }),
       chatType: entry.isGroup ? "group" : "direct",
       sender: { name: entry.senderName, id: entry.senderDisplay },
       previousTimestamp,
@@ -174,9 +178,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             channel: "Signal",
             from: fromLabel,
             timestamp: historyEntry.timestamp,
-            body: `${historyEntry.body}${
-              historyEntry.messageId ? ` [id:${historyEntry.messageId}]` : ""
-            }`,
+            body: wrapExternalContent(
+              `UNTRUSTED Signal message body\n${`${historyEntry.body}${historyEntry.messageId ? ` [id:${historyEntry.messageId}]` : ""}`.trim()}`,
+              { source: "unknown", includeWarning: false },
+            ),
             chatType: "group",
             senderLabel: historyEntry.sender,
             envelope: envelopeOptions,
