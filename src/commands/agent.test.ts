@@ -319,6 +319,13 @@ describe("agentCommand", () => {
     expect(callArgs?.senderIsOwner).toBe(expected);
   });
 
+  it("enables gateway subagent binding for normal agent runs", async () => {
+    const callArgs = await runEmbeddedWithTempConfig({
+      args: { message: "hi", to: "+1555" },
+    });
+    expect(callArgs?.allowGatewaySubagentBinding).toBe(true);
+  });
+
   it("requires explicit senderIsOwner for ingress runs", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -358,6 +365,7 @@ describe("agentCommand", () => {
       );
       const ingressCall = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(ingressCall?.senderIsOwner).toBe(false);
+      expect(ingressCall?.allowGatewaySubagentBinding).toBe(true);
       expect(ingressCall).not.toHaveProperty("allowModelOverride");
     });
   });
