@@ -3561,10 +3561,15 @@ describe("QmdMemoryManager", () => {
 
   it("rejects non-memory workspace markdown reads", async () => {
     await fs.writeFile(path.join(workspaceDir, "window.md"), "secret", "utf-8");
+    await fs.mkdir(path.join(workspaceDir, ".memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, ".memory", "hidden.md"), "secret", "utf-8");
 
     const { manager } = await createManager();
 
     await expect(manager.readFile({ relPath: "window.md" })).rejects.toThrow("path required");
+    await expect(manager.readFile({ relPath: ".memory/hidden.md" })).rejects.toThrow(
+      "path required",
+    );
 
     await manager.close();
   });

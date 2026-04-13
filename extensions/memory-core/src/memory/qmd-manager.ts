@@ -82,10 +82,7 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 ]);
 
 function isDefaultMemoryPath(relPath: string): boolean {
-  const normalized = relPath
-    .trim()
-    .replace(/^[./]+/, "")
-    .replace(/\\/g, "/");
+  const normalized = relPath.trim().replace(/^\.\//, "").replace(/\\/g, "/");
   if (!normalized) {
     return false;
   }
@@ -1207,14 +1204,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (full.missing) {
       return { text: "", path: relPath };
     }
-    if (!params.from && !params.lines) {
-      return { text: full.text, path: relPath };
-    }
-    const lines = full.text.split("\n");
-    const start = Math.max(1, params.from ?? 1);
-    const count = Math.max(1, params.lines ?? lines.length);
-    const slice = lines.slice(start - 1, start - 1 + count);
-    return { text: slice.join("\n"), path: relPath };
+    return { text: full.text, path: relPath };
   }
 
   status(): MemoryProviderStatus {
