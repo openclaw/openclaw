@@ -134,13 +134,35 @@ export type NextcloudTalkTarget = {
   name: string;
 };
 
-/** Incoming webhook payload from Nextcloud Talk. */
-export type NextcloudTalkWebhookPayload = {
+/** Message activity (Create/Update/Delete) webhook payload. */
+export type NextcloudTalkNotePayload = {
   type: "Create" | "Update" | "Delete";
   actor: NextcloudTalkActor;
   object: NextcloudTalkObject;
   target: NextcloudTalkTarget;
 };
+
+/** Reaction-added ("Like") webhook payload. Object id is the target message id; object content is the emoji. */
+export type NextcloudTalkLikePayload = {
+  type: "Like";
+  actor: NextcloudTalkActor;
+  object: NextcloudTalkObject;
+  target: NextcloudTalkTarget;
+};
+
+/** Reaction-removed ("Undo" of a "Like") webhook payload. */
+export type NextcloudTalkUndoLikePayload = {
+  type: "Undo";
+  actor: NextcloudTalkActor;
+  object: NextcloudTalkLikePayload;
+  target: NextcloudTalkTarget;
+};
+
+/** Incoming webhook payload from Nextcloud Talk. */
+export type NextcloudTalkWebhookPayload =
+  | NextcloudTalkNotePayload
+  | NextcloudTalkLikePayload
+  | NextcloudTalkUndoLikePayload;
 
 /** Result from sending a message to Nextcloud Talk. */
 export type NextcloudTalkSendResult = {
@@ -158,6 +180,19 @@ export type NextcloudTalkInboundMessage = {
   senderName: string;
   text: string;
   mediaType: string;
+  timestamp: number;
+  isGroupChat: boolean;
+};
+
+/** Parsed incoming reaction (Like/Undo) context. */
+export type NextcloudTalkInboundReaction = {
+  action: "added" | "removed";
+  messageId: string;
+  roomToken: string;
+  roomName: string;
+  senderId: string;
+  senderName: string;
+  emoji: string;
   timestamp: number;
   isGroupChat: boolean;
 };
@@ -182,7 +217,9 @@ export type NextcloudTalkWebhookServerOptions = {
   readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
   isBackendAllowed?: (backend: string) => boolean;
   shouldProcessMessage?: (message: NextcloudTalkInboundMessage) => boolean | Promise<boolean>;
+  shouldProcessReaction?: (reaction: NextcloudTalkInboundReaction) => boolean | Promise<boolean>;
   onMessage: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
+  onReaction?: (reaction: NextcloudTalkInboundReaction) => void | Promise<void>;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;
 };

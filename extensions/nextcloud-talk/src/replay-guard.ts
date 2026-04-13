@@ -22,6 +22,22 @@ function buildReplayKey(params: { roomToken: string; messageId: string }): strin
   return `${roomToken}:${messageId}`;
 }
 
+function buildReactionReplayKey(params: {
+  roomToken: string;
+  messageId: string;
+  senderId: string;
+  emoji: string;
+  action: "added" | "removed";
+}): string | null {
+  const base = buildReplayKey(params);
+  const senderId = params.senderId.trim();
+  const emoji = params.emoji.trim();
+  if (!base || !senderId || !emoji) {
+    return null;
+  }
+  return `reaction:${base}:${senderId}:${emoji}:${params.action}`;
+}
+
 export type NextcloudTalkReplayGuardOptions = {
   stateDir: string;
   ttlMs?: number;
@@ -35,6 +51,14 @@ export type NextcloudTalkReplayGuard = {
     accountId: string;
     roomToken: string;
     messageId: string;
+  }) => Promise<boolean>;
+  shouldProcessReaction: (params: {
+    accountId: string;
+    roomToken: string;
+    messageId: string;
+    senderId: string;
+    emoji: string;
+    action: "added" | "removed";
   }) => Promise<boolean>;
 };
 
@@ -53,6 +77,22 @@ export function createNextcloudTalkReplayGuard(
   return {
     shouldProcessMessage: async ({ accountId, roomToken, messageId }) => {
       const replayKey = buildReplayKey({ roomToken, messageId });
+      if (!replayKey) {
+        return true;
+      }
+      return await persistentDedupe.checkAndRecord(replayKey, {
+        namespace: accountId,
+        onDiskError: options.onDiskError,
+      });
+    },
+    shouldProcessReaction: async ({ accountId, roomToken, messageId, senderId, emoji, action }) => {
+      const replayKey = buildReactionReplayKey({
+        roomToken,
+        messageId,
+        senderId,
+        emoji,
+        action,
+      });
       if (!replayKey) {
         return true;
       }

@@ -26,7 +26,11 @@ import {
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import type {
+  CoreConfig,
+  NextcloudTalkInboundMessage,
+  NextcloudTalkInboundReaction,
+} from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
@@ -311,4 +315,152 @@ export async function handleNextcloudTalkInbound(params: {
           : undefined,
     },
   });
+}
+
+export async function handleNextcloudTalkInboundReaction(params: {
+  reaction: NextcloudTalkInboundReaction;
+  account: ResolvedNextcloudTalkAccount;
+  config: CoreConfig;
+  runtime: RuntimeEnv;
+  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+}): Promise<void> {
+  const { reaction, account, config, runtime, statusSink } = params;
+  const core = getNextcloudTalkRuntime();
+  const pairing = createChannelPairingController({
+    core,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+  });
+
+  const emoji = reaction.emoji.trim();
+  const senderId = reaction.senderId.trim();
+  const roomToken = reaction.roomToken.trim();
+  const messageId = reaction.messageId.trim();
+  if (!emoji || !senderId || !roomToken || !messageId) {
+    return;
+  }
+
+  // Drop echoes of the bot's own reactions (apiUser acts as the bot identity when configured).
+  const botUserId = account.config.apiUser?.trim();
+  if (botUserId && senderId === botUserId) {
+    return;
+  }
+
+  const roomKind = await resolveNextcloudTalkRoomKind({
+    account,
+    roomToken,
+    runtime,
+  });
+  const isGroup =
+    roomKind === "direct" ? false : roomKind === "group" ? true : reaction.isGroupChat;
+
+  statusSink?.({ lastInboundAt: reaction.timestamp });
+
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config as OpenClawConfig);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent:
+        ((config.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] ??
+          undefined) !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "nextcloud-talk",
+    accountId: account.accountId,
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
+    log: (message) => runtime.log?.(message),
+  });
+
+  const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
+  const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: CHANNEL_ID,
+    accountId: account.accountId,
+    dmPolicy,
+    readStore: pairing.readStoreForDmPolicy,
+  });
+  const storeAllowList = normalizeNextcloudTalkAllowlist(storeAllowFrom);
+
+  const roomMatch = resolveNextcloudTalkRoomMatch({
+    rooms: account.config.rooms,
+    roomToken,
+  });
+  const roomConfig = roomMatch.roomConfig;
+  if (isGroup && !roomMatch.allowed) {
+    runtime.log?.(`nextcloud-talk: drop reaction in room ${roomToken} (not allowlisted)`);
+    return;
+  }
+  if (roomConfig?.enabled === false) {
+    runtime.log?.(`nextcloud-talk: drop reaction in room ${roomToken} (disabled)`);
+    return;
+  }
+
+  const roomAllowFrom = normalizeNextcloudTalkAllowlist(roomConfig?.allowFrom);
+
+  const access = resolveDmGroupAccessWithCommandGate({
+    isGroup,
+    dmPolicy,
+    groupPolicy,
+    allowFrom: configAllowFrom,
+    groupAllowFrom: configGroupAllowFrom,
+    storeAllowFrom: storeAllowList,
+    isSenderAllowed: (allowFrom) =>
+      resolveNextcloudTalkAllowlistMatch({
+        allowFrom,
+        senderId,
+      }).allowed,
+    command: {
+      useAccessGroups: false,
+      allowTextCommands: false,
+      hasControlCommand: false,
+    },
+  });
+
+  if (access.decision !== "allow") {
+    runtime.log?.(
+      `nextcloud-talk: drop reaction sender ${senderId} (reason=${access.reason} room=${roomToken})`,
+    );
+    return;
+  }
+
+  if (isGroup) {
+    const groupAllow = resolveNextcloudTalkGroupAllow({
+      groupPolicy,
+      outerAllowFrom: access.effectiveGroupAllowFrom,
+      innerAllowFrom: roomAllowFrom,
+      senderId,
+    });
+    if (!groupAllow.allowed) {
+      runtime.log?.(
+        `nextcloud-talk: drop reaction group sender ${senderId} (policy=${groupPolicy})`,
+      );
+      return;
+    }
+  }
+
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    peer: {
+      kind: isGroup ? "group" : "direct",
+      id: isGroup ? roomToken : senderId,
+    },
+  });
+
+  const senderLabel = reaction.senderName?.trim() || senderId;
+  const roomLabel = isGroup ? reaction.roomName?.trim() || roomToken : `DM ${senderLabel}`;
+  const eventText = `Nextcloud Talk reaction ${reaction.action}: ${emoji} by ${senderLabel} on message ${messageId} in ${roomLabel}`;
+
+  core.system.enqueueSystemEvent(eventText, {
+    sessionKey: route.sessionKey,
+    contextKey: `nextcloud-talk:reaction:${roomToken}:${messageId}:${emoji}:${senderId}:${reaction.action}`,
+  });
+
+  runtime.log?.(
+    `nextcloud-talk reaction: ${reaction.action} ${emoji} by ${senderLabel} on ${messageId} room=${roomToken}`,
+  );
 }

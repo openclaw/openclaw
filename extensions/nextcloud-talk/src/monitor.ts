@@ -15,13 +15,15 @@ import {
   requestBodyErrorToText,
 } from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
-import { handleNextcloudTalkInbound } from "./inbound.js";
+import { handleNextcloudTalkInbound, handleNextcloudTalkInboundReaction } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type {
   CoreConfig,
   NextcloudTalkInboundMessage,
+  NextcloudTalkInboundReaction,
+  NextcloudTalkLikePayload,
   NextcloudTalkWebhookHeaders,
   NextcloudTalkWebhookPayload,
   NextcloudTalkWebhookServerOptions,
@@ -35,26 +37,46 @@ const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
 const WEBHOOK_AUTH_RATE_LIMIT_SCOPE = "nextcloud-talk-webhook-auth";
-const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
-  type: z.enum(["Create", "Update", "Delete"]),
-  actor: z.object({
-    type: z.literal("Person"),
-    id: z.string().min(1),
-    name: z.string(),
-  }),
-  object: z.object({
-    type: z.literal("Note"),
-    id: z.string().min(1),
-    name: z.string(),
-    content: z.string(),
-    mediaType: z.string(),
-  }),
-  target: z.object({
-    type: z.literal("Collection"),
-    id: z.string().min(1),
-    name: z.string(),
-  }),
+const NextcloudTalkActorSchema = z.object({
+  type: z.literal("Person"),
+  id: z.string().min(1),
+  name: z.string(),
 });
+const NextcloudTalkNoteObjectSchema = z.object({
+  type: z.literal("Note"),
+  id: z.string().min(1),
+  name: z.string(),
+  content: z.string(),
+  mediaType: z.string(),
+});
+const NextcloudTalkTargetSchema = z.object({
+  type: z.literal("Collection"),
+  id: z.string().min(1),
+  name: z.string(),
+});
+const NextcloudTalkNotePayloadSchema = z.object({
+  type: z.enum(["Create", "Update", "Delete"]),
+  actor: NextcloudTalkActorSchema,
+  object: NextcloudTalkNoteObjectSchema,
+  target: NextcloudTalkTargetSchema,
+});
+const NextcloudTalkLikePayloadSchema = z.object({
+  type: z.literal("Like"),
+  actor: NextcloudTalkActorSchema,
+  object: NextcloudTalkNoteObjectSchema,
+  target: NextcloudTalkTargetSchema,
+});
+const NextcloudTalkUndoLikePayloadSchema = z.object({
+  type: z.literal("Undo"),
+  actor: NextcloudTalkActorSchema,
+  object: NextcloudTalkLikePayloadSchema,
+  target: NextcloudTalkTargetSchema,
+});
+const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.union([
+  NextcloudTalkNotePayloadSchema,
+  NextcloudTalkLikePayloadSchema,
+  NextcloudTalkUndoLikePayloadSchema,
+]);
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
   invalidBackend: "Invalid backend",
@@ -146,11 +168,12 @@ function verifyWebhookSignature(params: {
   return true;
 }
 
-function decodeWebhookCreateMessage(params: {
+function decodeWebhookActivity(params: {
   body: string;
   res: ServerResponse;
 }):
   | { kind: "message"; message: NextcloudTalkInboundMessage }
+  | { kind: "reaction"; reaction: NextcloudTalkInboundReaction }
   | { kind: "ignore" }
   | { kind: "invalid" } {
   const payload = parseWebhookPayload(params.body);
@@ -158,14 +181,21 @@ function decodeWebhookCreateMessage(params: {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
     return { kind: "invalid" };
   }
-  if (payload.type !== "Create") {
-    return { kind: "ignore" };
+  if (payload.type === "Create") {
+    return { kind: "message", message: payloadToInboundMessage(payload) };
   }
-  return { kind: "message", message: payloadToInboundMessage(payload) };
+  if (payload.type === "Like") {
+    return { kind: "reaction", reaction: likePayloadToInboundReaction(payload, "added") };
+  }
+  if (payload.type === "Undo") {
+    // Only handle Undo of a Like (reaction removal). Ignore other Undo variants.
+    return { kind: "reaction", reaction: likePayloadToInboundReaction(payload.object, "removed") };
+  }
+  return { kind: "ignore" };
 }
 
 function payloadToInboundMessage(
-  payload: NextcloudTalkWebhookPayload,
+  payload: Extract<NextcloudTalkWebhookPayload, { type: "Create" | "Update" | "Delete" }>,
 ): NextcloudTalkInboundMessage {
   // Payload doesn't indicate DM vs room; mark as group and let inbound handler refine.
   const isGroupChat = true;
@@ -178,6 +208,26 @@ function payloadToInboundMessage(
     senderName: payload.actor.name ?? "",
     text: payload.object.content || payload.object.name || "",
     mediaType: payload.object.mediaType || "text/plain",
+    timestamp: Date.now(),
+    isGroupChat,
+  };
+}
+
+function likePayloadToInboundReaction(
+  payload: NextcloudTalkLikePayload,
+  action: "added" | "removed",
+): NextcloudTalkInboundReaction {
+  // Payload doesn't indicate DM vs room; let inbound handler refine via room-info lookup.
+  const isGroupChat = true;
+
+  return {
+    action,
+    messageId: payload.object.id,
+    roomToken: payload.target.id,
+    roomName: payload.target.name,
+    senderId: payload.actor.id,
+    senderName: payload.actor.name ?? "",
+    emoji: payload.object.content || payload.object.name || "",
     timestamp: Date.now(),
     isGroupChat,
   };
@@ -200,7 +250,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   start: () => Promise<void>;
   stop: () => void;
 } {
-  const { port, host, path, secret, onMessage, onError, abortSignal } = opts;
+  const { port, host, path, secret, onMessage, onReaction, onError, abortSignal } = opts;
   const maxBodyBytes =
     typeof opts.maxBodyBytes === "number" &&
     Number.isFinite(opts.maxBodyBytes) &&
@@ -210,6 +260,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const readBody = opts.readBody ?? readNextcloudTalkWebhookBody;
   const isBackendAllowed = opts.isBackendAllowed;
   const shouldProcessMessage = opts.shouldProcessMessage;
+  const shouldProcessReaction = opts.shouldProcessReaction;
   const webhookAuthRateLimiter = createAuthRateLimiter({
     maxAttempts: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
@@ -262,7 +313,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         return;
       }
 
-      const decoded = decodeWebhookCreateMessage({
+      const decoded = decodeWebhookActivity({
         body,
         res,
       });
@@ -271,6 +322,29 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       }
       if (decoded.kind === "ignore") {
         writeJsonResponse(res, 200);
+        return;
+      }
+
+      if (decoded.kind === "reaction") {
+        const reaction = decoded.reaction;
+        if (shouldProcessReaction) {
+          const shouldProcess = await shouldProcessReaction(reaction);
+          if (!shouldProcess) {
+            writeJsonResponse(res, 200);
+            return;
+          }
+        }
+
+        writeJsonResponse(res, 200);
+
+        if (!onReaction) {
+          return;
+        }
+        try {
+          await onReaction(reaction);
+        } catch (err) {
+          onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        }
         return;
       }
 
@@ -341,6 +415,7 @@ export type NextcloudTalkMonitorOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   onMessage?: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
+  onReaction?: (reaction: NextcloudTalkInboundReaction) => void | Promise<void>;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
@@ -405,6 +480,22 @@ export async function monitorNextcloudTalkProvider(
       }
       return shouldProcess;
     },
+    shouldProcessReaction: async (reaction) => {
+      const shouldProcess = await replayGuard.shouldProcessReaction({
+        accountId: account.accountId,
+        roomToken: reaction.roomToken,
+        messageId: reaction.messageId,
+        senderId: reaction.senderId,
+        emoji: reaction.emoji,
+        action: reaction.action,
+      });
+      if (!shouldProcess) {
+        logger.warn(
+          `[nextcloud-talk:${account.accountId}] replayed reaction ignored room=${reaction.roomToken} messageId=${reaction.messageId} emoji=${reaction.emoji}`,
+        );
+      }
+      return shouldProcess;
+    },
     onMessage: async (message) => {
       core.channel.activity.record({
         channel: "nextcloud-talk",
@@ -418,6 +509,25 @@ export async function monitorNextcloudTalkProvider(
       }
       await handleNextcloudTalkInbound({
         message,
+        account,
+        config: cfg,
+        runtime,
+        statusSink: opts.statusSink,
+      });
+    },
+    onReaction: async (reaction) => {
+      core.channel.activity.record({
+        channel: "nextcloud-talk",
+        accountId: account.accountId,
+        direction: "inbound",
+        at: reaction.timestamp,
+      });
+      if (opts.onReaction) {
+        await opts.onReaction(reaction);
+        return;
+      }
+      await handleNextcloudTalkInboundReaction({
+        reaction,
         account,
         config: cfg,
         runtime,
