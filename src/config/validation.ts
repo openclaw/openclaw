@@ -28,7 +28,9 @@ import {
 } from "../shared/avatar-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRecord } from "../utils.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
@@ -478,8 +480,285 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   };
 }
 
+/**
+ * Describes a single unrecognized-key location extracted from a Zod validation
+ * error.  `path` is the dot-separated config path to the parent object, and
+ * `keys` lists the specific unknown property names that should be removed.
+ */
+type UnrecognizedKeyLocation = {
+  path: ReadonlyArray<string | number>;
+  keys: readonly string[];
+};
+
+/**
+ * Inspect Zod validation issues and collect every `unrecognized_keys` entry.
+ * Returns `null` when any non-`unrecognized_keys` issue is present, signalling
+ * that the config has structural problems beyond stray keys and must not be
+ * auto-healed.
+ */
+function collectUnrecognizedKeyLocations(
+  issues: ReadonlyArray<unknown>,
+): UnrecognizedKeyLocation[] | null {
+  const locations: UnrecognizedKeyLocation[] = [];
+  for (const issue of issues) {
+    const record = toIssueRecord(issue);
+    if (!record) {
+      return null;
+    }
+    const code = typeof record.code === "string" ? record.code : "";
+    if (code === "unrecognized_keys") {
+      const keys = record.keys;
+      if (!Array.isArray(keys) || keys.length === 0) {
+        return null;
+      }
+      const validKeys = keys.filter((k): k is string => typeof k === "string" && k.length > 0);
+      if (validKeys.length === 0) {
+        return null;
+      }
+      locations.push({
+        path: toConfigPathSegments(record.path),
+        keys: validKeys,
+      });
+    } else {
+      return null;
+    }
+  }
+  return locations.length > 0 ? locations : null;
+}
+
+/**
+ * Remove the specified unrecognized keys from a deep clone of `raw` and return
+ * the sanitised object together with a human-readable summary of what was
+ * stripped.  The original value is never mutated.
+ */
+function stripUnrecognizedKeysFromConfig(
+  raw: unknown,
+  locations: ReadonlyArray<UnrecognizedKeyLocation>,
+): { stripped: unknown; details: string[]; segments: (readonly (string | number)[])[] } {
+  const clone = structuredClone(raw);
+  const details: string[] = [];
+  const segments: (readonly (string | number)[])[] = [];
+
+  for (const loc of locations) {
+    let target: unknown = clone;
+    for (const segment of loc.path) {
+      if (Array.isArray(target)) {
+        const index = typeof segment === "number" ? segment : Number(segment);
+        if (Number.isNaN(index) || index < 0 || index >= target.length) {
+          target = undefined;
+          break;
+        }
+        target = target[index] as unknown;
+      } else if (isRecord(target)) {
+        const seg = String(segment);
+        if (isBlockedObjectKey(seg) || !Object.prototype.hasOwnProperty.call(target, seg)) {
+          target = undefined;
+          break;
+        }
+        target = target[seg];
+      } else {
+        target = undefined;
+        break;
+      }
+    }
+    if (!isRecord(target)) {
+      continue;
+    }
+    for (const key of loc.keys) {
+      if (isBlockedObjectKey(key)) {
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(target, key)) {
+        delete target[key];
+        const fullSegments: readonly (string | number)[] = [...loc.path, key];
+        segments.push(fullSegments);
+        details.push(fullSegments.map(String).join("."));
+      }
+    }
+  }
+
+  return { stripped: clone, details, segments };
+}
+
+export type UnrecognizedKeyRecoveryResult =
+  | {
+      recovered: true;
+      config: OpenClawConfig;
+      /** Structured path segments for programmatic comparison (e.g. allowedPrefixes). */
+      strippedSegments: ReadonlyArray<readonly (string | number)[]>;
+      /** Dot-joined display strings for human-readable log output. */
+      strippedPathsDisplay: readonly string[];
+    }
+  | { recovered: false };
+
+/**
+ * Attempt to recover a config that failed Zod validation **solely** due to
+ * unrecognized keys.  The function performs its own `safeParse` to obtain the
+ * raw Zod issues, inspects whether every issue is `unrecognized_keys`, strips
+ * the offending properties, and re-validates.  If the second pass succeeds the
+ * cleaned config is returned; otherwise the original failure stands.
+ *
+ * This is the core self-healing mechanism for Issue #65721: agents (or external
+ * tools) may inject unknown fields into the config file via direct filesystem
+ * writes, bypassing the validated `writeConfigFile` API.  Rather than crashing
+ * the gateway on next startup, we strip the foreign keys and continue.
+ */
+export function tryRecoverUnrecognizedKeys(raw: unknown): UnrecognizedKeyRecoveryResult {
+  const firstPass = OpenClawSchema.safeParse(raw);
+  if (firstPass.success) {
+    // Config is already valid — nothing to recover.
+    return { recovered: false };
+  }
+
+  const locations = collectUnrecognizedKeyLocations(firstPass.error.issues);
+  if (!locations) {
+    return { recovered: false };
+  }
+
+  const { stripped, details, segments } = stripUnrecognizedKeysFromConfig(raw, locations);
+  if (details.length === 0) {
+    return { recovered: false };
+  }
+
+  const revalidated = OpenClawSchema.safeParse(stripped);
+  if (!revalidated.success) {
+    return { recovered: false };
+  }
+
+  return {
+    recovered: true,
+    config: revalidated.data as OpenClawConfig,
+    strippedSegments: segments,
+    strippedPathsDisplay: details,
+  };
+}
+
+/**
+ * Options for {@link applyUnrecognizedKeyRecovery}.
+ *
+ * `allowedTopLevelKeys` – when provided, **only** unrecognized keys whose
+ * first path segment (i.e. top-level config namespace) matches one of the
+ * listed strings will be stripped.  Keys outside those namespaces are left
+ * untouched and the recovery is aborted so the gateway falls back to the
+ * original fail-closed behaviour.  This addresses the CWE-693 concern raised
+ * by the security review: future security-relevant config namespaces can be
+ * excluded from auto-healing by simply omitting them from the allow-list.
+ *
+ * Values must be plain top-level key names (no dots).  Any entry containing a
+ * dot is ignored at runtime to prevent accidental misuse.
+ *
+ * When `allowedTopLevelKeys` is `undefined` (the default) **all** namespaces
+ * are eligible for healing — the current behaviour required to fix Issue
+ * #65721.
+ */
+export interface AutoHealOptions {
+  readonly allowedTopLevelKeys?: readonly string[];
+  /**
+   * Pre-computed byte length of the raw config file on disk.  When provided
+   * the recovery is skipped if this value exceeds the internal limit
+   * ({@link DEFAULT_MAX_AUTOHEAL_BYTES}, 2 MiB) to avoid the CPU/memory cost
+   * of `structuredClone` + repeated Zod validation on abnormally large
+   * payloads (CWE-400 mitigation).  Passing the size from the caller avoids
+   * an extra `JSON.stringify` allocation inside the recovery path.
+   *
+   * When omitted the size guard is skipped (callers that already enforce
+   * file-size limits at read time may choose not to pass this).
+   */
+  readonly rawFileSize?: number;
+}
+
+/**
+ * Apply unrecognized-key recovery to a failed validation result.  If the
+ * recovery succeeds **and** the cleaned config also passes plugin-level
+ * validation, the caller receives an updated `validated` result and a
+ * human-readable list of stripped paths.  Otherwise the original failure is
+ * returned unchanged.
+ *
+ * This helper exists so that `loadConfig` and `readConfigFileSnapshotInternal`
+ * share a single implementation instead of duplicating the recovery block.
+ *
+ * Security note (CWE-693): auto-healing is effectively a "fail-open" path.
+ * To mitigate the risk of silently stripping security-relevant keys on a
+ * version downgrade, the function:
+ *   1. Logs at **error** level so the change is impossible to miss.
+ *   2. Accepts an optional `allowedTopLevelKeys` list so callers can restrict
+ *      which top-level config namespaces are eligible for healing.
+ *   3. Never mutates the on-disk config — the stripped version is in-memory
+ *      only until the user explicitly runs `openclaw doctor --fix`.
+ */
+/** Default upper bound for auto-heal eligibility (2 MiB, matches MAX_INCLUDE_FILE_BYTES). */
+const DEFAULT_MAX_AUTOHEAL_BYTES = 2 * 1024 * 1024;
+
+export function applyUnrecognizedKeyRecovery(
+  rawConfig: unknown,
+  revalidate: (cleaned: OpenClawConfig) => { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] } | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] },
+  logger: Pick<typeof console, "error" | "warn">,
+  configPath: string,
+  options?: AutoHealOptions,
+): { healed: true; validated: { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }; strippedPaths: readonly string[] } | { healed: false } {
+  // --- CWE-400 mitigation: skip recovery for abnormally large configs ------
+  // The caller passes the raw file size obtained at read time so we avoid an
+  // extra JSON.stringify allocation inside the recovery hot path.
+  const rawFileSize = options?.rawFileSize;
+  if (rawFileSize !== undefined && rawFileSize > DEFAULT_MAX_AUTOHEAL_BYTES) {
+    logger.warn(
+      `Config auto-heal skipped: raw config size (${rawFileSize} bytes) exceeds ` +
+        `limit (${DEFAULT_MAX_AUTOHEAL_BYTES} bytes). Falling back to fail-closed behaviour.`,
+    );
+    return { healed: false };
+  }
+
+  const recovery = tryRecoverUnrecognizedKeys(rawConfig);
+  if (!recovery.recovered) {
+    return { healed: false };
+  }
+
+  // --- CWE-284 / CWE-693 mitigation: restrict healing to allowed namespaces.
+  // Comparison is segment-wise on the **first** path segment (top-level key)
+  // to avoid ambiguity when JSON keys themselves contain dots.  Entries in
+  // `allowedTopLevelKeys` that contain a dot are silently ignored so that
+  // callers cannot accidentally introduce path-separator confusion.
+  if (options?.allowedTopLevelKeys !== undefined) {
+    // Filter out entries containing dots to prevent misuse.
+    const validKeys = options.allowedTopLevelKeys.filter((k) => !k.includes("."));
+    const disallowed = recovery.strippedSegments.filter(
+      (segs) => {
+        const firstSegment = String(segs[0] ?? "");
+        return !validKeys.some((key) => firstSegment === key);
+      },
+    );
+    if (disallowed.length > 0) {
+      const disallowedDisplay = disallowed.map((segs) => segs.map(String).join("."));
+      logger.warn(
+        `Config auto-heal skipped: key(s) ${disallowedDisplay.map((p) => `"${sanitizeTerminalText(p)}"`).join(", ")} in ${sanitizeTerminalText(configPath)} ` +
+          "fall outside the allowed auto-heal namespaces. Falling back to fail-closed behaviour.",
+      );
+      return { healed: false };
+    }
+  }
+
+  const revalidated = revalidate(recovery.config);
+  if (revalidated.ok) {
+    // Log at error level so the auto-heal is impossible to miss (CWE-693).
+    logger.error(
+      `Config auto-healed: stripped unrecognized key(s) ${recovery.strippedPathsDisplay.map((p) => `"${sanitizeTerminalText(p)}"`).join(", ")} from ${sanitizeTerminalText(configPath)}. ` +
+        'Run "openclaw doctor --fix" to persist the fix.',
+    );
+    return { healed: true, validated: revalidated, strippedPaths: recovery.strippedPathsDisplay };
+  }
+  // Recovery stripped stray keys but plugin-level validation still fails.
+  // Log a diagnostic so the failure path is not completely silent (#65766).
+  logger.warn(
+    `Config auto-heal attempted: stripped key(s) ${recovery.strippedPathsDisplay.map((p) => `"${sanitizeTerminalText(p)}"`).join(", ")} from ${sanitizeTerminalText(configPath)}, but validation still fails. ` +
+      'Run "openclaw doctor --fix" for details.',
+  );
+  return { healed: false };
+}
+
 export const __testing = {
   mapZodIssueToConfigIssue,
+  collectUnrecognizedKeyLocations,
+  stripUnrecognizedKeysFromConfig,
 };
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {

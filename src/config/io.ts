@@ -85,6 +85,7 @@ import {
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
+  applyUnrecognizedKeyRecovery,
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
@@ -1094,7 +1095,22 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
+      let validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
+      if (!validated.ok) {
+        // Attempt self-healing: if every validation issue is an unrecognized key
+        // (e.g. an agent wrote stray fields via direct file edits), strip them
+        // and re-validate so the gateway can start instead of crashing (#65721).
+        const healResult = applyUnrecognizedKeyRecovery(
+          effectiveConfigRaw,
+          (cleaned) => validateConfigObjectWithPlugins(cleaned, { env: deps.env }),
+          deps.logger,
+          configPath,
+          { allowedTopLevelKeys: ["agents", "meta", "env"], rawFileSize: Buffer.byteLength(effectiveRaw, "utf8") },
+        );
+        if (healResult.healed) {
+          validated = healResult.validated;
+        }
+      }
       if (!validated.ok) {
         observeLoadConfigSnapshot({
           ...createConfigFileSnapshot({
@@ -1296,7 +1312,20 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
-      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
+      let validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
+      if (!validated.ok) {
+        // Attempt self-healing for unrecognized-key-only failures (#65721).
+        const healResult = applyUnrecognizedKeyRecovery(
+          effectiveConfigRaw,
+          (cleaned) => validateConfigObjectWithPlugins(cleaned, { env: deps.env }),
+          deps.logger,
+          configPath,
+          { allowedTopLevelKeys: ["agents", "meta", "env"], rawFileSize: Buffer.byteLength(effectiveRaw, "utf8") },
+        );
+        if (healResult.healed) {
+          validated = healResult.validated;
+        }
+      }
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
