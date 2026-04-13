@@ -42,7 +42,16 @@ function readCodexCliAuthFile(env: NodeJS.ProcessEnv): CodexCliAuthFile | null {
     const raw = fs.readFileSync(authPath, "utf8");
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? (parsed as CodexCliAuthFile) : null;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error) {
+      const code = 'code' in error ? (error as NodeJS.ErrnoException).code : undefined;
+      if (code === 'ENOENT') {
+        return null;
+      }
+      console.debug(`[openai-codex-cli-auth] Failed to read auth file: ${error.message}`);
+    } else {
+      console.debug(`[openai-codex-cli-auth] Failed to read auth file: ${String(error)}`);
+    }
     return null;
   }
 }
