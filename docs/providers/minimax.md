@@ -337,6 +337,19 @@ Config lives under `plugins.entries.minimax.config.webSearch.*`.
 See [MiniMax Search](/tools/minimax-search) for full web search configuration and usage.
 </Note>
 
+### Speech environment overrides
+
+MiniMax speech synthesis also supports environment overrides when you do not
+set per-provider config values:
+
+- `MINIMAX_API_HOST`: base URL for MiniMax speech requests.
+- `MINIMAX_TTS_MODEL`: default speech model (fallback default: `speech-2.8-hd`).
+- `MINIMAX_TTS_VOICE_ID`: default voice id (fallback default:
+  `English_expressive_narrator`).
+
+Resolution order is: explicit speech provider config -> environment override ->
+built-in default.
+
 ## Advanced configuration
 
 <AccordionGroup>
