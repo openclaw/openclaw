@@ -4,6 +4,7 @@ import {
   toLocationContext,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
@@ -244,7 +245,10 @@ export async function buildTelegramInboundContextPayload(params: {
     channel: "Telegram",
     from: conversationLabel,
     timestamp: msg.date ? msg.date * 1000 : undefined,
-    body: `${forwardPrefix}${bodyText}${replySuffix}`,
+    body: wrapExternalContent(
+      `UNTRUSTED Telegram message body\n${`${forwardPrefix}${bodyText}${replySuffix}`.trim()}`,
+      { source: "unknown", includeWarning: false },
+    ),
     chatType: isGroup ? "group" : "direct",
     sender: {
       name: senderName,
@@ -266,7 +270,10 @@ export async function buildTelegramInboundContextPayload(params: {
           channel: "Telegram",
           from: groupLabel ?? `group:${chatId}`,
           timestamp: entry.timestamp,
-          body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${chatId}]`,
+          body: wrapExternalContent(
+            `UNTRUSTED Telegram message body\n${`${entry.body} [id:${entry.messageId ?? "unknown"} chat:${chatId}]`.trim()}`,
+            { source: "unknown", includeWarning: false },
+          ),
           chatType: "group",
           senderLabel: entry.sender,
           envelope: envelopeOptions,
