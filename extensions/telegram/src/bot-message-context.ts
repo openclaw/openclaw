@@ -382,11 +382,15 @@ export const buildTelegramMessageContext = async ({
   const ackReactionEmoji =
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const effectiveAckReactionScope =
+    ackReactionScope === "group-mentions" && isGroup && !requireMention
+      ? "group-all"
+      : ackReactionScope;
   const shouldAckReaction = () =>
     Boolean(
       ackReaction &&
       shouldAckReactionGate({
-        scope: ackReactionScope,
+        scope: effectiveAckReactionScope,
         isDirect: !isGroup,
         isGroup,
         isMentionableGroup: isGroup,

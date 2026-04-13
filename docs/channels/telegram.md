@@ -718,6 +718,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - Telegram expects unicode emoji (for example "👀").
     - Use `""` to disable the reaction for a channel or account.
+    - With the default `messages.ackReactionScope: "group-mentions"`, Telegram still sends ack reactions for groups where `requireMention` is disabled, because every visible group message is treated as reply-worthy.
 
   </Accordion>
 
