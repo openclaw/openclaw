@@ -20,7 +20,8 @@ export type QaParityReportScenario = {
  * Optional self-describing run metadata written by PR L (#64789). Before
  * that PR merges, older summaries only have `scenarios` + `counts`; the
  * parity report treats a missing `run` block as "unknown provenance" and
- * skips the label-match verification rather than failing open.
+ * skips the label-match verification for backwards compatibility
+ * with legacy summaries that predate the run metadata block.
  */
 export type QaParityRunBlock = {
   primaryProvider?: string;
