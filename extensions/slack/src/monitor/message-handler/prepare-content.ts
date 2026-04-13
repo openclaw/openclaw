@@ -14,6 +14,8 @@ export type SlackResolvedMessageContent = {
   effectiveDirectMedia: SlackMediaResult[] | null;
 };
 
+const SLACK_USER_MENTION_PATTERN = /<@([A-Z0-9]+)(?:\|[^>]+)?>/gi;
+
 function filterInheritedParentFiles(params: {
   files: SlackFile[] | undefined;
   isThreadReply: boolean;
@@ -43,6 +45,7 @@ export async function resolveSlackMessageContent(params: {
   isBotMessage: boolean;
   botToken: string;
   mediaMaxBytes: number;
+  resolveUserName?: (userId: string) => Promise<{ name?: string }>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
     files: params.message.files,
@@ -90,11 +93,41 @@ export async function resolveSlackMessageContent(params: {
           .join("\n")
       : undefined;
 
+  const renderSlackUserMentions = async (text: string | undefined): Promise<string | undefined> => {
+    if (!text || !params.resolveUserName || !SLACK_USER_MENTION_PATTERN.test(text)) {
+      return text;
+    }
+    SLACK_USER_MENTION_PATTERN.lastIndex = 0;
+    const seen = new Map<string, string | null>();
+    for (const match of text.matchAll(SLACK_USER_MENTION_PATTERN)) {
+      const userId = match[1];
+      if (!userId || seen.has(userId)) {
+        continue;
+      }
+      const user = await params.resolveUserName(userId);
+      const renderedName = normalizeOptionalString(user?.name);
+      seen.set(userId, renderedName ? `<@${userId}> (${renderedName})` : null);
+    }
+    if (seen.size === 0) {
+      return text;
+    }
+    return text.replace(SLACK_USER_MENTION_PATTERN, (full, userId: string) => {
+      const rendered = seen.get(userId);
+      return rendered ?? full;
+    });
+  };
+
+  const renderedMessageText = await renderSlackUserMentions(
+    normalizeOptionalString(params.message.text),
+  );
+  const renderedAttachmentText = await renderSlackUserMentions(attachmentContent?.text);
+  const renderedBotAttachmentText = await renderSlackUserMentions(botAttachmentText);
+
   const rawBody =
     [
-      normalizeOptionalString(params.message.text),
-      attachmentContent?.text,
-      botAttachmentText,
+      renderedMessageText,
+      renderedAttachmentText,
+      renderedBotAttachmentText,
       mediaPlaceholder,
       fileOnlyPlaceholder,
     ]

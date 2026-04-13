@@ -668,17 +668,35 @@ describe("prepareSlackMessage sender prefix", () => {
     });
   }
 
-  it("prefixes channel bodies with sender label", async () => {
+  it("prefixes channel bodies with sender label and annotates Slack mention tokens", async () => {
     const ctx = createSenderPrefixCtx({
       channels: {},
       slashCommand: { command: "/openclaw", enabled: true },
     });
+    ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek" }) as any;
+
+    const result = await prepareSenderPrefixMessage(ctx, "<@BOT> hello", "1700000000.0001");
+
+    expect(result).not.toBeNull();
+    const body = result?.ctxPayload.Body ?? "";
+    expect(body).toContain("Alice (U1): <@BOT> (Bek) hello");
+    expect(result?.ctxPayload.RawBody).toBe("<@BOT> (Bek) hello");
+  });
+
+  it("keeps raw Slack mention tokens when user lookup cannot resolve them", async () => {
+    const ctx = createSenderPrefixCtx({
+      channels: {},
+      slashCommand: { command: "/openclaw", enabled: true },
+    });
+    ctx.resolveUserName = async (id: string) =>
+      ({ name: id === "U1" ? "Alice" : undefined }) as any;
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> hello", "1700000000.0001");
 
     expect(result).not.toBeNull();
     const body = result?.ctxPayload.Body ?? "";
     expect(body).toContain("Alice (U1): <@BOT> hello");
+    expect(result?.ctxPayload.RawBody).toBe("<@BOT> hello");
   });
 
   it("detects /new as control command when prefixed with Slack mention", async () => {
