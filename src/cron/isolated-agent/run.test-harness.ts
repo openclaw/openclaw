@@ -98,19 +98,9 @@ vi.mock("./run.runtime.js", () => ({
   resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
   resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
   resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
-  resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
-  lookupContextTokens: lookupContextTokensMock,
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
-  DEFAULT_MODEL: "gpt-4",
-  DEFAULT_PROVIDER: "openai",
-  loadModelCatalog: loadModelCatalogMock,
-  getModelRefStatus: getModelRefStatusMock,
   isCliProvider: isCliProviderMock,
-  normalizeModelSelection: normalizeModelSelectionForTest,
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
-  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
-  resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveThinkingDefault: resolveThinkingDefaultMock,
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
@@ -121,6 +111,7 @@ vi.mock("./run.runtime.js", () => ({
   ensureAgentWorkspace: ensureAgentWorkspaceMock,
   normalizeThinkLevel: normalizeThinkLevelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
+  resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
   setCliSessionId: vi.fn(),
   logWarn: (...args: unknown[]) => logWarnMock(...args),
@@ -131,6 +122,25 @@ vi.mock("./run.runtime.js", () => ({
   isExternalHookSession: isExternalHookSessionMock,
   resolveHookExternalContentSource: resolveHookExternalContentSourceMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
+}));
+
+vi.mock("./run-context.runtime.js", () => ({
+  lookupContextTokens: lookupContextTokensMock,
+}));
+
+vi.mock("./run-model-catalog.runtime.js", () => ({
+  loadModelCatalog: loadModelCatalogMock,
+}));
+
+vi.mock("./run-model-selection.runtime.js", () => ({
+  DEFAULT_MODEL: "gpt-4",
+  DEFAULT_PROVIDER: "openai",
+  loadModelCatalog: loadModelCatalogMock,
+  getModelRefStatus: getModelRefStatusMock,
+  normalizeModelSelection: normalizeModelSelectionForTest,
+  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
+  resolveHooksGmailModel: resolveHooksGmailModelMock,
 }));
 
 vi.mock("./run-execution.runtime.js", () => ({
@@ -150,6 +160,21 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
+}));
+
+vi.mock("./run-auth-profile.runtime.js", () => ({
+  resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
+}));
+
+vi.mock("./run-embedded.runtime.js", () => ({
+  resolveFastModeState: resolveFastModeStateMock,
+  resolveNestedAgentLane: resolveNestedAgentLaneMock,
+  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+}));
+
+vi.mock("./run-subagent-registry.runtime.js", () => ({
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
 }));
 
 vi.mock("../../agents/cli-runner.runtime.js", () => ({

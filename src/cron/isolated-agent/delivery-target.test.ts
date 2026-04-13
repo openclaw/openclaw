@@ -23,7 +23,7 @@ vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
     .mockResolvedValue({ channel: "telegram", configured: ["telegram"] }),
 }));
 
-vi.mock("../../infra/outbound/target-resolver.js", () => ({
+vi.mock("../../infra/outbound/target-id-resolution.js", () => ({
   maybeResolveIdLikeTarget: vi.fn(),
 }));
 
@@ -40,13 +40,13 @@ const mockedModuleIds = [
   "../../config/sessions/store-load.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
-  "../../infra/outbound/target-resolver.js",
+  "../../infra/outbound/target-id-resolution.js",
   "../../pairing/pairing-store.js",
 ];
 
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
-import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";

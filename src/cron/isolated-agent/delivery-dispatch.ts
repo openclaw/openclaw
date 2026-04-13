@@ -1,4 +1,3 @@
-import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -131,6 +130,9 @@ let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime
 let deliveryOutboundRuntimePromise:
   | Promise<typeof import("./delivery-outbound.runtime.js")>
   | undefined;
+let deliverySubagentRegistryRuntimePromise:
+  | Promise<typeof import("./delivery-subagent-registry.runtime.js")>
+  | undefined;
 let subagentFollowupRuntimePromise:
   | Promise<typeof import("./subagent-followup.runtime.js")>
   | undefined;
@@ -147,6 +149,13 @@ async function loadDeliveryOutboundRuntime(): Promise<
 > {
   deliveryOutboundRuntimePromise ??= import("./delivery-outbound.runtime.js");
   return await deliveryOutboundRuntimePromise;
+}
+
+async function loadDeliverySubagentRegistryRuntime(): Promise<
+  typeof import("./delivery-subagent-registry.runtime.js")
+> {
+  deliverySubagentRegistryRuntimePromise ??= import("./delivery-subagent-registry.runtime.js");
+  return await deliverySubagentRegistryRuntimePromise;
 }
 
 async function loadSubagentFollowupRuntime(): Promise<
@@ -569,8 +578,11 @@ export async function dispatchCronDelivery(
       return null;
     }
     const initialSynthesizedText = synthesizedText.trim();
-    let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
+    const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+    let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+      params.agentSessionKey,
+    );
     const shouldCheckCompletedDescendants =
       activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
     const needsSubagentFollowupRuntime =
@@ -597,7 +609,9 @@ export async function dispatchCronDelivery(
         timeoutMs: params.timeoutMs,
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
-      activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
+      activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+        params.agentSessionKey,
+      );
       if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
           sessionKey: params.agentSessionKey,
