@@ -31,6 +31,8 @@ export function resolveApprovalCommandAuthorization(params: {
   if (!resolved) {
     return { authorized: true, explicit: false };
   }
+  // Keep `resolved` by reference; cloning before this check would drop the
+  // non-enumerable implicit-fallback marker.
   const implicitSameChatAuthorization = isImplicitSameChatApprovalAuthorization(resolved);
   const availability = approvalCapability?.getActionAvailabilityState?.({
     cfg: params.cfg,

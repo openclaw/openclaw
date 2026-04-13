@@ -13,6 +13,10 @@ const IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION = Symbol(
 function markImplicitSameChatApprovalAuthorization(
   result: ApprovalAuthorizationResult,
 ): ApprovalAuthorizationResult {
+  // Keep this non-enumerable to avoid changing auth payload shape.
+  // Consumers must pass the same object reference to
+  // `isImplicitSameChatApprovalAuthorization`; spread/Object.assign/JSON clones
+  // drop this marker.
   Object.defineProperty(result, IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION, {
     value: true,
     enumerable: false,
