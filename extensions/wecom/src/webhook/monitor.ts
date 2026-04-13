@@ -407,6 +407,53 @@ export async function startAgentForStream(params: {
   }
 
   // ──────────────────────────────────────────────────────────────────
+  // 1.5 Early sender/group gate — must run before local-path fast path
+  //     to prevent unapproved senders from triggering file reads.
+  // ──────────────────────────────────────────────────────────────────
+  const earlyAuthz = await resolveWecomCommandAuthorization({
+    core,
+    cfg: config,
+    accountConfig: account.config,
+    rawBody,
+    senderUserId: userid,
+  });
+  if (
+    !earlyAuthz.shouldComputeAuth &&
+    earlyAuthz.dmPolicy !== "open" &&
+    !earlyAuthz.senderAllowed
+  ) {
+    target.runtime.log?.(
+      `[webhook] sender ${userid} not allowed by dmPolicy=${earlyAuthz.dmPolicy}, skipping (early gate)`,
+    );
+    streamStore.updateStream(streamId, (s) => {
+      s.finished = true;
+      s.content = "";
+    });
+    streamStore.onStreamFinished(streamId);
+    return;
+  }
+  if (chatType === "group") {
+    const earlyGroupResult = checkGroupPolicy({
+      chatId,
+      senderId: userid,
+      account: target.account,
+      config,
+      runtime: { log: (m: string) => target.runtime.log?.(m) },
+    });
+    if (!earlyGroupResult.allowed) {
+      target.runtime.log?.(
+        `[webhook] group ${chatId} not allowed by groupPolicy, skipping (early gate)`,
+      );
+      streamStore.updateStream(streamId, (s) => {
+        s.finished = true;
+        s.content = "";
+      });
+      streamStore.onStreamFinished(streamId);
+      return;
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────
   // 2. P0: 本机路径文件发送
   // P0: For group/DM scenarios where Bot sends local image/file paths, prefer Bot in-session delivery (images),
   // non-image files fall back to Agent DM, and ensure Bot session has a Chinese prompt.
