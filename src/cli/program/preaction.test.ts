@@ -55,6 +55,7 @@ let originalProcessTitleDescriptor: PropertyDescriptor | undefined;
 let observedProcessTitle: string;
 let originalNodeNoWarnings: string | undefined;
 let originalHideBanner: string | undefined;
+let originalOpenClawLogFile: string | undefined;
 let originalForceStderr: boolean;
 
 beforeAll(async () => {
@@ -69,6 +70,7 @@ beforeEach(() => {
   observedProcessTitle = originalProcessTitle;
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+  originalOpenClawLogFile = process.env.OPENCLAW_LOG_FILE;
   originalForceStderr = loggingState.forceConsoleToStderr;
   // Worker-thread Vitest runs do not reliably mutate the real process title,
   // so capture writes at the property boundary instead.
@@ -83,6 +85,7 @@ beforeEach(() => {
   loggingState.forceConsoleToStderr = false;
   delete process.env.NODE_NO_WARNINGS;
   delete process.env.OPENCLAW_HIDE_BANNER;
+  delete process.env.OPENCLAW_LOG_FILE;
 });
 
 afterEach(() => {
@@ -107,6 +110,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_HIDE_BANNER;
   } else {
     process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
+  }
+  if (originalOpenClawLogFile === undefined) {
+    delete process.env.OPENCLAW_LOG_FILE;
+  } else {
+    process.env.OPENCLAW_LOG_FILE = originalOpenClawLogFile;
   }
 });
 
@@ -226,6 +234,22 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
     processTitleSetSpy.mockRestore();
+  });
+
+  it("promotes root --log-file into OPENCLAW_LOG_FILE", async () => {
+    program.option("--log-file <path>");
+    (
+      program as Command & {
+        setOptionValueWithSource?: (key: string, value: unknown, source: string) => void;
+      }
+    ).setOptionValueWithSource?.("logFile", "/tmp/custom-openclaw.log", "cli");
+
+    await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "--log-file", "/tmp/custom-openclaw.log", "status"],
+    });
+
+    expect(process.env.OPENCLAW_LOG_FILE).toBe("/tmp/custom-openclaw.log");
   });
 
   it("loads plugins for local agent runs", async () => {

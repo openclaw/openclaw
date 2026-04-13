@@ -157,6 +157,7 @@ describe("gatherDaemonStatus", () => {
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_LOG_FILE",
       "DAEMON_GATEWAY_TOKEN",
       "DAEMON_GATEWAY_PASSWORD",
     ]);
@@ -164,6 +165,7 @@ describe("gatherDaemonStatus", () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli/openclaw.json";
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_LOG_FILE;
     delete process.env.DAEMON_GATEWAY_TOKEN;
     delete process.env.DAEMON_GATEWAY_PASSWORD;
     callGatewayStatusProbe.mockClear();
@@ -223,6 +225,18 @@ describe("gatherDaemonStatus", () => {
         configPath: "/tmp/openclaw-daemon/openclaw.json",
       }),
     );
+  });
+
+  it("reports the env-overridden log file path", async () => {
+    process.env.OPENCLAW_LOG_FILE = "/tmp/custom-openclaw.log";
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.logFile).toBe("/tmp/custom-openclaw.log");
   });
 
   it("reuses the shared CLI config snapshot when the daemon uses the same config path", async () => {

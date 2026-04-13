@@ -65,6 +65,10 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
       "--log-level <level>",
       `Global log level override for file + console (${CLI_LOG_LEVEL_VALUES})`,
       parseCliLogLevelOption,
+    )
+    .option(
+      "--log-file <path>",
+      "Global log file override (takes precedence over logging.file and OPENCLAW_LOG_FILE)",
     );
 
   program.option("--no-color", "Disable ANSI colors", false);

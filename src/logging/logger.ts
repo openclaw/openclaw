@@ -7,6 +7,7 @@ import {
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
+import { resolveEnvLogFileOverride } from "./env-log-file.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
@@ -77,11 +78,15 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
   });
 }
 
-function canUseSilentVitestFileLogFastPath(envLevel: LogLevel | undefined): boolean {
+function canUseSilentVitestFileLogFastPath(
+  envLevel: LogLevel | undefined,
+  envFile: string | undefined,
+): boolean {
   return (
     process.env.VITEST === "true" &&
     process.env.OPENCLAW_TEST_FILE_LOG !== "1" &&
     !envLevel &&
+    !envFile &&
     !loggingState.overrideSettings
   );
 }
@@ -96,9 +101,10 @@ function resolveSettings(): ResolvedSettings {
   }
 
   const envLevel = resolveEnvLogLevelOverride();
+  const envFile = resolveEnvLogFileOverride();
   // Test runs default file logs to silent. Skip config reads and fallback load in the
   // common case to avoid pulling heavy config/schema stacks on startup.
-  if (canUseSilentVitestFileLogFastPath(envLevel)) {
+  if (canUseSilentVitestFileLogFastPath(envLevel, envFile)) {
     return {
       level: "silent",
       file: defaultRollingPathForToday(),
@@ -124,7 +130,7 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const file = envFile ?? cfg?.file ?? defaultRollingPathForToday();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes };
 }

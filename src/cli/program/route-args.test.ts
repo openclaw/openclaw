@@ -118,8 +118,8 @@ describe("route-args", () => {
       parseConfigGetRouteArgs([
         "node",
         "openclaw",
-        "--log-level",
-        "debug",
+        "--log-file",
+        "/tmp/openclaw.log",
         "config",
         "get",
         "update.channel",

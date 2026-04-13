@@ -22,6 +22,9 @@ OpenClaw has two log “surfaces”:
 - The log file path and level can be configured via `~/.openclaw/openclaw.json`:
   - `logging.file`
   - `logging.level`
+- One-off overrides are also available via:
+  - `OPENCLAW_LOG_FILE`
+  - root CLI flag `--log-file <path>`
 
 The file format is one JSON object per line.
 

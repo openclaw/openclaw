@@ -49,6 +49,11 @@ describe("argv helpers", () => {
       expected: true,
     },
     {
+      name: "root -v alias with log-file",
+      argv: ["node", "openclaw", "--log-file", "/tmp/openclaw.log", "-v"],
+      expected: true,
+    },
+    {
       name: "subcommand -v should not be treated as version",
       argv: ["node", "openclaw", "acp", "-v"],
       expected: false,
@@ -193,6 +198,27 @@ describe("argv helpers", () => {
     ).toEqual(["update.channel"]);
   });
 
+  it("extracts routed config get positionals with interleaved log-file root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        [
+          "node",
+          "openclaw",
+          "config",
+          "get",
+          "--log-file",
+          "/tmp/openclaw.log",
+          "update.channel",
+          "--json",
+        ],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
   it("extracts routed config unset positionals with interleaved root options", () => {
     expect(
       getCommandPositionalsWithRootOptions(
@@ -230,6 +256,11 @@ describe("argv helpers", () => {
     {
       name: "skips known root option values",
       argv: ["node", "openclaw", "--log-level", "debug", "status"],
+      expected: "status",
+    },
+    {
+      name: "skips log-file root option values",
+      argv: ["node", "openclaw", "--log-file", "/tmp/openclaw.log", "status"],
       expected: "status",
     },
   ])("returns primary command: $name", ({ argv, expected }) => {

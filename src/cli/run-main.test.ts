@@ -70,6 +70,7 @@ describe("shouldEnsureCliPath", () => {
   it("skips path bootstrap for read-only fast paths", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "status"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "--log-level", "debug", "status"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "--log-file", "/tmp/openclaw.log", "status"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"])).toBe(false);

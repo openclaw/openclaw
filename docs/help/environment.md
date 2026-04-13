@@ -116,6 +116,7 @@ Both resolve from process env at activation time. SecretRef details are document
 | Variable             | Purpose                                                                                                                                                                                      |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_LOG_LEVEL` | Override log level for both file and console (e.g. `debug`, `trace`). Takes precedence over `logging.level` and `logging.consoleLevel` in config. Invalid values are ignored with a warning. |
+| `OPENCLAW_LOG_FILE`  | Override the file log path for the current process. Takes precedence over `logging.file` in config and is also set automatically by the root `--log-file <path>` CLI option. |
 
 ### `OPENCLAW_HOME`
 
