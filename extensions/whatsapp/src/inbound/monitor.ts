@@ -661,8 +661,8 @@ export async function attachWebInboxToSocket(
   const selfJid = self.jid ?? sock.user?.id ?? null;
   let healthProbeInterval: ReturnType<typeof setInterval> | null = null;
   let probeClosed = false;
-  let _activeProbeTimeout: ReturnType<typeof setTimeout> | null = null;
   let probeInFlight = false;
+  let consecutiveFailures = 0;
 
   if (selfJid && typeof sock.fetchStatus === "function") {
     const doProbe = async () => {
@@ -680,12 +680,10 @@ export async function attachWebInboxToSocket(
             timedOut = true;
             reject(new Error("probe timeout"));
           }, HEALTH_PROBE_TIMEOUT_MS);
-          _activeProbeTimeout = timeoutHandle;
         });
         await Promise.race([fetchPromise, timeout]);
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
-          _activeProbeTimeout = null;
         }
         if (probeClosed) {
           return;
@@ -693,13 +691,13 @@ export async function attachWebInboxToSocket(
         healthProbeState.lastProbeAt = Date.now();
         healthProbeState.ok = true;
         healthProbeState.error = undefined;
+        consecutiveFailures = 0;
         if (shouldLogVerbose()) {
           logVerbose("WA health probe: ok");
         }
       } catch (err) {
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
-          _activeProbeTimeout = null;
         }
         if (probeClosed) {
           return;
@@ -707,7 +705,16 @@ export async function attachWebInboxToSocket(
         healthProbeState.lastProbeAt = Date.now();
         healthProbeState.ok = false;
         healthProbeState.error = String(err);
-        inboundLogger.warn({ error: String(err) }, "WA health probe failed");
+        consecutiveFailures++;
+        inboundLogger.warn({ error: String(err), consecutiveFailures }, "WA health probe failed");
+
+        if (consecutiveFailures >= 3) {
+          inboundLogger.warn(
+            { consecutiveFailures },
+            "WA health probe: 3 consecutive failures, triggering reconnect",
+          );
+          resolveClose({ status: "lost", isLoggedOut: false, error: "health probe failures" });
+        }
       } finally {
         if (timedOut && fetchPromise) {
           // fetchStatus is still pending — keep probeInFlight true to prevent
