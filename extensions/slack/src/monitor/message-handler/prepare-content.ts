@@ -18,7 +18,10 @@ const SLACK_USER_MENTION_TOKEN_RE = /<@([A-Z0-9]+)(?:\|([^>]+))?>/gi;
 
 async function normalizeSlackInboundMentions(
   text: string,
-  resolveUserName?: (userId: string) => Promise<{ name?: string }>,
+  params?: {
+    botUserId?: string;
+    resolveUserName?: (userId: string) => Promise<{ name?: string }>;
+  },
 ): Promise<string> {
   if (!text.includes("<@")) {
     return text;
@@ -29,9 +32,17 @@ async function normalizeSlackInboundMentions(
     return text;
   }
 
+  const botUserId = normalizeOptionalString(params?.botUserId);
+  const resolveUserName = params?.resolveUserName;
   const resolvedNames = new Map<string, string | null>();
   if (resolveUserName) {
-    const uniqueIds = [...new Set(matches.map((match) => match[1] ?? "").filter(Boolean))];
+    const uniqueIds = [
+      ...new Set(
+        matches
+          .map((match) => match[1] ?? "")
+          .filter((userId) => Boolean(userId) && normalizeOptionalString(userId) !== botUserId),
+      ),
+    ];
     await Promise.all(
       uniqueIds.map(async (userId) => {
         try {
@@ -47,6 +58,9 @@ async function normalizeSlackInboundMentions(
   return text.replaceAll(
     SLACK_USER_MENTION_TOKEN_RE,
     (token, userId: string, inlineLabel: string | undefined) => {
+      if (normalizeOptionalString(userId) === botUserId) {
+        return token;
+      }
       const resolvedName = normalizeOptionalString(resolvedNames.get(userId) ?? undefined);
       if (resolvedName) {
         return `@${resolvedName}`;
@@ -62,13 +76,16 @@ async function normalizeSlackInboundMentions(
 
 async function normalizeOptionalSlackInboundText(
   text: string | undefined,
-  resolveUserName?: (userId: string) => Promise<{ name?: string }>,
+  params?: {
+    botUserId?: string;
+    resolveUserName?: (userId: string) => Promise<{ name?: string }>;
+  },
 ): Promise<string | undefined> {
   const normalizedText = normalizeOptionalString(text);
   if (!normalizedText) {
     return undefined;
   }
-  return await normalizeSlackInboundMentions(normalizedText, resolveUserName);
+  return await normalizeSlackInboundMentions(normalizedText, params);
 }
 
 function filterInheritedParentFiles(params: {
@@ -99,6 +116,7 @@ export async function resolveSlackMessageContent(params: {
   threadStarter: SlackThreadStarter | null;
   isBotMessage: boolean;
   botToken: string;
+  botUserId?: string;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
 }): Promise<SlackResolvedMessageContent | null> {
@@ -150,15 +168,24 @@ export async function resolveSlackMessageContent(params: {
 
   const normalizedMessageText = await normalizeOptionalSlackInboundText(
     params.message.text,
-    params.resolveUserName,
+    {
+      botUserId: params.botUserId,
+      resolveUserName: params.resolveUserName,
+    },
   );
   const normalizedAttachmentText = await normalizeOptionalSlackInboundText(
     attachmentContent?.text,
-    params.resolveUserName,
+    {
+      botUserId: params.botUserId,
+      resolveUserName: params.resolveUserName,
+    },
   );
   const normalizedBotAttachmentText = await normalizeOptionalSlackInboundText(
     botAttachmentText,
-    params.resolveUserName,
+    {
+      botUserId: params.botUserId,
+      resolveUserName: params.resolveUserName,
+    },
   );
 
   const rawBody =

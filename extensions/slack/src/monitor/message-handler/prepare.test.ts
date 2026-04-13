@@ -258,6 +258,29 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.BodyForAgent).toBe("hi @Bek and @Ava and <@U4>");
   });
 
+  it("keeps bot mentions unchanged while normalizing user mentions", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    slackCtx.botUserId = "BOT";
+    slackCtx.resolveUserName = async (userId) =>
+      ({ name: userId === "U2" ? "Bek" : userId === "BOT" ? "OpenClaw" : undefined }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        text: "<@BOT> hi <@U2>",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toBe("<@BOT> hi @Bek");
+    expect(prepared!.ctxPayload.BodyForAgent).toBe("<@BOT> hi @Bek");
+  });
+
   it("keeps generated file placeholders unchanged while normalizing user-authored text", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
