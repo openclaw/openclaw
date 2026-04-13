@@ -98,6 +98,19 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function filterProvidersUnsupportedByPiModelsJson(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  return Object.fromEntries(
+    Object.entries(providers).filter(([, provider]) => {
+      if (!provider.models?.length) {
+        return true;
+      }
+      return Boolean(provider.baseUrl && provider.apiKey);
+    }),
+  );
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -144,7 +157,9 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? mergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const finalProviders = filterProvidersUnsupportedByPiModelsJson(
+    applyNativeStreamingUsageCompat(secretEnforcedProviders),
+  );
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {

@@ -7,6 +7,23 @@ import {
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
+function makeModelDefinition(id: string) {
+  return {
+    id,
+    name: id,
+    reasoning: true,
+    input: ["text"] as Array<"text" | "image">,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128000,
+    maxTokens: 8192,
+  };
+}
+
 vi.mock("./models-config.providers.js", () => ({
   applyNativeStreamingUsageCompat: (providers: unknown) => providers,
   enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
@@ -122,6 +139,49 @@ describe("models-config", () => {
         2,
       )}\n`,
     });
+  });
+
+  it("filters runtime-only providers that would invalidate PI custom models", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { providers: {} } },
+        agentDir: "/tmp/openclaw-agent",
+        env: {} as NodeJS.ProcessEnv,
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          volcengine: {
+            baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+            api: "openai-completions",
+            apiKey: "VOLCANO_ENGINE_API_KEY",
+            models: [makeModelDefinition("deepseek-v3-2-251201")],
+          },
+          "volcengine-plan": {
+            baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+            api: "openai-completions",
+            apiKey: "VOLCANO_ENGINE_API_KEY",
+            models: [makeModelDefinition("ark-code-latest")],
+          },
+          codex: {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [makeModelDefinition("gpt-5-codex")],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    const providers =
+      plan.action === "write"
+        ? (JSON.parse(plan.contents) as { providers: Record<string, ProviderConfig> }).providers
+        : {};
+
+    expect(providers["volcengine"]).toBeDefined();
+    expect(providers["volcengine-plan"]).toBeDefined();
+    expect(providers["codex"]).toBeUndefined();
   });
 
   it("uses tokenRef env var when github-copilot profile omits plaintext token", () => {
