@@ -636,11 +636,28 @@ That can be confusing in real deployments:
 - hosted providers can fail with quota or rate-limit errors that only show up
   once Active Memory starts issuing recall searches before each reply
 
-Active Memory can still run when embeddings are unavailable if your
-`memorySearch` setup can fall back to lexical-only retrieval, but semantic
-recall quality will usually degrade. If you depend on embedding-backed recall,
-multimodal indexing, or a specific local/remote provider, pin the provider
-explicitly instead of relying on auto-detection.
+Active Memory can still run without embeddings when `memory_search` can operate
+in degraded lexical-only mode, which typically happens when no embedding
+provider can be resolved.
+
+Do not assume the same fallback on provider runtime failures such as quota
+exhaustion, rate limits, network/provider errors, or missing local/remote
+models after a provider has already been selected.
+
+In practice:
+
+- if no embedding provider can be resolved, `memory_search` may degrade to
+  lexical-only retrieval
+- if an embedding provider is resolved and then fails at runtime, OpenClaw does
+  not currently guarantee a lexical fallback for that request
+- if you need deterministic provider selection, pin
+  `agents.defaults.memorySearch.provider`
+- if you need provider failover on runtime errors, configure
+  `agents.defaults.memorySearch.fallback` explicitly
+
+If you depend on embedding-backed recall, multimodal indexing, or a specific
+local/remote provider, pin the provider explicitly instead of relying on
+auto-detection.
 
 Common pinning examples:
 

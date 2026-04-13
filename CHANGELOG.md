@@ -2,7 +2,16 @@
 
 Docs: https://docs.openclaw.ai
 
-## 2026.4.12
+## Unreleased
+
+### Changes
+
+### Fixes
+
+- Gateway/startup: defer scheduled services until sidecars finish, gate chat history and model listing during sidecar resume, and let Control UI retry startup-gated history loads so Sandbox wake resumes channels first. (#65365) Thanks @lml2468.
+- Control UI/chat: load the live gateway slash-command catalog into the composer and command palette so dock commands, plugin commands, and direct skill aliases appear in chat, while keeping trusted local commands authoritative and bounding remote command metadata. (#65620) Thanks @BunsDev.
+
+## 2026.4.12-beta.1
 
 ### Changes
 
@@ -54,6 +63,8 @@ Docs: https://docs.openclaw.ai
 - Memory/memory-core: watch the `memory` directory directly and ignore non-markdown churn so nested note changes still sync on macOS + Node 25 environments where recursive `memory/**/*.md` glob watching fails. (#64711) Thanks @jasonxargs-boop and @vincentkoc.
 - WhatsApp: centralize per-account connection ownership so reconnects, login recovery, and outbound readiness stay attached to the live socket instead of drifting across monitor and login paths. (#65290) Thanks @mcaxtr and @vincentkoc.
 - iMessage: retry transient `watch.subscribe` startup failures before tearing down the monitor, and sanitize startup error logging so brief local transport stalls do not immediately bounce the channel or leak raw imsg RPC payloads into logs. (#65393) Thanks @vincentkoc.
+- CLI/audio providers: report env-authenticated providers as configured in `openclaw infer audio providers --json`, while keeping trusted workspace provider env lookup defaults stable during auth setup. (#65491)
+- Plugins/install: reinstall bundled runtime packages when the matching platform native optional child is missing, so packaged Windows installs can recover dependencies that were packed on another host OS.
 
 ## 2026.4.11
 
