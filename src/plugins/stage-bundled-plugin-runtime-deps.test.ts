@@ -22,6 +22,23 @@ async function loadStageBundledPluginRuntimeDeps(): Promise<StageBundledPluginRu
   return loaded.stageBundledPluginRuntimeDeps;
 }
 
+async function loadPostinstallBundledPluginsModule(): Promise<{
+  applyBaileysEncryptedStreamFinishHotfix: (params?: { packageRoot?: string }) => {
+    applied: boolean;
+    reason: string;
+    targetPath?: string;
+  };
+}> {
+  const moduleUrl = new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url);
+  return (await import(moduleUrl.href)) as {
+    applyBaileysEncryptedStreamFinishHotfix: (params?: { packageRoot?: string }) => {
+      applied: boolean;
+      reason: string;
+      targetPath?: string;
+    };
+  };
+}
+
 const tempDirs: string[] = [];
 
 function makeRepoRoot(prefix: string): string {
@@ -163,5 +180,42 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(installs[0]?.devDependencies).toBeUndefined();
     expect(installs[0]?.peerDependencies).toBeUndefined();
     expect(installs[0]?.peerDependenciesMeta).toBeUndefined();
+  });
+
+  it("patches installed Baileys encryptedStream flush ordering for shipped runtime deps", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-hotfix-");
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    writeRepoFile(
+      repoRoot,
+      "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
+      [
+        "        encFileWriteStream.write(mac);",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        logger?.debug('encrypted data successfully');",
+      ].join("\n"),
+    );
+
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({ packageRoot: repoRoot });
+
+    expect(result).toEqual({
+      applied: true,
+      reason: "patched",
+      targetPath,
+    });
+    expect(fs.readFileSync(targetPath, "utf8")).toContain(
+      "const encFinishPromise = once(encFileWriteStream, 'finish');",
+    );
+    expect(fs.readFileSync(targetPath, "utf8")).toContain("await originalFinishPromise;");
   });
 });
