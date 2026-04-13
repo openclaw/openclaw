@@ -8,6 +8,7 @@ import {
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import * as pinnedPathHelperModule from "./fs-pinned-path-helper.js";
 import {
+  __setFsSafeTestHooksForTest,
   appendFileWithinRoot,
   copyFileWithinRoot,
   createRootScopedReadFile,
@@ -26,6 +27,7 @@ import {
 const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
+  __setFsSafeTestHooksForTest(undefined);
   await tempDirs.cleanup();
 });
 
@@ -247,6 +249,34 @@ describe("fs-safe", () => {
       }),
     ).rejects.toMatchObject({ code: "invalid-path" });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlink-target reads when the path target changes after open",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const insideA = path.join(root, "inside-a.txt");
+      const insideB = path.join(root, "inside-b.txt");
+      const link = path.join(root, "link.txt");
+      await fs.writeFile(insideA, "inside-a");
+      await fs.writeFile(insideB, "inside-b");
+      await fs.symlink(insideA, link);
+
+      __setFsSafeTestHooksForTest({
+        afterOpen: async () => {
+          await fs.rm(link);
+          await fs.symlink(insideB, link);
+        },
+      });
+
+      await expect(
+        readFileWithinRoot({
+          rootDir: root,
+          relativePath: "link.txt",
+          allowSymlinkTargetWithinRoot: true,
+        }),
+      ).rejects.toMatchObject({ code: "invalid-path" });
+    },
+  );
 
   it.runIf(process.platform !== "win32")("blocks hardlink aliases under root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");

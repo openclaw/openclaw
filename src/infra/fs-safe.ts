@@ -53,6 +53,7 @@ export type SafeLocalReadResult = {
 export type FsSafeTestHooks = {
   afterPreOpenLstat?: (filePath: string) => Promise<void> | void;
   beforeOpen?: (filePath: string, flags: number) => Promise<void> | void;
+  afterOpen?: (filePath: string, handle: FileHandle) => Promise<void> | void;
 };
 
 let fsSafeTestHooks: FsSafeTestHooks | undefined;
@@ -129,6 +130,7 @@ async function openVerifiedLocalFile(
         : OPEN_READ_FLAGS;
     await fsSafeTestHooks?.beforeOpen?.(filePath, openFlags);
     handle = await fs.open(filePath, openFlags);
+    await fsSafeTestHooks?.afterOpen?.(filePath, handle);
   } catch (err) {
     if (isNotFoundPathError(err)) {
       throw new SafeOpenError("not-found", "file not found");
@@ -152,7 +154,12 @@ async function openVerifiedLocalFile(
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
     }
 
-    if (!options?.allowSymlinkTargetWithinRoot) {
+    if (options?.allowSymlinkTargetWithinRoot) {
+      const pathStat = await fs.stat(filePath);
+      if (!sameFileIdentity(stat, pathStat)) {
+        throw new SafeOpenError("path-mismatch", "path changed during read");
+      }
+    } else {
       const pathStat = await fs.lstat(filePath);
       if (pathStat.isSymbolicLink()) {
         throw new SafeOpenError("symlink", "symlink not allowed");
