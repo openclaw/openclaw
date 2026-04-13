@@ -8,8 +8,11 @@ import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixtu
 // Mock auth-profile submodules — must be before importing model-fallback
 vi.mock("./auth-profiles/store.js", () => ({
   ensureAuthProfileStore: vi.fn(),
-  hasAnyAuthProfileStoreSource: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(),
+}));
+
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: vi.fn(),
 }));
 
 vi.mock("./auth-profiles/usage.js", () => ({
@@ -27,6 +30,7 @@ vi.mock("./auth-profiles/source-check.js", () => ({
 }));
 
 type AuthProfilesStoreModule = typeof import("./auth-profiles/store.js");
+type AuthProfilesSourceCheckModule = typeof import("./auth-profiles/source-check.js");
 type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
 type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");
 type ModelFallbackModule = typeof import("./model-fallback.js");
@@ -36,7 +40,7 @@ let mockedEnsureAuthProfileStore: ReturnType<
   typeof vi.mocked<AuthProfilesStoreModule["ensureAuthProfileStore"]>
 >;
 let mockedHasAnyAuthProfileStoreSource: ReturnType<
-  typeof vi.mocked<AuthProfilesStoreModule["hasAnyAuthProfileStoreSource"]>
+  typeof vi.mocked<AuthProfilesSourceCheckModule["hasAnyAuthProfileStoreSource"]>
 >;
 let mockedGetSoonestCooldownExpiry: ReturnType<
   typeof vi.mocked<AuthProfilesUsageModule["getSoonestCooldownExpiry"]>
@@ -61,13 +65,14 @@ let unregisterLogTransport: (() => void) | undefined;
 
 async function loadModelFallbackProbeModules() {
   const authProfilesStoreModule = await import("./auth-profiles/store.js");
+  const authProfilesSourceCheckModule = await import("./auth-profiles/source-check.js");
   const authProfilesUsageModule = await import("./auth-profiles/usage.js");
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
   const loggerModule = await import("../logging/logger.js");
   const modelFallbackModule = await import("./model-fallback.js");
   mockedEnsureAuthProfileStore = vi.mocked(authProfilesStoreModule.ensureAuthProfileStore);
   mockedHasAnyAuthProfileStoreSource = vi.mocked(
-    authProfilesStoreModule.hasAnyAuthProfileStoreSource,
+    authProfilesSourceCheckModule.hasAnyAuthProfileStoreSource,
   );
   mockedGetSoonestCooldownExpiry = vi.mocked(authProfilesUsageModule.getSoonestCooldownExpiry);
   mockedIsProfileInCooldown = vi.mocked(authProfilesUsageModule.isProfileInCooldown);
