@@ -136,7 +136,7 @@ describe("WhatsAppConnectionController", () => {
   it("starts reconnect safety timer on close and clears on reopen", async () => {
     vi.useFakeTimers();
     try {
-      const infoSpy = vi.spyOn(await import("openclaw/plugin-sdk/runtime-env"), "info");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const sock = { ws: { close: vi.fn() } };
       const listener = {
         sendMessage: vi.fn(async () => ({ messageId: "m1" })),
@@ -156,11 +156,9 @@ describe("WhatsAppConnectionController", () => {
 
       // Advance past the safety timeout
       await vi.advanceTimersByTimeAsync(91_000);
-      expect(infoSpy).toHaveBeenCalledWith(
-        expect.stringContaining("reconnect may be stuck"),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("reconnect may be stuck"));
 
-      infoSpy.mockRestore();
+      warnSpy.mockRestore();
     } finally {
       vi.useRealTimers();
     }
@@ -195,9 +193,7 @@ describe("WhatsAppConnectionController", () => {
 
       // Advance past the safety timeout — timer should have been cleared
       await vi.advanceTimersByTimeAsync(91_000);
-      expect(infoSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining("reconnect may be stuck"),
-      );
+      expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining("reconnect may be stuck"));
 
       infoSpy.mockRestore();
     } finally {
@@ -229,9 +225,7 @@ describe("WhatsAppConnectionController", () => {
 
       // Advance past the safety timeout — timer should have been cleared by shutdown
       await vi.advanceTimersByTimeAsync(91_000);
-      expect(infoSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining("reconnect may be stuck"),
-      );
+      expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining("reconnect may be stuck"));
 
       infoSpy.mockRestore();
     } finally {
