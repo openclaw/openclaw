@@ -496,9 +496,11 @@ export class WhatsAppConnectionController {
     // isn't opened within 90s, something is likely stuck.
     this.clearReconnectSafetyTimer();
     this.reconnectSafetyTimer = setTimeout(() => {
-      info(
-        `WA listener guard: ${RECONNECT_SAFETY_TIMEOUT_MS / 1000}s since connection closed ` +
-          `(account=${this.accountId}), reconnect may be stuck`,
+      console.warn(
+        info(
+          `WA listener guard: ${RECONNECT_SAFETY_TIMEOUT_MS / 1000}s since connection closed ` +
+            `(account=${this.accountId}), reconnect may be stuck`,
+        ),
       );
     }, RECONNECT_SAFETY_TIMEOUT_MS);
 
