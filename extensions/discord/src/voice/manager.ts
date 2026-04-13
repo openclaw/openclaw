@@ -8,6 +8,7 @@ import type { VoicePlugin } from "@buape/carbon/voice";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -65,6 +66,13 @@ const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
 const PLAYBACK_READY_TIMEOUT_MS = 60_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
+
+/**
+ * Maximum opus frames to decode before recycling an opusscript WASM decoder.
+ * Prevents accumulation of internal decoder state that can trigger a C abort()
+ * in opus_decoder.c:515.  15 000 frames at 20 ms each = 5 minutes.
+ */
+const OPUSSCRIPT_RECYCLE_FRAMES = 15_000;
 
 const logger = createSubsystemLogger("discord/voice");
 
@@ -318,9 +326,6 @@ export class DiscordVoiceManager {
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom: string[];
   private readonly allowDangerousNameMatching: boolean;
-  private readonly minSegmentSeconds: number;
-  private readonly silenceDurationMs: number;
-  private readonly playbackCooldownMs: number;
   private readonly minRmsEnergy: number;
   private readonly wakeWordConfig: DiscordVoiceWakeWordConfig | undefined;
   private wakeWordSidecar: WakeWordSidecar | null = null;
@@ -351,11 +356,7 @@ export class DiscordVoiceManager {
     this.ownerAllowFrom =
       params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [];
     this.allowDangerousNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
-    const capture = params.discordConfig.voice?.capture;
-    this.minSegmentSeconds = capture?.minSegmentSeconds ?? DEFAULT_MIN_SEGMENT_SECONDS;
-    this.silenceDurationMs = capture?.silenceDurationMs ?? DEFAULT_SILENCE_DURATION_MS;
-    this.playbackCooldownMs = capture?.playbackCooldownMs ?? DEFAULT_PLAYBACK_COOLDOWN_MS;
-    this.minRmsEnergy = capture?.minRmsEnergy ?? DEFAULT_MIN_RMS_ENERGY;
+    this.minRmsEnergy = params.discordConfig.voice?.capture?.minRmsEnergy ?? 15;
     this.wakeWordConfig = params.discordConfig.voice?.wakeWord;
   }
 
@@ -377,6 +378,9 @@ export class DiscordVoiceManager {
       onDetection: (event: SidecarDetectionEvent) => {
         this.handleWakeWordDetection(event);
       },
+      onFatalError: (message: string) => {
+        this.handleSidecarFatalError(message);
+      },
     });
     void this.wakeWordSidecar.start();
     return this.wakeWordSidecar;
@@ -394,6 +398,21 @@ export class DiscordVoiceManager {
           session.handleDetection(event);
         }
       }
+    }
+  }
+
+  private handleSidecarFatalError(message: string): void {
+    logger.warn(`sidecar fatal error — tearing down all wake word sessions: ${message}`);
+    this.wakeWordSidecar = null;
+    for (const entry of this.sessions.values()) {
+      if (!entry.wakeWordSessions) {
+        continue;
+      }
+      for (const [userId, session] of entry.wakeWordSessions) {
+        session.destroy();
+        entry.capture.activeSpeakers.delete(userId);
+      }
+      entry.wakeWordSessions.clear();
     }
   }
 
@@ -607,6 +626,10 @@ export class DiscordVoiceManager {
       });
     };
     speakingEndHandler = (userId: string) => {
+      // Wake word sessions manage their own lifecycle; don't interfere.
+      if (entry.wakeWordSessions?.has(userId)) {
+        return;
+      }
       this.scheduleCaptureFinalize(entry, userId, "speaker end");
     };
 
@@ -739,11 +762,10 @@ export class DiscordVoiceManager {
       return;
     }
 
-    // TODO(wake-word): re-integrate wake word gating with new capture-state architecture
-    // if (this.isWakeWordEnabled() && entry.wakeWordSessions) {
-    //   await this.handleSpeakingStartWakeWord(entry, userId);
-    //   return;
-    // }
+    if (this.isWakeWordEnabled() && entry.wakeWordSessions) {
+      await this.handleSpeakingStartWakeWord(entry, userId);
+      return;
+    }
 
     logVoiceVerbose(
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -830,7 +852,7 @@ export class DiscordVoiceManager {
       return;
     }
 
-    entry.activeSpeakers.add(userId);
+    entry.capture.activeSpeakers.add(userId);
     logVoiceVerbose(
       `wake word capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
@@ -843,7 +865,7 @@ export class DiscordVoiceManager {
       sidecar,
       config: {
         lookbackSeconds: cfg.lookbackSeconds,
-        silenceDurationMs: this.silenceDurationMs,
+        silenceDurationMs: 1200,
         minRmsEnergy: this.minRmsEnergy,
         captureTimeoutSeconds: cfg.captureTimeoutSeconds,
         minCommandLength: cfg.minCommandLength,
@@ -877,22 +899,39 @@ export class DiscordVoiceManager {
       this.handleReceiveError(entry, err);
     });
 
-    // Create a per-chunk opus decoder for the continuous stream.
-    const selected = createOpusDecoder();
-    if (!selected) {
+    // Create a recycling opus decoder for the continuous stream.
+    const initialDecoder = createOpusDecoder();
+    if (!initialDecoder) {
       entry.wakeWordSessions!.delete(userId);
-      entry.activeSpeakers.delete(userId);
+      entry.capture.activeSpeakers.delete(userId);
       return;
     }
+
+    let currentDecoder = initialDecoder;
+    let decodeCount = 0;
+    const needsRecycle = initialDecoder.name === "opusscript";
 
     stream.on("data", (chunk: Buffer) => {
       if (!chunk || chunk.length === 0) {
         return;
       }
       try {
-        const decoded = selected.decoder.decode(chunk);
+        const decoded = currentDecoder.decoder.decode(chunk);
         if (decoded && decoded.length > 0) {
           session.feedAudio(Buffer.from(decoded));
+        }
+        // Recycle opusscript WASM decoders to prevent C abort().
+        if (needsRecycle && ++decodeCount >= OPUSSCRIPT_RECYCLE_FRAMES) {
+          try {
+            (currentDecoder.decoder as OpusDecoder & { delete?: () => void }).delete?.();
+          } catch {
+            /* ignore */
+          }
+          const fresh = createOpusDecoder();
+          if (fresh) {
+            currentDecoder = fresh;
+            decodeCount = 0;
+          }
         }
       } catch {
         // Decode errors are expected occasionally; skip the chunk.
@@ -903,9 +942,14 @@ export class DiscordVoiceManager {
       logVoiceVerbose(
         `wake word stream ended: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
+      try {
+        (currentDecoder.decoder as OpusDecoder & { delete?: () => void }).delete?.();
+      } catch {
+        /* ignore */
+      }
       session.destroy();
       entry.wakeWordSessions!.delete(userId);
-      entry.activeSpeakers.delete(userId);
+      entry.capture.activeSpeakers.delete(userId);
     });
   }
 

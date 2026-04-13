@@ -81,6 +81,10 @@ const SIDECAR_PYTHON_SCRIPT = [
   '            confidence_threshold = cfg.get("confidence", DEFAULT_CONFIDENCE)',
   '            model_path = cfg.get("modelPath")',
   '            triggers = cfg.get("triggers", [])',
+  '            if model_path:',
+  '                import os',
+  '                if not os.path.isfile(model_path):',
+  '                    emit({"type": "error", "message": f"model file not found: {model_path}", "fatal": True}); model = None; continue',
   '            try:',
   '                if model_path:',
   '                    model = OWWModel(wakeword_models=[model_path], inference_framework="onnx")',
@@ -95,7 +99,7 @@ const SIDECAR_PYTHON_SCRIPT = [
   '                configured = True',
   '                emit({"type": "ready"})',
   '            except Exception as exc:',
-  '                emit({"type": "error", "message": f"model load failed: {exc}"}); model = None',
+  '                emit({"type": "error", "message": f"model load failed: {exc}", "fatal": True}); model = None',
   '        elif msg_type == MSG_AUDIO:',
   '            if not configured or model is None: continue',
   '            import numpy as np',
@@ -133,6 +137,8 @@ export type WakeWordSidecarOptions = {
   confidence?: number;
   modelPath?: string;
   onDetection: (event: SidecarDetectionEvent) => void;
+  /** Called when the sidecar reports a deterministic, non-retriable error. */
+  onFatalError?: (message: string) => void;
 };
 
 export class WakeWordSidecar {
@@ -140,6 +146,7 @@ export class WakeWordSidecar {
   private retryCount = 0;
   private startedAt = 0;
   private destroyed = false;
+  private ready = false;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pythonPath: string;
   private readonly scriptPath: string;
@@ -147,6 +154,7 @@ export class WakeWordSidecar {
   private readonly confidence: number;
   private readonly modelPath?: string;
   private readonly onDetection: (event: SidecarDetectionEvent) => void;
+  private readonly onFatalError?: (message: string) => void;
 
   constructor(options: WakeWordSidecarOptions) {
     this.pythonPath = options.pythonPath ?? WAKE_WORD_DEFAULTS.pythonPath;
@@ -155,6 +163,7 @@ export class WakeWordSidecar {
     this.confidence = options.confidence ?? WAKE_WORD_DEFAULTS.confidence;
     this.modelPath = options.modelPath;
     this.onDetection = options.onDetection;
+    this.onFatalError = options.onFatalError;
   }
 
   /**
@@ -183,7 +192,17 @@ export class WakeWordSidecar {
    * Send a chunk of 16 kHz mono PCM audio to the sidecar.
    */
   sendAudio(pcm: Buffer): void {
+    if (!this.ready) {
+      return;
+    }
     this.sendBinaryFrame(SIDECAR_MSG_AUDIO, pcm);
+  }
+
+  /**
+   * Returns true if the sidecar is configured and ready to accept audio.
+   */
+  isReady(): boolean {
+    return this.ready && this.isAlive();
   }
 
   /**
@@ -245,6 +264,7 @@ export class WakeWordSidecar {
   }
 
   private killProcess(): void {
+    this.ready = false;
     if (this.process) {
       try {
         this.process.kill("SIGTERM");
@@ -313,6 +333,7 @@ export class WakeWordSidecar {
 
     switch (event.type) {
       case "ready":
+        this.ready = true;
         logger.info("sidecar ready");
         break;
       case "detection":
@@ -322,7 +343,14 @@ export class WakeWordSidecar {
         this.onDetection(event);
         break;
       case "error":
-        logger.warn(`sidecar error: ${event.message}`);
+        if (event.fatal) {
+          logger.warn(`sidecar fatal error: ${event.message}`);
+          this.destroyed = true;
+          this.killProcess();
+          this.onFatalError?.(event.message);
+        } else {
+          logger.warn(`sidecar error: ${event.message}`);
+        }
         break;
       default:
         logger.warn(`sidecar: unknown event type: ${JSON.stringify(event)}`);

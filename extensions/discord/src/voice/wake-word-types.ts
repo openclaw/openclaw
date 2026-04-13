@@ -59,6 +59,8 @@ export type SidecarReadyEvent = {
 export type SidecarErrorEvent = {
   type: "error";
   message: string;
+  /** When true, the error is deterministic and retrying will not help. */
+  fatal?: boolean;
 };
 
 export type SidecarEvent = SidecarDetectionEvent | SidecarReadyEvent | SidecarErrorEvent;
