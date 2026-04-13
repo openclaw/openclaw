@@ -149,13 +149,17 @@ async function downloadFile(params: {
 
   const destPath = path.resolve(params.rootDir, params.relativePath);
   const stagingDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-download-"));
-  await runBeforeTempWrite();
   const tempPath = path.join(stagingDir, `${randomUUID()}.tmp`);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: params.url,
-    timeoutMs: Math.max(1_000, params.timeoutMs),
-  });
+  let release: (() => Promise<void>) | undefined;
   try {
+    await runBeforeTempWrite();
+    const fetched = await fetchWithSsrFGuard({
+      url: params.url,
+      timeoutMs: Math.max(1_000, params.timeoutMs),
+    });
+    release = fetched.release;
+    const { response } = fetched;
+
     if (!response.ok || !response.body) {
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
@@ -182,7 +186,9 @@ async function downloadFile(params: {
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
     await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-    await release();
+    if (release) {
+      await release();
+    }
   }
 }
 
