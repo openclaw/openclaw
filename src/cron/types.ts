@@ -100,6 +100,11 @@ type CronAgentTurnPayloadFields = {
   lightContext?: boolean;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Optional exec policy override forwarded to embedded exec-capable tools. */
+  execPolicy?: {
+    security?: "deny" | "allowlist" | "full";
+    ask?: "off" | "on-miss" | "always";
+  };
 };
 
 type CronAgentTurnPayload = {
