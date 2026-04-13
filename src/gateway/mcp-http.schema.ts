@@ -3,10 +3,14 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
 
+/**
+ * Tool-level `_meta.ui` metadata per MCP Apps spec (SEP-1865).
+ * Only `resourceUri` and `visibility` belong on the tool; CSP/permissions
+ * live in the resource-level metadata returned by `resources/read`.
+ */
 export type McpToolUiMeta = {
   resourceUri: string;
-  permissions?: string[];
-  csp?: Record<string, string[]>;
+  visibility?: Array<"model" | "app">;
 };
 
 export type McpToolSchemaEntry = {
@@ -88,10 +92,63 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
       description: tool.description,
       inputSchema: raw,
     };
-    const mcpAppUi = (tool as unknown as { mcpAppUi?: McpToolUiMeta }).mcpAppUi;
+    const mcpAppUi = (
+      tool as unknown as {
+        mcpAppUi?: { resourceUri?: string; visibility?: Array<"model" | "app"> };
+      }
+    ).mcpAppUi;
     if (mcpAppUi?.resourceUri) {
-      entry._meta = { ui: mcpAppUi };
+      const ui: McpToolUiMeta = { resourceUri: mcpAppUi.resourceUri };
+      if (mcpAppUi.visibility) {
+        ui.visibility = mcpAppUi.visibility;
+      }
+      entry._meta = { ui };
     }
     return entry;
   });
+}
+
+/**
+ * Filter tool schema entries by caller role per MCP Apps visibility rules.
+ *
+ * - `"model"` → exclude tools with `visibility: ["app"]` (app-only tools)
+ * - `"app"`   → exclude tools with `visibility: ["model"]` (model-only tools)
+ * - `undefined` → no filtering, return all tools (backward-compatible default)
+ *
+ * Tools without `_meta.ui.visibility` or with `visibility: ["model", "app"]`
+ * are always included.
+ */
+export function filterToolSchemaByVisibility(
+  tools: McpToolSchemaEntry[],
+  callerRole: "model" | "app" | undefined,
+): McpToolSchemaEntry[] {
+  if (!callerRole) {
+    return tools;
+  }
+  return tools.filter((tool) => {
+    const visibility = tool._meta?.ui?.visibility;
+    if (!visibility || visibility.length === 0) {
+      return true; // default: visible to both
+    }
+    return visibility.includes(callerRole);
+  });
+}
+
+/**
+ * Check whether a specific tool is callable by the given caller role.
+ * Returns `true` when the tool is accessible, `false` when visibility
+ * rules block the caller.
+ */
+export function isToolVisibleTo(
+  tool: McpToolSchemaEntry,
+  callerRole: "model" | "app" | undefined,
+): boolean {
+  if (!callerRole) {
+    return true;
+  }
+  const visibility = tool._meta?.ui?.visibility;
+  if (!visibility || visibility.length === 0) {
+    return true;
+  }
+  return visibility.includes(callerRole);
 }

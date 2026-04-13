@@ -169,6 +169,4 @@ export const GATEWAY_EVENTS = [
   "plugin.approval.requested",
   "plugin.approval.resolved",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
-  // MCP Apps: push tool result to UI subscribers when tool has _meta.ui
-  "mcp.tool.result",
 ];

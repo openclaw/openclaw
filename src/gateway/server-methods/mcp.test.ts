@@ -26,7 +26,7 @@ const mockToolSchema = [
     name: "show_chart",
     description: "render a chart",
     inputSchema: { type: "object", properties: {} },
-    _meta: { ui: { resourceUri: "ui://openclaw-charts/chart.html" } },
+    _meta: { ui: { resourceUri: "ui://openclaw-charts/chart.html", visibility: ["model", "app"] } },
   },
 ];
 
@@ -45,7 +45,10 @@ const mockTools = [
     name: "show_chart",
     description: "render a chart",
     parameters: { type: "object", properties: {} },
-    mcpAppUi: { resourceUri: "ui://openclaw-charts/chart.html" },
+    mcpAppUi: {
+      resourceUri: "ui://openclaw-charts/chart.html",
+      visibility: ["model", "app"] as Array<"model" | "app">,
+    },
     execute: vi.fn(async () => ({ content: [{ type: "text", text: "chart data" }] })),
   },
 ];
@@ -134,6 +137,35 @@ describe("mcp.tools.list", () => {
     const [ok] = respond.mock.calls[0] as RespondCall;
     expect(ok).toBe(false);
   });
+
+  it("filters tools by callerRole=model (excludes app-only tools)", async () => {
+    const { respond, promise } = invokeHandler("mcp.tools.list", {
+      callerRole: "model",
+    });
+    await promise;
+
+    const [ok, payload] = respond.mock.calls[0] as RespondCall;
+    expect(ok).toBe(true);
+    const tools = (payload as { tools: Array<{ name: string }> }).tools;
+    // show_chart has visibility: ["model","app"] so it should be included.
+    // ping has no _meta so it should be included.
+    expect(tools.some((t) => t.name === "ping")).toBe(true);
+    expect(tools.some((t) => t.name === "show_chart")).toBe(true);
+  });
+
+  it("filters tools by callerRole=app (excludes model-only tools)", async () => {
+    const { respond, promise } = invokeHandler("mcp.tools.list", {
+      callerRole: "app",
+    });
+    await promise;
+
+    const [ok, payload] = respond.mock.calls[0] as RespondCall;
+    expect(ok).toBe(true);
+    const tools = (payload as { tools: Array<{ name: string }> }).tools;
+    // Both ping (no visibility) and show_chart (model+app) should be visible to app callers.
+    expect(tools.some((t) => t.name === "ping")).toBe(true);
+    expect(tools.some((t) => t.name === "show_chart")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -186,6 +218,19 @@ describe("mcp.tools.call", () => {
     await promise;
     const [ok] = respond.mock.calls[0] as RespondCall;
     expect(ok).toBe(false);
+  });
+
+  it("accepts callerRole parameter to gate visibility", async () => {
+    // show_chart has visibility: ["model", "app"], so calling as "model" should succeed
+    const { respond, promise } = invokeHandler("mcp.tools.call", {
+      name: "show_chart",
+      arguments: {},
+      callerRole: "model",
+    });
+    await promise;
+    const [ok, payload] = respond.mock.calls[0] as RespondCall;
+    expect(ok).toBe(true);
+    expect((payload as { isError: boolean }).isError).toBe(false);
   });
 });
 

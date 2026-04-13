@@ -36,7 +36,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   close: () => Promise<void>;
 }> {
   const token = crypto.randomBytes(32).toString("hex");
-  const toolCache = new McpLoopbackToolCache();
+  const toolCache = new McpLoopbackToolCache("http");
 
   const httpServer = createHttpServer((req, res) => {
     if (!validateMcpLoopbackRequest({ req, res, token })) {
@@ -64,6 +64,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             message,
             tools: scopedTools.tools,
             toolSchema: scopedTools.toolSchema,
+            callerRole: requestContext.callerRole,
           });
           if (response !== null) {
             responses.push(response);

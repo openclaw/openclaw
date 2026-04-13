@@ -6,19 +6,22 @@
  *   mcp.tools.call      — execute a tool by name
  *   mcp.resources.list  — list registered ui:// resources
  *   mcp.resources.read  — fetch HTML content for a ui:// resource
+ *
+ * Schema shapes follow the MCP Apps spec (SEP-1865):
+ *   - Tool _meta.ui: resourceUri + visibility only
+ *   - Resource content _meta.ui: csp (domain-based) + permissions (structured) + domain + prefersBorder
  */
 import { type Static, Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
 // ---------------------------------------------------------------------------
-// Shared sub-schemas
+// Shared sub-schemas: Tool _meta.ui (SEP-1865 § Resource Discovery)
 // ---------------------------------------------------------------------------
 
 export const McpToolUiMetaSchema = Type.Object(
   {
     resourceUri: NonEmptyString,
-    permissions: Type.Optional(Type.Array(Type.String())),
-    csp: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
+    visibility: Type.Optional(Type.Array(Type.Union([Type.Literal("model"), Type.Literal("app")]))),
   },
   { additionalProperties: false },
 );
@@ -40,6 +43,47 @@ export const McpToolEntrySchema = Type.Object(
   { additionalProperties: true },
 );
 
+// ---------------------------------------------------------------------------
+// Shared sub-schemas: Resource _meta.ui (SEP-1865 § UI Resource Format)
+// ---------------------------------------------------------------------------
+
+export const McpUiResourceCspSchema = Type.Object(
+  {
+    connectDomains: Type.Optional(Type.Array(Type.String())),
+    resourceDomains: Type.Optional(Type.Array(Type.String())),
+    frameDomains: Type.Optional(Type.Array(Type.String())),
+    baseUriDomains: Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: false },
+);
+
+export const McpUiPermissionsSchema = Type.Object(
+  {
+    camera: Type.Optional(Type.Object({})),
+    microphone: Type.Optional(Type.Object({})),
+    geolocation: Type.Optional(Type.Object({})),
+    clipboardWrite: Type.Optional(Type.Object({})),
+  },
+  { additionalProperties: false },
+);
+
+export const McpResourceUiMetaSchema = Type.Object(
+  {
+    csp: Type.Optional(McpUiResourceCspSchema),
+    permissions: Type.Optional(McpUiPermissionsSchema),
+    domain: Type.Optional(Type.String()),
+    prefersBorder: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const McpResourceMetaSchema = Type.Object(
+  {
+    ui: Type.Optional(McpResourceUiMetaSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const McpResourceEntrySchema = Type.Object(
   {
     uri: NonEmptyString,
@@ -54,6 +98,7 @@ export const McpContentBlockSchema = Type.Object(
     uri: NonEmptyString,
     mimeType: NonEmptyString,
     text: Type.String(),
+    _meta: Type.Optional(McpResourceMetaSchema),
   },
   { additionalProperties: false },
 );
@@ -62,9 +107,19 @@ export const McpContentBlockSchema = Type.Object(
 // mcp.tools.list
 // ---------------------------------------------------------------------------
 
+/**
+ * Caller role for MCP Apps visibility filtering.
+ *
+ * - `"model"` — the LLM agent; tools with `visibility: ["app"]` are excluded.
+ * - `"app"`   — the MCP App iframe; tools with `visibility: ["model"]` are excluded.
+ * - omitted  — no filtering, all tools returned (backward-compatible default).
+ */
+export const McpCallerRoleSchema = Type.Union([Type.Literal("model"), Type.Literal("app")]);
+
 export const McpToolsListParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
+    callerRole: Type.Optional(McpCallerRoleSchema),
   },
   { additionalProperties: false },
 );
@@ -85,6 +140,7 @@ export const McpToolsCallParamsSchema = Type.Object(
     name: NonEmptyString,
     arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     sessionKey: Type.Optional(Type.String()),
+    callerRole: Type.Optional(McpCallerRoleSchema),
   },
   { additionalProperties: false },
 );
@@ -133,6 +189,7 @@ export const McpResourcesListResultSchema = Type.Object(
 export const McpResourcesReadParamsSchema = Type.Object(
   {
     uri: NonEmptyString,
+    sessionKey: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

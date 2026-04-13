@@ -17,6 +17,7 @@ import { resolveMainSessionKey } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { listResources, resolveResourceContent } from "../mcp-app-resources.js";
 import { McpLoopbackToolCache } from "../mcp-http.runtime.js";
+import { filterToolSchemaByVisibility, isToolVisibleTo } from "../mcp-http.schema.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
@@ -35,7 +36,7 @@ import type { GatewayRequestHandlers } from "./types.js";
  * Re-uses the same 30 s TTL caching strategy as the MCP loopback server
  * to keep tool resolution cheap for interactive clients.
  */
-const wsToolCache = new McpLoopbackToolCache();
+const wsToolCache = new McpLoopbackToolCache("ws");
 
 function resolveMcpSessionKey(rawSessionKey: unknown): string {
   const cfg = loadConfig();
@@ -74,7 +75,9 @@ export const mcpHandlers: GatewayRequestHandlers = {
       senderIsOwner,
     });
 
-    respond(true, { tools: toolSchema }, undefined);
+    const callerRole = params.callerRole;
+    const filtered = filterToolSchemaByVisibility(toolSchema, callerRole);
+    respond(true, { tools: filtered }, undefined);
   },
 
   // -------------------------------------------------------------------------
@@ -121,6 +124,21 @@ export const mcpHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Enforce visibility: reject calls to tools the caller's role can't access.
+    const callerRole = params.callerRole;
+    const schemaEntry = toolSchema.find((s) => s.name === toolName);
+    if (schemaEntry && !isToolVisibleTo(schemaEntry, callerRole)) {
+      respond(
+        true,
+        {
+          content: [{ type: "text", text: `Tool not available: ${toolName}` }],
+          isError: true,
+        },
+        undefined,
+      );
+      return;
+    }
+
     const toolArgs = (params.arguments ?? {}) as Record<string, unknown>;
     const toolCallId = `mcp-ws-${crypto.randomUUID()}`;
 
@@ -128,7 +146,6 @@ export const mcpHandlers: GatewayRequestHandlers = {
       const result = await tool.execute(toolCallId, toolArgs);
 
       // Locate matching schema entry to include _meta.ui when present
-      const schemaEntry = toolSchema.find((s) => s.name === toolName);
       const meta = schemaEntry?._meta;
 
       const payload: Record<string, unknown> = {

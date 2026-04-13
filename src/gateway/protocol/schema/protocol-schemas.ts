@@ -131,6 +131,8 @@ import {
 import {
   McpContentBlockSchema,
   McpResourceEntrySchema,
+  McpResourceMetaSchema,
+  McpResourceUiMetaSchema,
   McpResourcesListParamsSchema,
   McpResourcesListResultSchema,
   McpResourcesReadParamsSchema,
@@ -142,6 +144,8 @@ import {
   McpToolsCallResultSchema,
   McpToolsListParamsSchema,
   McpToolsListResultSchema,
+  McpUiPermissionsSchema,
+  McpUiResourceCspSchema,
 } from "./mcp.js";
 import {
   NodeDescribeParamsSchema,
@@ -380,6 +384,10 @@ export const ProtocolSchemas = {
   McpToolUiMeta: McpToolUiMetaSchema,
   McpToolMeta: McpToolMetaSchema,
   McpToolEntry: McpToolEntrySchema,
+  McpUiResourceCsp: McpUiResourceCspSchema,
+  McpUiPermissions: McpUiPermissionsSchema,
+  McpResourceUiMeta: McpResourceUiMetaSchema,
+  McpResourceMeta: McpResourceMetaSchema,
   McpResourceEntry: McpResourceEntrySchema,
   McpContentBlock: McpContentBlockSchema,
   McpToolsListParams: McpToolsListParamsSchema,
