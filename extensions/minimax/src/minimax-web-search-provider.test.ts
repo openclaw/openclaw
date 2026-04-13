@@ -14,12 +14,14 @@ describe("minimax web search provider", () => {
   const originalCodePlanKey = process.env.MINIMAX_CODE_PLAN_KEY;
   const originalCodingApiKey = process.env.MINIMAX_CODING_API_KEY;
   const originalApiKey = process.env.MINIMAX_API_KEY;
+  const originalOauthToken = process.env.MINIMAX_OAUTH_TOKEN;
 
   beforeEach(() => {
     delete process.env.MINIMAX_API_HOST;
     delete process.env.MINIMAX_CODE_PLAN_KEY;
     delete process.env.MINIMAX_CODING_API_KEY;
     delete process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_OAUTH_TOKEN;
   });
 
   afterEach(() => {
@@ -27,6 +29,7 @@ describe("minimax web search provider", () => {
     process.env.MINIMAX_CODE_PLAN_KEY = originalCodePlanKey;
     process.env.MINIMAX_CODING_API_KEY = originalCodingApiKey;
     process.env.MINIMAX_API_KEY = originalApiKey;
+    process.env.MINIMAX_OAUTH_TOKEN = originalOauthToken;
   });
 
   describe("resolveMiniMaxRegion", () => {
@@ -138,6 +141,11 @@ describe("minimax web search provider", () => {
     it("falls back to MINIMAX_API_KEY last", () => {
       process.env.MINIMAX_API_KEY = "plain-key";
       expect(resolveMiniMaxApiKey()).toBe("plain-key");
+    });
+
+    it("accepts MINIMAX_OAUTH_TOKEN as a fallback for OAuth-authorized users", () => {
+      process.env.MINIMAX_OAUTH_TOKEN = "oauth-token";
+      expect(resolveMiniMaxApiKey()).toBe("oauth-token");
     });
   });
 
