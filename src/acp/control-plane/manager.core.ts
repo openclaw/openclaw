@@ -648,6 +648,10 @@ export class AcpSessionManager {
           throw error;
         }
       }
+      throw new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        "Failed to set config option after all retry attempts.",
+      );
     });
   }
 
