@@ -1,3 +1,4 @@
+import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -18,7 +19,6 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
-import { resolveSessionTranscriptPath } from "./run-execution.runtime.js";
 import { executeCronRun, type CronExecutionResult } from "./run-executor.js";
 import {
   createPersistCronSessionEntry,
@@ -50,7 +50,7 @@ import {
   resolveCronStyleNow,
   resolveDefaultAgentId,
   resolveHookExternalContentSource,
-  resolveSessionAuthProfileOverride,
+  resolveSessionTranscriptPath,
   resolveThinkingDefault,
   setSessionRuntimeModel,
   supportsXHighThinking,
@@ -63,10 +63,25 @@ import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 let sessionStoreRuntimePromise:
   | Promise<typeof import("../../config/sessions/store.runtime.js")>
   | undefined;
+let cronAuthProfileRuntimePromise:
+  | Promise<typeof import("./run-auth-profile.runtime.js")>
+  | undefined;
 
 async function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
   return await sessionStoreRuntimePromise;
+}
+
+async function loadCronAuthProfileRuntime() {
+  cronAuthProfileRuntimePromise ??= import("./run-auth-profile.runtime.js");
+  return await cronAuthProfileRuntimePromise;
+}
+
+function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
+  return (
+    Boolean(cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) ||
+    Boolean(cfg.auth?.order && Object.keys(cfg.auth.order).length > 0)
+  );
 }
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
@@ -413,16 +428,26 @@ async function prepareCronRunContext(params: {
   } catch (err) {
     logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
   }
-  const authProfileId = await resolveSessionAuthProfileOverride({
-    cfg: cfgWithAgentDefaults,
-    provider,
-    agentDir,
-    sessionEntry: cronSession.sessionEntry,
-    sessionStore: cronSession.store,
-    sessionKey: agentSessionKey,
-    storePath: cronSession.storePath,
-    isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
-  });
+  const hasSessionAuthProfileOverride = Boolean(
+    cronSession.sessionEntry.authProfileOverride?.trim(),
+  );
+  const authProfileId =
+    !hasSessionAuthProfileOverride &&
+    !hasConfiguredAuthProfiles(cfgWithAgentDefaults) &&
+    !hasAnyAuthProfileStoreSource(agentDir)
+      ? undefined
+      : await (
+          await loadCronAuthProfileRuntime()
+        ).resolveSessionAuthProfileOverride({
+          cfg: cfgWithAgentDefaults,
+          provider,
+          agentDir,
+          sessionEntry: cronSession.sessionEntry,
+          sessionStore: cronSession.store,
+          sessionKey: agentSessionKey,
+          storePath: cronSession.storePath,
+          isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
+        });
   const liveSelection: CronLiveSelection = {
     provider,
     model,

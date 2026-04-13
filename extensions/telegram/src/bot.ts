@@ -12,7 +12,7 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -289,7 +289,11 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
       return;
     }
     highestPersistedUpdateId = safe;
-    void opts.updateOffset.onUpdateId(safe);
+    void Promise.resolve()
+      .then(() => opts.updateOffset?.onUpdateId?.(safe))
+      .catch((err) => {
+        runtime.error?.(`telegram: failed to persist update watermark: ${formatErrorMessage(err)}`);
+      });
   };
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
