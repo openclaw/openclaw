@@ -4,7 +4,16 @@ import {
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-contract";
 
-const MINIMAX_CODING_PLAN_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
+// Include MINIMAX_OAUTH_TOKEN and MINIMAX_API_KEY so the web_search
+// provider can discover OAuth-managed credentials, not just Coding Plan
+// keys. The chat provider (provider-registration.ts:255) already lists
+// both — the web search provider was missing them (#65768).
+const MINIMAX_CODING_PLAN_ENV_VARS = [
+  "MINIMAX_OAUTH_TOKEN",
+  "MINIMAX_API_KEY",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+] as const;
 
 function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
   return searchConfig?.apiKey;
