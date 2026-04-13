@@ -25,8 +25,8 @@ describe("exec safe-bin runtime policy", () => {
     { bin: "gsed", expected: true },
     { bin: "ruby3.2", expected: true },
     { bin: "bash", expected: true },
-    { bin: "busybox", expected: false },
-    { bin: "toybox", expected: false },
+    { bin: "busybox", expected: true },
+    { bin: "toybox", expected: true },
     { bin: "myfilter", expected: false },
     { bin: "jq", expected: false },
   ];
@@ -48,7 +48,7 @@ describe("exec safe-bin runtime policy", () => {
         "/usr/bin/node",
         "/opt/homebrew/bin/gawk",
       ]),
-    ).toEqual(["gawk", "node", "python3"]);
+    ).toEqual(["busybox", "gawk", "node", "python3", "toybox"]);
   });
 
   it("merges and normalizes safe-bin profile fixtures", () => {
