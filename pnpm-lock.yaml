@@ -703,6 +703,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/lmstudio: {}
+
   extensions/lobster:
     dependencies:
       '@clawdbot/lobster':
