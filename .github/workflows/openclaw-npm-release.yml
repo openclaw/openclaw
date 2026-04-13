@@ -45,7 +45,7 @@ jobs:
   # RELEASE-TIME LIVE OR END-TO-END VALIDATION BELONGS IN openclaw-release-checks.yml.
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only && !inputs.promote_beta_to_latest }}
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
@@ -242,7 +242,7 @@ jobs:
 
   validate_publish_request:
     if: ${{ !inputs.preflight_only && !inputs.promote_beta_to_latest }}
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
