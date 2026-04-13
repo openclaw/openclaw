@@ -324,6 +324,12 @@ importers:
       '@matrix-org/matrix-sdk-crypto-nodejs':
         specifier: ^0.4.0
         version: 0.4.0
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
+      music-metadata:
+        specifier: ^11.12.3
+        version: 11.12.3
       openshell:
         specifier: 0.1.0
         version: 0.1.0
@@ -584,6 +590,9 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+      qrcode-terminal:
+        specifier: ^0.12.0
+        version: 0.12.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

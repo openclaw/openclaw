@@ -876,6 +876,7 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     createFeishuThreadBindingManagerMock.mockReset().mockImplementation(() => ({
       stop: vi.fn(),
     }));
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("claimed");
     vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
     vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
     vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
@@ -951,7 +952,7 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
   });
 
   it("drops duplicate comment events before dispatch", async () => {
-    vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(true);
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("duplicate");
     const onComment = await setupCommentMonitorHandler();
 
     await onComment(makeDriveCommentEvent());

@@ -15,6 +15,7 @@ import { createEventDispatcher } from "./client.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { isRecord, readString } from "./comment-shared.js";
 import {
+  claimUnprocessedFeishuMessage,
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
   releaseFeishuMessageProcessing,
@@ -604,19 +605,20 @@ function registerEventHandlers(
           }
           const eventId = event.event_id?.trim();
           const syntheticMessageId = eventId ? `drive-comment:${eventId}` : undefined;
-          if (
-            syntheticMessageId &&
-            (await hasProcessedFeishuMessage(syntheticMessageId, accountId, log))
-          ) {
-            log(`feishu[${accountId}]: dropping duplicate comment event ${syntheticMessageId}`);
-            return;
-          }
-          if (
-            syntheticMessageId &&
-            !tryBeginFeishuMessageProcessing(syntheticMessageId, accountId)
-          ) {
-            log(`feishu[${accountId}]: dropping in-flight comment event ${syntheticMessageId}`);
-            return;
+          if (syntheticMessageId) {
+            const claim = await claimUnprocessedFeishuMessage({
+              messageId: syntheticMessageId,
+              namespace: accountId,
+              log,
+            });
+            if (claim === "duplicate") {
+              log(`feishu[${accountId}]: dropping duplicate comment event ${syntheticMessageId}`);
+              return;
+            }
+            if (claim === "inflight") {
+              log(`feishu[${accountId}]: dropping in-flight comment event ${syntheticMessageId}`);
+              return;
+            }
           }
           log(
             `feishu[${accountId}]: received drive comment notice ` +
@@ -739,11 +741,16 @@ function registerEventHandlers(
           },
         };
         const syntheticMessageId = syntheticEvent.message.message_id;
-        if (await hasProcessedFeishuMessage(syntheticMessageId, accountId, log)) {
+        const claim = await claimUnprocessedFeishuMessage({
+          messageId: syntheticMessageId,
+          namespace: accountId,
+          log,
+        });
+        if (claim === "duplicate") {
           log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
           return;
         }
-        if (!tryBeginFeishuMessageProcessing(syntheticMessageId, accountId)) {
+        if (claim === "inflight") {
           log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
           return;
         }

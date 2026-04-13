@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import * as authProfileStoreModule from "./auth-profiles/store.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
@@ -197,6 +198,32 @@ const MODEL_COOLDOWN_MESSAGE = "model_cooldown: All credentials for model gpt-5 
 const CONNECTION_ERROR_MESSAGE = "Connection error.";
 
 describe("runWithModelFallback", () => {
+  it("skips auth store bootstrap when no auth profile sources exist", async () => {
+    const hasSourcesSpy = vi
+      .spyOn(authProfileStoreModule, "hasAnyAuthProfileStoreSource")
+      .mockReturnValue(false);
+    const ensureStoreSpy = vi.spyOn(authProfileStoreModule, "ensureAuthProfileStore");
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    try {
+      const result = await runWithModelFallback({
+        cfg: makeCfg(),
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        agentDir: "/tmp/openclaw-no-auth-profiles",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(hasSourcesSpy).toHaveBeenCalledWith("/tmp/openclaw-no-auth-profiles");
+      expect(ensureStoreSpy).not.toHaveBeenCalled();
+      expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    } finally {
+      hasSourcesSpy.mockRestore();
+      ensureStoreSpy.mockRestore();
+    }
+  });
+
   it("keeps openai gpt-5.3 codex on the openai provider before running", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockResolvedValueOnce("ok");
