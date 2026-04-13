@@ -37,6 +37,11 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "nostr", minHostVersionBaseline: "2026.3.22" },
   {
+    pluginId: "qqbot",
+    mirroredRootRuntimeDeps: ["mpg123-decoder", "silk-wasm", "ws"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  {
     pluginId: "slack",
     mirroredRootRuntimeDeps: ["@slack/bolt", "@slack/web-api", "https-proxy-agent"],
   },
