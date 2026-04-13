@@ -541,16 +541,24 @@ export function applyJobResult(
         // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
         recordScheduleComputeError({ state, job, err });
       }
-      if (job.schedule.kind === "cron") {
-        // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
-        // after the current run ended.  Prevents spin-loops when the
-        // schedule computation lands in the same second due to
-        // timezone/croner edge cases (see #17821).
-        const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
-        job.state.nextRunAtMs =
-          naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
-      } else {
+      // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
+      // after the current run ended.  For cron schedules this is
+      // unconditional — second-granularity expressions can land right at
+      // endedAt causing spin-loops (#17821).  For every-schedules we
+      // only enforce the floor when naturalNext lands at or before
+      // endedAt (execution time >= interval, #52097); when the next
+      // tick is already past endedAt the job keeps its natural cadence
+      // so short-interval every-jobs aren't penalised by 2 s.
+      const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
+      if (naturalNext === undefined) {
+        // For cron schedules, fall back to minNext (croner edge cases).
+        // For every-schedules, undefined means a malformed everyMs —
+        // leave unscheduled so a force-run doesn't create a 2 s hot loop.
+        job.state.nextRunAtMs = job.schedule.kind === "cron" ? minNext : undefined;
+      } else if (job.schedule.kind === "every" && naturalNext > result.endedAt) {
         job.state.nextRunAtMs = naturalNext;
+      } else {
+        job.state.nextRunAtMs = Math.max(naturalNext, minNext);
       }
     } else {
       job.state.nextRunAtMs = undefined;
