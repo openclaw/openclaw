@@ -113,6 +113,22 @@ describe("tsdown config", () => {
     }
   });
 
+  // Regression tests for /status command runtime entries
+  // See: https://github.com/openclaw/openclaw/pull/65735
+  it("includes auto-reply/reply/commands-status-deps.runtime entry", () => {
+    const unifiedGraph = unifiedDistGraph();
+    const entries = entryKeys(unifiedGraph!);
+
+    expect(entries).toContain("auto-reply/reply/commands-status-deps.runtime");
+  });
+
+  it("includes auto-reply/status.runtime entry", () => {
+    const unifiedGraph = unifiedDistGraph();
+    const entries = entryKeys(unifiedGraph!);
+
+    expect(entries).toContain("auto-reply/status.runtime");
+  });
+
   it("suppresses unresolved imports from extension source", () => {
     const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
     const handled: TsdownLog[] = [];
