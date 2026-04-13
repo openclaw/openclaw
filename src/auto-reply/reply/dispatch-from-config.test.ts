@@ -2968,4 +2968,39 @@ describe("before_dispatch hook", () => {
     expect(hookMocks.runner.runBeforeDispatch).toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "model reply" });
   });
+
+  it("sends a fallback final reply when model dispatch produces no sendable output", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: false });
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => undefined,
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: expect.stringContaining("I couldn't produce a reply"),
+      isError: true,
+    });
+    expect(result.queuedFinal).toBe(true);
+    expect(result.counts.final).toBe(1);
+  });
+
+  it("does not send the fallback final reply for channel messages", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: false });
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx({ ChatType: "channel", Surface: "slack", Provider: "slack" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => undefined,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+    expect(result.counts.final).toBe(0);
+  });
 });
