@@ -327,3 +327,27 @@ Validation:
 - `pnpm test extensions/slack/src/monitor/auth.test.ts`
 - `pnpm test extensions/slack/src/monitor/auth.test.ts -t "authorizeSlackSystemEventSender"`
 - `pnpm test extensions/slack/src/monitor/events/interactions.test.ts`
+
+[CODEX COMMENTS RESOLUTION]
+
+Date: 2026-04-13
+PR: https://github.com/openclaw/openclaw/pull/66028
+Tracking issue: https://github.com/NVIDIA-dev/openclaw-tracking/issues/422
+
+Reviewed the current PR threads and found one remaining unresolved Codex comment on `extensions/slack/src/monitor/auth.ts`.
+
+Work completed:
+
+- Fixed the mixed allowlist edge case where `allowFrom: ["U_OWNER", "*"]` caused an explicit owner to be treated as wildcard-only in channel-restricted interactions.
+- Preserved the existing hardening behavior where wildcard matches alone do not bypass channel `users` restrictions.
+- Added a focused unit test in `extensions/slack/src/monitor/auth.test.ts` covering explicit owner access with a mixed `["U_OWNER", "*"]` global allowlist.
+
+Validation:
+
+- `pnpm test extensions/slack/src/monitor/auth.test.ts`
+- `pnpm test extensions/slack/src/monitor/events/interactions.test.ts`
+
+Planned GitHub follow-up after validation:
+
+- Resolve the addressed Codex thread.
+- Comment `@codex review`.

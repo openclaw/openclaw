@@ -271,6 +271,25 @@ describe("authorizeSlackSystemEventSender", () => {
     });
   });
 
+  it("preserves explicit owner access when allowFrom also contains wildcard", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER", "*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
   it("allows senders without channel context when no allowFrom is configured", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx(),

@@ -254,6 +254,7 @@ export async function authorizeSlackSystemEventSender(params: {
   } else {
     const allowFromLower = await resolveAllowFromLower(false);
     const ownerAllowlistConfigured = allowFromLower.length > 0;
+    const allowFromLowerWithoutWildcard = allowFromLower.filter((entry) => entry !== "*");
     const channelConfig = resolveSlackChannelConfig({
       channelId,
       channelName,
@@ -273,7 +274,14 @@ export async function authorizeSlackSystemEventSender(params: {
         })
       : { allowed: false };
     const ownerAllowed = ownerMatch.allowed;
-    const ownerExplicitlyAllowed = ownerAllowed && ownerMatch.matchSource !== "wildcard";
+    const ownerExplicitlyAllowed =
+      allowFromLowerWithoutWildcard.length > 0 &&
+      resolveSlackAllowListMatch({
+        allowList: allowFromLowerWithoutWildcard,
+        id: senderId,
+        name: senderName,
+        allowNameMatching: params.ctx.allowNameMatching,
+      }).allowed;
     if (channelUsersAllowlistConfigured) {
       const channelUserAllowed = resolveSlackUserAllowed({
         allowList: channelConfig?.users,
