@@ -3840,7 +3840,7 @@ def cmd_state(args):
     resources_processed = attrs.get("resources-processed", True)
     if not resources_processed:
         import time
-        print("  Resources still being indexed by TFC, waiting...")
+        print("  Resources still being indexed by TFC, waiting before listing resources...")
         for attempt in range(6):
             wait = 2 ** attempt
             time.sleep(wait)
@@ -3854,6 +3854,7 @@ def cmd_state(args):
             print(f"    still processing... ({attempt + 1}/6)")
         else:
             print("  ⚠️  Resources may be incomplete — TFC is still indexing. Re-run in a minute.")
+            return
 
     r3 = requests.get(f"{TFC_API}/state-versions/{sv_id}/resources", headers=api_headers())
     if r3.status_code >= 400:
