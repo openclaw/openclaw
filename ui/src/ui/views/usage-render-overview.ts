@@ -554,13 +554,13 @@ function renderUsageInsights(
   }));
   const topAgents = aggregates.byAgent.slice(0, 5).map((entry) => ({
     label: entry.agentId,
-    value: formatCost(entry.totals.totalCost),
-    sub: formatTokens(entry.totals.totalTokens),
+    value: formatTokens(entry.totals.totalTokens),
+    sub: formatCost(entry.totals.totalCost),
   }));
   const topChannels = aggregates.byChannel.slice(0, 5).map((entry) => ({
     label: entry.channel,
-    value: formatCost(entry.totals.totalCost),
-    sub: formatTokens(entry.totals.totalTokens),
+    value: formatTokens(entry.totals.totalTokens),
+    sub: formatCost(entry.totals.totalCost),
   }));
 
   return html`

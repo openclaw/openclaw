@@ -40,7 +40,7 @@ describe("shared/usage-aggregates", () => {
     });
   });
 
-  it("merges daily latency by date and computes aggregate tail sorting", () => {
+  it("merges daily latency by date and uses tokens for zero-cost channel ranking", () => {
     const dailyLatencyMap = new Map<
       string,
       {
@@ -62,8 +62,8 @@ describe("shared/usage-aggregates", () => {
 
     const tail = buildUsageAggregateTail({
       byChannelMap: new Map([
-        ["discord", { totalCost: 4 }],
-        ["telegram", { totalCost: 8 }],
+        ["discord", { totalCost: 0, totalTokens: 20 }],
+        ["telegram", { totalCost: 0, totalTokens: 80 }],
       ]),
       latencyTotals: {
         count: 3,
@@ -102,6 +102,27 @@ describe("shared/usage-aggregates", () => {
       { date: "2026-03-12", cost: 1 },
     ]);
     expect(tail.daily).toEqual([{ date: "2026-03-11" }, { date: "2026-03-12" }]);
+  });
+
+  it("keeps cost-first ranking when channels have non-zero cost", () => {
+    const tail = buildUsageAggregateTail({
+      byChannelMap: new Map([
+        ["high-cost", { totalCost: 10, totalTokens: 5 }],
+        ["high-token", { totalCost: 1, totalTokens: 500 }],
+      ]),
+      latencyTotals: {
+        count: 0,
+        sum: 0,
+        min: Number.POSITIVE_INFINITY,
+        max: 0,
+        p95Max: 0,
+      },
+      dailyLatencyMap: new Map(),
+      modelDailyMap: new Map(),
+      dailyMap: new Map(),
+    });
+
+    expect(tail.byChannel.map((entry) => entry.channel)).toEqual(["high-cost", "high-token"]);
   });
 
   it("omits latency when no requests were counted", () => {

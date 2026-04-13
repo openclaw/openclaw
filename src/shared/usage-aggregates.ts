@@ -29,6 +29,36 @@ type LatencyLike = {
 
 type DailyLatencyInput = LatencyLike & { date: string };
 
+type CostAndTokenTotalsLike = {
+  totalCost: number;
+  totalTokens: number;
+};
+
+export function compareUsageTotalsByCostThenTokens<TTotals extends CostAndTokenTotalsLike>(
+  left: TTotals,
+  right: TTotals,
+): number {
+  return right.totalCost - left.totalCost || right.totalTokens - left.totalTokens;
+}
+
+export function compareUsageTotalsByTokensThenCost<TTotals extends CostAndTokenTotalsLike>(
+  left: TTotals,
+  right: TTotals,
+): number {
+  return right.totalTokens - left.totalTokens || right.totalCost - left.totalCost;
+}
+
+export function sortUsageRankingEntries<TEntry extends { totals: CostAndTokenTotalsLike }>(
+  entries: readonly TEntry[],
+): TEntry[] {
+  const rankByTokens = entries.length > 0 && entries.every((entry) => entry.totals.totalCost === 0);
+  return [...entries].toSorted((a, b) =>
+    rankByTokens
+      ? compareUsageTotalsByTokensThenCost(a.totals, b.totals)
+      : compareUsageTotalsByCostThenTokens(a.totals, b.totals),
+  );
+}
+
 export function mergeUsageLatency(
   totals: LatencyTotalsLike,
   latency: LatencyLike | undefined,
@@ -66,7 +96,7 @@ export function mergeUsageDailyLatency(
 }
 
 export function buildUsageAggregateTail<
-  TTotals extends { totalCost: number },
+  TTotals extends CostAndTokenTotalsLike,
   TDaily extends DailyLike,
   TModelDaily extends { date: string; cost: number },
 >(params: {
@@ -77,9 +107,9 @@ export function buildUsageAggregateTail<
   dailyMap: Map<string, TDaily>;
 }) {
   return {
-    byChannel: Array.from(params.byChannelMap.entries())
-      .map(([channel, totals]) => ({ channel, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+    byChannel: sortUsageRankingEntries(
+      Array.from(params.byChannelMap.entries()).map(([channel, totals]) => ({ channel, totals })),
+    ),
     latency:
       params.latencyTotals.count > 0
         ? {
