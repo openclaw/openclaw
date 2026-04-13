@@ -407,6 +407,53 @@ describe("update-startup", () => {
     );
   });
 
+  it("prefers dist/index.js over dist/entry.js for root-based auto-update fallback", async () => {
+    const root = path.join(tempDir, "openclaw-root");
+    const distDir = path.join(root, "dist");
+    const indexPath = path.join(distDir, "index.js");
+    const entryPath = path.join(distDir, "entry.js");
+
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(indexPath, "", "utf-8");
+    await fs.writeFile(entryPath, "", "utf-8");
+
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "{}",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const originalArgv = process.argv.slice();
+    process.argv = [process.execPath];
+    try {
+      await runAutoUpdateCheckWithDefaults({
+        cfg: createBetaAutoUpdateConfig(),
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [process.execPath, indexPath, "update", "--yes", "--channel", "beta", "--json"],
+      expect.objectContaining({
+        timeoutMs: 45 * 60 * 1000,
+        env: expect.objectContaining({
+          OPENCLAW_AUTO_UPDATE: "1",
+        }),
+      }),
+    );
+  });
+
   it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 

@@ -1330,6 +1330,31 @@ describe("update-cli", () => {
     testCase.assertExtra();
   });
 
+  it("updateCommand prefers dist/index.js over dist/entry.js when refreshing service env", async () => {
+    const root = createCaseDir("openclaw-updated-root-index-first");
+    const indexPath = path.join(root, "dist", "index.js");
+    const entryPath = path.join(root, "dist", "entry.js");
+
+    pathExists.mockImplementation(
+      async (candidate: string) => candidate === indexPath || candidate === entryPath,
+    );
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      root,
+      steps: [],
+      durationMs: 100,
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await updateCommand({});
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), indexPath, "gateway", "install", "--force"],
+      expect.objectContaining({ cwd: root, timeoutMs: 60_000 }),
+    );
+  });
+
   it("updateCommand continues after doctor sub-step and clears update flag", async () => {
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     try {
