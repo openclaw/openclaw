@@ -15,14 +15,21 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 
 ## Session Startup
 
-Before doing anything else:
+Use runtime-provided startup context first.
 
-1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+That context may already include:
 
-Don't ask permission. Just do it.
+- `AGENTS.md`, `SOUL.md`, and `USER.md`
+- recent daily memory such as `memory/YYYY-MM-DD.md`
+- `MEMORY.md` when this is the main session
+
+Do not manually reread startup files unless:
+
+1. The user explicitly asks
+2. The provided context is missing something you need
+3. You need a deeper follow-up read beyond the provided startup context
+
+**If `USER.md` timezone or city is empty or unknown**, ask casually during this session: "By the way, what city are you in? Helps me not message you at 3am." Don't interrogate — weave it in naturally.
 
 ## Memory
 
@@ -136,9 +143,6 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
 
-Default heartbeat prompt:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-
 You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
 
 ### Heartbeat vs Cron: When to Use Each
@@ -188,7 +192,7 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 
 **When to stay quiet (HEARTBEAT_OK):**
 
-- Late night (23:00-08:00) unless urgent
+- Late night in *their* timezone (23:00-08:00) unless urgent. If you don't know their timezone, default to UTC but ask when you get a chance.
 - Human is clearly busy
 - Nothing new since last check
 - You just checked &lt;30 minutes ago
