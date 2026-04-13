@@ -50,6 +50,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 - Read `SOUL.md`, `USER.md`, and today+yesterday in `memory/`.
 - Read `MEMORY.md` when present; only fall back to lowercase `memory.md` when `MEMORY.md` is absent.
+- Read `memory/injected-lessons.md` — today's injected lessons (if it exists).
 - Do it before responding.
 
 ## Soul (required)
