@@ -97,7 +97,11 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./system-events.js";
+import {
+  consumeSystemEventEntries,
+  peekSystemEventEntries,
+  resolveSystemEventDeliveryContext,
+} from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -801,6 +805,9 @@ export async function runHeartbeatOnce(opts: {
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
+    if (preflight.shouldInspectPendingEvents && preflight.pendingEventEntries.length > 0) {
+      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    }
     return { status: "skipped", reason: "no-tasks-due" };
   }
 
@@ -890,6 +897,13 @@ export async function runHeartbeatOnce(opts: {
 
     store[sessionKey] = { ...base, heartbeatTaskState: taskState };
     await saveSessionStore(storePath, store);
+  };
+
+  const consumeInspectedSystemEvents = () => {
+    if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+      return;
+    }
+    consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
   };
 
   const ctx = {
@@ -995,6 +1009,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1031,6 +1046,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1067,6 +1083,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1088,6 +1105,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1108,6 +1126,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1183,6 +1202,7 @@ export async function runHeartbeatOnce(opts: {
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     await updateTaskTimestamps();
+    consumeInspectedSystemEvents();
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);
