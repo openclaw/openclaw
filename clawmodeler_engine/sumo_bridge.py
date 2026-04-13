@@ -22,9 +22,9 @@ def prepare_sumo_bridge(workspace: Path, run_id: str, scenario_id: str = "baseli
     if not manifest_path.exists():
         raise InsufficientDataError(f"Run manifest not found: {manifest_path}")
 
-    zones = load_zones(receipt)
-    socio = load_socio(receipt)
-    network_edges = load_sumo_network_edges(receipt)
+    zones = load_zones(workspace, receipt)
+    socio = load_socio(workspace, receipt)
+    network_edges = load_sumo_network_edges(workspace, receipt)
     if not network_edges:
         raise InsufficientDataError(
             "SUMO bridge requires staged network_edges.csv with from_zone_id,to_zone_id,minutes."
@@ -140,7 +140,7 @@ def run_sumo_bridge(workspace: Path, run_id: str, scenario_id: str = "baseline")
 
 def validate_sumo_bridge(workspace: Path, run_id: str, scenario_id: str = "baseline") -> Path:
     receipt = load_receipt(workspace)
-    zones = load_zones(receipt)
+    zones = load_zones(workspace, receipt)
     bridge_dir = workspace / "runs" / run_id / "outputs" / "bridges" / "sumo"
     run_manifest_path = bridge_dir / "sumo_run_manifest.json"
     if not run_manifest_path.exists():
@@ -268,8 +268,8 @@ def validate_sumo_references(
     return blockers
 
 
-def load_sumo_network_edges(receipt: dict[str, Any]) -> list[dict[str, Any]]:
-    paths = artifact_paths(receipt, "network_edges_csv")
+def load_sumo_network_edges(workspace: Path, receipt: dict[str, Any]) -> list[dict[str, Any]]:
+    paths = artifact_paths(workspace, receipt, "network_edges_csv")
     if not paths:
         return []
     rows: list[dict[str, Any]] = []

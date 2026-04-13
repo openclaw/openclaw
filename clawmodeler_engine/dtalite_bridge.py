@@ -15,9 +15,9 @@ def prepare_dtalite_bridge(workspace: Path, run_id: str, scenario_id: str = "bas
     if not manifest_path.exists():
         raise InsufficientDataError(f"Run manifest not found: {manifest_path}")
 
-    zones = load_zones(receipt)
-    socio = load_socio(receipt)
-    network_edges = load_sumo_network_edges(receipt)
+    zones = load_zones(workspace, receipt)
+    socio = load_socio(workspace, receipt)
+    network_edges = load_sumo_network_edges(workspace, receipt)
     if not network_edges:
         raise InsufficientDataError(
             "DTALite bridge requires staged network_edges.csv with from_zone_id,to_zone_id,minutes."

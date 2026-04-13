@@ -50,7 +50,7 @@ def prepare_all_bridges(
 
     results: list[dict[str, Any]] = []
     for bridge in bridges:
-        missing = missing_required_inputs(receipt, bridge["requires"])
+        missing = missing_required_inputs(workspace, receipt, bridge["requires"])
         if missing:
             results.append(
                 {
@@ -90,5 +90,7 @@ def prepare_all_bridges(
     return output_path
 
 
-def missing_required_inputs(receipt: dict[str, Any], kinds: tuple[str, ...]) -> list[str]:
-    return [kind for kind in kinds if not artifact_paths(receipt, kind)]
+def missing_required_inputs(
+    workspace: Path, receipt: dict[str, Any], kinds: tuple[str, ...]
+) -> list[str]:
+    return [kind for kind in kinds if not artifact_paths(workspace, receipt, kind)]

@@ -26,15 +26,15 @@ def run_full_stack(
     paths: dict[str, Path],
 ) -> dict[str, Any]:
     question = load_optional_json(workspace / "analysis_plan.json").get("question", {})
-    zones = load_zones(receipt)
-    socio = load_socio(receipt)
+    zones = load_zones(workspace, receipt)
+    socio = load_socio(workspace, receipt)
     scenario_specs = normalize_scenarios(question, scenarios)
 
     outputs: dict[str, list[str]] = {"tables": [], "maps": [], "figures": [], "bridges": []}
     fact_blocks: list[dict[str, Any]] = []
 
     scenario_rows = build_scenario_socio_rows(socio, scenario_specs)
-    accessibility = compute_accessibility(receipt, zones, scenario_rows, question)
+    accessibility = compute_accessibility(workspace, receipt, zones, scenario_rows, question)
     accessibility_path = paths["tables"] / "accessibility_by_zone.csv"
     write_csv(accessibility_path, accessibility)
     outputs["tables"].append(str(accessibility_path))
@@ -53,14 +53,14 @@ def run_full_stack(
     outputs["tables"].append(str(vmt_path))
     fact_blocks.extend(vmt_fact_blocks(vmt_path, vmt_rows))
 
-    transit_rows = compute_transit_metrics(receipt)
+    transit_rows = compute_transit_metrics(workspace, receipt)
     if transit_rows:
         transit_path = paths["tables"] / "transit_metrics_by_route.csv"
         write_csv(transit_path, transit_rows)
         outputs["tables"].append(str(transit_path))
         fact_blocks.extend(transit_fact_blocks(transit_path, transit_rows))
 
-    score_rows = compute_project_scores(receipt, delta_rows, vmt_rows)
+    score_rows = compute_project_scores(workspace, receipt, delta_rows, vmt_rows)
     score_path = paths["tables"] / "project_scores.csv"
     write_csv(score_path, score_rows)
     outputs["tables"].append(str(score_path))
@@ -91,7 +91,7 @@ def run_full_stack(
             "narrative_engine",
             "bridge_exports",
         ],
-        "assumptions": collect_assumptions(question, receipt, transit_rows),
+        "assumptions": collect_assumptions(workspace, question, receipt, transit_rows),
     }
 
 
@@ -101,16 +101,33 @@ def load_optional_json(path: Path) -> dict[str, Any]:
     return read_json(path)
 
 
-def artifact_paths(receipt: dict[str, Any], kind: str) -> list[Path]:
+def resolve_staged_path(workspace: Path, receipt: dict[str, Any], staged_path: object) -> Path:
+    path = Path(str(staged_path))
+    if path.is_absolute():
+        return path
+
+    receipt_root_raw = receipt.get("workspace", {}).get("root")
+    if receipt_root_raw:
+        receipt_root = Path(str(receipt_root_raw))
+        if not receipt_root.is_absolute():
+            try:
+                return workspace / path.relative_to(receipt_root)
+            except ValueError:
+                pass
+
+    return workspace / path
+
+
+def artifact_paths(workspace: Path, receipt: dict[str, Any], kind: str) -> list[Path]:
     paths: list[Path] = []
     for item in receipt.get("inputs", []):
         if item.get("kind") == kind:
-            paths.append(Path(str(item["staged_path"])))
+            paths.append(resolve_staged_path(workspace, receipt, item["staged_path"]))
     return paths
 
 
-def load_zones(receipt: dict[str, Any]) -> list[dict[str, Any]]:
-    paths = artifact_paths(receipt, "zones_geojson")
+def load_zones(workspace: Path, receipt: dict[str, Any]) -> list[dict[str, Any]]:
+    paths = artifact_paths(workspace, receipt, "zones_geojson")
     if not paths:
         raise InputValidationError("A zones GeoJSON input is required for full-stack analysis.")
     data = read_json(paths[0])
@@ -129,8 +146,8 @@ def load_zones(receipt: dict[str, Any]) -> list[dict[str, Any]]:
     return zones
 
 
-def load_socio(receipt: dict[str, Any]) -> list[dict[str, Any]]:
-    paths = artifact_paths(receipt, "socio_csv")
+def load_socio(workspace: Path, receipt: dict[str, Any]) -> list[dict[str, Any]]:
+    paths = artifact_paths(workspace, receipt, "socio_csv")
     if not paths:
         raise InputValidationError("A socio CSV with zone_id is required for full-stack analysis.")
     with paths[0].open("r", encoding="utf-8-sig", newline="") as file:
@@ -199,6 +216,7 @@ def build_scenario_socio_rows(
 
 
 def compute_accessibility(
+    workspace: Path,
     receipt: dict[str, Any],
     zones: list[dict[str, Any]],
     scenario_rows: list[dict[str, Any]],
@@ -214,7 +232,7 @@ def compute_accessibility(
     for row in scenario_rows:
         rows_by_scenario.setdefault(row["scenario_id"], []).append(row)
 
-    graph, graph_engine, zone_node_map = load_travel_time_graph(receipt)
+    graph, graph_engine, zone_node_map = load_travel_time_graph(workspace, receipt)
     output: list[dict[str, Any]] = []
     for scenario_id, socio_rows in rows_by_scenario.items():
         for origin in zones:
@@ -252,10 +270,11 @@ def compute_accessibility(
 
 
 def load_travel_time_graph(
+    workspace: Path,
     receipt: dict[str, Any],
 ) -> tuple[dict[str, list[tuple[str, float]]], str, dict[str, str]]:
-    zone_node_map = load_zone_node_map(receipt)
-    paths = artifact_paths(receipt, "network_edges_csv")
+    zone_node_map = load_zone_node_map(workspace, receipt)
+    paths = artifact_paths(workspace, receipt, "network_edges_csv")
     if paths:
         return load_network_edges_csv(paths[0]), "network_edges_dijkstra", zone_node_map
     workspace_root = Path(str(receipt.get("workspace", {}).get("root", "")))
@@ -265,8 +284,8 @@ def load_travel_time_graph(
     return {}, "", zone_node_map
 
 
-def load_zone_node_map(receipt: dict[str, Any]) -> dict[str, str]:
-    paths = artifact_paths(receipt, "zone_node_map_csv")
+def load_zone_node_map(workspace: Path, receipt: dict[str, Any]) -> dict[str, str]:
+    paths = artifact_paths(workspace, receipt, "zone_node_map_csv")
     if not paths:
         return {}
     mapping: dict[str, str] = {}
@@ -430,8 +449,8 @@ def compute_vmt_screening(
     return rows
 
 
-def compute_transit_metrics(receipt: dict[str, Any]) -> list[dict[str, Any]]:
-    gtfs_paths = artifact_paths(receipt, "gtfs_zip")
+def compute_transit_metrics(workspace: Path, receipt: dict[str, Any]) -> list[dict[str, Any]]:
+    gtfs_paths = artifact_paths(workspace, receipt, "gtfs_zip")
     if not gtfs_paths:
         return []
 
@@ -494,11 +513,12 @@ def compute_transit_metrics(receipt: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def compute_project_scores(
+    workspace: Path,
     receipt: dict[str, Any],
     delta_rows: list[dict[str, Any]],
     vmt_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    project_rows = load_project_rows(receipt)
+    project_rows = load_project_rows(workspace, receipt)
     if not project_rows:
         delta_by_scenario: dict[str, float] = {}
         for row in delta_rows:
@@ -554,9 +574,9 @@ def compute_project_scores(
     return sorted(rows, key=lambda row: float(row["total_score"]), reverse=True)
 
 
-def load_project_rows(receipt: dict[str, Any]) -> list[dict[str, str]]:
+def load_project_rows(workspace: Path, receipt: dict[str, Any]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for path in artifact_paths(receipt, "candidate_projects_csv"):
+    for path in artifact_paths(workspace, receipt, "candidate_projects_csv"):
         with path.open("r", encoding="utf-8-sig", newline="") as file:
             rows.extend(dict(row) for row in csv.DictReader(file))
     return rows
@@ -635,7 +655,10 @@ def scenario_summary_rows(scenarios: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def collect_assumptions(
-    question: dict[str, Any], receipt: dict[str, Any], transit_rows: list[dict[str, Any]]
+    workspace: Path,
+    question: dict[str, Any],
+    receipt: dict[str, Any],
+    transit_rows: list[dict[str, Any]],
 ) -> list[str]:
     assumptions = [
         "Accessibility uses network edge shortest paths when a network_edges CSV is staged; "
@@ -649,7 +672,7 @@ def collect_assumptions(
         f"{parse_float(question.get('kg_co2e_per_vmt'), DEFAULT_KG_CO2E_PER_VMT)} "
         "kg CO2e per VMT unless overridden.",
     ]
-    if artifact_paths(receipt, "gtfs_zip") and not transit_rows:
+    if artifact_paths(workspace, receipt, "gtfs_zip") and not transit_rows:
         assumptions.append("GTFS was present but no route time metrics were produced.")
     return assumptions
 

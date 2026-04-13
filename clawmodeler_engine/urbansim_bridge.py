@@ -24,8 +24,8 @@ def prepare_urbansim_bridge(
         raise InsufficientDataError(f"Run manifest not found: {manifest_path}")
 
     question = load_optional_json(workspace / "analysis_plan.json").get("question", {})
-    zones = load_zones(receipt)
-    socio = load_socio(receipt)
+    zones = load_zones(workspace, receipt)
+    socio = load_socio(workspace, receipt)
     scenario_specs = normalize_scenarios(question, [scenario_id])
     scenario_rows = build_scenario_socio_rows(socio, scenario_specs)
 

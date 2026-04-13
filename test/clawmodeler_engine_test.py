@@ -19,10 +19,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ClawModelerEngineTest(unittest.TestCase):
-    def run_engine(self, *args: str, expected_code: int = 0) -> subprocess.CompletedProcess[str]:
+    def run_engine(
+        self, *args: str, expected_code: int = 0, cwd: Path = REPO_ROOT
+    ) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(REPO_ROOT)
         result = subprocess.run(
             [sys.executable, "-m", "clawmodeler_engine", *args],
-            cwd=REPO_ROOT,
+            cwd=cwd,
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -228,6 +233,61 @@ class ClawModelerEngineTest(unittest.TestCase):
                     / "bridges"
                     / "sumo"
                     / "bridge_manifest.json"
+                ).exists()
+            )
+
+    def test_run_resolves_relative_receipt_paths_from_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            intake_cwd = temp / "intake-cwd"
+            later_cwd = temp / "later-cwd"
+            intake_cwd.mkdir()
+            later_cwd.mkdir()
+            workspace = intake_cwd / "workspace"
+            inputs = write_demo_inputs(intake_cwd)
+            input_paths = [
+                inputs["zones"],
+                inputs["socio"],
+                inputs["projects"],
+                inputs["network_edges"],
+                inputs["gtfs"],
+            ]
+
+            self.run_engine(
+                "intake",
+                "--workspace",
+                "workspace",
+                "--inputs",
+                *(str(path.relative_to(intake_cwd)) for path in input_paths),
+                cwd=intake_cwd,
+            )
+            self.run_engine(
+                "plan",
+                "--workspace",
+                str(workspace),
+                "--question",
+                str(inputs["question"]),
+                cwd=later_cwd,
+            )
+            self.run_engine(
+                "run",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                "relpaths",
+                "--scenarios",
+                "baseline",
+                cwd=later_cwd,
+            )
+
+            self.assertTrue(
+                (
+                    workspace
+                    / "runs"
+                    / "relpaths"
+                    / "outputs"
+                    / "tables"
+                    / "accessibility_by_zone.csv"
                 ).exists()
             )
 

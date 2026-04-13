@@ -15,7 +15,7 @@ def prepare_tbest_bridge(workspace: Path, run_id: str, scenario_id: str = "basel
     manifest_path = workspace / "runs" / run_id / "manifest.json"
     if not manifest_path.exists():
         raise InsufficientDataError(f"Run manifest not found: {manifest_path}")
-    gtfs_paths = artifact_paths(receipt, "gtfs_zip")
+    gtfs_paths = artifact_paths(workspace, receipt, "gtfs_zip")
     if not gtfs_paths:
         raise InsufficientDataError("TBEST bridge requires a staged GTFS zip feed.")
 

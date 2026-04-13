@@ -48,7 +48,7 @@ def build_zone_node_map(
             f"GraphML file has no node coordinates usable for zone mapping: {graphml_path}"
         )
 
-    zones = load_zones(receipt)
+    zones = load_zones(workspace, receipt)
     rows: list[dict[str, Any]] = []
     for zone in zones:
         nearest = nearest_node(
