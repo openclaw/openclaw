@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -105,6 +106,16 @@ export function applyCliProfileEnv(params: {
 
   // Convenience only: fill defaults, never override explicit env values.
   env.OPENCLAW_PROFILE = profile;
+
+  // Clear inherited launchd label when it conflicts with the requested profile,
+  // so resolveLaunchAgentLabel() re-derives from OPENCLAW_PROFILE instead of
+  // short-circuiting on the inherited value. Preserve explicit operator overrides
+  // that already match the target profile's expected label.
+  const inheritedLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const profileLabel = resolveGatewayLaunchAgentLabel(profile);
+  if (inheritedLabel && inheritedLabel !== profileLabel) {
+    delete env.OPENCLAW_LAUNCHD_LABEL;
+  }
 
   const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
   const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
