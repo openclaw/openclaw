@@ -221,6 +221,9 @@ should activate it later.
 
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
+Current consumers use it as a narrowing hint before broader plugin loading, so
+missing activation metadata usually only costs performance; it should not
+change correctness while legacy manifest ownership fallbacks still exist.
 
 ```json
 {
@@ -241,6 +244,16 @@ not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
 | `onChannels`     | No       | `string[]`                                           | Channel ids that should activate this plugin.                     |
 | `onRoutes`       | No       | `string[]`                                           | Route kinds that should activate this plugin.                     |
 | `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. |
+
+Current live consumers:
+
+- command-triggered CLI planning falls back to legacy
+  `commandAliases[].cliCommand` or `commandAliases[].name`
+- channel-triggered setup/channel planning falls back to legacy `channels[]`
+  ownership when explicit channel activation metadata is missing
+- provider-triggered setup/runtime planning falls back to legacy
+  `providers[]` and top-level `cliBackends[]` ownership when explicit provider
+  activation metadata is missing
 
 ## setup reference
 
