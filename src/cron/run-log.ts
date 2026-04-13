@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import {
@@ -15,6 +17,7 @@ export type CronRunLogEntry = {
   action: "finished";
   status?: CronRunStatus;
   error?: string;
+  errorReason?: FailoverReason;
   summary?: string;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
@@ -279,12 +282,17 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         obj.usage && typeof obj.usage === "object"
           ? (obj.usage as Record<string, unknown>)
           : undefined;
+      const normalizedError = typeof obj.error === "string" ? obj.error : undefined;
       const entry: CronRunLogEntry = {
         ts: obj.ts,
         jobId: obj.jobId,
         action: "finished",
         status: obj.status,
-        error: obj.error,
+        error: normalizedError,
+        errorReason:
+          typeof obj.errorReason === "string"
+            ? obj.errorReason
+            : (resolveFailoverReasonFromError(normalizedError) ?? undefined),
         summary: obj.summary,
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
@@ -375,7 +383,8 @@ export async function readCronRunLogEntriesPage(
     statuses,
     deliveryStatuses,
     query,
-    queryTextForEntry: (entry) => [entry.summary ?? "", entry.error ?? "", entry.jobId].join(" "),
+    queryTextForEntry: (entry) =>
+      [entry.summary ?? "", entry.error ?? "", entry.errorReason ?? "", entry.jobId].join(" "),
   });
   const sorted =
     sortDir === "asc"
@@ -432,7 +441,13 @@ export async function readCronRunLogEntriesPageAll(
     query,
     queryTextForEntry: (entry) => {
       const jobName = opts.jobNameById?.[entry.jobId] ?? "";
-      return [entry.summary ?? "", entry.error ?? "", entry.jobId, jobName].join(" ");
+      return [
+        entry.summary ?? "",
+        entry.error ?? "",
+        entry.errorReason ?? "",
+        entry.jobId,
+        jobName,
+      ].join(" ");
     },
   });
   const sorted =
