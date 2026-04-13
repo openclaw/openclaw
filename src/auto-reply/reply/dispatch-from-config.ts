@@ -427,6 +427,25 @@ export async function dispatchReplyFromConfig(
     ? toPluginConversationBinding(pluginOwnedBindingRecord)
     : null;
 
+  // Resolve sendPolicy early so every outbound path below (plugin-binding
+  // notices, fast-abort, normal dispatch) honors suppressDelivery. Under
+  // sendPolicy: "deny" the agent still processes inbound, but no outbound
+  // reply/notice/indicator is allowed. See #53328.
+  const sendPolicy = resolveSendPolicy({
+    cfg,
+    entry: sessionStoreEntry.entry,
+    sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    channel:
+      sessionStoreEntry.entry?.channel ??
+      ctx.OriginatingChannel ??
+      ctx.Surface ??
+      ctx.Provider ??
+      undefined,
+    chatType: sessionStoreEntry.entry?.chatType,
+  });
+  const suppressDelivery = sendPolicy === "deny";
+  const suppressHookUserDelivery = suppressAcpChildUserDelivery || suppressDelivery;
+
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
     | "plugin-bound-fallback-no-handler"
@@ -434,68 +453,78 @@ export async function dispatchReplyFromConfig(
 
   if (pluginOwnedBinding) {
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    logVerbose(
-      `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
-    );
-    const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
-      ? await hookRunner.runInboundClaimForPluginOutcome(
-          pluginOwnedBinding.pluginId,
-          inboundClaimEvent,
-          inboundClaimContext,
-        )
-      : (() => {
-          const pluginLoaded =
-            getGlobalPluginRegistry()?.plugins.some(
-              (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
-            ) ?? false;
-          return pluginLoaded
-            ? ({ status: "no_handler" } as const)
-            : ({ status: "missing_plugin" } as const);
-        })();
+    if (suppressDelivery) {
+      // Plugin-bound inbound handlers typically emit outbound replies we
+      // cannot rewind. Under deny, skip the plugin claim entirely and fall
+      // through to normal (suppressed) agent processing so no delivery leaks
+      // via the plugin path. See #53328.
+      logVerbose(
+        `plugin-bound inbound skipped under sendPolicy: deny (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
+      );
+    } else {
+      logVerbose(
+        `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
+      );
+      const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
+        ? await hookRunner.runInboundClaimForPluginOutcome(
+            pluginOwnedBinding.pluginId,
+            inboundClaimEvent,
+            inboundClaimContext,
+          )
+        : (() => {
+            const pluginLoaded =
+              getGlobalPluginRegistry()?.plugins.some(
+                (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
+              ) ?? false;
+            return pluginLoaded
+              ? ({ status: "no_handler" } as const)
+              : ({ status: "missing_plugin" } as const);
+          })();
 
-    switch (targetedClaimOutcome.status) {
-      case "handled": {
-        markIdle("plugin_binding_dispatch");
-        recordProcessed("completed", { reason: "plugin-bound-handled" });
-        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
-      }
-      case "missing_plugin":
-      case "no_handler": {
-        pluginFallbackReason =
-          targetedClaimOutcome.status === "missing_plugin"
-            ? "plugin-bound-fallback-missing-plugin"
-            : "plugin-bound-fallback-no-handler";
-        if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
-          const didSendNotice = await sendBindingNotice(
-            { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
-            "additive",
-          );
-          if (didSendNotice) {
-            markPluginBindingFallbackNoticeShown(pluginOwnedBinding.bindingId);
-          }
+      switch (targetedClaimOutcome.status) {
+        case "handled": {
+          markIdle("plugin_binding_dispatch");
+          recordProcessed("completed", { reason: "plugin-bound-handled" });
+          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
-        break;
-      }
-      case "declined": {
-        await sendBindingNotice(
-          { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
-          "terminal",
-        );
-        markIdle("plugin_binding_declined");
-        recordProcessed("completed", { reason: "plugin-bound-declined" });
-        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
-      }
-      case "error": {
-        logVerbose(
-          `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
-        );
-        await sendBindingNotice(
-          { text: buildPluginBindingErrorText(pluginOwnedBinding) },
-          "terminal",
-        );
-        markIdle("plugin_binding_error");
-        recordProcessed("completed", { reason: "plugin-bound-error" });
-        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        case "missing_plugin":
+        case "no_handler": {
+          pluginFallbackReason =
+            targetedClaimOutcome.status === "missing_plugin"
+              ? "plugin-bound-fallback-missing-plugin"
+              : "plugin-bound-fallback-no-handler";
+          if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
+            const didSendNotice = await sendBindingNotice(
+              { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
+              "additive",
+            );
+            if (didSendNotice) {
+              markPluginBindingFallbackNoticeShown(pluginOwnedBinding.bindingId);
+            }
+          }
+          break;
+        }
+        case "declined": {
+          await sendBindingNotice(
+            { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
+            "terminal",
+          );
+          markIdle("plugin_binding_declined");
+          recordProcessed("completed", { reason: "plugin-bound-declined" });
+          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        }
+        case "error": {
+          logVerbose(
+            `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
+          );
+          await sendBindingNotice(
+            { text: buildPluginBindingErrorText(pluginOwnedBinding) },
+            "terminal",
+          );
+          markIdle("plugin_binding_error");
+          recordProcessed("completed", { reason: "plugin-bound-error" });
+          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        }
       }
     }
   }
@@ -536,24 +565,30 @@ export async function dispatchReplyFromConfig(
     }
     const fastAbort = await fastAbortResolver({ ctx, cfg });
     if (fastAbort.handled) {
-      const payload = {
-        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
-      } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
-      const result = await routeReplyToOriginating(payload);
-      if (result) {
-        queuedFinal = result.ok;
-        if (result.ok) {
-          routedFinalCount += 1;
-        }
-        if (!result.ok) {
-          logVerbose(
-            `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
-          );
+      if (!suppressDelivery) {
+        const payload = {
+          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
+        } satisfies ReplyPayload;
+        const result = await routeReplyToOriginating(payload);
+        if (result) {
+          queuedFinal = result.ok;
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+        } else {
+          queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(payload);
+        logVerbose(
+          `dispatch-from-config: fast_abort reply suppressed by sendPolicy: deny (session=${sessionKey ?? "unknown"})`,
+        );
       }
       const counts = dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
@@ -561,21 +596,6 @@ export async function dispatchReplyFromConfig(
       markIdle("message_completed");
       return { queuedFinal, counts };
     }
-
-    const sendPolicy = resolveSendPolicy({
-      cfg,
-      entry: sessionStoreEntry.entry,
-      sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-      channel:
-        sessionStoreEntry.entry?.channel ??
-        ctx.OriginatingChannel ??
-        ctx.Surface ??
-        ctx.Provider ??
-        undefined,
-      chatType: sessionStoreEntry.entry?.chatType,
-    });
-    const suppressDelivery = sendPolicy === "deny";
-    const suppressHookUserDelivery = suppressAcpChildUserDelivery || suppressDelivery;
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
