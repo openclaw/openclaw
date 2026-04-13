@@ -173,7 +173,7 @@ async function resolveWritablePage(params: {
   config: ResolvedMemoryWikiConfig;
   lookup: string;
 }): Promise<QueryableWikiPage | null> {
-  const pages = await readQueryableWikiPages(params.config.vault.path);
+  const pages = await readQueryableWikiPages(params.config.vault.path, params.config);
   return resolveQueryableWikiPageByLookup(pages, params.lookup);
 }
 
@@ -182,7 +182,7 @@ async function applyCreateSynthesisMutation(params: {
   mutation: CreateSynthesisMemoryWikiMutation;
 }): Promise<{ changed: boolean; pagePath: string; pageId: string }> {
   const slug = slugifyWikiSegment(params.mutation.title);
-  const pagePath = path.join("syntheses", `${slug}.md`).replace(/\\/g, "/");
+  const pagePath = path.join(params.config.layout.synthesesDir, `${slug}.md`).replace(/\\/g, "/");
   const absolutePath = path.join(params.config.vault.path, pagePath);
   const existing = await fs.readFile(absolutePath, "utf8").catch(() => "");
   const parsed = parseWikiMarkdown(existing);

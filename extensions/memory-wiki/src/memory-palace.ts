@@ -88,7 +88,7 @@ function comparePalaceItems(left: MemoryWikiPalaceItem, right: MemoryWikiPalaceI
 export async function listMemoryWikiPalace(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiPalaceStatus> {
-  const pages = await readQueryableWikiPages(config.vault.path);
+  const pages = await readQueryableWikiPages(config.vault.path, config);
   const items = pages
     .map((page) => {
       const parsed = parseWikiMarkdown(page.raw);
