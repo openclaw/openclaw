@@ -154,10 +154,37 @@ describe("resolveFeishuAllowlistMatch", () => {
   it("matches normalized ID entries", () => {
     expect(
       resolveFeishuAllowlistMatch({
-        allowFrom: ["feishu:user:OU_ALLOWED"],
-        senderId: "ou_allowed",
+        allowFrom: ["feishu:user:ou_ALLOWED"],
+        senderId: "ou_ALLOWED",
       }),
-    ).toEqual({ allowed: true, matchKey: "ou_allowed", matchSource: "id" });
+    ).toEqual({ allowed: true, matchKey: "user:ou_ALLOWED", matchSource: "id" });
+  });
+
+  it("accepts repeated provider prefixes for legacy allowlist entries", () => {
+    expect(
+      resolveFeishuAllowlistMatch({
+        allowFrom: ["feishu:feishu:user:ou_ALLOWED"],
+        senderId: "ou_ALLOWED",
+      }),
+    ).toEqual({ allowed: true, matchKey: "user:ou_ALLOWED", matchSource: "id" });
+  });
+
+  it("does not fold opaque IDs to lowercase", () => {
+    expect(
+      resolveFeishuAllowlistMatch({
+        allowFrom: ["user:OU_ALLOWED"],
+        senderId: "ou_ALLOWED",
+      }),
+    ).toEqual({ allowed: false });
+  });
+
+  it("keeps user and chat allowlist namespaces distinct", () => {
+    expect(
+      resolveFeishuAllowlistMatch({
+        allowFrom: ["user:oc_group_123"],
+        senderId: "oc_group_123",
+      }),
+    ).toEqual({ allowed: false });
   });
 
   it("supports user_id as an additional immutable sender candidate", () => {
@@ -167,7 +194,7 @@ describe("resolveFeishuAllowlistMatch", () => {
         senderId: "ou_other",
         senderIds: ["on_user_123"],
       }),
-    ).toEqual({ allowed: true, matchKey: "on_user_123", matchSource: "id" });
+    ).toEqual({ allowed: true, matchKey: "user:on_user_123", matchSource: "id" });
   });
 
   it("does not authorize based on display-name collision", () => {
