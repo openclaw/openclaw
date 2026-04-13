@@ -1537,12 +1537,13 @@ export async function runEmbeddedPiAgent(
           });
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
-            provider: sessionLastAssistant?.provider ?? provider,
-            // agentMeta.model is persisted into the session store. The store
-            // already tracks provider separately, so model should be the bare
-            // provider-local ID (e.g. "gpt-5.4"), not a provider-qualified
-            // ref which would produce a doubled "openai/openai/gpt-5.4" pair.
-            // In hybrid mode, use the stored execution model ID directly.
+            // In hybrid mode, always report the execution provider/model so
+            // the persisted session identity is consistent regardless of
+            // whether this turn routed to the personality model.
+            provider:
+              personalityMode === "hybrid"
+                ? executionProvider
+                : (sessionLastAssistant?.provider ?? provider),
             model:
               personalityMode === "hybrid"
                 ? executionModelId
@@ -1572,6 +1573,67 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
+          // --- Personality closeout (pre-send sanitizer, Option B) ---
+          // Runs BEFORE payloadsWithToolMedia so the rewritten text is
+          // included in the merged output the user receives.
+          if (
+            personalityMode === "hybrid" &&
+            turnIntent === "execution" &&
+            personalityModelRef &&
+            !aborted &&
+            payloads.length > 0 &&
+            !attempt.didSendViaMessagingTool
+          ) {
+            const visibleText = payloads
+              .filter((p) => typeof p.text === "string" && !p.isError && !p.isReasoning)
+              .map((p) => p.text)
+              .join("\n\n")
+              .trim();
+            if (visibleText.length > 0 && visibleText.length < 4000) {
+              const personalitySlash = personalityModelRef.indexOf("/");
+              const pProvider =
+                personalitySlash > 0
+                  ? personalityModelRef.slice(0, personalitySlash)
+                  : executionProvider;
+              const pModelId =
+                personalitySlash > 0
+                  ? personalityModelRef.slice(personalitySlash + 1)
+                  : personalityModelRef;
+              log.info(
+                `personality-closeout: runId=${params.runId} ` +
+                  `executionModel=${executionProvider}/${executionModelId} ` +
+                  `personalityModel=${pProvider}/${pModelId} — rewriting ${visibleText.length} chars`,
+              );
+              const rewritten = await runPersonalityCloseout({
+                cfg: params.config,
+                personalityProvider: pProvider,
+                personalityModelId: pModelId,
+                agentDir,
+                executionText: visibleText,
+                signal: params.abortSignal,
+              });
+              if (rewritten) {
+                let rewrittenUsed = false;
+                payloads = payloads.map((p) => {
+                  if (
+                    typeof p.text === "string" &&
+                    !p.isError &&
+                    !p.isReasoning &&
+                    !rewrittenUsed
+                  ) {
+                    rewrittenUsed = true;
+                    return { ...p, text: rewritten };
+                  }
+                  if (typeof p.text === "string" && !p.isError && !p.isReasoning && rewrittenUsed) {
+                    return { ...p, text: "" };
+                  }
+                  return p;
+                });
+              }
+            }
+          }
+          // --- End personality closeout ---
+
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
             payloads,
             toolMediaUrls: attempt.toolMediaUrls,
@@ -1757,73 +1819,6 @@ export async function runEmbeddedPiAgent(
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
-
-          // --- Personality closeout (pre-send sanitizer, Option B) ---
-          // When hybrid mode is active and this was an execution turn, catch
-          // the visible text before delivery and run it through the personality
-          // model (e.g. gpt-5.2) for emotional rewriting. The personality model
-          // gets SOUL.md in its system prompt automatically via bootstrap files.
-          // Best-effort: if the personality call fails, deliver the original.
-          if (
-            personalityMode === "hybrid" &&
-            turnIntent === "execution" &&
-            personalityModelRef &&
-            !aborted &&
-            payloads.length > 0 &&
-            !attempt.didSendViaMessagingTool
-          ) {
-            const visibleText = payloads
-              .filter((p) => typeof p.text === "string" && !p.isError && !p.isReasoning)
-              .map((p) => p.text)
-              .join("\n\n")
-              .trim();
-            if (visibleText.length > 0 && visibleText.length < 4000) {
-              const personalitySlash = personalityModelRef.indexOf("/");
-              const pProvider =
-                personalitySlash > 0 ? personalityModelRef.slice(0, personalitySlash) : provider;
-              const pModelId =
-                personalitySlash > 0
-                  ? personalityModelRef.slice(personalitySlash + 1)
-                  : personalityModelRef;
-              log.info(
-                `personality-closeout: runId=${params.runId} ` +
-                  `executionModel=${executionProvider}/${executionModelId} ` +
-                  `personalityModel=${pProvider}/${pModelId} — rewriting ${visibleText.length} chars`,
-              );
-              const rewritten = await runPersonalityCloseout({
-                cfg: params.config,
-                personalityProvider: pProvider,
-                personalityModelId: pModelId,
-                agentDir,
-                executionText: visibleText,
-                signal: params.abortSignal,
-              });
-              if (rewritten) {
-                // Replace visible text payloads with the personality-rewritten
-                // version. Keep non-text payloads (media, errors, reasoning)
-                // intact so tool results and attachments are not lost.
-                let rewrittenUsed = false;
-                payloads = payloads.map((p) => {
-                  if (
-                    typeof p.text === "string" &&
-                    !p.isError &&
-                    !p.isReasoning &&
-                    !rewrittenUsed
-                  ) {
-                    rewrittenUsed = true;
-                    return { ...p, text: rewritten };
-                  }
-                  // Clear remaining text payloads that were part of the
-                  // original visible text (now folded into the rewrite).
-                  if (typeof p.text === "string" && !p.isError && !p.isReasoning && rewrittenUsed) {
-                    return { ...p, text: "" };
-                  }
-                  return p;
-                });
-              }
-            }
-          }
-          // --- End personality closeout ---
 
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
