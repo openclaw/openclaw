@@ -690,6 +690,16 @@ export ATOM_API_KEY="atom-local"
 
 Then set a model (replace with one of the IDs returned by `/v1/models`):
 
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "atom/your-model-id" } },
+  },
+}
+```
+
+See [/providers/atom](/providers/atom) for setup details.
+
 ### LM Studio
 
 LM Studio ships as a bundled provider plugin which uses the native API:
@@ -703,7 +713,6 @@ Then set a model (replace with one of the IDs returned by `http://localhost:1234
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "atom/your-model-id" } },
     defaults: { model: { primary: "lmstudio/openai/gpt-oss-20b" } },
   },
 }
