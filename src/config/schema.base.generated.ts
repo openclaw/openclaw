@@ -4316,7 +4316,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "boolean",
                         title: "Enable Tool Result Micro-Compression",
                         description:
-                          "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). Disable to preserve current pruning behavior exactly.",
+                          "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). When enabled, line endings are normalized and outer empty lines are removed before any optional ANSI stripping, trailing-whitespace trimming, or blank-line collapse. Disable to preserve current pruning behavior exactly.",
                       },
                       stripAnsi: {
                         type: "boolean",
@@ -23718,7 +23718,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.contextPruning.microCompress.enabled": {
       label: "Enable Tool Result Micro-Compression",
-      help: "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). Disable to preserve current pruning behavior exactly.",
+      help: "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). When enabled, line endings are normalized and outer empty lines are removed before any optional ANSI stripping, trailing-whitespace trimming, or blank-line collapse. Disable to preserve current pruning behavior exactly.",
       tags: ["advanced"],
     },
     "agents.defaults.contextPruning.microCompress.stripAnsi": {
