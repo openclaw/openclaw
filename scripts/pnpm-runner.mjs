@@ -17,7 +17,7 @@ export function resolvePnpmRunner(params = {}) {
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
     // On WSL/Linux, npm_execpath may point to a native ELF binary.
     // Running it via node will fail — exec it directly instead.
-    const isJsScript = /\.c?js$/.test(npmExecPath);
+    const isJsScript = /\.c?js$/i.test(npmExecPath);
     if (isJsScript) {
       return {
         command: nodeExecPath,
