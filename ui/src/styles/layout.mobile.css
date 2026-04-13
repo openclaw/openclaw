@@ -377,13 +377,13 @@
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session--mobile {
     min-width: unset;
     max-width: unset;
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session--mobile select {
     width: 100%;
     font-size: 14px;
     padding: 10px 12px;

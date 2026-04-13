@@ -4,7 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { renderChatSessionSelect } from "../app-render.helpers.ts";
+import { renderChatMobileToggle, renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   createModelCatalog,
@@ -151,6 +151,13 @@ function createChatHeaderState(
 
 function flushTasks() {
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+function findSessionSelect(
+  container: ParentNode,
+  target: "desktop" | "mobile",
+): HTMLSelectElement | null {
+  return container.querySelector<HTMLSelectElement>(`select[data-chat-session-select="${target}"]`);
 }
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
@@ -1138,6 +1145,34 @@ describe("chat view", () => {
 
     expect(labels).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
     expect(labels).not.toContain("Subagent:");
+  });
+
+  it("reselects the current desktop session when rerendering to a fallback session option", () => {
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    state.sessionKey = "agent:main:test-b";
+    state.settings.sessionKey = state.sessionKey;
+    render(renderChatSessionSelect(state), container);
+
+    const sessionSelect = findSessionSelect(container, "desktop");
+    expect(sessionSelect?.value).toBe("agent:main:test-b");
+    expect(sessionSelect?.selectedOptions[0]?.value).toBe("agent:main:test-b");
+  });
+
+  it("reselects the current mobile session when rerendering to a fallback session option", () => {
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+
+    state.sessionKey = "agent:main:test-b";
+    state.settings.sessionKey = state.sessionKey;
+    render(renderChatMobileToggle(state), container);
+
+    const sessionSelect = findSessionSelect(container, "mobile");
+    expect(sessionSelect?.value).toBe("agent:main:test-b");
+    expect(sessionSelect?.selectedOptions[0]?.value).toBe("agent:main:test-b");
   });
 
   it("keeps a unique scoped fallback when a grouped session row has no label or displayName", () => {
