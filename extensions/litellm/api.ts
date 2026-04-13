@@ -6,3 +6,4 @@ export {
   LITELLM_DEFAULT_MODEL_ID,
   LITELLM_DEFAULT_MODEL_REF,
 } from "./onboard.js";
+export { configureLitellmNonInteractive, fetchLitellmModels } from "./src/setup.js";
