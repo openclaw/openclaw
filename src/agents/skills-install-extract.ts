@@ -169,6 +169,7 @@ export async function extractArchive(params: {
         timeoutMs,
         kind: "zip",
         stripComponents: strip,
+        beforeWriteToDestination: validateTargetDir,
       });
       return { stdout: "", stderr: "", code: 0 };
     }
@@ -181,6 +182,7 @@ export async function extractArchive(params: {
         kind: "tar",
         stripComponents: strip,
         tarGzip: true,
+        beforeWriteToDestination: validateTargetDir,
       });
       return { stdout: "", stderr: "", code: 0 };
     }

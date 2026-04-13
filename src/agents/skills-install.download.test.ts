@@ -521,6 +521,50 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
     expect(extractionAttempted).toBe(false);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "fails closed when targetDir is replaced between tar.bz2 extract and merge",
+    async () => {
+      const entry = buildEntry("tbz2-before-merge-rebind");
+      const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
+
+      mockArchiveResponse(new Uint8Array([1, 2, 3]));
+
+      runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+        const cmd = (argv[0] ?? []) as string[];
+        if (cmd[0] === "tar" && cmd[1] === "tf") {
+          return runCommandResult({ stdout: "package/hello.txt\n" });
+        }
+        if (cmd[0] === "tar" && cmd[1] === "tvf") {
+          return runCommandResult({
+            stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n",
+          });
+        }
+        if (cmd[0] === "tar" && cmd[1] === "xf") {
+          const stagingDir = cmd[cmd.indexOf("-C") + 1] ?? "";
+          await fs.mkdir(path.join(stagingDir, "package"), { recursive: true });
+          await fs.writeFile(path.join(stagingDir, "package", "hello.txt"), "hi", "utf-8");
+
+          const reboundTargetDir = `${targetDir}-rebound`;
+          await fs.rename(targetDir, reboundTargetDir);
+          await fs.mkdir(targetDir, { recursive: true });
+          return runCommandResult({ stdout: "ok" });
+        }
+        return runCommandResult();
+      });
+
+      const result = await installDownloadSkill({
+        name: "tbz2-before-merge-rebind",
+        url: "https://example.invalid/good.tbz2",
+        archive: "tar.bz2",
+        targetDir,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr.toLowerCase()).toContain("directory changed during install");
+      expect(await fileExists(path.join(targetDir, "package", "hello.txt"))).toBe(false);
+    },
+  );
+
   it("rejects tar.bz2 entries that traverse pre-existing targetDir symlinks", async () => {
     const entry = buildEntry("tbz2-targetdir-symlink");
     const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");

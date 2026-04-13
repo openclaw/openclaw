@@ -7,6 +7,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import type { ArchiveSecurityError } from "./archive.js";
 import { extractArchive, resolvePackedRootDir } from "./archive.js";
+import { sameFileIdentity } from "./file-identity.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-archive-" });
 const directorySymlinkType = process.platform === "win32" ? "junction" : undefined;
@@ -361,6 +362,77 @@ describe("archive utils", () => {
           timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
         }),
       ).rejects.toThrow(/absolute|drive path|escapes destination/i);
+    });
+  });
+
+  it("runs beforeWriteToDestination on zip extracts and blocks destination rebinds", async () => {
+    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+      const zip = new JSZip();
+      zip.file("package/one.txt", "one");
+      zip.file("package/two.txt", "two");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+      const pinned = await fs.lstat(extractDir);
+      let callbackCalls = 0;
+
+      await expect(
+        extractArchive({
+          archivePath,
+          destDir: extractDir,
+          timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+          beforeWriteToDestination: async () => {
+            callbackCalls += 1;
+            if (callbackCalls === 2) {
+              const reboundDir = `${extractDir}-rebound`;
+              await fs.rename(extractDir, reboundDir);
+              await fs.mkdir(extractDir, { recursive: true });
+            }
+            const current = await fs.lstat(extractDir);
+            if (!sameFileIdentity(current, pinned)) {
+              throw new Error("destination directory changed during extract");
+            }
+          },
+        }),
+      ).rejects.toThrow("destination directory changed during extract");
+
+      expect(callbackCalls).toBeGreaterThanOrEqual(2);
+      await expectPathMissing(path.join(extractDir, "package", "two.txt"));
+    });
+  });
+
+  it("runs beforeWriteToDestination on tar extracts and blocks destination rebinds", async () => {
+    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
+      await writePackageArchive({
+        ext: "tar",
+        workDir,
+        archivePath,
+        fileName: "hello.txt",
+        content: "hi",
+      });
+
+      const pinned = await fs.lstat(extractDir);
+      let callbackCalls = 0;
+
+      await expect(
+        extractArchive({
+          archivePath,
+          destDir: extractDir,
+          timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+          beforeWriteToDestination: async () => {
+            callbackCalls += 1;
+            const reboundDir = `${extractDir}-rebound`;
+            await fs.rename(extractDir, reboundDir);
+            await fs.mkdir(extractDir, { recursive: true });
+            const current = await fs.lstat(extractDir);
+            if (!sameFileIdentity(current, pinned)) {
+              throw new Error("destination directory changed during extract");
+            }
+          },
+        }),
+      ).rejects.toThrow("destination directory changed during extract");
+
+      expect(callbackCalls).toBe(1);
+      await expectPathMissing(path.join(extractDir, "package", "hello.txt"));
     });
   });
 });

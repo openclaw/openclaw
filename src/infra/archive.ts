@@ -457,6 +457,7 @@ async function extractZip(params: {
   destDir: string;
   stripComponents?: number;
   limits?: ArchiveExtractLimits;
+  beforeWriteToDestination?: () => Promise<void>;
 }): Promise<void> {
   const limits = resolveExtractLimits(params.limits);
   const destinationRealDir = await prepareArchiveDestinationDir(params.destDir);
@@ -482,6 +483,9 @@ async function extractZip(params: {
     });
     if (!output) {
       continue;
+    }
+    if (params.beforeWriteToDestination) {
+      await params.beforeWriteToDestination();
     }
 
     await prepareZipOutputPath({
@@ -581,6 +585,7 @@ export async function extractArchive(params: {
   tarGzip?: boolean;
   limits?: ArchiveExtractLimits;
   logger?: ArchiveLogger;
+  beforeWriteToDestination?: () => Promise<void>;
 }): Promise<void> {
   const kind = params.kind ?? resolveArchiveKind(params.archivePath);
   if (!kind) {
@@ -629,6 +634,9 @@ export async function extractArchive(params: {
                 }
               },
             });
+            if (params.beforeWriteToDestination) {
+              await params.beforeWriteToDestination();
+            }
             await mergeExtractedTreeIntoDestination({
               sourceDir: stagingDir,
               destinationDir: destinationRealDir,
@@ -649,6 +657,7 @@ export async function extractArchive(params: {
       destDir: params.destDir,
       stripComponents: params.stripComponents,
       limits: params.limits,
+      beforeWriteToDestination: params.beforeWriteToDestination,
     }),
     params.timeoutMs,
     label,
