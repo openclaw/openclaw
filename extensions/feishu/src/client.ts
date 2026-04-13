@@ -73,6 +73,7 @@ let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
+export const FEISHU_WS_USE_PROXY_ENV_VAR = "OPENCLAW_FEISHU_WS_USE_PROXY";
 
 type FeishuHttpInstanceLike = Pick<
   typeof feishuClientSdk.defaultHttpInstance,
@@ -80,7 +81,10 @@ type FeishuHttpInstanceLike = Pick<
 >;
 
 async function getWsProxyAgent() {
-  return resolveAmbientNodeProxyAgent<Agent>();
+  if (process.env[FEISHU_WS_USE_PROXY_ENV_VAR] === "1") {
+    return resolveAmbientNodeProxyAgent<Agent>();
+  }
+  return undefined;
 }
 
 // Multi-account client cache

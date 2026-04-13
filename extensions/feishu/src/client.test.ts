@@ -358,7 +358,20 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.agent).toBeUndefined();
   });
 
-  it("creates a ws proxy agent when lowercase https_proxy is set", async () => {
+  it("does not inherit ambient proxy env by default", async () => {
+    process.env.https_proxy = "http://lower-https:8001";
+    process.env.HTTPS_PROXY = "http://upper-https:8002";
+    process.env.HTTP_PROXY = "http://upper-http:8999";
+
+    await createFeishuWSClient(baseAccount);
+
+    expect(proxyAgentCtorMock).not.toHaveBeenCalled();
+    const options = firstWsClientOptions();
+    expect(options.agent).toBeUndefined();
+  });
+
+  it("creates a ws proxy agent when explicitly enabled and lowercase https_proxy is set", async () => {
+    process.env.OPENCLAW_FEISHU_WS_USE_PROXY = "1";
     process.env.https_proxy = "http://lower-https:8001";
 
     await createFeishuWSClient(baseAccount);
@@ -368,7 +381,8 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.agent).toEqual({ proxied: true });
   });
 
-  it("creates a ws proxy agent when uppercase HTTPS_PROXY is set", async () => {
+  it("creates a ws proxy agent when explicitly enabled and uppercase HTTPS_PROXY is set", async () => {
+    process.env.OPENCLAW_FEISHU_WS_USE_PROXY = "1";
     process.env.HTTPS_PROXY = "http://upper-https:8002";
 
     await createFeishuWSClient(baseAccount);
@@ -378,7 +392,8 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.agent).toEqual({ proxied: true });
   });
 
-  it("falls back to HTTP_PROXY for ws proxy agent creation", async () => {
+  it("falls back to HTTP_PROXY when explicitly enabled", async () => {
+    process.env.OPENCLAW_FEISHU_WS_USE_PROXY = "1";
     process.env.HTTP_PROXY = "http://upper-http:8999";
 
     await createFeishuWSClient(baseAccount);
