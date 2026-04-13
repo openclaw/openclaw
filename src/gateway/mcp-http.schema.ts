@@ -3,10 +3,19 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
 
+export type McpToolUiMeta = {
+  resourceUri: string;
+  permissions?: string[];
+  csp?: Record<string, string[]>;
+};
+
 export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
   inputSchema: Record<string, unknown>;
+  _meta?: {
+    ui?: McpToolUiMeta;
+  };
 };
 
 function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknown> {
@@ -74,10 +83,15 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
         raw.properties = {};
       }
     }
-    return {
+    const entry: McpToolSchemaEntry = {
       name: tool.name,
       description: tool.description,
       inputSchema: raw,
     };
+    const mcpAppUi = (tool as unknown as { mcpAppUi?: McpToolUiMeta }).mcpAppUi;
+    if (mcpAppUi?.resourceUri) {
+      entry._meta = { ui: mcpAppUi };
+    }
+    return entry;
   });
 }

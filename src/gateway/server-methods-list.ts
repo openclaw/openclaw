@@ -132,6 +132,11 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  // MCP Apps gateway proxy methods
+  "mcp.tools.list",
+  "mcp.tools.call",
+  "mcp.resources.list",
+  "mcp.resources.read",
 ];
 
 export function listGatewayMethods(): string[] {
@@ -164,4 +169,6 @@ export const GATEWAY_EVENTS = [
   "plugin.approval.requested",
   "plugin.approval.resolved",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  // MCP Apps: push tool result to UI subscribers when tool has _meta.ui
+  "mcp.tool.result",
 ];

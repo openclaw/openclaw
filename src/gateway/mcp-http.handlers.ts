@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
+import { listResources, resolveResourceContent } from "./mcp-app-resources.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
   MCP_LOOPBACK_SERVER_VERSION,
@@ -46,7 +47,7 @@ export async function handleMcpJsonRpc(params: {
         MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS[0];
       return jsonRpcResult(id, {
         protocolVersion: negotiated,
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, resources: {} },
         serverInfo: {
           name: MCP_LOOPBACK_SERVER_NAME,
           version: MCP_LOOPBACK_SERVER_VERSION,
@@ -58,6 +59,19 @@ export async function handleMcpJsonRpc(params: {
       return null;
     case "tools/list":
       return jsonRpcResult(id, { tools: params.toolSchema });
+    case "resources/list":
+      return jsonRpcResult(id, { resources: listResources() });
+    case "resources/read": {
+      const uri = methodParams?.uri as string;
+      if (!uri) {
+        return jsonRpcError(id, -32602, "resources/read requires a uri parameter");
+      }
+      const resolved = await resolveResourceContent(uri);
+      if (!resolved.ok) {
+        return jsonRpcError(id, -32002, resolved.error);
+      }
+      return jsonRpcResult(id, { contents: [resolved.content] });
+    }
     case "tools/call": {
       const toolName = methodParams?.name as string;
       const toolArgs = (methodParams?.arguments ?? {}) as Record<string, unknown>;

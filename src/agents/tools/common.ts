@@ -6,12 +6,27 @@ import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
+/**
+ * Optional MCP App UI metadata for tools that render interactive
+ * HTML content in a sandboxed iframe via the MCP Apps protocol.
+ */
+export type McpAppUiMeta = {
+  /** `ui://` resource URI — host fetches HTML via `resources/read` */
+  resourceUri: string;
+  /** Extra iframe permissions (e.g. `["allow-forms"]`). `allow-same-origin` is never granted. */
+  permissions?: string[];
+  /** CSP directives merged with the default restrictive policy */
+  csp?: Record<string, string[]>;
+};
+
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
   TResult
 > & {
   ownerOnly?: boolean;
   displaySummary?: string;
+  /** When set, this tool renders its result via an MCP App iframe. */
+  mcpAppUi?: McpAppUiMeta;
 };
 
 // Cross-package tool registration still mixes concrete schema-typed tools with

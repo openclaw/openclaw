@@ -129,6 +129,21 @@ import {
   LogsTailResultSchema,
 } from "./logs-chat.js";
 import {
+  McpContentBlockSchema,
+  McpResourceEntrySchema,
+  McpResourcesListParamsSchema,
+  McpResourcesListResultSchema,
+  McpResourcesReadParamsSchema,
+  McpResourcesReadResultSchema,
+  McpToolEntrySchema,
+  McpToolMetaSchema,
+  McpToolUiMetaSchema,
+  McpToolsCallParamsSchema,
+  McpToolsCallResultSchema,
+  McpToolsListParamsSchema,
+  McpToolsListResultSchema,
+} from "./mcp.js";
+import {
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
   NodePendingDrainParamsSchema,
@@ -362,6 +377,19 @@ export const ProtocolSchemas = {
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
+  McpToolUiMeta: McpToolUiMetaSchema,
+  McpToolMeta: McpToolMetaSchema,
+  McpToolEntry: McpToolEntrySchema,
+  McpResourceEntry: McpResourceEntrySchema,
+  McpContentBlock: McpContentBlockSchema,
+  McpToolsListParams: McpToolsListParamsSchema,
+  McpToolsListResult: McpToolsListResultSchema,
+  McpToolsCallParams: McpToolsCallParamsSchema,
+  McpToolsCallResult: McpToolsCallResultSchema,
+  McpResourcesListParams: McpResourcesListParamsSchema,
+  McpResourcesListResult: McpResourcesListResultSchema,
+  McpResourcesReadParams: McpResourcesReadParamsSchema,
+  McpResourcesReadResult: McpResourcesReadResultSchema,
 } satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;
