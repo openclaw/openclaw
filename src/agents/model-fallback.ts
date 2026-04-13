@@ -96,6 +96,13 @@ function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
+function isSessionWriteLockError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    /session file locked \(timeout \d+ms\): .*\.jsonl\.lock/.test(err.message)
+  );
+}
+
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
   candidates: ModelCandidate[];
   addExplicitCandidate: (candidate: ModelCandidate) => void;
@@ -773,6 +780,9 @@ export async function runWithModelFallback<T>(params: {
       // throw, rethrow it immediately rather than trying a different model
       // that may have a smaller context window and fail worse.
       const errMessage = err instanceof Error ? err.message : String(err);
+      if (isSessionWriteLockError(err)) {
+        throw err;
+      }
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
