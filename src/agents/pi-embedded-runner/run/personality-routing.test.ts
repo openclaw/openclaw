@@ -48,6 +48,15 @@ describe("classifyTurnIntent", () => {
     expect(classifyTurnIntent({ prompt: "update the config file" })).toBe("execution");
   });
 
+  it("routes short imperative commands to execution", () => {
+    expect(classifyTurnIntent({ prompt: "run tests" })).toBe("execution");
+    expect(classifyTurnIntent({ prompt: "run the tests" })).toBe("execution");
+    expect(classifyTurnIntent({ prompt: "build it" })).toBe("execution");
+    expect(classifyTurnIntent({ prompt: "fix this" })).toBe("execution");
+    expect(classifyTurnIntent({ prompt: "update everything" })).toBe("execution");
+    expect(classifyTurnIntent({ prompt: "delete them" })).toBe("execution");
+  });
+
   it("routes ambiguous verbs WITHOUT code context to personality", () => {
     expect(classifyTurnIntent({ prompt: "run an errand for me" })).toBe("personality");
     expect(classifyTurnIntent({ prompt: "create a birthday message" })).toBe("personality");

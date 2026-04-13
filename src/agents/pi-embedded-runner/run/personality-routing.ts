@@ -95,11 +95,24 @@ const STRONG_EXECUTION_SIGNAL_RE =
 const AMBIGUOUS_VERB_RE = /\b(?:run|test|create|update|delete|modify|build|fix)\b/i;
 
 /**
+ * Short imperative patterns that are unambiguously execution-intent
+ * even without code context. "run tests", "build it", "fix the bug"
+ * are commands, not conversation. These override the ambiguous-verb
+ * gate for messages <=60 chars so short commands route to execution.
+ */
+const SHORT_IMPERATIVE_EXECUTION_RE =
+  /\b(?:run|build|test|fix|deploy|install|revert|update|delete|modify|create)\s+(?:it|this|that|the|tests?|them|everything|all)\b/i;
+
+/**
  * Combined check: strong signals always match; ambiguous verbs only
  * match when paired with code context in the same message.
  */
 function hasExecutionSignal(text: string): boolean {
   if (STRONG_EXECUTION_SIGNAL_RE.test(text)) {
+    return true;
+  }
+  // Short imperative commands ("run tests", "build it") are execution
+  if (SHORT_IMPERATIVE_EXECUTION_RE.test(text)) {
     return true;
   }
   // Ambiguous verbs need a co-occurring code context signal
