@@ -2520,6 +2520,76 @@ describe("initSessionState dmScope delivery migration", () => {
 });
 
 describe("initSessionState internal channel routing preservation", () => {
+  it("clears stale thread routing on non-thread system-event sessions", async () => {
+    const storePath = await createStorePath("system-event-clears-stale-thread-");
+    const sessionKey = "agent:main:mattermost:channel:chan1";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-system-event-stale-thread",
+        updatedAt: Date.now(),
+        lastChannel: "mattermost",
+        lastTo: "channel:CHAN1",
+        lastAccountId: "default",
+        lastThreadId: "stale-root",
+        deliveryContext: {
+          channel: "mattermost",
+          to: "channel:CHAN1",
+          accountId: "default",
+          threadId: "stale-root",
+        },
+        origin: {
+          provider: "mattermost",
+          to: "channel:CHAN1",
+          accountId: "default",
+          threadId: "stale-root",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "heartbeat tick",
+        SessionKey: sessionKey,
+        Provider: "heartbeat",
+        From: "heartbeat",
+        To: "heartbeat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("mattermost");
+    expect(result.sessionEntry.lastTo).toBe("channel:CHAN1");
+    expect(result.sessionEntry.lastThreadId).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext).toEqual({
+      channel: "mattermost",
+      to: "channel:CHAN1",
+      accountId: "default",
+    });
+    expect(result.sessionEntry.origin).toEqual({
+      provider: "mattermost",
+      to: "channel:CHAN1",
+      accountId: "default",
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
+    expect(persisted[sessionKey]?.deliveryContext).toEqual({
+      channel: "mattermost",
+      to: "channel:CHAN1",
+      accountId: "default",
+    });
+    expect(persisted[sessionKey]?.origin).toEqual({
+      provider: "mattermost",
+      to: "channel:CHAN1",
+      accountId: "default",
+    });
+  });
+
   it("does not synthesize heartbeat routing on a session with no external route", async () => {
     const storePath = await createStorePath("system-event-no-route-");
     const sessionKey = "agent:main:main";

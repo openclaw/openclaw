@@ -12,6 +12,14 @@ const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
   vi.fn((): { ref: unknown } => ({ ref: undefined })),
 );
+const hasConfiguredSecretInputMock = vi.hoisted(() =>
+  vi.fn((value: unknown): boolean => {
+    if (typeof value === "string" && value.trim()) {
+      return true;
+    }
+    return resolveSecretInputRefMock(value as never)?.ref != null;
+  }),
+);
 const resolveGatewayAuthMock = vi.hoisted(() =>
   vi.fn(() => ({
     mode: "token",
@@ -70,6 +78,7 @@ vi.mock("../../config/paths.js", () => ({
 }));
 
 vi.mock("../../config/types.secrets.js", () => ({
+  hasConfiguredSecretInput: hasConfiguredSecretInputMock,
   resolveSecretInputRef: resolveSecretInputRefMock,
 }));
 

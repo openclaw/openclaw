@@ -1,7 +1,6 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentSkillsFilter } from "./run.runtime.js";
 
 let skillsSnapshotRuntimePromise:
   | Promise<typeof import("./skills-snapshot.runtime.js")>
@@ -26,7 +25,7 @@ export async function resolveCronSkillsSnapshot(params: {
 
   const runtime = await loadSkillsSnapshotRuntime();
   const snapshotVersion = runtime.getSkillsSnapshotVersion(params.workspaceDir);
-  const skillFilter = resolveAgentSkillsFilter(params.config, params.agentId);
+  const skillFilter = runtime.resolveAgentSkillsFilter(params.config, params.agentId);
   const existingSnapshot = params.existingSnapshot;
   const shouldRefresh =
     !existingSnapshot ||

@@ -984,7 +984,6 @@ describe("createTelegramBot", () => {
       persistedAfterDrain.length > 0 ? Math.max(...persistedAfterDrain) : -Infinity;
     expect(maxPersistedAfterDrain).toBe(102);
   });
-
   it("logs and swallows update watermark persistence failures", async () => {
     sequentializeSpy.mockImplementationOnce(
       () => async (_ctx: unknown, next: () => Promise<void>) => {
@@ -1121,7 +1120,6 @@ describe("createTelegramBot", () => {
       expect(onUpdateId).toHaveBeenCalledWith(202);
     });
   });
-
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
       channels: {
@@ -1165,6 +1163,130 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries native command updates after a bubbled handler failure", async () => {
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!verboseHandler) {
+      throw new Error("verbose command handler missing");
+    }
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
+          typeof fn === "function",
+      );
+    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await verboseHandler(ctx);
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const ctx = {
+      update: { update_id: 333 },
+      message: {
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "testuser" },
+        text: "/verbose on",
+        date: 1736380800,
+        message_id: 42,
+      },
+      match: "on",
+    };
+
+    const loadConfigCallsBeforeRetry = loadConfig.mock.calls.length;
+    loadConfig.mockImplementationOnce(() => {
+      throw new Error("cfg boom");
+    });
+    await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
+    const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
+    await runMiddlewareChain(ctx);
+
+    expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
+    expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
+  });
+
+  it("retries group migration updates after a bubbled handler failure", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groups: {
+            "-1001": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const migrationHandler = getOnHandler("message:migrate_to_chat_id");
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
+          typeof fn === "function",
+      );
+    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await migrationHandler(ctx);
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const ctx = {
+      update: { update_id: 444 },
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "Old Group" },
+        migrate_to_chat_id: -1002,
+      },
+    };
+
+    const loadConfigCallsBeforeRetry = loadConfig.mock.calls.length;
+    loadConfig.mockImplementationOnce(() => {
+      throw new Error("cfg boom");
+    });
+    await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
+    const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
+    await runMiddlewareChain(ctx);
+
+    expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
+    expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
   });
 
   const groupPolicyCases: Array<{

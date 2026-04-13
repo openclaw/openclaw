@@ -1,4 +1,3 @@
-import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
@@ -9,9 +8,6 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolut
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
-import { readChannelAllowFromStoreEntriesSync } from "../../pairing/allow-from-store-read.js";
-import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
-import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 
 export type DeliveryTargetResolution =
@@ -56,10 +52,18 @@ async function resolveOutboundTargetWithRuntime(
 let channelSelectionRuntimePromise:
   | Promise<typeof import("../../infra/outbound/channel-selection.runtime.js")>
   | undefined;
+let deliveryTargetRuntimePromise:
+  | Promise<typeof import("./delivery-target.runtime.js")>
+  | undefined;
 
 async function loadChannelSelectionRuntime() {
   channelSelectionRuntimePromise ??= import("../../infra/outbound/channel-selection.runtime.js");
   return await channelSelectionRuntimePromise;
+}
+
+async function loadDeliveryTargetRuntime() {
+  deliveryTargetRuntimePromise ??= import("./delivery-target.runtime.js");
+  return await deliveryTargetRuntimePromise;
 }
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -140,6 +144,7 @@ export async function resolveDeliveryTarget(
       : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
+    const { resolveFirstBoundAccountId } = await loadDeliveryTargetRuntime();
     accountId = resolveFirstBoundAccountId({ cfg, channelId: channel, agentId });
   }
 
@@ -172,34 +177,42 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  const channelPlugin = getLoadedChannelPluginForRead(channel);
-  const resolvedAccountId = normalizeAccountId(accountId);
-  const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
-    cfg,
-    accountId: resolvedAccountId,
-  });
-  const configuredAllowFrom = configuredAllowFromRaw
-    ? mapAllowFromEntries(configuredAllowFromRaw)
-    : [];
-  const storeAllowFrom = readChannelAllowFromStoreEntriesSync(
-    channel,
-    process.env,
-    resolvedAccountId,
-  );
-  const allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
-  const effectiveAllowFrom = mode === "implicit" ? allowFromOverride : undefined;
-
-  if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
-    const currentTargetResolution = await resolveOutboundTargetWithRuntime({
-      channel,
-      to: toCandidate,
+  let effectiveAllowFrom: string[] | undefined;
+  if (mode === "implicit") {
+    const {
+      getLoadedChannelPluginForRead,
+      mapAllowFromEntries,
+      readChannelAllowFromStoreEntriesSync,
+    } = await loadDeliveryTargetRuntime();
+    const channelPlugin = getLoadedChannelPluginForRead(channel);
+    const resolvedAccountId = normalizeAccountId(accountId);
+    const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
       cfg,
-      accountId,
-      mode,
-      allowFrom: effectiveAllowFrom,
+      accountId: resolvedAccountId,
     });
-    if (!currentTargetResolution.ok) {
-      toCandidate = allowFromOverride[0];
+    const configuredAllowFrom = configuredAllowFromRaw
+      ? mapAllowFromEntries(configuredAllowFromRaw)
+      : [];
+    const storeAllowFrom = readChannelAllowFromStoreEntriesSync(
+      channel,
+      process.env,
+      resolvedAccountId,
+    );
+    const allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+    effectiveAllowFrom = allowFromOverride;
+
+    if (toCandidate && allowFromOverride.length > 0) {
+      const currentTargetResolution = await resolveOutboundTargetWithRuntime({
+        channel,
+        to: toCandidate,
+        cfg,
+        accountId,
+        mode,
+        allowFrom: effectiveAllowFrom,
+      });
+      if (!currentTargetResolution.ok) {
+        toCandidate = allowFromOverride[0];
+      }
     }
   }
 

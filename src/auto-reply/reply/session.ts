@@ -67,6 +67,24 @@ function loadSessionArchiveRuntime() {
   return sessionArchiveRuntimePromise;
 }
 
+function stripThreadIdFromDeliveryContext(
+  context: SessionEntry["deliveryContext"],
+): SessionEntry["deliveryContext"] {
+  if (!context || context.threadId == null || context.threadId === "") {
+    return context;
+  }
+  const { threadId: _threadId, ...rest } = context;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["origin"] {
+  if (!origin || origin.threadId == null || origin.threadId === "") {
+    return origin;
+  }
+  const { threadId: _threadId, ...rest } = origin;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
 function resolveExplicitSessionEndReason(
   matchedResetTriggerLower?: string,
 ): PluginHookSessionEndReason {
@@ -606,6 +624,14 @@ export async function initSessionState(params: {
   });
   if (metaPatch) {
     sessionEntry = { ...sessionEntry, ...metaPatch };
+  }
+  if (isSystemEvent && !isThread) {
+    sessionEntry = {
+      ...sessionEntry,
+      lastThreadId: undefined,
+      deliveryContext: stripThreadIdFromDeliveryContext(sessionEntry.deliveryContext),
+      origin: stripThreadIdFromOrigin(sessionEntry.origin),
+    };
   }
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";

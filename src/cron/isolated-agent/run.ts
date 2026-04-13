@@ -7,12 +7,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import {
-  dispatchCronDelivery,
-  matchesMessagingToolDeliveryTarget,
-  resolveCronDeliveryBestEffort,
-} from "./delivery-dispatch.js";
-import { resolveDeliveryTarget } from "./delivery-target.js";
-import {
   isHeartbeatOnlyResponse,
   resolveCronPayloadOutcome,
   resolveHeartbeatAckMaxChars,
@@ -69,6 +63,7 @@ let cronContextRuntimePromise: Promise<typeof import("./run-context.runtime.js")
 let cronModelCatalogRuntimePromise:
   | Promise<typeof import("./run-model-catalog.runtime.js")>
   | undefined;
+let cronDeliveryRuntimePromise: Promise<typeof import("./run-delivery.runtime.js")> | undefined;
 
 async function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
@@ -100,6 +95,11 @@ async function loadCronModelCatalogRuntime() {
   return await cronModelCatalogRuntimePromise;
 }
 
+async function loadCronDeliveryRuntime() {
+  cronDeliveryRuntimePromise ??= import("./run-delivery.runtime.js");
+  return await cronDeliveryRuntimePromise;
+}
+
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
   return (
     Boolean(cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) ||
@@ -115,8 +115,9 @@ export type { RunCronAgentTurnResult } from "./run.types.js";
 
 type CronExecutionRuntime = typeof import("./run-executor.runtime.js");
 type CronExecutionResult = Awaited<ReturnType<CronExecutionRuntime["executeCronRun"]>>;
-type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 type CronModelCatalogRuntime = typeof import("./run-model-catalog.runtime.js");
+type CronDeliveryRuntime = typeof import("./run-delivery.runtime.js");
+type ResolvedCronDeliveryTarget = Awaited<ReturnType<CronDeliveryRuntime["resolveDeliveryTarget"]>>;
 
 type IsolatedDeliveryContract = "cron-owned" | "shared";
 
@@ -165,6 +166,7 @@ async function resolveCronDeliveryContext(params: {
       }),
     };
   }
+  const { resolveDeliveryTarget } = await loadCronDeliveryRuntime();
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
@@ -644,6 +646,11 @@ async function finalizeCronRun(params: {
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
     isHeartbeatOnlyResponse(payloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+  const {
+    dispatchCronDelivery,
+    matchesMessagingToolDeliveryTarget,
+    resolveCronDeliveryBestEffort,
+  } = await loadCronDeliveryRuntime();
   const skipMessagingToolDelivery =
     (prepared.input.deliveryContract ?? "cron-owned") === "shared" &&
     prepared.deliveryRequested &&

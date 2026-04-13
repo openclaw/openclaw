@@ -240,6 +240,27 @@ function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]
   return keys.some((k) => TRANSIENT_PATTERNS[k]?.test(error));
 }
 
+function resolveCronNextRunWithLowerBound(params: {
+  state: CronServiceState;
+  job: CronJob;
+  naturalNext: number | undefined;
+  lowerBoundMs: number;
+  context: "completion" | "error_backoff";
+}): number | undefined {
+  if (params.naturalNext === undefined) {
+    params.state.deps.log.warn(
+      {
+        jobId: params.job.id,
+        jobName: params.job.name,
+        context: params.context,
+      },
+      "cron: next run unresolved; clearing schedule to avoid a refire loop",
+    );
+    return undefined;
+  }
+  return Math.max(params.naturalNext, params.lowerBoundMs);
+}
+
 function resolveRetryConfig(cronConfig?: CronConfig) {
   const retry = cronConfig?.retry;
   return {
@@ -518,7 +539,17 @@ export function applyJobResult(
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.
       job.state.nextRunAtMs =
-        normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+        job.schedule.kind === "cron"
+          ? resolveCronNextRunWithLowerBound({
+              state,
+              job,
+              naturalNext: normalNext,
+              lowerBoundMs: backoffNext,
+              context: "error_backoff",
+            })
+          : normalNext !== undefined
+            ? Math.max(normalNext, backoffNext)
+            : backoffNext;
       state.deps.log.info(
         {
           jobId: job.id,
@@ -547,8 +578,13 @@ export function applyJobResult(
         // schedule computation lands in the same second due to
         // timezone/croner edge cases (see #17821).
         const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
-        job.state.nextRunAtMs =
-          naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
+        job.state.nextRunAtMs = resolveCronNextRunWithLowerBound({
+          state,
+          job,
+          naturalNext,
+          lowerBoundMs: minNext,
+          context: "completion",
+        });
       } else {
         job.state.nextRunAtMs = naturalNext;
       }
@@ -609,6 +645,14 @@ export function armTimer(state: CronServiceState) {
     const withNextRun =
       state.store?.jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs))
         .length ?? 0;
+    if (enabledCount > 0) {
+      armRunningRecheckTimer(state);
+      state.deps.log.debug(
+        { jobCount, enabledCount, withNextRun, delayMs: MAX_TIMER_DELAY_MS },
+        "cron: timer armed for maintenance recheck",
+      );
+      return;
+    }
     state.deps.log.debug(
       { jobCount, enabledCount, withNextRun },
       "cron: armTimer skipped - no jobs with nextRunAtMs",
