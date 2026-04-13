@@ -25,6 +25,7 @@ describe("Feishu reaction lifecycle", () => {
       cfg,
       accountId: "default",
       event: makeReactionEvent(),
+      reactionActionType: "created",
       botOpenId: "ou_bot",
       fetchMessage: async () => ({
         messageId: "om_msg1",
@@ -46,6 +47,7 @@ describe("Feishu reaction lifecycle", () => {
       cfg,
       accountId: "default",
       event: makeReactionEvent(),
+      reactionActionType: "deleted",
       botOpenId: "ou_bot",
       fetchMessage: async () => ({
         messageId: "om_msg1",
@@ -57,7 +59,6 @@ describe("Feishu reaction lifecycle", () => {
         contentType: "text",
       }),
       uuid: () => "fixed-uuid",
-      action: "deleted",
     });
 
     expect(result?.message.content).toBe(
