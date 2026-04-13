@@ -327,9 +327,28 @@ function resolveDefaultCollections(
   if (!include) {
     return [];
   }
+  const rootPath = path.join(workspaceDir, "MEMORY.md");
+  const altPath = path.join(workspaceDir, "memory.md");
+  let rootInode: string | number | undefined;
+  try {
+    const rootStat = fs.statSync(rootPath);
+    rootInode = rootStat.ino;
+  } catch {
+    // MEMORY.md doesn't exist, skip deduplication check
+  }
+  let altInode: string | number | undefined;
+  try {
+    const altStat = fs.statSync(altPath);
+    altInode = altStat.ino;
+  } catch {
+    // memory.md doesn't exist, alt entry will be added normally
+  }
+  // On case-insensitive filesystems (macOS HFS+), MEMORY.md and memory.md resolve
+  // to the same inode. Skip the memory-alt collection to avoid addCollection failure.
+  const skipAlt = rootInode !== undefined && altInode !== undefined && rootInode === altInode;
   const entries: Array<{ path: string; pattern: string; base: string }> = [
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
+    ...(skipAlt ? [] : [{ path: workspaceDir, pattern: "memory.md", base: "memory-alt" }]),
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
