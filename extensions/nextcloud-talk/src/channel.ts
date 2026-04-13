@@ -1,4 +1,9 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
@@ -7,7 +12,12 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  listEnabledNextcloudTalkAccounts,
+  resolveNextcloudTalkAccount,
+  type ResolvedNextcloudTalkAccount,
+} from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import {
@@ -25,7 +35,7 @@ import {
 import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { sendMessageNextcloudTalk } from "./send.js";
+import { sendMessageNextcloudTalk, sendReactionNextcloudTalk } from "./send.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupAdapter } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
@@ -41,6 +51,67 @@ const meta = {
   aliases: ["nc-talk", "nc"],
   order: 65,
   quickstartAllowFrom: true,
+};
+
+function describeNextcloudTalkMessageTool({
+  cfg,
+}: Parameters<
+  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
+>[0]): ChannelMessageToolDiscovery {
+  const enabledAccounts = listEnabledNextcloudTalkAccounts(cfg as CoreConfig).filter((account) =>
+    Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+  );
+
+  const actions: ChannelMessageActionName[] = [];
+  if (enabledAccounts.length > 0) {
+    actions.push("send");
+    actions.push("react");
+  }
+
+  return { actions, capabilities: [], schema: null };
+}
+
+function parseNextcloudTalkReactActionParams(params: Record<string, unknown>): {
+  roomToken: string;
+  messageId: string;
+  emoji: string;
+} {
+  const roomToken = normalizeOptionalString(params.to) ?? normalizeOptionalString(params.target);
+  if (!roomToken) {
+    throw new Error("Nextcloud Talk react requires a target (to) room token.");
+  }
+
+  const messageId = normalizeOptionalString(params.messageId);
+  if (!messageId) {
+    throw new Error("Nextcloud Talk react requires messageId.");
+  }
+
+  const emoji = normalizeOptionalString(params.emoji)?.replace(/^:+|:+$/g, "");
+  if (!emoji) {
+    throw new Error("Nextcloud Talk react requires emoji.");
+  }
+
+  return { roomToken, messageId, emoji };
+}
+
+const nextcloudTalkMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: describeNextcloudTalkMessageTool,
+  // Send stays on outbound.attachedResults; only react needs plugin dispatch here.
+  supportsAction: ({ action }) => action === "react",
+  handleAction: async ({ action, params, cfg, accountId }) => {
+    if (action !== "react") {
+      throw new Error(`Unsupported Nextcloud Talk action: ${action}`);
+    }
+    const { roomToken, messageId, emoji } = parseNextcloudTalkReactActionParams(params);
+    await sendReactionNextcloudTalk(roomToken, messageId, emoji, {
+      accountId: accountId ?? undefined,
+      cfg: cfg as CoreConfig,
+    });
+    return {
+      content: [{ type: "text" as const, text: `Reacted ${emoji} on ${messageId}` }],
+      details: {},
+    };
+  },
 };
 
 const collectNextcloudTalkSecurityWarnings =
@@ -95,6 +166,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           }),
       },
       approvalCapability: nextcloudTalkApprovalAuth,
+      actions: nextcloudTalkMessageActions,
       doctor: nextcloudTalkDoctor,
       groups: {
         resolveRequireMention: ({ cfg, accountId, groupId }) => {
