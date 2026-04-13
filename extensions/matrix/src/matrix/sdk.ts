@@ -607,7 +607,7 @@ export class MatrixClient {
           "MatrixClientLite",
           "Cross-signing/bootstrap is incomplete for an already owner-signed device; skipping automatic reset and preserving the current identity. Restore the recovery key or run an explicit verification bootstrap if repair is needed.",
         );
-      } else if (this.password?.trim()) {
+      } else {
         try {
           // The repair path already force-resets cross-signing; allow secret storage
           // recreation so the new keys can be persisted. Without this, a device that
@@ -631,11 +631,6 @@ export class MatrixClient {
             err,
           );
         }
-      } else {
-        LogService.warn(
-          "MatrixClientLite",
-          "Cross-signing/bootstrap incomplete and no password is configured for UIA fallback",
-        );
       }
     }
     this.cryptoBootstrapped = true;
