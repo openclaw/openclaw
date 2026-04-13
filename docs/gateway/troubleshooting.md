@@ -30,6 +30,45 @@ Expected healthy signals:
 - `openclaw channels status --probe` shows live per-account transport status and,
   where supported, probe/audit results such as `works` or `audit ok`.
 
+## Execution checklist when health looks green but work still fails
+
+Use this when `/healthz`, `/readyz`, `openclaw gateway status`, or
+`openclaw channels status --probe` look healthy, but real tool calls, paired-device
+RPCs, or operator actions still fail.
+
+1. Normalize paths first.
+   - Use canonical paths only.
+   - On Windows/WSL, prefer the real `/mnt/c/...` path instead of copied shell text.
+   - If you hit `ENOENT`, stop and verify path drift before retrying.
+2. Verify hard prerequisites before any action.
+   - Confirm required IDs such as `sessionId`, node IDs, or canvas IDs exist.
+   - Confirm the runtime/plugin/binary you plan to call is actually installed.
+   - Validate command and RPC arguments against the expected schema.
+3. Check auth before trusting liveness.
+   - If loopback gateway access shows `pairing required`, `scope-upgrade`, or WebSocket close `1008`, treat that as an auth block first, not a transient transport blip.
+   - Re-pair or re-approve scopes before continuing.
+4. Treat liveness as non-authoritative.
+   - `channels.status`, plugin registration, wrapper exit code `0`, and websocket pings are not proof that execution paths are healthy.
+   - Tool outcomes beat liveness signals.
+5. Fail closed on false-green signatures.
+   - Treat auth failures, schema validation failures, `INVALID_REQUEST`, `ENOENT`, compile/build failures, and exit `0` with no artifact or state change as real failures.
+   - Treat SIGTERM or process death with no useful output as a failed run, not a soft success.
+6. Use a safe execution style for non-trivial checks.
+   - Write a real script file, then run `node file.js` or `python file.py`.
+   - Avoid heredocs, inline eval, and fragile shell interpolation when reproducing or verifying a bug.
+7. Suppress repeated missing-file churn.
+   - For optional files, do one existence check.
+   - If the file is absent, record that once and stop retrying the same missing path.
+8. Check for config drift.
+   - Make sure you are using the intended config file.
+   - Nested duplicate configs are a common reason a "fixed" setting appears to have no effect.
+9. Check for runtime skew.
+   - Make sure the running service entrypoint matches the repo/build you think you updated.
+   - Mixed global-install and repo-checkout `dist/` paths often explain why logs, code, and behavior do not line up.
+10. Do not clear the incident until execution proves recovery.
+    - Success means a real authenticated scoped RPC or operator action works.
+    - Do not clear the issue from health endpoints, channel liveness, or wrapper exit codes alone.
+
 ## Anthropic 429 extra usage required for long context
 
 Use this when logs/errors include:

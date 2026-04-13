@@ -36,6 +36,10 @@ Good output in one line:
   gateway is unreachable, the command falls back to config-only summaries.
 - `openclaw logs --follow` → steady activity, no repeating fatal errors.
 
+If those look green but real work still fails, use the
+[/gateway/troubleshooting#execution-checklist-when-health-looks-green-but-work-still-fails](/gateway/troubleshooting#execution-checklist-when-health-looks-green-but-work-still-fails)
+runbook before declaring recovery.
+
 ## Anthropic long context 429
 
 If you see:
