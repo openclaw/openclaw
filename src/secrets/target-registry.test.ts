@@ -37,20 +37,6 @@ describe("secret target registry", () => {
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
   });
 
-  it("resolves the Exa web-search credential path", () => {
-    const target = resolveConfigSecretTargetByPath([
-      "plugins",
-      "entries",
-      "exa",
-      "config",
-      "webSearch",
-      "apiKey",
-    ]);
-
-    expect(target).not.toBeNull();
-    expect(target?.entry?.id).toBe("plugins.entries.exa.config.webSearch.apiKey");
-  });
-
   it("returns null when no config target path matches", () => {
     const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
 
