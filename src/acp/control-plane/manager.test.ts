@@ -2958,4 +2958,125 @@ describe("AcpSessionManager", () => {
       }),
     ).rejects.toThrow("disk locked");
   });
+
+  it("retries setSessionConfigOption once with fresh persistent session after Resource not found error", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:claude:acp:binding:discord:default:retry-config";
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta({
+        agent: "claude",
+      }),
+      runtimeSessionName: sessionKey,
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-sid-stale",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+    runtimeState.ensureSession.mockImplementation(async (inputUnknown: unknown) => {
+      const input = inputUnknown as {
+        sessionKey: string;
+        mode: "persistent" | "oneshot";
+        resumeSessionId?: string;
+      };
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+        backendSessionId: input.resumeSessionId ? "acpx-sid-stale" : "acpx-sid-fresh",
+      };
+    });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      backendSessionId: "acpx-sid-fresh",
+      details: { status: "alive" },
+    });
+    runtimeState.setConfigOption
+      .mockRejectedValueOnce(
+        new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          "Persistent ACP session acpx-sid-stale could not be resumed: Resource not found: acpx-sid-stale",
+        ),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.setSessionConfigOption({
+        cfg: baseCfg,
+        sessionKey,
+        key: "model",
+        value: "claude-3-5-sonnet-20241022",
+      }),
+    ).resolves.toBeDefined();
+
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey,
+    });
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.setConfigOption).toHaveBeenCalledTimes(2);
+    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
+    expect(currentMeta.identity?.state).toBe("resolved");
+  });
+
+  it("does not retry setSessionConfigOption on non-recoverable errors", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({
+        agent: "claude",
+      }),
+    });
+    runtimeState.setConfigOption.mockRejectedValue(
+      new AcpRuntimeError("ACP_TURN_FAILED", "Invalid config value"),
+    );
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.setSessionConfigOption({
+        cfg: baseCfg,
+        sessionKey: "agent:claude:acp:session-1",
+        key: "model",
+        value: "invalid-model",
+      }),
+    ).rejects.toThrow("Invalid config value");
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledTimes(1);
+    expect(runtimeState.prepareFreshSession).not.toHaveBeenCalled();
+  });
 });

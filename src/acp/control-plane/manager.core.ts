@@ -565,61 +565,89 @@ export class AcpSessionManager {
 
     await this.evictIdleRuntimeHandles({ cfg: params.cfg });
     return await this.withSessionActor(sessionKey, async () => {
-      const resolution = this.resolveSession({
-        cfg: params.cfg,
-        sessionKey,
-      });
-      const resolvedMeta = requireReadySessionMeta(resolution);
-      const { runtime, handle, meta } = await this.ensureRuntimeHandle({
-        cfg: params.cfg,
-        sessionKey,
-        meta: resolvedMeta,
-      });
-      const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
-      const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
-      if (
-        !capabilities.controls.includes("session/set_config_option") ||
-        !runtime.setConfigOption
-      ) {
-        throw createUnsupportedControlError({
-          backend: handle.backend || meta.backend,
-          control: "session/set_config_option",
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const resolution = this.resolveSession({
+          cfg: params.cfg,
+          sessionKey,
         });
-      }
+        const resolvedMeta = requireReadySessionMeta(resolution);
+        const { runtime, handle, meta } = await this.ensureRuntimeHandle({
+          cfg: params.cfg,
+          sessionKey,
+          meta: resolvedMeta,
+        });
+        const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
+        const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
+        if (
+          !capabilities.controls.includes("session/set_config_option") ||
+          !runtime.setConfigOption
+        ) {
+          throw createUnsupportedControlError({
+            backend: handle.backend || meta.backend,
+            control: "session/set_config_option",
+          });
+        }
 
-      const advertisedKeys = new Set(
-        (capabilities.configOptionKeys ?? [])
-          .map((entry) => normalizeText(entry))
-          .filter(Boolean) as string[],
-      );
-      if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
-        throw new AcpRuntimeError(
-          "ACP_BACKEND_UNSUPPORTED_CONTROL",
-          `ACP backend "${handle.backend || meta.backend}" does not accept config key "${key}".`,
+        const advertisedKeys = new Set(
+          (capabilities.configOptionKeys ?? [])
+            .map((entry) => normalizeText(entry))
+            .filter(Boolean) as string[],
         );
+        if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
+          throw new AcpRuntimeError(
+            "ACP_BACKEND_UNSUPPORTED_CONTROL",
+            `ACP backend "${handle.backend || meta.backend}" does not accept config key "${key}".`,
+          );
+        }
+
+        try {
+          await withAcpRuntimeErrorBoundary({
+            run: async () =>
+              await runtime.setConfigOption!({
+                handle,
+                key,
+                value,
+              }),
+            fallbackCode: "ACP_TURN_FAILED",
+            fallbackMessage: "Could not update ACP runtime config option.",
+          });
+
+          const nextOptions = mergeRuntimeOptions({
+            current: resolveRuntimeOptionsFromMeta(meta),
+            patch: inferredPatch,
+          });
+          await this.persistRuntimeOptions({
+            cfg: params.cfg,
+            sessionKey,
+            options: nextOptions,
+          });
+          return nextOptions;
+        } catch (error) {
+          const shouldRetry =
+            attempt === 0 &&
+            meta.mode === "persistent" &&
+            error instanceof AcpRuntimeError &&
+            error.code === "ACP_TURN_FAILED" &&
+            this.isRecoverableMissingPersistentSessionError(error.message);
+
+          if (shouldRetry) {
+            const retryFreshHandle = await this.prepareFreshHandleRetry({
+              attempt,
+              cfg: params.cfg,
+              sessionKey,
+              error,
+              sawTurnOutput: false,
+              runtime,
+              meta,
+            });
+            if (retryFreshHandle) {
+              continue;
+            }
+          }
+
+          throw error;
+        }
       }
-
-      await withAcpRuntimeErrorBoundary({
-        run: async () =>
-          await runtime.setConfigOption!({
-            handle,
-            key,
-            value,
-          }),
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "Could not update ACP runtime config option.",
-      });
-
-      const nextOptions = mergeRuntimeOptions({
-        current: resolveRuntimeOptionsFromMeta(meta),
-        patch: inferredPatch,
-      });
-      await this.persistRuntimeOptions({
-        cfg: params.cfg,
-        sessionKey,
-        options: nextOptions,
-      });
-      return nextOptions;
     });
   }
 
