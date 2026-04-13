@@ -338,6 +338,12 @@ describe("qa cli runtime", () => {
           "source-docs-discovery-report",
           "image-understanding-attachment",
           "compaction-retry-mutating-tool",
+          "subagent-handoff",
+          "subagent-fanout-synthesis",
+          "memory-recall",
+          "thread-memory-isolation",
+          "config-restart-capability-flip",
+          "instruction-followthrough-repo-contract",
         ],
       }),
     );
@@ -564,6 +570,39 @@ describe("qa cli runtime", () => {
         scenarioIds: ["channel-chat-baseline"],
       }),
     );
+  });
+
+  it("passes provider-qualified mock parity suite selection through to the host runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      parityPack: "agentic",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "anthropic/claude-opus-4-6",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "anthropic/claude-opus-4-6",
+      fastMode: undefined,
+      scenarioIds: [
+        "approval-turn-tool-followthrough",
+        "model-switch-tool-continuity",
+        "source-docs-discovery-report",
+        "image-understanding-attachment",
+        "compaction-retry-mutating-tool",
+        "subagent-handoff",
+        "subagent-fanout-synthesis",
+        "memory-recall",
+        "thread-memory-isolation",
+        "config-restart-capability-flip",
+        "instruction-followthrough-repo-contract",
+      ],
+    });
   });
 
   it("rejects multipass-only suite flags on the host runner", async () => {
