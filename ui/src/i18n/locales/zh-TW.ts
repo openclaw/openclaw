@@ -148,6 +148,7 @@ export const zh_TW: TranslationMap = {
   tabs: {
     agents: "代理",
     overview: "概覽",
+    plans: "方案",
     channels: "頻道",
     instances: "實例",
     sessions: "會話",
@@ -169,6 +170,7 @@ export const zh_TW: TranslationMap = {
   subtitles: {
     agents: "工作區、工具、身份。",
     overview: "狀態、入口點、健康。",
+    plans: "協調方案檢視與生命週期控制。",
     channels: "頻道和設置。",
     instances: "已連接客戶端和節點。",
     sessions: "活動會話和默認設置。",
@@ -615,6 +617,7 @@ export const zh_TW: TranslationMap = {
   },
   languages: {
     en: "英文",
+    vi: "Tiếng Việt（越南語）",
     zhCN: "简体中文 (簡體中文)",
     zhTW: "繁體中文 (繁體中文)",
     ptBR: "Português (巴西葡萄牙語)",

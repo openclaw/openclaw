@@ -148,6 +148,7 @@ export const ko: TranslationMap = {
   tabs: {
     agents: "에이전트",
     overview: "개요",
+    plans: "플랜",
     channels: "채널",
     instances: "인스턴스",
     sessions: "세션",
@@ -169,6 +170,7 @@ export const ko: TranslationMap = {
   subtitles: {
     agents: "워크스페이스, 도구, 정체성.",
     overview: "상태, 진입점, 상태 정보.",
+    plans: "오케스트레이션 플랜 검사 및 수명 주기 제어.",
     channels: "채널 및 설정.",
     instances: "연결된 클라이언트와 노드.",
     sessions: "활성 세션 및 기본값.",
@@ -620,6 +622,7 @@ export const ko: TranslationMap = {
   },
   languages: {
     en: "영어",
+    vi: "Tiếng Việt (베트남어)",
     zhCN: "简体中文 (중국어 간체)",
     zhTW: "繁體中文 (중국어 번체)",
     ptBR: "Português (브라질 포르투갈어)",

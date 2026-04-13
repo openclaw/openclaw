@@ -151,6 +151,7 @@ export const fr: TranslationMap = {
   tabs: {
     agents: "Agents",
     overview: "Aperçu",
+    plans: "Plans",
     channels: "Canaux",
     instances: "Instances",
     sessions: "Sessions",
@@ -172,6 +173,7 @@ export const fr: TranslationMap = {
   subtitles: {
     agents: "Espaces de travail, outils, identités.",
     overview: "Statut, points d’entrée, santé.",
+    plans: "Inspection des plans d’orchestration et contrôles du cycle de vie.",
     channels: "Canaux et paramètres.",
     instances: "Clients et nœuds connectés.",
     sessions: "Sessions actives et valeurs par défaut.",
@@ -630,6 +632,7 @@ export const fr: TranslationMap = {
   },
   languages: {
     en: "Anglais",
+    vi: "Tiếng Việt (vietnamien)",
     zhCN: "简体中文 (chinois simplifié)",
     zhTW: "繁體中文 (chinois traditionnel)",
     ptBR: "Português (portugais brésilien)",

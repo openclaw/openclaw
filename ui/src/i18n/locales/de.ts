@@ -152,6 +152,7 @@ export const de: TranslationMap = {
   tabs: {
     agents: "Agenten",
     overview: "Übersicht",
+    plans: "Pläne",
     channels: "Kanäle",
     instances: "Instanzen",
     sessions: "Sitzungen",
@@ -173,6 +174,7 @@ export const de: TranslationMap = {
   subtitles: {
     agents: "Agent-Arbeitsbereiche, Tools und Identitäten verwalten.",
     overview: "Gateway-Status, Einstiegspunkte und eine schnelle Zustandsprüfung.",
+    plans: "Orchestrierungsplan-Inspektion und Lebenszyklussteuerungen.",
     channels: "Kanäle und Einstellungen verwalten.",
     instances: "Präsenzsignale von verbundenen Clients und Geräten.",
     sessions: "Aktive Sitzungen inspizieren und Standardeinstellungen pro Sitzung anpassen.",
@@ -629,6 +631,7 @@ export const de: TranslationMap = {
   },
   languages: {
     en: "Englisch",
+    vi: "Tiếng Việt (Vietnamesisch)",
     zhCN: "简体中文 (Vereinfachtes Chinesisch)",
     zhTW: "繁體中文 (Traditionelles Chinesisch)",
     ptBR: "Português (Brasilianisches Portugiesisch)",

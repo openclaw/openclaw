@@ -151,6 +151,7 @@ export const tr: TranslationMap = {
   tabs: {
     agents: "Aracılar",
     overview: "Genel Bakış",
+    plans: "Planlar",
     channels: "Kanallar",
     instances: "Örnekler",
     sessions: "Oturumlar",
@@ -172,6 +173,7 @@ export const tr: TranslationMap = {
   subtitles: {
     agents: "Çalışma alanları, araçlar, kimlikler.",
     overview: "Durum, giriş noktaları, sağlık.",
+    plans: "Orkestrasyon planı inceleme ve yaşam döngüsü kontrolleri.",
     channels: "Kanallar ve ayarlar.",
     instances: "Bağlı istemciler ve düğümler.",
     sessions: "Etkin oturumlar ve varsayılanlar.",
@@ -628,6 +630,7 @@ export const tr: TranslationMap = {
   },
   languages: {
     en: "İngilizce",
+    vi: "Tiếng Việt (Vietnamca)",
     zhCN: "简体中文 (Basitleştirilmiş Çince)",
     zhTW: "繁體中文 (Geleneksel Çince)",
     ptBR: "Português (Brezilya Portekizcesi)",

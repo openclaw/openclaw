@@ -150,6 +150,7 @@ export const pl: TranslationMap = {
   tabs: {
     agents: "Agenci",
     overview: "Przegląd",
+    plans: "Plany",
     channels: "Kanały",
     instances: "Instancje",
     sessions: "Sesje",
@@ -171,6 +172,7 @@ export const pl: TranslationMap = {
   subtitles: {
     agents: "Obszary robocze, narzędzia, tożsamości.",
     overview: "Status, punkty dostępu, stan.",
+    plans: "Podgląd planu orkiestracji i kontrola cyklu życia.",
     channels: "Kanały i ustawienia.",
     instances: "Połączone klienty i węzły.",
     sessions: "Aktywne sesje i ustawienia domyślne.",
@@ -628,6 +630,7 @@ export const pl: TranslationMap = {
   },
   languages: {
     en: "Angielski (English)",
+    vi: "Tiếng Việt (wietnamski)",
     zhCN: "简体中文 (chiński uproszczony)",
     zhTW: "繁體中文 (chiński tradycyjny)",
     ptBR: "Português (brazylijski portugalski)",

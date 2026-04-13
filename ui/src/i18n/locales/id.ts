@@ -149,6 +149,7 @@ export const id: TranslationMap = {
   tabs: {
     agents: "Agen",
     overview: "Ikhtisar",
+    plans: "Paket",
     channels: "Saluran",
     instances: "Instans",
     sessions: "Sesi",
@@ -170,6 +171,7 @@ export const id: TranslationMap = {
   subtitles: {
     agents: "Ruang kerja, alat, identitas.",
     overview: "Status, titik masuk, kesehatan.",
+    plans: "Inspeksi rencana orkestrasi dan kontrol siklus hidup.",
     channels: "Saluran dan pengaturan.",
     instances: "Klien dan node yang terhubung.",
     sessions: "Sesi aktif dan default.",
@@ -624,6 +626,7 @@ export const id: TranslationMap = {
   },
   languages: {
     en: "Inggris",
+    vi: "Tiếng Việt (Bahasa Vietnam)",
     zhCN: "简体中文 (Tionghoa Sederhana)",
     zhTW: "繁體中文 (Tionghoa Tradisional)",
     ptBR: "Português (Portugis Brasil)",
