@@ -5,6 +5,7 @@ import {
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   TOOL_CALL_HISTORY_SIZE,
+  UNKNOWN_TOOL_THRESHOLD,
   WARNING_THRESHOLD,
   detectToolCallLoop,
   getToolCallStats,
@@ -461,6 +462,25 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("does not block repeated unknown-tool failures before the unknown-tool threshold", () => {
+      const state = createState();
+      const toolName = "exec";
+      const unknownToolError = new Error("Tool exec not found");
+
+      for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD - 1; index += 1) {
+        recordFailedCall(state, toolName, { command: `echo ${index}` }, unknownToolError, index);
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        toolName,
+        { command: "echo still allowed" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("blocks repeated unknown-tool failures even when the args keep changing", () => {
       const state = createState();
       const toolName = "exec";
@@ -501,6 +521,10 @@ describe("tool-loop-detection", () => {
       );
 
       expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("unknown_tool_repeat");
+        expect(loopResult.level).toBe("critical");
+      }
     });
 
     it("warns on ping-pong alternating patterns", () => {

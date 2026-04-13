@@ -1236,6 +1236,12 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
         allowedToolNames,
+        {
+          unknownToolThreshold:
+            clientToolLoopDetection?.enabled === true
+              ? clientToolLoopDetection.unknownToolThreshold
+              : undefined,
+        },
       );
 
       if (
