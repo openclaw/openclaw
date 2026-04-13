@@ -118,6 +118,35 @@ describe("pw-ai", () => {
     expect(p1.click).toHaveBeenCalledTimes(1);
   });
 
+  it("returns numeric ai snapshot refs in the public snapshot output", async () => {
+    const snapshot = ['- button "OK" [ref=1]', '- link "Docs" [ref=2]'].join("\n");
+    const p1 = createPage({ targetId: "T1", snapshotFull: snapshot });
+    const browser = createBrowser([p1.page]);
+
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+
+    const res = await snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+    });
+
+    expect(res.snapshot).toContain("[ref=1]");
+    expect(res.snapshot).toContain("[ref=2]");
+    expect(res.refs).toMatchObject({
+      1: { role: "button", name: "OK" },
+      2: { role: "link", name: "Docs" },
+    });
+
+    await clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "1",
+    });
+
+    expect(p1.locator).toHaveBeenCalledWith("aria-ref=1");
+    expect(p1.click).toHaveBeenCalledTimes(1);
+  });
+
   it("truncates oversized snapshots", async () => {
     const longSnapshot = "A".repeat(20);
     const p1 = createPage({ targetId: "T1", snapshotFull: longSnapshot });

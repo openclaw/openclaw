@@ -97,6 +97,11 @@ describe("browser cli snapshot defaults", () => {
       expectMode: "efficient",
     },
     {
+      label: "does not apply config snapshot defaults to explicit ai snapshots",
+      args: ["--format", "ai"],
+      expectMode: undefined,
+    },
+    {
       label: "does not apply config snapshot defaults to aria snapshots",
       args: ["--format", "aria"],
       expectMode: undefined,
@@ -106,7 +111,7 @@ describe("browser cli snapshot defaults", () => {
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
 
-    if (args.includes("--format")) {
+    if (args.includes("--format") && args.includes("aria")) {
       gatewayMocks.callGatewayFromCli.mockResolvedValueOnce({
         ok: true,
         format: "aria",

@@ -183,13 +183,16 @@ export async function executeSnapshotAction(params: {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = browserToolActionDeps.loadConfig().browser?.snapshotDefaults;
   const format: "ai" | "aria" | undefined =
-    input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
-      ? input.snapshotFormat
-      : undefined;
+    input.snapshotFormat === "ai"
+      ? "ai"
+      : input.snapshotFormat === "aria"
+        ? "aria"
+        : undefined;
+  const formatExplicit = format !== undefined;
   const mode: "efficient" | undefined =
     input.mode === "efficient"
       ? "efficient"
-      : format !== "aria" && snapshotDefaults?.mode === "efficient"
+      : !formatExplicit && format !== "aria" && snapshotDefaults?.mode === "efficient"
         ? "efficient"
         : undefined;
   const labels = typeof input.labels === "boolean" ? input.labels : undefined;
