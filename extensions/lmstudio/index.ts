@@ -44,7 +44,7 @@ function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefin
 
 /** Lazily loads setup helpers so provider wiring stays lightweight at startup. */
 async function loadProviderSetup() {
-  return await import("openclaw/plugin-sdk/lmstudio");
+  return await import("./api.js");
 }
 
 export default definePluginEntry({
