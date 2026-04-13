@@ -11,7 +11,7 @@ import {
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { getChildLogger, getLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -314,6 +314,15 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerBase: TsLogger<LogObj> | null = null;
+  const getFileLogger = (): TsLogger<LogObj> => {
+    const currentBase = getLogger();
+    if (!fileLogger || currentBase !== fileLoggerBase) {
+      fileLogger = getChildLogger({ subsystem });
+      fileLoggerBase = currentBase;
+    }
+    return fileLogger;
+  };
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -336,10 +345,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      if (!fileLogger) {
-        fileLogger = getChildLogger({ subsystem });
-      }
-      logToFile(fileLogger, level, message, fileMeta);
+      logToFile(getFileLogger(), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -402,10 +408,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, "info", message, { raw: true });
+        logToFile(getFileLogger(), "info", message, { raw: true });
       }
       if (
         shouldLogToConsole("info", { level: getConsoleSettings().level }) &&
