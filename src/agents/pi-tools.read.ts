@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
   appendFileWithinRoot,
@@ -30,12 +31,8 @@ export {
 } from "./pi-tools.params.js";
 
 const normalizeToolParams = (params: unknown): Record<string, unknown> | undefined => {
-  if (!params) {
-    return undefined;
-  }
-  if (typeof params === "object") {
-    return params as Record<string, unknown>;
-  }
+  if (!params) {return undefined;}
+  if (typeof params === "object") {return params as Record<string, unknown>;}
   return undefined;
 };
 
@@ -299,14 +296,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
+const MAX_DIR_ENTRIES = 200; // P2 FIX: Maximum directory entries to display
 
 function getImageMimeType(ext: string): string {
-  if (ext === "svg") {
-    return "image/svg+xml";
-  }
-  if (ext === "jpg") {
-    return "image/jpeg";
-  }
+  if (ext === "svg") {return "image/svg+xml";}
+  if (ext === "jpg") {return "image/jpeg";}
   return `image/${ext}`;
 }
 
@@ -379,11 +373,11 @@ export function createOpenClawReadTool(
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
 
       let rawPath = typeof record?.path === "string" ? record.path : ".";
-      rawPath = rawPath.match(/[\x20-\x7E]/g)?.join("") || "";
+      rawPath = rawPath.match(/[\x20-\x7E]/g)?.join('') || '';
 
       // P1 FIX #3: Get paging parameters for text files
-      const offset = typeof record?.offset === "number" ? record.offset : 0;
-      const limit = typeof record?.limit === "number" ? record.limit : undefined;
+      const offset = typeof record?.offset === 'number' ? record.offset : 0;
+      const limit = typeof record?.limit === 'number' ? record.limit : undefined;
 
       const rootDir = options?.root ? path.resolve(options.root) : process.cwd();
 
@@ -398,9 +392,7 @@ export function createOpenClawReadTool(
       try {
         await fs.access(inputPath);
       } catch {
-        const workspacePattern = new RegExp(
-          `${rootDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(.+)`,
-        );
+        const workspacePattern = new RegExp(`${rootDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(.+)`);
         const match = rawPath.match(workspacePattern);
         if (match) {
           const alternativePath = path.resolve(rootDir, match[1]);
@@ -417,18 +409,16 @@ export function createOpenClawReadTool(
         await assertSandboxPath({
           filePath: inputPath,
           cwd: rootDir,
-          root: rootDir,
+          root: rootDir
         });
       } catch (err) {
         const error = err as Error;
         return {
           toolCallId,
-          content: [
-            {
-              type: "text",
-              text: `Access denied: ${error.message}. File exists at ${inputPath} but cannot be accessed.`,
-            },
-          ],
+          content: [{
+            type: "text",
+            text: `Access denied: ${error.message}. File exists at ${inputPath} but cannot be accessed.`
+          }],
           details: { isError: true, path: inputPath },
         };
       }
@@ -437,10 +427,22 @@ export function createOpenClawReadTool(
         const stats = await fs.stat(inputPath);
 
         if (stats.isDirectory()) {
-          const files = await fs.readdir(inputPath);
+          // P2 FIX: Add truncation for directory listings
+          let files = await fs.readdir(inputPath);
+          let truncated = false;
+          
+          if (files.length > MAX_DIR_ENTRIES) {
+            truncated = true;
+            files = files.slice(0, MAX_DIR_ENTRIES);
+          }
+          
+          const listingText = `Listing for ${inputPath}:\n${files.join("\n")}${
+            truncated ? `\n\n... and ${files.length - MAX_DIR_ENTRIES} more entries not shown (limit: ${MAX_DIR_ENTRIES})` : ""
+          }`;
+          
           return {
             toolCallId,
-            content: [{ type: "text", text: `Listing for ${inputPath}:\n${files.join("\n")}` }],
+            content: [{ type: "text", text: listingText }],
             details: { path: inputPath },
           };
         }
@@ -456,16 +458,15 @@ export function createOpenClawReadTool(
           if (fileBuffer.length > 5242880) {
             return {
               toolCallId,
-              content: [
-                {
-                  type: "text",
-                  text: `🖼️ ${fileName} - Image too large (${formatBytes(fileBuffer.length)}). View at: ${mediaUrl}`,
-                },
-              ],
+              content: [{
+                type: "text",
+                text: `🖼️ ${fileName} - Image too large (${formatBytes(fileBuffer.length)}). View at: ${mediaUrl}`
+              }],
               details: { path: inputPath, size: fileBuffer.length, truncated: true },
             };
           }
           const mimeType = getImageMimeType(ext);
+          // KEEP ORIGINAL WORKING FORMAT
           return {
             toolCallId,
             content: [
@@ -486,38 +487,28 @@ export function createOpenClawReadTool(
           };
         }
 
-        // Handle audio files - use URL streaming, NOT base64
+// Handle audio files - use URL streaming, NOT base64
         if (AUDIO_EXTENSIONS.has(ext)) {
           const MAX_AUDIO_SIZE = 10 * 1024 * 1024;
           if (stats.size > MAX_AUDIO_SIZE) {
             return {
               toolCallId,
-              content: [
-                {
-                  type: "text",
-                  text: `🎵 ${fileName} (${formatBytes(stats.size)}) - ${mediaUrl}`,
-                },
-              ],
+              content: [{
+                type: "text",
+                text: `🎵 ${fileName} (${formatBytes(stats.size)}) - ${mediaUrl}`
+              }],
               details: { path: inputPath, size: stats.size, streamed: true },
             };
           }
 
           let mimeType: string;
-          if (ext === "mp3") {
-            mimeType = "audio/mpeg";
-          } else if (ext === "wav") {
-            mimeType = "audio/wav";
-          } else if (ext === "ogg") {
-            mimeType = "audio/ogg";
-          } else if (ext === "m4a") {
-            mimeType = "audio/mp4";
-          } else if (ext === "flac") {
-            mimeType = "audio/flac";
-          } else if (ext === "aac") {
-            mimeType = "audio/aac";
-          } else {
-            mimeType = "audio/ogg";
-          }
+          if (ext === "mp3") mimeType = "audio/mpeg";
+          else if (ext === "wav") mimeType = "audio/wav";
+          else if (ext === "ogg") mimeType = "audio/ogg";
+          else if (ext === "m4a") mimeType = "audio/mp4";
+          else if (ext === "flac") mimeType = "audio/flac";
+          else if (ext === "aac") mimeType = "audio/aac";
+          else mimeType = "audio/ogg";
 
           return {
             toolCallId,
@@ -539,30 +530,21 @@ export function createOpenClawReadTool(
           if (stats.size > MAX_VIDEO_SIZE) {
             return {
               toolCallId,
-              content: [
-                {
-                  type: "text",
-                  text: `🎬 ${fileName} (${formatBytes(stats.size)}) - ${mediaUrl}`,
-                },
-              ],
+              content: [{
+                type: "text",
+                text: `🎬 ${fileName} (${formatBytes(stats.size)}) - ${mediaUrl}`
+              }],
               details: { path: inputPath, size: stats.size, streamed: true },
             };
           }
 
           let mimeType: string;
-          if (ext === "mp4") {
-            mimeType = "video/mp4";
-          } else if (ext === "webm") {
-            mimeType = "video/webm";
-          } else if (ext === "mov") {
-            mimeType = "video/quicktime";
-          } else if (ext === "avi") {
-            mimeType = "video/x-msvideo";
-          } else if (ext === "mkv") {
-            mimeType = "video/x-matroska";
-          } else {
-            mimeType = "video/mp4";
-          }
+          if (ext === "mp4") mimeType = "video/mp4";
+          else if (ext === "webm") mimeType = "video/webm";
+          else if (ext === "mov") mimeType = "video/quicktime";
+          else if (ext === "avi") mimeType = "video/x-msvideo";
+          else if (ext === "mkv") mimeType = "video/x-matroska";
+          else mimeType = "video/mp4";
 
           return {
             toolCallId,
@@ -585,14 +567,13 @@ export function createOpenClawReadTool(
         let truncated = false;
 
         if (offset > 0 || limit !== undefined) {
-          const lines = text.split("\n");
+          const lines = text.split('\n');
           const start = Math.min(offset, lines.length);
           const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
-          text = lines.slice(start, end).join("\n");
+          text = lines.slice(start, end).join('\n');
           truncated = true;
         } else if (text.length > maxChars) {
-          text =
-            text.slice(0, maxChars) + `\n\n[Truncated: File is ${formatBytes(fileBuffer.length)}]`;
+          text = text.slice(0, maxChars) + `\n\n[Truncated: File is ${formatBytes(fileBuffer.length)}]`;
           truncated = true;
         }
 
@@ -601,16 +582,12 @@ export function createOpenClawReadTool(
           content: [{ type: "text", text }],
           details: { path: inputPath, size: fileBuffer.length, truncated, offset, limit },
         };
+
       } catch (err) {
         const error = err as Error;
         return {
           toolCallId,
-          content: [
-            {
-              type: "text",
-              text: `Read failed: ${error.message}. File path attempted: ${inputPath}`,
-            },
-          ],
+          content: [{ type: "text", text: `Read failed: ${error.message}. File path attempted: ${inputPath}` }],
           details: { isError: true, path: inputPath },
         };
       }
