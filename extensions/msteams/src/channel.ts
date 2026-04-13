@@ -29,7 +29,6 @@ import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
-  looksLikeMSTeamsTargetId,
   normalizeMSTeamsMessagingTarget,
   normalizeMSTeamsUserInput,
   parseMSTeamsConversationId,
@@ -167,7 +166,21 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {
-          looksLikeId: (raw) => looksLikeMSTeamsTargetId(raw),
+          looksLikeId: (raw) => {
+            const trimmed = raw.trim();
+            if (!trimmed) {
+              return false;
+            }
+            if (/^conversation:/i.test(trimmed)) {
+              return true;
+            }
+            if (/^user:/i.test(trimmed)) {
+              // Only treat as ID if the value after user: looks like a UUID
+              const id = trimmed.slice("user:".length).trim();
+              return /^[0-9a-fA-F-]{16,}$/.test(id);
+            }
+            return trimmed.includes("@thread");
+          },
           hint: "<conversationId|user:ID|conversation:ID>",
         },
       },
@@ -310,26 +323,31 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         probeAccount: async ({ cfg }) =>
           await (await loadMSTeamsChannelRuntime()).probeMSTeams(cfg.channels?.msteams),
         formatCapabilitiesProbe: ({ probe }) => {
-          const teamsProbe = probe as ProbeMSTeamsResult | undefined;
+          const teamsProbe =
+            probe && typeof probe === "object" ? (probe as Record<string, unknown>) : undefined;
           const lines: Array<{ text: string; tone?: "error" }> = [];
-          const appId = normalizeOptionalString(teamsProbe?.appId) ?? "";
+          const appId = typeof teamsProbe?.appId === "string" ? teamsProbe.appId.trim() : "";
           if (appId) {
             lines.push({ text: `App: ${appId}` });
           }
-          const graph = teamsProbe?.graph;
+          const graph =
+            teamsProbe?.graph && typeof teamsProbe.graph === "object"
+              ? (teamsProbe.graph as Record<string, unknown>)
+              : undefined;
           if (graph) {
             const roles = Array.isArray(graph.roles)
-              ? graph.roles.map((role) => role.trim()).filter(Boolean)
+              ? graph.roles.map((role) => String(role).trim()).filter(Boolean)
               : [];
             const scopes = Array.isArray(graph.scopes)
-              ? graph.scopes.map((scope) => scope.trim()).filter(Boolean)
+              ? graph.scopes.map((scope) => String(scope).trim()).filter(Boolean)
               : [];
             const formatPermission = (permission: string) => {
               const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];
               return hint ? `${permission} (${hint})` : permission;
             };
             if (!graph.ok) {
-              lines.push({ text: `Graph: ${graph.error ?? "failed"}`, tone: "error" });
+              const graphError = typeof graph.error === "string" ? graph.error : "failed";
+              lines.push({ text: `Graph: ${graphError}`, tone: "error" });
             } else if (roles.length > 0 || scopes.length > 0) {
               if (roles.length > 0) {
                 lines.push({ text: `Graph roles: ${roles.map(formatPermission).join(", ")}` });
@@ -387,16 +405,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => {
-        const nativeChannelId = context.NativeChannelId?.trim();
-        const hasChannelRoute = Boolean(nativeChannelId && nativeChannelId.includes("/"));
-        return {
-          currentChannelId: normalizeOptionalString(context.To),
-          currentGraphChannelId: hasChannelRoute ? nativeChannelId : undefined,
-          currentThreadTs: context.ReplyToId,
-          hasRepliedRef,
-        };
-      },
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: normalizeOptionalString(context.To),
+        currentThreadTs: context.ReplyToId,
+        currentThreadRootId: normalizeOptionalString(context.ReplyToId),
+        currentParentConversationId: normalizeOptionalString(context.To),
+        hasRepliedRef,
+      }),
     },
     outbound: {
       deliveryMode: "direct",

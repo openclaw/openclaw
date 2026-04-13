@@ -17,6 +17,7 @@ import {
   listChannelsMSTeams as listChannelsMSTeamsImpl,
   getChannelInfoMSTeams as getChannelInfoMSTeamsImpl,
 } from "./graph-teams.js";
+import { listThreadMSTeams as listThreadMSTeamsImpl } from "./graph-thread.js";
 import { msteamsOutbound as msteamsOutboundImpl } from "./outbound.js";
 import { probeMSTeams as probeMSTeamsImpl } from "./probe.js";
 import {
@@ -25,12 +26,6 @@ import {
   sendAdaptiveCardMSTeams as sendAdaptiveCardMSTeamsImpl,
   sendMessageMSTeams as sendMessageMSTeamsImpl,
 } from "./send.js";
-// NOTE: reactMessageMSTeams / listReactionsMSTeams / unreactMessageMSTeams are
-// imported from ./graph-messages.js above. The channel dispatcher in channel.ts
-// calls those signatures (messageId + reactionType), not the send.reactions.ts
-// variants. send.reactions.ts remains as a delegated-auth implementation that
-// is currently wired through its own test surface; do not re-import it here
-// until channel.ts is migrated to that signature, otherwise identifiers collide.
 export const msTeamsChannelRuntime = {
   deleteMessageMSTeams: deleteMessageMSTeamsImpl,
   editMessageMSTeams: editMessageMSTeamsImpl,
@@ -38,6 +33,7 @@ export const msTeamsChannelRuntime = {
   getMemberInfoMSTeams: getMemberInfoMSTeamsImpl,
   getMessageMSTeams: getMessageMSTeamsImpl,
   listChannelsMSTeams: listChannelsMSTeamsImpl,
+  listThreadMSTeams: listThreadMSTeamsImpl,
   listPinsMSTeams: listPinsMSTeamsImpl,
   listReactionsMSTeams: listReactionsMSTeamsImpl,
   pinMessageMSTeams: pinMessageMSTeamsImpl,

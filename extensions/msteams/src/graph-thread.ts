@@ -1,4 +1,5 @@
-import { fetchGraphJson, type GraphResponse } from "./graph.js";
+import type { OpenClawConfig } from "../runtime-api.js";
+import { fetchGraphJson, resolveGraphToken, type GraphResponse } from "./graph.js";
 
 export type GraphThreadMessage = {
   id?: string;
@@ -7,7 +8,43 @@ export type GraphThreadMessage = {
     application?: { displayName?: string; id?: string };
   };
   body?: { content?: string; contentType?: string };
+  attachments?: Array<{
+    contentType?: string;
+    contentUrl?: string;
+    name?: string;
+  }>;
   createdDateTime?: string;
+};
+
+type GraphThreadResponse = GraphResponse<GraphThreadMessage> & {
+  "@odata.nextLink"?: string;
+};
+
+export type MSTeamsThreadMessage = {
+  id?: string;
+  senderId?: string;
+  senderName: string;
+  text: string;
+  createdAt?: string;
+  source: "root" | "reply";
+};
+
+export type ListThreadMSTeamsParams = {
+  cfg: OpenClawConfig;
+  teamId: string;
+  channelId: string;
+  rootMessageId: string;
+  limit?: number;
+};
+
+export type ListThreadMSTeamsResult = {
+  teamId: string;
+  channelId: string;
+  rootMessageId: string;
+  truncated: boolean;
+  unavailableMediaCount: number;
+  sourceIds: string[];
+  messages: MSTeamsThreadMessage[];
 };
 
 // TTL cache for team ID -> group GUID mapping.
@@ -82,7 +119,7 @@ export async function fetchChannelMessage(
   channelId: string,
   messageId: string,
 ): Promise<GraphThreadMessage | undefined> {
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}?$select=id,from,body,createdDateTime`;
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}?$select=id,from,body,attachments,createdDateTime`;
   try {
     return await fetchGraphJson<GraphThreadMessage>({ token, path });
   } catch {
@@ -111,9 +148,169 @@ export async function fetchThreadReplies(
   // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
   // For threads with >50 replies, only the oldest 50 are returned. The most recent
   // replies (often the most relevant context) may be truncated.
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,attachments,createdDateTime`;
   const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
   return res.value ?? [];
+}
+
+function normalizeThreadLimit(limit?: number): number {
+  if (!Number.isFinite(limit)) {
+    return 100;
+  }
+  return Math.min(Math.max(Math.floor(limit ?? 100), 1), 250);
+}
+
+function nextGraphPath(nextLink: string): string {
+  try {
+    const url = new URL(nextLink);
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return nextLink;
+  }
+}
+
+function threadMessageText(message: GraphThreadMessage): string {
+  const contentType = message.body?.contentType ?? "text";
+  const rawContent = message.body?.content ?? "";
+  const text = contentType === "html" ? stripHtmlFromTeamsMessage(rawContent) : rawContent.trim();
+  if (text) {
+    return text;
+  }
+  return countUnavailableMediaMarkers(message) > 0 ? "[media unavailable]" : "";
+}
+
+function threadMessageSender(message: GraphThreadMessage) {
+  return {
+    senderName:
+      message.from?.user?.displayName ?? message.from?.application?.displayName ?? "unknown",
+    senderId: message.from?.user?.id ?? message.from?.application?.id,
+  };
+}
+
+function toThreadMessage(
+  message: GraphThreadMessage,
+  source: "root" | "reply",
+): MSTeamsThreadMessage | null {
+  const text = threadMessageText(message);
+  if (!text) {
+    return null;
+  }
+  const sender = threadMessageSender(message);
+  return {
+    ...(message.id ? { id: message.id } : {}),
+    ...(sender.senderId ? { senderId: sender.senderId } : {}),
+    senderName: sender.senderName,
+    text,
+    ...(message.createdDateTime ? { createdAt: message.createdDateTime } : {}),
+    source,
+  };
+}
+
+function countUnavailableMediaMarkers(message: GraphThreadMessage): number {
+  const attachmentCount = Array.isArray(message.attachments)
+    ? message.attachments.filter((attachment) => {
+        const contentType = attachment.contentType?.trim().toLowerCase() ?? "";
+        const contentUrl = attachment.contentUrl?.trim() ?? "";
+        const name = attachment.name?.trim() ?? "";
+        return Boolean(contentType || contentUrl || name);
+      }).length
+    : 0;
+  if (attachmentCount > 0) {
+    return attachmentCount;
+  }
+  const contentType = message.body?.contentType ?? "text";
+  const rawContent = message.body?.content ?? "";
+  if (!rawContent || contentType !== "html") {
+    return 0;
+  }
+  const matches = rawContent.match(/<(img|attachment)\b/gi);
+  return matches?.length ?? 0;
+}
+
+function sortChronologically(messages: MSTeamsThreadMessage[]): MSTeamsThreadMessage[] {
+  return messages.toSorted((left, right) => {
+    const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
+    const rightTime = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
+    const leftValid = Number.isFinite(leftTime);
+    const rightValid = Number.isFinite(rightTime);
+    if (leftValid && rightValid && leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+    if (leftValid !== rightValid) {
+      return leftValid ? -1 : 1;
+    }
+    if (left.source !== right.source) {
+      return left.source === "root" ? -1 : 1;
+    }
+    return (left.id ?? "").localeCompare(right.id ?? "");
+  });
+}
+
+export async function fetchThreadRepliesDetailed(
+  token: string,
+  groupId: string,
+  channelId: string,
+  messageId: string,
+  limit = 100,
+): Promise<{ messages: GraphThreadMessage[]; truncated: boolean }> {
+  const targetLimit = normalizeThreadLimit(limit);
+  const pageSize = Math.min(targetLimit, 50);
+  let path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${pageSize}&$select=id,from,body,attachments,createdDateTime`;
+  const messages: GraphThreadMessage[] = [];
+  let truncated = false;
+
+  while (path) {
+    const response = await fetchGraphJson<GraphThreadResponse>({ token, path });
+    const page = response.value ?? [];
+    for (const entry of page) {
+      if (messages.length >= targetLimit) {
+        truncated = true;
+        return { messages, truncated };
+      }
+      messages.push(entry);
+    }
+    const nextLink =
+      typeof response["@odata.nextLink"] === "string" && response["@odata.nextLink"].trim()
+        ? response["@odata.nextLink"].trim()
+        : undefined;
+    if (!nextLink) {
+      break;
+    }
+    path = nextGraphPath(nextLink);
+  }
+
+  return { messages, truncated };
+}
+
+export async function listThreadMSTeams(
+  params: ListThreadMSTeamsParams,
+): Promise<ListThreadMSTeamsResult> {
+  const token = await resolveGraphToken(params.cfg);
+  const groupId = await resolveTeamGroupId(token, params.teamId);
+  const limit = normalizeThreadLimit(params.limit);
+  const [rootMessage, replies] = await Promise.all([
+    fetchChannelMessage(token, groupId, params.channelId, params.rootMessageId),
+    fetchThreadRepliesDetailed(token, groupId, params.channelId, params.rootMessageId, limit),
+  ]);
+  const messages = sortChronologically(
+    [
+      ...(rootMessage ? [toThreadMessage(rootMessage, "root")] : []),
+      ...replies.messages.map((message) => toThreadMessage(message, "reply")),
+    ].filter((entry): entry is MSTeamsThreadMessage => Boolean(entry)),
+  );
+  const unavailableMediaCount =
+    (rootMessage ? countUnavailableMediaMarkers(rootMessage) : 0) +
+    replies.messages.reduce((total, message) => total + countUnavailableMediaMarkers(message), 0);
+
+  return {
+    teamId: params.teamId,
+    channelId: params.channelId,
+    rootMessageId: params.rootMessageId,
+    truncated: replies.truncated,
+    unavailableMediaCount,
+    sourceIds: messages.map((message) => message.id).filter((id): id is string => Boolean(id)),
+    messages,
+  };
 }
 
 /**
