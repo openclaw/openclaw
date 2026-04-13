@@ -136,7 +136,9 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
   }
 
   if (!data.access_token) {
-    throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
+    throw new Error(
+      `Failed to get access_token. Check QQBOT_APP_ID and QQBOT_CLIENT_SECRET. See https://docs.openclaw.ai/channels/qqbot. API response: ${JSON.stringify(data)}`,
+    );
   }
 
   const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
@@ -242,7 +244,10 @@ export async function apiRequest<T = unknown>(
       throw new Error(`Request timeout[${path}]: exceeded ${timeout}ms`, { cause: err });
     }
     debugError(`[qqbot-api] <<< Network error:`, err);
-    throw new Error(`Network error [${path}]: ${formatErrorMessage(err)}`, { cause: err });
+    throw new Error(
+      `Network error [${path}]: ${formatErrorMessage(err)}. Check connectivity and QQ platform access. See https://docs.openclaw.ai/channels/qqbot`,
+      { cause: err },
+    );
   } finally {
     clearTimeout(timeoutId);
   }

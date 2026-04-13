@@ -111,7 +111,8 @@ export async function sendProactive(
   if (!account.appId || !account.clientSecret) {
     return {
       success: false,
-      error: "QQBot not configured (missing appId or clientSecret)",
+      error:
+        "QQBot not configured. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET. See https://docs.openclaw.ai/channels/qqbot",
     };
   }
 
@@ -282,7 +283,8 @@ export async function sendProactiveMessageDirect(
   if (!account.appId || !account.clientSecret) {
     return {
       success: false,
-      error: "QQBot not configured (missing appId or clientSecret)",
+      error:
+        "QQBot not configured. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET. See https://docs.openclaw.ai/channels/qqbot",
     };
   }
 

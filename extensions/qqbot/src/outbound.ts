@@ -265,7 +265,9 @@ function buildMediaTarget(
 /** Resolve an authenticated access token for the account. */
 async function getToken(account: ResolvedQQBotAccount): Promise<string> {
   if (!account.appId || !account.clientSecret) {
-    throw new Error("QQBot not configured (missing appId or clientSecret)");
+    throw new Error(
+      "QQBot not configured. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET. See https://docs.openclaw.ai/channels/qqbot",
+    );
   }
   return getAccessToken(account.appId, account.clientSecret);
 }
@@ -1297,7 +1299,11 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   }
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
+    return {
+      channel: "qqbot",
+      error:
+        "QQBot not configured. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET. See https://docs.openclaw.ai/channels/qqbot",
+    };
   }
 
   try {
@@ -1378,7 +1384,8 @@ export async function sendProactiveMessage(
   const timestamp = new Date().toISOString();
 
   if (!account.appId || !account.clientSecret) {
-    const errorMsg = "QQBot not configured (missing appId or clientSecret)";
+    const errorMsg =
+      "QQBot not configured. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET. See https://docs.openclaw.ai/channels/qqbot";
     debugError(`[${timestamp}] [qqbot] sendProactiveMessage: ${errorMsg}`);
     return { channel: "qqbot", error: errorMsg };
   }
@@ -1459,7 +1466,11 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   const { to, text, replyToId, account, mimeType } = ctx;
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
+    return {
+      channel: "qqbot",
+      error:
+        "QQBot not configured. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET. See https://docs.openclaw.ai/channels/qqbot",
+    };
   }
   if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
