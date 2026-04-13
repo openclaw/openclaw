@@ -32,6 +32,7 @@ import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
 } from "../test/vitest/vitest.unit-paths.mjs";
+import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
@@ -87,6 +88,7 @@ const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
+const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
@@ -668,7 +670,7 @@ function hasConservativeVitestWorkerBudget(env) {
   return workerBudget !== null && workerBudget <= 1;
 }
 
-export function resolveParallelFullSuiteConcurrency(specCount, env = process.env) {
+export function resolveParallelFullSuiteConcurrency(specCount, env = process.env, hostInfo) {
   const override = parsePositiveInt(env.OPENCLAW_TEST_PROJECTS_PARALLEL);
   if (override !== null) {
     return Math.min(override, specCount);
@@ -676,7 +678,7 @@ export function resolveParallelFullSuiteConcurrency(specCount, env = process.env
   if (env.OPENCLAW_TEST_PROJECTS_SERIAL === "1") {
     return 1;
   }
-  if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
+  if (isCiLikeEnv(env)) {
     return 1;
   }
   if (hasConservativeVitestWorkerBudget(env)) {
@@ -688,7 +690,42 @@ export function resolveParallelFullSuiteConcurrency(specCount, env = process.env
   ) {
     return 1;
   }
-  return Math.min(10, specCount);
+  return Math.min(resolveLocalFullSuiteProfile(env, hostInfo).shardParallelism, specCount);
+}
+
+function sanitizeVitestCachePathSegment(value) {
+  return (
+    value
+      .replace(/[^a-zA-Z0-9._-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .slice(0, 180) || "default"
+  );
+}
+
+export function applyParallelVitestCachePaths(specs, params = {}) {
+  const baseEnv = params.env ?? process.env;
+  if (baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+    return specs;
+  }
+  const cwd = params.cwd ?? process.cwd();
+  return specs.map((spec, index) => {
+    if (spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+      return spec;
+    }
+    const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
+    return {
+      ...spec,
+      env: {
+        ...spec.env,
+        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
+          cwd,
+          "node_modules",
+          ".experimental-vitest-cache",
+          cacheSegment,
+        ),
+      },
+    };
+  });
 }
 
 export function createVitestRunSpecs(args, params = {}) {
@@ -715,6 +752,20 @@ export function createVitestRunSpecs(args, params = {}) {
       watchMode: plan.watchMode,
     };
   });
+}
+
+export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
+  if (env.OPENCLAW_TEST_PROJECTS_FORCE_LOCK === "1") {
+    return true;
+  }
+
+  return !(
+    runSpecs.length === 1 &&
+    runSpecs[0]?.config === TOOLING_VITEST_CONFIG &&
+    runSpecs[0]?.watchMode === false &&
+    Array.isArray(runSpecs[0]?.includePatterns) &&
+    runSpecs[0].includePatterns.length > 0
+  );
 }
 
 export function writeVitestIncludeFile(filePath, includePatterns) {

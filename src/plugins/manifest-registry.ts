@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -14,27 +14,29 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
-import {
-  loadPluginManifest,
-  type OpenClawPackageManifest,
-  type PluginManifestCommandAlias,
-  type PluginManifestConfigContracts,
-  type PluginManifest,
-  type PluginManifestChannelConfig,
-  type PluginManifestContracts,
-  type PluginManifestModelSupport,
-} from "./manifest.js";
-import { checkMinHostVersion } from "./min-host-version.js";
-import { isPathInside, safeRealpathSync } from "./path-safety.js";
-import { resolvePluginCacheInputs } from "./roots.js";
+import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
-  PluginKind,
-  PluginOrigin,
-} from "./types.js";
+} from "./manifest-types.js";
+import {
+  loadPluginManifest,
+  type OpenClawPackageManifest,
+  type PluginManifestActivation,
+  type PluginManifestConfigContracts,
+  type PluginManifest,
+  type PluginManifestChannelConfig,
+  type PluginManifestContracts,
+  type PluginManifestModelSupport,
+  type PluginManifestSetup,
+} from "./manifest.js";
+import { checkMinHostVersion } from "./min-host-version.js";
+import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 
 type PluginManifestContractListKey =
   | "speechProviders"
@@ -84,6 +86,8 @@ export type PluginManifestRecord = {
   providerAuthAliases?: Record<string, string>;
   channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
+  activation?: PluginManifestActivation;
+  setup?: PluginManifestSetup;
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -206,47 +210,6 @@ export function resolveManifestContractOwnerPluginId(params: {
   )?.id;
 }
 
-export type PluginManifestCommandAliasRecord = PluginManifestCommandAlias & {
-  pluginId: string;
-};
-
-export function resolveManifestCommandAliasOwner(params: {
-  command: string | undefined;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  registry?: PluginManifestRegistry;
-}): PluginManifestCommandAliasRecord | undefined {
-  const normalizedCommand = normalizeOptionalLowercaseString(params.command);
-  if (!normalizedCommand) {
-    return undefined;
-  }
-  const registry =
-    params.registry ??
-    loadPluginManifestRegistry({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
-
-  const commandIsPluginId = registry.plugins.some(
-    (plugin) => normalizeOptionalLowercaseString(plugin.id) === normalizedCommand,
-  );
-  if (commandIsPluginId) {
-    return undefined;
-  }
-
-  for (const plugin of registry.plugins) {
-    const alias = plugin.commandAliases?.find(
-      (entry) => normalizeOptionalLowercaseString(entry.name) === normalizedCommand,
-    );
-    if (alias) {
-      return { ...alias, pluginId: plugin.id };
-    }
-  }
-  return undefined;
-}
-
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
   if (raw === "" || raw === "0") {
@@ -363,6 +326,8 @@ function buildRecord(params: {
     providerAuthAliases: params.manifest.providerAuthAliases,
     channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
+    activation: params.manifest.activation,
+    setup: params.manifest.setup,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],

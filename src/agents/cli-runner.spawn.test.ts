@@ -7,6 +7,7 @@ import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
 } from "./bootstrap-files.js";
+import { buildRunClaudeCliAgentParams } from "./cli-runner.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
@@ -365,6 +366,40 @@ describe("runCliAgent spawn path", () => {
         process.env.CLI_SKILL_API_KEY = previousEnvValue;
       }
     }
+  });
+
+  it("ignores legacy claudeSessionId on the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-claude-legacy-wrapper",
+      claudeSessionId: "c9d7b831-1c31-4d22-80b9-1e50ca207d4b",
+    });
+
+    expect(params.provider).toBe("claude-cli");
+    expect(params.prompt).toBe("hi");
+    expect(params).not.toHaveProperty("cliSessionId");
+    expect(JSON.stringify(params)).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
+  });
+
+  it("forwards senderIsOwner through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionKey: "agent:main:matrix:room:123",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-claude-owner-wrapper",
+      senderIsOwner: false,
+    });
+
+    expect(params.senderIsOwner).toBe(false);
   });
 
   it("runs CLI through supervisor and returns payload", async () => {

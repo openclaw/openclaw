@@ -77,6 +77,9 @@ Welcome to the lobster tank! 🦞
 - **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
   - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
 
+- **Sliverp** - Chinese Channel: QQ, WeChat, Wecom, Dingtalk, Feishu
+  - GitHub: [@sliverp](https://github.com/sliverp) · X: [@sliver01234](https://x.com/sliver01234)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
@@ -95,6 +98,7 @@ For coordinated change sets that genuinely need more than 10 PRs, join the **#cl
 
 - Test locally with your OpenClaw instance
 - Run tests: `pnpm build && pnpm check && pnpm test`
+- For iterative local commits, `scripts/committer --fast "message" <files...>` passes `FAST_COMMIT=1` through to the pre-commit hook so it skips the repo-wide `pnpm check`. Only use it when you've already run equivalent targeted validation for the touched surface.
 - For extension/plugin changes, run the fast local lane first:
   - `pnpm test:extension <extension-name>`
   - `pnpm test:extension --list` to see valid extension ids

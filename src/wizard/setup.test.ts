@@ -13,6 +13,7 @@ type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type ResolvePluginProvidersRuntime =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
@@ -26,7 +27,7 @@ const resolvePluginProvidersRuntime = vi.hoisted(() =>
 );
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
-const promptDefaultModel = vi.hoisted(() => vi.fn(async () => ({ config: null, model: null })));
+const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
 const configureGatewayForSetup = vi.hoisted(() =>
   vi.fn(async (args) => ({
@@ -83,7 +84,7 @@ const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
     const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
-    const port = raw ? Number.parseInt(String(raw), 10) : Number.NaN;
+    const port = raw ? Number.parseInt(raw, 10) : Number.NaN;
     return Number.isFinite(port) && port > 0 ? port : 18789;
   }),
 );

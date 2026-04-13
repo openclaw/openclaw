@@ -13,9 +13,11 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { modelsAuthLoginCommand, modelsStatusCommand } from "../commands/models.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import {
@@ -35,6 +37,7 @@ import {
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -53,7 +56,6 @@ import {
   setTtsProvider,
   textToSpeech,
 } from "../tts/tts.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "../video-generation/runtime.js";
 import {
   isWebFetchProviderConfigured,
@@ -395,17 +397,14 @@ function resolveSelectedProviderFromModelRef(modelRef: string | undefined): stri
   return resolveModelRefOverride(modelRef).provider;
 }
 
-function getAuthProfileIdsForProvider(
-  cfg: ReturnType<typeof loadConfig>,
-  providerId: string,
-): string[] {
+function getAuthProfileIdsForProvider(cfg: OpenClawConfig, providerId: string): string[] {
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const store = loadAuthProfileStoreForRuntime(agentDir);
   return listProfilesForProvider(store, providerId);
 }
 
 function providerHasGenericConfig(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   providerId: string;
   envVars?: string[];
 }): boolean {
@@ -549,12 +548,12 @@ async function runModelRun(params: {
   }
 
   const { provider, model } = resolveModelRefOverride(params.model);
-  const response = await callGateway<{
+  const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
       meta?: { agentMeta?: { provider?: string; model?: string } };
     };
-  }>({
+  } = await callGateway({
     method: "agent",
     params: {
       agentId,
@@ -815,17 +814,55 @@ async function runVideoGenerate(params: { prompt: string; model?: string; output
     modelOverride: params.model,
   });
   const outputs = await Promise.all(
-    result.videos.map(async (video, index) => ({
-      ...(await writeOutputAsset({
-        buffer: video.buffer,
-        mimeType: video.mimeType,
-        originalFilename: video.fileName,
-        outputPath: params.output,
-        outputIndex: index,
-        outputCount: result.videos.length,
-        subdir: "generated",
-      })),
-    })),
+    result.videos.map(async (video, index) => {
+      if (!video.buffer && !video.url) {
+        throw new Error(`Video asset at index ${index} has neither buffer nor url`);
+      }
+
+      let videoBuffer = video.buffer;
+      if (!videoBuffer && video.url) {
+        const response = await fetch(video.url, { signal: AbortSignal.timeout(120_000) });
+        if (!response.ok) {
+          throw new Error(`Failed to download video from ${video.url}: ${response.status}`);
+        }
+        if (params.output && response.body) {
+          const { pipeline } = await import("node:stream/promises");
+          const { Readable } = await import("node:stream");
+          const { createWriteStream } = await import("node:fs");
+          const mimeType = normalizeMimeType(video.mimeType);
+          const ext =
+            extensionForMime(mimeType) ||
+            path.extname(video.fileName ?? "") ||
+            path.extname(params.output ?? "");
+          const resolvedOutput = path.resolve(params.output);
+          const parsed = path.parse(resolvedOutput);
+          const filePath =
+            result.videos.length <= 1
+              ? path.join(parsed.dir, `${parsed.name}${ext}`)
+              : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
+          await fs.mkdir(path.dirname(filePath), { recursive: true });
+          await pipeline(
+            Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
+            createWriteStream(filePath),
+          );
+          const stat = await fs.stat(filePath);
+          return { path: filePath, mimeType: video.mimeType, size: stat.size };
+        }
+        videoBuffer = Buffer.from(await response.arrayBuffer());
+      }
+
+      return {
+        ...(await writeOutputAsset({
+          buffer: videoBuffer!,
+          mimeType: video.mimeType,
+          originalFilename: video.fileName,
+          outputPath: params.output,
+          outputIndex: index,
+          outputCount: result.videos.length,
+          subdir: "generated",
+        })),
+      };
+    }),
   );
   return {
     ok: true,
@@ -871,12 +908,12 @@ async function runTtsConvert(params: {
 }) {
   if (params.transport === "gateway") {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: loadConfig() });
-    const result = await callGateway<{
+    const result: {
       audioPath?: string;
       provider?: string;
       outputFormat?: string;
       voiceCompatible?: boolean;
-    }>({
+    } = await callGateway({
       method: "tts.convert",
       params: {
         text: params.text,
@@ -964,10 +1001,10 @@ async function runTtsConvert(params: {
 async function runTtsProviders(transport: CapabilityTransport) {
   const cfg = loadConfig();
   if (transport === "gateway") {
-    const payload = await callGateway<{
+    const payload: {
       providers?: Array<Record<string, unknown>>;
       active?: string;
-    }>({
+    } = await callGateway({
       method: "tts.providers",
       timeoutMs: 30_000,
     });
@@ -1451,7 +1488,14 @@ export function registerCapabilityCli(program: Command) {
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
             available: true,
-            configured: providerHasGenericConfig({ cfg, providerId: provider.id }),
+            configured: providerHasGenericConfig({
+              cfg,
+              providerId: provider.id,
+              envVars: getProviderEnvVars(provider.id, {
+                config: cfg,
+                includeUntrustedWorkspacePlugins: false,
+              }),
+            }),
             selected: false,
             id: provider.id,
             capabilities: provider.capabilities,

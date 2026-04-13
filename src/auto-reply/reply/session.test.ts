@@ -16,11 +16,12 @@ import {
   registerSessionBindingAdapter,
 } from "../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
@@ -291,9 +292,12 @@ describe("initSessionState thread forking", () => {
     if (!newSessionFile) {
       throw new Error("Missing session file for forked thread");
     }
-    const [headerLine] = (await fs.readFile(newSessionFile, "utf-8"))
+    const headerLine = (await fs.readFile(newSessionFile, "utf-8"))
       .split(/\r?\n/)
-      .filter((line) => line.trim().length > 0);
+      .find((line) => line.trim().length > 0);
+    if (!headerLine) {
+      throw new Error("Missing session header");
+    }
     const parsedHeader = JSON.parse(headerLine) as {
       parentSession?: string;
     };
@@ -522,7 +526,10 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.sessionFile).toBeTruthy();
     const forkedContent = await fs.readFile(result.sessionEntry.sessionFile ?? "", "utf-8");
-    const [headerLine] = forkedContent.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    const headerLine = forkedContent.split(/\r?\n/).find((line) => line.trim().length > 0);
+    if (!headerLine) {
+      throw new Error("Missing session header");
+    }
     const parsedHeader = JSON.parse(headerLine) as { parentSession?: string };
     const expectedParentSession = await fs.realpath(parentSessionFile);
     const actualParentSession = parsedHeader.parentSession
@@ -554,6 +561,35 @@ describe("initSessionState thread forking", () => {
     expect(path.basename(sessionFile ?? "")).toBe(
       `${result.sessionEntry.sessionId}-topic-456.jsonl`,
     );
+  });
+
+  it("records topic-specific session files from SessionKey when MessageThreadId is absent", async () => {
+    const root = await makeCaseDir("openclaw-topic-session-key-");
+    const storePath = path.join(root, "sessions.json");
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+    try {
+      const result = await initSessionState({
+        ctx: {
+          Body: "Hello topic",
+          SessionKey: "agent:main:telegram:group:123:topic:456",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      const sessionFile = result.sessionEntry.sessionFile;
+      expect(sessionFile).toBeTruthy();
+      expect(path.basename(sessionFile ?? "")).toBe(
+        `${result.sessionEntry.sessionId}-topic-456.jsonl`,
+      );
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 });
 
