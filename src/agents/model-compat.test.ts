@@ -58,13 +58,6 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
-  const model = { ...baseModel(), ...overrides };
-  delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
-  expect(supportsUsageInStreaming(normalized)).toBe(false);
-}
-
 function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
@@ -232,11 +225,11 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOff({
-      provider: "custom-cpa",
-      baseUrl: "https://cpa.example.com/v1",
-    });
+  it("does not force supportsUsageInStreaming off for generic custom openai-completions provider", () => {
+    const model = { ...baseModel(), provider: "custom-cpa", baseUrl: "https://cpa.example.com/v1" };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
   it("forces supportsStrictMode off for z.ai models", () => {
@@ -308,7 +301,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
-  it("still forces flags off when not explicitly set by user", () => {
+  it("forces developerRole and strictMode off but preserves usage streaming for custom providers", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -317,8 +310,41 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("forces supportsUsageInStreaming off for known non-standard providers (e.g. Cerebras)", () => {
+    const model = {
+      ...baseModel(),
+      provider: "cerebras",
+      baseUrl: "https://api.cerebras.ai/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
+  it("forces supportsUsageInStreaming off for known non-standard providers (e.g. Chutes)", () => {
+    const model = {
+      ...baseModel(),
+      provider: "chutes",
+      baseUrl: "https://llm.chutes.ai/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
+  it("forces supportsUsageInStreaming off for known non-standard providers (e.g. DeepSeek)", () => {
+    const model = {
+      ...baseModel(),
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("respects explicit supportsStrictMode true on non-native endpoints", () => {
@@ -332,7 +358,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsStrictMode(normalized)).toBe(true);
   });
 
-  it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
+  it("does not mutate caller model when forcing compat off", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -345,7 +371,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsStrictMode(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(false);
   });
 

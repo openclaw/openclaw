@@ -1173,16 +1173,43 @@ describe("openai transport stream", () => {
     ) as {
       messages?: Array<{ role?: string }>;
       reasoning_effort?: unknown;
-      stream_options?: unknown;
+      stream_options?: { include_usage?: boolean };
       store?: unknown;
       tools?: Array<{ function?: { strict?: boolean } }>;
     };
 
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
     expect(params).not.toHaveProperty("reasoning_effort");
-    expect(params).not.toHaveProperty("stream_options");
+    expect(params.stream_options).toMatchObject({ include_usage: true });
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("omits stream_options for known non-standard providers (Cerebras)", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "llama-3.1-8b-instant",
+        name: "llama-3.1-8b-instant",
+        api: "openai-completions",
+        provider: "cerebras",
+        baseUrl: "https://api.cerebras.ai/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: unknown;
+    };
+
+    expect(params).not.toHaveProperty("stream_options");
   });
 
   it("flattens pure text content arrays for string-only completions backends when opted in", () => {
