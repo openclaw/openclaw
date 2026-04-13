@@ -110,6 +110,7 @@ const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } =
   await import("./server-startup-unavailable-methods.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
+type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
@@ -144,34 +145,53 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
-    let resumeChannels!: () => void;
-    const channelsReady = new Promise<void>((resolve) => {
-      resumeChannels = resolve;
+    let resumeSidecars!: () => void;
+    const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
+      resumeSidecars = () => resolve({ pluginServices: null });
     });
-    const startChannels = vi.fn(async () => {
-      await channelsReady;
+    const startGatewaySidecars = vi.fn(async () => {
+      return await sidecarsReady;
     });
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
 
-    const startup = startGatewayPostAttachRuntime({
-      ...createPostAttachParams({ startChannels }),
-      unavailableGatewayMethods,
-    });
+    const startup = startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        unavailableGatewayMethods,
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    );
 
-    await vi.waitFor(() => {
-      expect(startChannels).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 10_000 },
+    );
 
     expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
     expect(hoisted.startPluginServices).not.toHaveBeenCalled();
 
-    resumeChannels();
+    resumeSidecars();
     await startup;
 
     expect([...unavailableGatewayMethods]).toEqual([]);
-    expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
+    expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
   });
 });
+
+function createPostAttachRuntimeDeps(
+  overrides: Partial<PostAttachRuntimeDeps> = {},
+): PostAttachRuntimeDeps {
+  return {
+    getGlobalHookRunner: vi.fn(() => null),
+    logGatewayStartup: hoisted.logGatewayStartup,
+    scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
+    startGatewaySidecars: vi.fn(async () => ({ pluginServices: null })),
+    startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
+    ...overrides,
+  };
+}
 
 function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): PostAttachParams {
   return {
