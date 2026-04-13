@@ -156,6 +156,29 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
   });
 
+  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat cadence is disabled", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "repo rules", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "0m",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+    });
+
+    expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
+    expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
+  });
+
   it("keeps HEARTBEAT.md for actual heartbeat runs even when the prompt section is disabled", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");

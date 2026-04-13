@@ -4,16 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
-import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
-  buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
+  resolvePluginLoaderJitiConfig,
 } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext };
 
@@ -67,9 +68,14 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
 const nodeRequire = createRequire(import.meta.url);
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedModuleExports = new Map<string, unknown>();
+const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  return value !== undefined && !/^(?:0|false)$/iu.test(value.trim());
+}
 
 function resolveSpecifierCandidates(modulePath: string): string[] {
-  const ext = path.extname(modulePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(modulePath));
   if (ext === ".js") {
     return [modulePath, modulePath.slice(0, -3) + ".ts"];
   }
@@ -138,6 +144,9 @@ function resolveBundledEntryModuleCandidates(
 
   const distExtensionsRoot = path.join(packageRoot, "dist", "extensions") + path.sep;
   if (!importerPath.startsWith(distExtensionsRoot)) {
+    return candidates;
+  }
+  if (isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv])) {
     return candidates;
   }
 
@@ -252,12 +261,11 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    modulePath,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    preferBuiltDist: true,
   });
   const cached = jitiLoaders.get(cacheKey);
   if (cached) {
@@ -281,7 +289,7 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
   if (
     process.platform === "win32" &&
     modulePath.includes(`${path.sep}dist${path.sep}`) &&
-    [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase())
+    [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
   ) {
     try {
       loaded = nodeRequire(modulePath);

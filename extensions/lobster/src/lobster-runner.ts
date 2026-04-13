@@ -5,6 +5,10 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export type LobsterEnvelope =
   | {
@@ -168,7 +172,7 @@ type PipelineRuntimeContext = {
 
 function normalizeForCwdSandbox(p: string): string {
   const normalized = path.normalize(p);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 export function resolveLobsterCwd(cwdRaw: unknown): string {
@@ -305,7 +309,7 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
   if (!fileStat.isFile()) {
     throw new Error("Workflow path is not a file");
   }
-  const ext = path.extname(resolved).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(resolved));
   if (![".lobster", ".yaml", ".yml", ".json"].includes(ext)) {
     throw new Error("Workflow file must end in .lobster, .yaml, .yml, or .json");
   }

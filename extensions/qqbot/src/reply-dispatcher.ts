@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   getAccessToken,
   sendC2CMessage,
@@ -299,7 +300,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
     try {
       const fileBuffer = await readStructuredPayloadLocalFile(imageUrl);
       const base64Data = fileBuffer.toString("base64");
-      const ext = path.extname(imageUrl).toLowerCase();
+      const ext = normalizeLowercaseStringOrEmpty(path.extname(imageUrl));
       const mimeTypes: Record<string, string> = {
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",

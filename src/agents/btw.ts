@@ -2,27 +2,39 @@ import {
   streamSimple,
   type Api,
   type AssistantMessageEvent,
+  type ImageContent,
   type Message,
   type Model,
+  type TextContent,
 } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+import {
+  resolveImageSanitizationLimits,
+  type ImageSanitizationLimits,
+} from "./image-sanitization.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
+import { streamWithPayloadPatch } from "./pi-embedded-runner/stream-payload-utils.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
+import { sanitizeImageBlocks } from "./tool-images.js";
 
 type SessionManagerLike = {
   getLeafEntry?: () => {
@@ -82,14 +94,134 @@ function buildBtwQuestionPrompt(question: string, inFlightPrompt?: string): stri
   return lines.join("\n");
 }
 
-function toSimpleContextMessages(messages: unknown[]): Message[] {
-  const contextMessages = messages.filter((message): message is Message => {
+function normalizeBtwContentBlocks(content: unknown): unknown[] | undefined {
+  if (Array.isArray(content)) {
+    return content;
+  }
+  if (content && typeof content === "object") {
+    return [content];
+  }
+  return undefined;
+}
+
+function isBtwTextBlock(block: unknown): block is TextContent {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const record = block as { type?: unknown; text?: unknown };
+  return normalizeLowercaseStringOrEmpty(record.type) === "text" && typeof record.text === "string";
+}
+
+function isBtwImageBlock(block: unknown): block is ImageContent {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const record = block as { type?: unknown; data?: unknown; mimeType?: unknown };
+  return (
+    normalizeLowercaseStringOrEmpty(record.type) === "image" &&
+    typeof record.data === "string" &&
+    typeof record.mimeType === "string"
+  );
+}
+
+async function sanitizeBtwUserMessage(params: {
+  message: Extract<Message, { role: "user" }>;
+  imageLimits: ImageSanitizationLimits;
+}): Promise<Extract<Message, { role: "user" }> | undefined> {
+  if (typeof params.message.content === "string") {
+    return params.message;
+  }
+  const blocks = normalizeBtwContentBlocks(params.message.content);
+  if (!blocks) {
+    return undefined;
+  }
+
+  const content: Array<TextContent | ImageContent> = [];
+  for (const block of blocks) {
+    if (isBtwTextBlock(block)) {
+      content.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (!isBtwImageBlock(block)) {
+      continue;
+    }
+    const { images } = await sanitizeImageBlocks([block], "btw:context", params.imageLimits);
+    const image = images[0];
+    if (image) {
+      content.push(image);
+    }
+  }
+
+  if (content.length === 0) {
+    return undefined;
+  }
+  return {
+    ...params.message,
+    content,
+  };
+}
+
+function sanitizeBtwAssistantMessage(
+  message: Extract<Message, { role: "assistant" }>,
+): Extract<Message, { role: "assistant" }> | undefined {
+  const rawContent = (message as { content?: unknown }).content;
+  if (typeof rawContent === "string") {
+    const trimmed = rawContent.trim();
+    return trimmed.length > 0
+      ? {
+          ...message,
+          content: [{ type: "text", text: trimmed }],
+        }
+      : undefined;
+  }
+  const blocks = normalizeBtwContentBlocks(rawContent);
+  if (!blocks) {
+    return undefined;
+  }
+  const content = blocks.flatMap((block): TextContent[] =>
+    isBtwTextBlock(block) ? [{ type: "text", text: block.text }] : [],
+  );
+  if (content.length === 0) {
+    return undefined;
+  }
+  return {
+    ...message,
+    content,
+  };
+}
+
+async function toSimpleContextMessages(params: {
+  messages: unknown[];
+  imageLimits: ImageSanitizationLimits;
+}): Promise<Message[]> {
+  const contextMessages: Message[] = [];
+  for (const message of params.messages) {
     if (!message || typeof message !== "object") {
-      return false;
+      continue;
     }
     const role = (message as { role?: unknown }).role;
-    return role === "user" || role === "assistant";
-  });
+    if (role === "user") {
+      const sanitizedMessage = await sanitizeBtwUserMessage({
+        message: message as Extract<Message, { role: "user" }>,
+        imageLimits: params.imageLimits,
+      });
+      if (sanitizedMessage) {
+        contextMessages.push(sanitizedMessage);
+      }
+      continue;
+    }
+    if (role !== "assistant") {
+      continue;
+    }
+    // BTW is a no-tools path, so keep only user-visible blocks from prior
+    // messages and strip hidden reasoning/tool replay data.
+    const sanitizedMessage = sanitizeBtwAssistantMessage(
+      message as Extract<Message, { role: "assistant" }>,
+    );
+    if (sanitizedMessage) {
+      contextMessages.push(sanitizedMessage);
+    }
+  }
   return stripToolResultDetails(
     contextMessages as Parameters<typeof stripToolResultDetails>[0],
   ) as Message[];
@@ -199,10 +331,14 @@ export async function runBtwSideQuestion(
 
   const sessionManager = SessionManager.open(sessionFile) as SessionManagerLike;
   const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
+  const imageLimits = resolveImageSanitizationLimits(params.cfg);
   let messages: Message[] = [];
   let inFlightPrompt: string | undefined;
   if (Array.isArray(activeRunSnapshot?.messages) && activeRunSnapshot.messages.length > 0) {
-    messages = toSimpleContextMessages(activeRunSnapshot.messages);
+    messages = await toSimpleContextMessages({
+      messages: activeRunSnapshot.messages,
+      imageLimits,
+    });
     inFlightPrompt = activeRunSnapshot.inFlightPrompt;
   } else if (activeRunSnapshot) {
     inFlightPrompt = activeRunSnapshot.inFlightPrompt;
@@ -230,9 +366,10 @@ export async function runBtwSideQuestion(
   }
   if (messages.length === 0) {
     const sessionContext = sessionManager.buildSessionContext();
-    messages = toSimpleContextMessages(
-      Array.isArray(sessionContext.messages) ? sessionContext.messages : [],
-    );
+    messages = await toSimpleContextMessages({
+      messages: Array.isArray(sessionContext.messages) ? sessionContext.messages : [],
+      imageLimits,
+    });
   }
   if (messages.length === 0 && !inFlightPrompt?.trim()) {
     throw new Error("No active session context.");
@@ -255,7 +392,45 @@ export async function runBtwSideQuestion(
     profileId: authProfileId,
     agentDir: params.agentDir,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  let runtimeModel = model;
+  let apiKey =
+    apiKeyInfo.mode === "aws-sdk" && !apiKeyInfo.apiKey
+      ? undefined
+      : requireApiKey(apiKeyInfo, model.provider);
+  if (apiKey) {
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+    });
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
+    const preparedAuth = await prepareProviderRuntimeAuth({
+      provider: model.provider,
+      config: params.cfg,
+      workspaceDir,
+      env: process.env,
+      context: {
+        config: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir,
+        env: process.env,
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        apiKey,
+        authMode: apiKeyInfo.mode,
+        profileId: authProfileId,
+      },
+    });
+    if (preparedAuth?.baseUrl) {
+      runtimeModel = {
+        ...runtimeModel,
+        baseUrl: preparedAuth.baseUrl,
+      };
+    }
+    if (preparedAuth?.apiKey) {
+      apiKey = preparedAuth.apiKey;
+    }
+  }
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
@@ -283,8 +458,9 @@ export async function runBtwSideQuestion(
     await blockEmitChain;
   };
 
-  const stream = streamSimple(
-    model,
+  const stream = await streamWithPayloadPatch(
+    streamSimple,
+    runtimeModel,
     {
       systemPrompt: buildBtwSystemPrompt(),
       messages: [
@@ -307,6 +483,13 @@ export async function runBtwSideQuestion(
       // reasoning off so we reliably receive answer text instead of thinking-only output.
       reasoning: undefined,
       signal: params.opts?.abortSignal,
+    },
+    (payloadObj) => {
+      // BTW is intentionally tool-less. Some OpenAI-compatible providers reject
+      // the empty tools arrays injected for generic tool-history replay.
+      if (Array.isArray(payloadObj.tools) && payloadObj.tools.length === 0) {
+        delete payloadObj.tools;
+      }
     },
   );
 

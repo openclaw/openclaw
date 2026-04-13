@@ -1,4 +1,5 @@
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
@@ -59,7 +60,7 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   if (!parsed) {
     return false;
   }
-  return parsed.rest.toLowerCase().startsWith("cron:");
+  return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("cron:") === true;
 }
 
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
@@ -67,11 +68,11 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   if (!raw) {
     return false;
   }
-  if (raw.toLowerCase().startsWith("subagent:")) {
+  if (normalizeOptionalLowercaseString(raw)?.startsWith("subagent:")) {
     return true;
   }
   const parsed = parseAgentSessionKey(raw);
-  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
+  return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("subagent:") === true;
 }
 
 export function getSubagentDepth(sessionKey: string | undefined | null): number {
@@ -87,12 +88,12 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   if (!raw) {
     return false;
   }
-  const normalized = raw.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
   if (normalized.startsWith("acp:")) {
     return true;
   }
   const parsed = parseAgentSessionKey(raw);
-  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
+  return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
 }
 
 export function parseThreadSessionSuffix(
@@ -103,7 +104,7 @@ export function parseThreadSessionSuffix(
     return { baseSessionKey: undefined, threadId: undefined };
   }
 
-  const lowerRaw = raw.toLowerCase();
+  const lowerRaw = normalizeLowercaseStringOrEmpty(raw);
   const threadMarker = ":thread:";
   const threadIndex = lowerRaw.lastIndexOf(threadMarker);
   const markerIndex = threadIndex;

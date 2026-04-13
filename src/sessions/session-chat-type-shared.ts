@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
@@ -58,7 +59,7 @@ export function deriveSessionChatTypeFromKey(
     (scopedSessionKey: string) => SessionKeyChatType | undefined
   > = [],
 ): SessionKeyChatType {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
     return "unknown";
   }

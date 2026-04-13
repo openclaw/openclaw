@@ -519,9 +519,29 @@ The manifest is the control-plane source of truth. OpenClaw uses it to:
 - validate `plugins.entries.<id>.config`
 - augment Control UI labels/placeholders
 - show install/catalog metadata
+- preserve cheap activation and setup descriptors without loading plugin runtime
 
 For native plugins, the runtime module is the data-plane part. It registers
 actual behavior such as hooks, tools, commands, or provider flows.
+
+Optional manifest `activation` and `setup` blocks stay on the control plane.
+They are metadata-only descriptors for activation planning and setup discovery;
+they do not replace runtime registration, `register(...)`, or `setupEntry`.
+The first live activation consumers now use manifest command, channel, and provider hints
+to narrow plugin loading before broader registry materialization:
+
+- CLI loading narrows to plugins that own the requested primary command
+- channel setup/plugin resolution narrows to plugins that own the requested
+  channel id
+- explicit provider setup/runtime resolution narrows to plugins that own the
+  requested provider id
+
+Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
+`setup.cliBackends` to narrow candidate plugins before it falls back to
+`setup-api` for plugins that still need setup-time runtime hooks. If more than
+one discovered plugin claims the same normalized setup provider or CLI backend
+id, setup lookup refuses the ambiguous owner instead of relying on discovery
+order.
 
 ### What the loader caches
 
@@ -610,9 +630,10 @@ conversation, and it runs after core approval handling finishes.
 Provider plugins now have two layers:
 
 - manifest metadata: `providerAuthEnvVars` for cheap provider env-auth lookup
-  before runtime load, `channelEnvVars` for cheap channel env/setup lookup
-  before runtime load, plus `providerAuthChoices` for cheap onboarding/auth-choice
-  labels and CLI flag metadata before runtime load
+  before runtime load, `providerAuthAliases` for provider variants that share
+  auth, `channelEnvVars` for cheap channel env/setup lookup before runtime
+  load, plus `providerAuthChoices` for cheap onboarding/auth-choice labels and
+  CLI flag metadata before runtime load
 - config-time hooks: `catalog` / legacy `discovery` plus `applyConfigDefaults`
 - runtime hooks: `normalizeModelId`, `normalizeTransport`,
   `normalizeConfig`,
@@ -640,8 +661,10 @@ needing a whole custom inference transport.
 
 Use manifest `providerAuthEnvVars` when the provider has env-based credentials
 that generic auth/status/model-picker paths should see without loading plugin
-runtime. Use manifest `providerAuthChoices` when onboarding/auth-choice CLI
-surfaces should know the provider's choice id, group labels, and simple
+runtime. Use manifest `providerAuthAliases` when one provider id should reuse
+another provider id's env vars, auth profiles, config-backed auth, and API-key
+onboarding choice. Use manifest `providerAuthChoices` when onboarding/auth-choice
+CLI surfaces should know the provider's choice id, group labels, and simple
 one-flag auth wiring without loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
@@ -1134,6 +1157,9 @@ authoring plugins:
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/telegram-command-config`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/approval-gateway-runtime`,
+  `openclaw/plugin-sdk/approval-handler-adapter-runtime`,
+  `openclaw/plugin-sdk/approval-handler-runtime`,
   `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
   `openclaw/plugin-sdk/infra-runtime`,
@@ -1152,9 +1178,9 @@ authoring plugins:
   assistant-visible-text stripping, markdown render/chunking helpers, redaction
   helpers, directive-tag helpers, and safe-text utilities.
 - Approval-specific channel seams should prefer one `approvalCapability`
-  contract on the plugin. Core then reads approval auth, delivery, render, and
-  native-routing behavior through that one capability instead of mixing
-  approval behavior into unrelated plugin fields.
+  contract on the plugin. Core then reads approval auth, delivery, render,
+  native-routing, and lazy native-handler behavior through that one capability
+  instead of mixing approval behavior into unrelated plugin fields.
 - `openclaw/plugin-sdk/channel-runtime` is deprecated and remains only as a
   compatibility shim for older plugins. New code should import the narrower
   generic primitives instead, and repo code should not add new imports of the

@@ -1,20 +1,10 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-import {
-  GOOGLE_GEMINI_DEFAULT_MODEL,
-  applyGoogleGeminiModelDefault,
-  normalizeGoogleProviderConfig,
-  normalizeGoogleModelId,
-  resolveGoogleGenerativeAiTransport,
-} from "./api.js";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import { buildGoogleMusicGenerationProvider } from "./music-generation-provider.js";
-import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
+import { registerGoogleProvider } from "./provider-registration.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
 
@@ -26,13 +16,6 @@ type GoogleMediaUnderstandingProvider = MediaUnderstandingProvider & {
   describeImages: NonNullable<MediaUnderstandingProvider["describeImages"]>;
   transcribeAudio: NonNullable<MediaUnderstandingProvider["transcribeAudio"]>;
   describeVideo: NonNullable<MediaUnderstandingProvider["describeVideo"]>;
-};
-
-const GOOGLE_GEMINI_PROVIDER_HOOKS = {
-  ...buildProviderReplayFamilyHooks({
-    family: "google-gemini",
-  }),
-  ...buildProviderStreamFamilyHooks("google-thinking"),
 };
 
 async function loadGoogleImageGenerationProvider(): Promise<ImageGenerationProvider> {
@@ -126,47 +109,7 @@ export default definePluginEntry({
   register(api) {
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     registerGoogleGeminiCliProvider(api);
-    api.registerProvider({
-      id: "google",
-      label: "Google AI Studio",
-      docsPath: "/providers/models",
-      hookAliases: ["google-antigravity", "google-vertex"],
-      envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: "google",
-          methodId: "api-key",
-          label: "Google Gemini API key",
-          hint: "AI Studio / Gemini API key",
-          optionKey: "geminiApiKey",
-          flagName: "--gemini-api-key",
-          envVar: "GEMINI_API_KEY",
-          promptMessage: "Enter Gemini API key",
-          defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
-          expectedProviders: ["google"],
-          applyConfig: (cfg) => applyGoogleGeminiModelDefault(cfg).next,
-          wizard: {
-            choiceId: "gemini-api-key",
-            choiceLabel: "Google Gemini API key",
-            groupId: "google",
-            groupLabel: "Google",
-            groupHint: "Gemini API key + OAuth",
-          },
-        }),
-      ],
-      normalizeTransport: ({ api, baseUrl }) =>
-        resolveGoogleGenerativeAiTransport({ api, baseUrl }),
-      normalizeConfig: ({ provider, providerConfig }) =>
-        normalizeGoogleProviderConfig(provider, providerConfig),
-      normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
-      resolveDynamicModel: (ctx) =>
-        resolveGoogleGeminiForwardCompatModel({
-          providerId: ctx.provider,
-          ctx,
-        }),
-      ...GOOGLE_GEMINI_PROVIDER_HOOKS,
-      isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
-    });
+    registerGoogleProvider(api);
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
     api.registerMusicGenerationProvider(buildGoogleMusicGenerationProvider());

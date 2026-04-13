@@ -20,6 +20,7 @@ import {
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { resolveShellWrapperTransportArgv } from "../infra/exec-wrapper-resolution.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
@@ -359,9 +360,11 @@ async function evaluateSystemRunPolicyPhase(
         .find((entry) => entry !== null) ?? null)
     : null;
   const isWindows = process.platform === "win32";
-  const cmdInvocation = parsed.shellPayload
-    ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
-    : opts.isCmdExeInvocation(parsed.argv);
+  // Detect Windows wrapper transport from the same shell-wrapper view used to
+  // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when
+  // dispatch carriers like `env FOO=bar ...` wrap the shell invocation.
+  const cmdDetectionArgv = resolveShellWrapperTransportArgv(parsed.argv) ?? parsed.argv;
+  const cmdInvocation = opts.isCmdExeInvocation(cmdDetectionArgv);
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries,
@@ -407,13 +410,8 @@ async function evaluateSystemRunPolicyPhase(
     return null;
   }
 
-  // Fail closed if policy/runtime drift re-allows unapproved shell wrappers.
-  if (
-    security === "allowlist" &&
-    parsed.shellPayload &&
-    !policy.approvedByAsk &&
-    !durableApprovalSatisfied
-  ) {
+  // Fail closed if policy/runtime drift re-allows Windows shell wrappers.
+  if (policy.shellWrapperBlocked && !policy.approvedByAsk && !durableApprovalSatisfied) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: "SYSTEM_RUN_DENIED: approval required",

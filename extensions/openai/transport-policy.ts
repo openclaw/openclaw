@@ -5,6 +5,7 @@ import type {
   ProviderWebSocketSessionPolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS = 60_000;
@@ -17,7 +18,7 @@ function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
     return false;
   }
   try {
-    return new URL(trimmed).hostname.toLowerCase().endsWith(".openai.azure.com");
+    return normalizeLowercaseStringOrEmpty(new URL(trimmed).hostname).endsWith(".openai.azure.com");
   } catch {
     return false;
   }

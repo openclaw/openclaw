@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
 import { slackApprovalCapability, slackNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
@@ -232,7 +232,33 @@ describe("slack native approval adapter", () => {
 
     expect(target).toEqual({
       to: "channel:C123",
-      threadId: "1712345678",
+      threadId: "1712345678.123456",
+    });
+  });
+
+  it("falls back to the session-key origin target for plugin approvals when the store is missing", async () => {
+    const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: {
+        ...buildConfig(),
+        session: { store: STORE_PATH },
+      },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "channel:C123",
+      threadId: "1712345678.123456",
     });
   });
 

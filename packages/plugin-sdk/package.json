@@ -84,6 +84,10 @@
       "types": "./dist/src/plugin-sdk/provider-http.d.ts",
       "default": "./src/provider-http.ts"
     },
+    "./provider-model-types": {
+      "types": "./dist/src/plugin-sdk/provider-model-types.d.ts",
+      "default": "./src/provider-model-types.ts"
+    },
     "./provider-model-shared": {
       "types": "./dist/src/plugin-sdk/provider-model-shared.d.ts",
       "default": "./src/provider-model-shared.ts"
@@ -103,6 +107,14 @@
     "./provider-web-search": {
       "types": "./dist/src/plugin-sdk/provider-web-search.d.ts",
       "default": "./src/provider-web-search.ts"
+    },
+    "./provider-web-search-contract": {
+      "types": "./dist/src/plugin-sdk/provider-web-search-contract.d.ts",
+      "default": "./src/provider-web-search-contract.ts"
+    },
+    "./provider-web-search-config-contract": {
+      "types": "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
+      "default": "./src/provider-web-search-config-contract.ts"
     },
     "./runtime-doctor": {
       "types": "./dist/src/plugin-sdk/runtime-doctor.d.ts",

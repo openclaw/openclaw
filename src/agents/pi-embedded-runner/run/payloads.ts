@@ -4,9 +4,12 @@ import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -15,10 +18,10 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
 import {
-  extractAssistantText,
   extractAssistantThinking,
+  extractAssistantVisibleText,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
@@ -41,7 +44,7 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
 ] as const;
 
 function isRecoverableToolError(error: string | undefined): boolean {
-  const errorLower = (error ?? "").toLowerCase();
+  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
@@ -74,7 +77,7 @@ function resolveToolErrorWarningPolicy(params: {
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
-  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
   const includeDetails = shouldIncludeToolErrorDetails(params);
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
@@ -214,7 +217,9 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const fallbackAnswerText = params.lastAssistant
+    ? extractAssistantVisibleText(params.lastAssistant)
+    : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;

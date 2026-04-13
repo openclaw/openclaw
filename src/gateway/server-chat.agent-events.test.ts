@@ -215,36 +215,42 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
-  it("does not emit chat delta for NO_REPLY streaming text", () => {
-    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
-      createHarness({ now: 1_000 }),
-      " NO_REPLY  ",
-    );
-    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
-    nowSpy?.mockRestore();
-  });
+  it.each([" NO_REPLY  ", " ANNOUNCE_SKIP ", " REPLY_SKIP "])(
+    "does not emit chat delta for suppressed control text %s",
+    (replyText) => {
+      const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+        createHarness({ now: 1_000 }),
+        replyText,
+      );
+      expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+      expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+      nowSpy?.mockRestore();
+    },
+  );
 
-  it("does not include NO_REPLY text in chat final message", () => {
-    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
-      now: 2_000,
-    });
-    chatRunState.registry.add("run-2", { sessionKey: "session-2", clientRunId: "client-2" });
+  it.each(["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "does not include %s text in chat final message",
+    (replyText) => {
+      const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+        now: 2_000,
+      });
+      chatRunState.registry.add("run-2", { sessionKey: "session-2", clientRunId: "client-2" });
 
-    handler({
-      runId: "run-2",
-      seq: 1,
-      stream: "assistant",
-      ts: Date.now(),
-      data: { text: "NO_REPLY" },
-    });
-    emitLifecycleEnd(handler, "run-2");
+      handler({
+        runId: "run-2",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: replyText },
+      });
+      emitLifecycleEnd(handler, "run-2");
 
-    const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
-    expect(payload.message).toBeUndefined();
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
-    nowSpy?.mockRestore();
-  });
+      const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+      expect(payload.message).toBeUndefined();
+      expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+      nowSpy?.mockRestore();
+    },
+  );
 
   it("suppresses NO_REPLY lead fragments and does not leak NO in final chat message", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
@@ -269,6 +275,38 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it.each([
+    ["ANNOUNCE_SKIP", ["ANN", "ANNOUNCE_", "ANNOUNCE_SKIP"]],
+    ["REPLY_SKIP", ["REP", "REPLY_", "REPLY_SKIP"]],
+  ] as const)(
+    "suppresses %s lead fragments and does not leak the streamed prefix in the final chat message",
+    (_replyText, fragments) => {
+      const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+        now: 2_150,
+      });
+      chatRunState.registry.add("run-control", {
+        sessionKey: "session-control",
+        clientRunId: "client-control",
+      });
+
+      for (const text of fragments) {
+        handler({
+          runId: "run-control",
+          seq: 1,
+          stream: "assistant",
+          ts: Date.now(),
+          data: { text },
+        });
+      }
+      emitLifecycleEnd(handler, "run-control");
+
+      const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+      expect(payload.message).toBeUndefined();
+      expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+      nowSpy?.mockRestore();
+    },
+  );
+
   it("keeps final short replies like 'No' even when lead-fragment deltas are suppressed", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_200,
@@ -289,6 +327,46 @@ describe("agent event handler", () => {
     };
     expect(payload.message?.content?.[0]?.text).toBe("No");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("strips a glued leading NO_REPLY token from cumulative chat snapshots", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_250,
+    });
+    chatRunState.registry.add("run-4b", { sessionKey: "session-4b", clientRunId: "client-4b" });
+
+    handler({
+      runId: "run-4b",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "NO_REPLYThe user" },
+    });
+    handler({
+      runId: "run-4b",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "NO_REPLYThe user is saying hello" },
+    });
+    emitLifecycleEnd(handler, "run-4b");
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    const finalPayload = chatCalls.at(-1)?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+      state?: string;
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("The user is saying hello");
+    expect(
+      chatCalls.every(([, payload]) => {
+        const text = (payload as { message?: { content?: Array<{ text?: string }> } }).message
+          ?.content?.[0]?.text;
+        return !text || !text.includes("NO_REPLY");
+      }),
+    ).toBe(true);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(chatCalls.length);
     nowSpy?.mockRestore();
   });
 
@@ -1178,6 +1256,39 @@ describe("agent event handler", () => {
     expect(finalPayload.runId).toBe("run-terminal-error");
     expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-error");
     expect(agentRunSeq.has("run-terminal-error")).toBe(false);
+  });
+
+  it("adds detected errorKind to chat lifecycle error payloads", () => {
+    const { broadcast, nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-detected-error",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    registerAgentRunContext("run-detected-error", { sessionKey: "session-detected-error" });
+
+    handler({
+      runId: "run-detected-error",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "error",
+        error: Object.assign(new Error("Too many requests"), { code: 429 }),
+      },
+    });
+
+    const payload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      errorKind?: string;
+      errorMessage?: string;
+    };
+    expect(payload.state).toBe("error");
+    expect(payload.errorKind).toBe("rate_limit");
+    expect(payload.errorMessage).toContain("Too many requests");
+
+    const nodePayload = sessionChatCalls(nodeSendToSession).at(-1)?.[2] as {
+      errorKind?: string;
+    };
+    expect(nodePayload.errorKind).toBe("rate_limit");
   });
 
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {

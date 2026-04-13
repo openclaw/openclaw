@@ -173,6 +173,30 @@ describe("loadToolsCatalog", () => {
     expect(state.toolsCatalogError).toContain("gateway unavailable");
     expect(state.toolsCatalogLoading).toBe(false);
   });
+
+  it("ignores catalog responses after selected agent changes mid-request", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const pending = loadToolsCatalog(state, "main");
+    state.agentsSelectedId = "other-agent";
+    resolvers.shift()?.({
+      agentId: "main",
+      profiles: [{ id: "full", label: "Full" }],
+      groups: [],
+    });
+    await pending;
+
+    expect(state.toolsCatalogResult).toBeNull();
+    expect(state.toolsCatalogError).toBeNull();
+    expect(state.toolsCatalogLoading).toBe(false);
+  });
 });
 
 describe("loadToolsEffective", () => {
@@ -222,6 +246,91 @@ describe("loadToolsEffective", () => {
     expect(state.toolsEffectiveResultKey).toBeNull();
     expect(state.toolsEffectiveError).toContain("gateway unavailable");
     expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("ignores effective-tool responses after selected agent changes mid-request", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const pending = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+    state.agentsSelectedId = "other-agent";
+    resolvers.shift()?.({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+    await pending;
+
+    expect(state.toolsEffectiveResult).toBeNull();
+    expect(state.toolsEffectiveResultKey).toBeNull();
+    expect(state.toolsEffectiveError).toBeNull();
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("uses the catalog provider when the active session reports a stale provider", async () => {
+    const { state, request } = createState();
+    const sessionsResult = state.sessionsResult!;
+    state.sessionsResult = {
+      ts: sessionsResult.ts,
+      path: sessionsResult.path,
+      count: 1,
+      defaults: sessionsResult.defaults,
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "deepseek-chat",
+          modelProvider: "zai",
+        },
+      ],
+    };
+    state.chatModelCatalog = [{ id: "deepseek-chat", name: "DeepSeek Chat", provider: "deepseek" }];
+    request.mockResolvedValue({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=deepseek/deepseek-chat");
+  });
+
+  it("preserves already-qualified session models when the active session provider is stale and the catalog is empty", async () => {
+    const { state, request } = createState();
+    const sessionsResult = state.sessionsResult!;
+    state.sessionsResult = {
+      ts: sessionsResult.ts,
+      path: sessionsResult.path,
+      count: 1,
+      defaults: sessionsResult.defaults,
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "openai/gpt-5-mini",
+          modelProvider: "zai",
+        },
+      ],
+    };
+    state.chatModelCatalog = [];
+    request.mockResolvedValue({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
   });
 });
 

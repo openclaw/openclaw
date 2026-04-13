@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getChannelPlugin } from "./plugins/index.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
@@ -28,9 +29,7 @@ export type ThreadBindingSpawnPolicy = {
 };
 
 function normalizeChannelId(value: string | undefined | null): string {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {

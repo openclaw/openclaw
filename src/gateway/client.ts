@@ -14,7 +14,10 @@ import {
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -149,6 +152,11 @@ function readConnectChallengeTimeoutOverride(
   return undefined;
 }
 
+function isGatewayClientStoppedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message === "gateway client stopped" || message === "Error: gateway client stopped";
+}
+
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs" | "connectDelayMs">,
 ): number {
@@ -267,6 +275,9 @@ export class GatewayClient {
     const ws = new WebSocket(url, wsOptions as ClientOptions);
     this.ws = ws;
     this.socketOpened = false;
+    this.connectNonce = null;
+    this.connectSent = false;
+    this.clearConnectChallengeTimeout();
 
     ws.on("open", () => {
       this.socketOpened = true;
@@ -295,7 +306,7 @@ export class GatewayClient {
       // not erase a valid cached device token.
       if (
         code === 1008 &&
-        reasonText.toLowerCase().includes("device token mismatch") &&
+        normalizeLowercaseStringOrEmpty(reasonText).includes("device token mismatch") &&
         !this.opts.token &&
         !this.opts.password &&
         this.opts.deviceIdentity
@@ -418,7 +429,7 @@ export class GatewayClient {
     if (this.connectSent) {
       return;
     }
-    const nonce = this.connectNonce?.trim() ?? "";
+    const nonce = normalizeOptionalString(this.connectNonce) ?? "";
     if (!nonce) {
       this.opts.onConnectError?.(new Error("gateway connect challenge missing nonce"));
       this.ws?.close(1008, "connect challenge missing nonce");
@@ -545,7 +556,7 @@ export class GatewayClient {
         }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
-        if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {
+        if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
           logDebug(msg);
         } else {
           logError(msg);

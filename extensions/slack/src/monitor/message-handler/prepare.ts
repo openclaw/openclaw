@@ -25,7 +25,10 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -62,7 +65,7 @@ function resolveCachedMentionRegexes(
   ctx: SlackMonitorContext,
   agentId: string | undefined,
 ): RegExp[] {
-  const key = agentId?.trim() || "__default__";
+  const key = normalizeOptionalString(agentId) ?? "__default__";
   let byAgent = mentionRegexCache.get(ctx);
   if (!byAgent) {
     byAgent = new Map<string, RegExp[]>();
@@ -505,7 +508,7 @@ export async function prepareSlackMessage(params: {
     },
     policy: {
       isGroup: isRoom,
-      requireMention: Boolean(shouldRequireMention),
+      requireMention: shouldRequireMention,
       allowedImplicitMentionKinds: ctx.threadRequireExplicitMention ? [] : undefined,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
@@ -573,7 +576,7 @@ export async function prepareSlackMessage(params: {
         isDirect: isDirectMessage,
         isGroup: isRoomish,
         isMentionableGroup: isRoom,
-        requireMention: Boolean(shouldRequireMention),
+        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention: mentionDecision.shouldBypassMention,
@@ -788,7 +791,7 @@ export async function prepareSlackMessage(params: {
             pinnedMainDmOwner && message.user
               ? {
                   ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: message.user.toLowerCase(),
+                  senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
                   onSkip: ({ ownerRecipient, senderRecipient }) => {
                     logVerbose(
                       `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,

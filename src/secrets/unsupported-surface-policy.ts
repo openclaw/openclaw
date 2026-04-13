@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
 import { loadBundledChannelSecurityContractApi } from "./channel-contract-api.js";
@@ -17,12 +15,6 @@ function listBundledChannelIds(): string[] {
     ...new Set(
       loadPluginManifestRegistry({})
         .plugins.filter((entry) => entry.origin === "bundled")
-        .filter((entry) => {
-          return (
-            fs.existsSync(path.join(entry.rootDir, "security-contract-api.ts")) ||
-            fs.existsSync(path.join(entry.rootDir, "security-contract-api.js"))
-          );
-        })
         .flatMap((entry) => entry.channels),
     ),
   ].toSorted((left, right) => left.localeCompare(right));

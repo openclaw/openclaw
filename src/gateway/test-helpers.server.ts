@@ -27,6 +27,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
@@ -606,7 +607,7 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   return server;
 }
 
-async function startGatewayServerWithRetries(params: {
+export async function startGatewayServerWithRetries(params: {
   port: number;
   opts?: GatewayServerOptions;
 }): Promise<{ port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }> {
@@ -773,10 +774,12 @@ function resolveDefaultTestDeviceIdentityPath(params: {
   deviceFamily?: string;
   role: string;
 }) {
-  const safe =
-    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
-      .replace(/[^a-zA-Z0-9._-]+/g, "_")
-      .toLowerCase();
+  const safe = normalizeLowercaseStringOrEmpty(
+    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`.replace(
+      /[^a-zA-Z0-9._-]+/g,
+      "_",
+    ),
+  );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
 }
@@ -791,11 +794,11 @@ export async function readConnectChallengeNonce(
   }
   trackConnectChallengeNonce(ws);
   try {
-    const evt = await onceMessage<{
-      type?: string;
-      event?: string;
-      payload?: Record<string, unknown> | null;
-    }>(ws, (o) => o.type === "event" && o.event === "connect.challenge", timeoutMs);
+    const evt = await onceMessage(
+      ws,
+      (o) => o.type === "event" && o.event === "connect.challenge",
+      timeoutMs,
+    );
     const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
     if (typeof nonce === "string" && nonce.trim().length > 0) {
       (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();

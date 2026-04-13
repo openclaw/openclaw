@@ -23,6 +23,7 @@ import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion, resolveRuntimeServiceVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
+  scanInstalledPackageDependencyTree,
   scanBundleInstallSource,
   scanFileInstallSource,
   scanPackageInstallSource,
@@ -59,6 +60,7 @@ export {
   resolveCompatibilityHostVersion,
   resolveRuntimeServiceVersion,
   resolveTimedInstallModeOptions,
+  scanInstalledPackageDependencyTree,
   scanBundleInstallSource,
   scanFileInstallSource,
   scanPackageInstallSource,

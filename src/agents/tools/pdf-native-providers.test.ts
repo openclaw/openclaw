@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  normalizeProviderTransportWithPlugin: (params: { context?: { baseUrl?: string } }) =>
+    params.context?.baseUrl ? { baseUrl: params.context.baseUrl } : undefined,
+}));
+
 const TEST_PDF_INPUT = { base64: "dGVzdA==", filename: "doc.pdf" } as const;
 
 function makeAnthropicAnalyzeParams(

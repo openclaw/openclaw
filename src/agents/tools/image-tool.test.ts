@@ -1224,6 +1224,19 @@ describe("image tool data URL support", () => {
       /Unsupported data URL type/i,
     );
   });
+
+  it("rejects oversized data URLs before decoding", () => {
+    const oversizedBase64 = "A".repeat(16);
+    const dataUrl = `data:image/png;base64,${oversizedBase64}`;
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      expect(() => __testing.decodeDataUrl(dataUrl, { maxBytes: 4 })).toThrow(/size limit/i);
+      expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedBase64, "base64");
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
+  });
 });
 
 describe("image tool MiniMax VLM routing", () => {
@@ -1268,9 +1281,7 @@ describe("image tool MiniMax VLM routing", () => {
     const [url, init] = fetch.mock.calls[0];
     expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
     expect(init?.method).toBe("POST");
-    expect(String((init?.headers as Record<string, string>)?.Authorization)).toBe(
-      "Bearer minimax-test",
-    );
+    expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");
     expect(String(init?.body)).toContain('"prompt":"Describe the image."');
     expect(String(init?.body)).toContain('"image_url":"data:image/png;base64,');
 

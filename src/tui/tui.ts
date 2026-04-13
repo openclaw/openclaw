@@ -16,6 +16,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -69,9 +70,9 @@ export function resolveTuiSessionKey(params: {
     return trimmed;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
-  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
+  return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
 }
 
 export function resolveInitialTuiAgentId(params: {

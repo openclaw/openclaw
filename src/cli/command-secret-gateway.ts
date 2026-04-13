@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
@@ -18,7 +19,7 @@ import {
   discoverConfigSecretTargetsByIds,
   type DiscoveredConfigSecretTarget,
 } from "../secrets/target-registry.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 type ResolveCommandSecretsResult = {
   resolvedConfig: OpenClawConfig;
@@ -147,8 +148,7 @@ function classifyRuntimeWebTargetPathState(params: {
       if (fetch?.enabled === false) {
         return "inactive";
       }
-      const configuredProvider =
-        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      const configuredProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
       if (!configuredProvider) {
         return "active";
       }
@@ -165,8 +165,7 @@ function classifyRuntimeWebTargetPathState(params: {
     if (search?.enabled === false) {
       return "inactive";
     }
-    const configuredProvider =
-      typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+    const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
     if (!configuredProvider) {
       return "active";
     }
@@ -190,8 +189,7 @@ function classifyRuntimeWebTargetPathState(params: {
     return "inactive";
   }
 
-  const configuredProvider =
-    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   if (!configuredProvider) {
     return "active";
   }
@@ -216,8 +214,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
       if (fetch?.enabled === false) {
         return "tools.web.fetch is disabled.";
       }
-      const configuredProvider =
-        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      const configuredProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
       if (configuredProvider) {
         return `tools.web.fetch.provider is "${configuredProvider}".`;
       }
@@ -227,8 +224,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
     if (search?.enabled === false) {
       return "tools.web.search is disabled.";
     }
-    const configuredProvider =
-      typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+    const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
     const configuredPluginId = configuredProvider
       ? commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
           contract: "webSearchProviders",
@@ -253,8 +249,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
     return "tools.web.search is disabled.";
   }
 
-  const configuredProvider =
-    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   if (configuredProvider && configuredProvider !== match[1]) {
     return `tools.web.search.provider is "${configuredProvider}".`;
   }
@@ -398,7 +393,7 @@ function collectInactiveSurfacePathsFromDiagnostics(diagnostics: string[]): Set<
 }
 
 function isUnsupportedSecretsResolveError(err: unknown): boolean {
-  const message = formatErrorMessage(err).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
   if (!message.includes("secrets.resolve")) {
     return false;
   }
@@ -692,7 +687,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
 
   let payload: GatewaySecretsResolveResult;
   try {
-    payload = await callGateway<GatewaySecretsResolveResult>({
+    payload = await callGateway({
       config: params.config,
       method: "secrets.resolve",
       requiredMethods: ["secrets.resolve"],

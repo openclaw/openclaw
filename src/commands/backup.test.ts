@@ -11,18 +11,14 @@ import {
   resolveBackupPlanFromPaths,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
-import { backupCreateCommand } from "./backup.js";
+import {
+  backupVerifyCommandMock,
+  createBackupTestRuntime,
+  mockStateOnlyBackupPlan,
+  tarCreateMock,
+} from "./backup.test-support.js";
 
-const tarCreateMock = vi.hoisted(() => vi.fn());
-const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
-
-vi.mock("tar", () => ({
-  c: tarCreateMock,
-}));
-
-vi.mock("./backup-verify.js", () => ({
-  backupVerifyCommand: backupVerifyCommandMock,
-}));
+const { backupCreateCommand } = await import("./backup.js");
 
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
@@ -63,21 +59,13 @@ describe("backup commands", () => {
     await tempHome.restore();
   });
 
-  function createRuntime(): RuntimeEnv {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } satisfies RuntimeEnv;
-  }
-
   async function withInvalidWorkspaceBackupConfig<T>(fn: (runtime: RuntimeEnv) => Promise<T>) {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
-    const runtime = createRuntime();
+    const runtime = createBackupTestRuntime();
 
     try {
       return await fn(runtime);
@@ -175,7 +163,7 @@ describe("backup commands", () => {
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
       await fs.writeFile(path.join(externalWorkspace, "SOUL.md"), "# external\n", "utf8");
 
-      const runtime = createRuntime();
+      const runtime = createBackupTestRuntime();
 
       const nowMs = Date.UTC(2026, 2, 9, 0, 0, 0);
       vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
@@ -265,59 +253,12 @@ describe("backup commands", () => {
     }
   });
 
-  it("optionally verifies the archive after writing it", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const archiveDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-backup-verify-on-create-"),
-    );
-    try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
-
-      const runtime = createRuntime();
-      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
-        await resolveBackupPlanFromPaths({
-          stateDir,
-          configPath: path.join(stateDir, "openclaw.json"),
-          oauthDir: path.join(stateDir, "credentials"),
-          includeWorkspace: false,
-          configInsideState: true,
-          oauthInsideState: true,
-          nowMs: 123,
-        }),
-      );
-
-      const result = await backupCreateCommand(runtime, {
-        output: archiveDir,
-        verify: true,
-      });
-
-      expect(result.verified).toBe(true);
-      expect(backupVerifyCommandMock).toHaveBeenCalledWith(
-        expect.objectContaining({ log: expect.any(Function) }),
-        expect.objectContaining({ archive: result.archivePath, json: false }),
-      );
-    } finally {
-      await fs.rm(archiveDir, { recursive: true, force: true });
-    }
-  });
-
   it("rejects output paths that would be created inside a backed-up directory", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
 
-    const runtime = createRuntime();
-    vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
-      await resolveBackupPlanFromPaths({
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-        oauthDir: path.join(stateDir, "credentials"),
-        includeWorkspace: false,
-        configInsideState: true,
-        oauthInsideState: true,
-        nowMs: 123,
-      }),
-    );
+    const runtime = createBackupTestRuntime();
+    await mockStateOnlyBackupPlan(stateDir);
 
     await expect(
       backupCreateCommand(runtime, {
@@ -338,18 +279,8 @@ describe("backup commands", () => {
       await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.symlink(stateDir, symlinkPath);
 
-      const runtime = createRuntime();
-      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
-        await resolveBackupPlanFromPaths({
-          stateDir,
-          configPath: path.join(stateDir, "openclaw.json"),
-          oauthDir: path.join(stateDir, "credentials"),
-          includeWorkspace: false,
-          configInsideState: true,
-          oauthInsideState: true,
-          nowMs: 123,
-        }),
-      );
+      const runtime = createBackupTestRuntime();
+      await mockStateOnlyBackupPlan(stateDir);
 
       await expect(
         backupCreateCommand(runtime, {
@@ -381,7 +312,7 @@ describe("backup commands", () => {
       }),
     );
 
-    const runtime = createRuntime();
+    const runtime = createBackupTestRuntime();
 
     const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
     const result = await backupCreateCommand(runtime, { nowMs });
@@ -420,7 +351,7 @@ describe("backup commands", () => {
         }),
       );
 
-      const runtime = createRuntime();
+      const runtime = createBackupTestRuntime();
 
       const nowMs = Date.UTC(2026, 2, 9, 1, 3, 4);
       const result = await backupCreateCommand(runtime, { nowMs });
@@ -451,7 +382,7 @@ describe("backup commands", () => {
       }),
     );
 
-    const runtime = createRuntime();
+    const runtime = createBackupTestRuntime();
 
     const result = await backupCreateCommand(runtime, {
       output: existingArchive,
@@ -504,7 +435,7 @@ describe("backup commands", () => {
       }),
     );
 
-    const runtime = createRuntime();
+    const runtime = createBackupTestRuntime();
 
     const result = await backupCreateCommand(runtime, {
       dryRun: true,
@@ -522,7 +453,7 @@ describe("backup commands", () => {
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
 
-    const runtime = createRuntime();
+    const runtime = createBackupTestRuntime();
 
     try {
       const result = await backupCreateCommand(runtime, {

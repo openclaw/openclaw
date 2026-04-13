@@ -7,44 +7,72 @@ import {
   type ProviderUsageAuth,
   usageNow,
 } from "./provider-usage.test-support.js";
+import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
+const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() =>
+  vi.fn<typeof import("../plugins/provider-runtime.js").resolveProviderUsageSnapshotWithPlugin>(
+    async () => null,
+  ),
+);
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({}),
+}));
+
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderUsageSnapshotWithPlugin: resolveProviderUsageSnapshotWithPluginMock,
+  };
+});
 
 describe("provider-usage.load", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    resolveProviderUsageSnapshotWithPluginMock.mockReset();
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
   });
 
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      if (url.includes("api.github.com/copilot_internal/user")) {
-        return makeResponse(200, {
-          quota_snapshots: { chat: { percent_remaining: 80 } },
-          copilot_plan: "Copilot Pro",
-        });
-      }
-      if (url.includes("cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")) {
-        return makeResponse(200, {
-          models: {
-            "gemini-2.5-pro": {
-              quotaInfo: { remainingFraction: 0.4, resetTime: "2026-01-08T01:00:00Z" },
-            },
-          },
-        });
-      }
-      if (url.includes("cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")) {
-        return makeResponse(200, {
-          buckets: [{ modelId: "gemini-2.5-pro", remainingFraction: 0.6 }],
-        });
-      }
-      if (url.includes("chatgpt.com/backend-api/wham/usage")) {
-        return makeResponse(200, {
-          rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 10800 } },
-          plan_type: "Plus",
-        });
-      }
-      return makeResponse(404, "not found");
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
+        switch (provider) {
+          case "github-copilot":
+            return {
+              provider,
+              displayName: "GitHub Copilot",
+              windows: [{ label: "Chat", usedPercent: 20 }],
+            };
+          case googleGeminiCliProvider:
+            return {
+              provider,
+              displayName: "Gemini CLI",
+              windows: [{ label: "Pro", usedPercent: 40 }],
+            };
+          case "openai-codex":
+            return {
+              provider,
+              displayName: "Codex",
+              windows: [{ label: "3h", usedPercent: 12 }],
+            };
+          case "xiaomi":
+            return {
+              provider,
+              displayName: "Xiaomi",
+              windows: [],
+            };
+          default:
+            return null;
+        }
+      },
+    );
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
     });
 
     const summary = await loadUsageWithAuth(
@@ -77,6 +105,7 @@ describe("provider-usage.load", () => {
     expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
       [],
     );
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("returns empty provider list when auth resolves to none", async () => {
@@ -97,11 +126,14 @@ describe("provider-usage.load", () => {
   });
 
   it("filters errors that are marked as ignored", async () => {
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      if (url.includes("api.anthropic.com/api/oauth/usage")) {
-        return makeResponse(500, "boom");
-      }
-      return makeResponse(404, "not found");
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
+      provider: "anthropic",
+      displayName: "Claude",
+      windows: [],
+      error: "HTTP 500",
+    });
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
     });
     ignoredErrors.add("HTTP 500");
     try {

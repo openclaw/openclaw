@@ -7,13 +7,14 @@ import {
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  type DeliveryContext,
-} from "../../utils/delivery-context.js";
+} from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
@@ -76,7 +77,7 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
 }
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
-  return sessionKey.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(sessionKey);
 }
 
 export function resolveSessionStoreEntry(params: {
@@ -103,7 +104,7 @@ export function resolveSessionStoreEntry(params: {
     if (candidateKey === normalizedKey) {
       continue;
     }
-    if (candidateKey.toLowerCase() !== normalizedKey) {
+    if (normalizeStoreSessionKey(candidateKey) !== normalizedKey) {
       continue;
     }
     legacyKeySet.add(candidateKey);
@@ -190,6 +191,8 @@ type SaveSessionStoreOptions = {
   onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
   /** Optional overrides used by maintenance commands. */
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
+  /** Fully resolved maintenance settings when the caller already has config loaded. */
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 };
 
 function updateSessionStoreWriteCaches(params: {
@@ -279,7 +282,9 @@ async function saveSessionStoreUnlocked(
 
   if (!opts?.skipMaintenance) {
     // Resolve maintenance config once (avoids repeated loadConfig() calls).
-    const maintenance = { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
+    const maintenance = opts?.maintenanceConfig
+      ? { ...opts.maintenanceConfig, ...opts?.maintenanceOverride }
+      : { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
     const shouldWarnOnly = maintenance.mode === "warn";
     const beforeCount = Object.keys(store).length;
 

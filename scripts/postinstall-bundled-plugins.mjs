@@ -2,9 +2,11 @@
 // Runs after install to restore bundled extension runtime deps.
 // Installed builds can lazy-load bundled plugin code through root dist chunks,
 // so runtime dependencies declared in dist/extensions/*/package.json must also
-// resolve from the package root node_modules. Skip source checkouts.
+// resolve from the package root node_modules. Source checkouts resolve bundled
+// plugin deps from the workspace root, so stale plugin-local node_modules must
+// not linger under extensions/* and shadow the root graph.
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
@@ -22,6 +24,54 @@ function readJson(filePath) {
 
 function dependencySentinelPath(depName) {
   return join("node_modules", ...depName.split("/"), "package.json");
+}
+
+const KNOWN_NATIVE_PLATFORMS = new Set([
+  "aix",
+  "android",
+  "darwin",
+  "freebsd",
+  "linux",
+  "openbsd",
+  "sunos",
+  "win32",
+]);
+const KNOWN_NATIVE_ARCHES = new Set(["arm", "arm64", "ia32", "ppc64", "riscv64", "s390x", "x64"]);
+
+function packageNameTokens(name) {
+  return name
+    .toLowerCase()
+    .split(/[/@._-]+/u)
+    .filter(Boolean);
+}
+
+function optionalDependencyTargetsRuntime(name, params = {}) {
+  const platform = params.platform ?? process.platform;
+  const arch = params.arch ?? process.arch;
+  const tokens = new Set(packageNameTokens(name));
+  const hasNativePlatformToken = [...tokens].some((token) => KNOWN_NATIVE_PLATFORMS.has(token));
+  const hasNativeArchToken = [...tokens].some((token) => KNOWN_NATIVE_ARCHES.has(token));
+  return hasNativePlatformToken && hasNativeArchToken && tokens.has(platform) && tokens.has(arch);
+}
+
+function runtimeDepNeedsInstall(params) {
+  const packageJsonPath = join(params.packageRoot, params.dep.sentinelPath);
+  if (!params.existsSync(packageJsonPath)) {
+    return true;
+  }
+
+  try {
+    const packageJson = params.readJson(packageJsonPath);
+    return Object.keys(packageJson.optionalDependencies ?? {}).some(
+      (childName) =>
+        optionalDependencyTargetsRuntime(childName, {
+          arch: params.arch,
+          platform: params.platform,
+        }) && !params.existsSync(join(params.packageRoot, dependencySentinelPath(childName))),
+    );
+  } catch {
+    return true;
+  }
 }
 
 function collectRuntimeDeps(packageJson) {
@@ -102,7 +152,7 @@ export function createNestedNpmInstallEnv(env = process.env) {
   return nextEnv;
 }
 
-function isSourceCheckoutRoot(params) {
+export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
   return (
     pathExists(join(params.packageRoot, ".git")) &&
@@ -111,14 +161,35 @@ function isSourceCheckoutRoot(params) {
   );
 }
 
+export function pruneBundledPluginSourceNodeModules(params = {}) {
+  const extensionsDir = params.extensionsDir ?? join(DEFAULT_PACKAGE_ROOT, "extensions");
+  const pathExists = params.existsSync ?? existsSync;
+  const readDir = params.readdirSync ?? readdirSync;
+  const removePath = params.rmSync ?? rmSync;
+
+  if (!pathExists(extensionsDir)) {
+    return;
+  }
+
+  for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      continue;
+    }
+
+    const pluginDir = join(extensionsDir, entry.name);
+    if (!pathExists(join(pluginDir, "package.json"))) {
+      continue;
+    }
+
+    removePath(join(pluginDir, "node_modules"), { recursive: true, force: true });
+  }
+}
+
 function shouldRunBundledPluginPostinstall(params) {
   if (params.env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
     return false;
   }
   if (!params.existsSync(params.extensionsDir)) {
-    return false;
-  }
-  if (isSourceCheckoutRoot({ packageRoot: params.packageRoot, existsSync: params.existsSync })) {
     return false;
   }
   return true;
@@ -131,6 +202,22 @@ export function runBundledPluginPostinstall(params = {}) {
   const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
+  if (env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
+    return;
+  }
+  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
+    try {
+      pruneBundledPluginSourceNodeModules({
+        extensionsDir: join(packageRoot, "extensions"),
+        existsSync: pathExists,
+        readdirSync: params.readdirSync,
+        rmSync: params.rmSync,
+      });
+    } catch (e) {
+      log.warn(`[postinstall] could not prune bundled plugin source node_modules: ${String(e)}`);
+    }
+    return;
+  }
   if (
     !shouldRunBundledPluginPostinstall({
       env,
@@ -145,7 +232,16 @@ export function runBundledPluginPostinstall(params = {}) {
     params.runtimeDeps ??
     discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
   const missingSpecs = runtimeDeps
-    .filter((dep) => !pathExists(join(packageRoot, dep.sentinelPath)))
+    .filter((dep) =>
+      runtimeDepNeedsInstall({
+        dep,
+        existsSync: pathExists,
+        packageRoot,
+        arch: params.arch,
+        platform: params.platform,
+        readJson: params.readJson ?? readJson,
+      }),
+    )
     .map((dep) => `${dep.name}@${dep.version}`);
 
   if (missingSpecs.length === 0) {
@@ -162,7 +258,14 @@ export function runBundledPluginPostinstall(params = {}) {
         existsSync: pathExists,
         platform: params.platform,
         comSpec: params.comSpec,
-        npmArgs: ["install", "--omit=dev", "--no-save", "--package-lock=false", ...missingSpecs],
+        npmArgs: [
+          "install",
+          "--omit=dev",
+          "--no-save",
+          "--package-lock=false",
+          "--legacy-peer-deps",
+          ...missingSpecs,
+        ],
       });
     const result = spawn(npmRunner.command, npmRunner.args, {
       cwd: packageRoot,

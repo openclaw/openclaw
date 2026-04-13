@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -241,8 +241,8 @@ async function promptPluginFields(params: {
     });
     const trimmed = input.trim();
     if (trimmed !== currentStr) {
-      // Try to parse as number if schema says number
-      if (schemaProp?.type === "number") {
+      // Coerce numeric text input when the schema expects a JSON number or integer.
+      if (schemaProp?.type === "number" || schemaProp?.type === "integer") {
         if (trimmed === "") {
           setPathCreateStrict(updatedConfig, pathSegments, undefined);
           changed = true;
@@ -311,15 +311,22 @@ export async function setupPluginConfig(params: {
 
   const selected = await params.prompter.multiselect({
     message: "Configure plugins (select to set up now, or skip)",
-    options: unconfigured.map((p) => ({
-      value: p.id,
-      label: p.name,
-      hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}`,
-    })),
+    options: [
+      {
+        value: "__skip__",
+        label: "Skip for now",
+        hint: "Continue without configuring plugins",
+      },
+      ...unconfigured.map((p) => ({
+        value: p.id,
+        label: p.name,
+        hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}`,
+      })),
+    ],
   });
 
   let config = params.config;
-  for (const pluginId of selected) {
+  for (const pluginId of selected.filter((value) => value !== "__skip__")) {
     const plugin = unconfigured.find((p) => p.id === pluginId);
     if (!plugin) {
       continue;
