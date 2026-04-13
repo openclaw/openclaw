@@ -458,13 +458,13 @@ describe("update-cli", () => {
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
-    const { entryPath } = setupUpdatedRootRefresh();
+    const { entrypoints } = setupUpdatedRootRefresh();
 
     await updateCommand({ yes: true });
 
     expect(spawn).toHaveBeenCalledWith(
       expect.stringMatching(/node/),
-      [entryPath, "update", "--yes"],
+      [entrypoints[0], "update", "--yes"],
       expect.objectContaining({
         stdio: "inherit",
         env: expect.objectContaining({
