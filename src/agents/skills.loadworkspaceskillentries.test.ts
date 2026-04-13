@@ -220,6 +220,33 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(replacementEntries.map((entry) => entry.skill.name)).toEqual(["docs-search"]);
   });
 
+  it("loads personal skills from the OS home even when OPENCLAW_HOME is set", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const openclawHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-home-"));
+    tempDirs.push(openclawHome);
+    process.env.OPENCLAW_HOME = openclawHome;
+
+    await writeSkill({
+      dir: path.join(fakeHome, ".agents", "skills", "personal-skill"),
+      name: "personal-skill",
+      description: "OS home skill",
+    });
+    await writeSkill({
+      dir: path.join(openclawHome, ".agents", "skills", "personal-skill"),
+      name: "personal-skill",
+      description: "OPENCLAW_HOME skill",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    const personal = entries.find((entry) => entry.skill.name === "personal-skill");
+    expect(personal?.skill.description).toBe("OS home skill");
+    expect(personal?.skill.filePath).toContain(path.join(fakeHome, ".agents", "skills"));
+  });
+
   it("keeps remote-eligible skills when agent filtering is active", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeSkill({

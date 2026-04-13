@@ -558,7 +558,7 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalHomeDir = resolveHomeDir();
+  const personalHomeDir = resolveUserHomeDir();
   const personalAgentsSkillsDir = personalHomeDir
     ? path.resolve(personalHomeDir, ".agents", "skills")
     : path.resolve(".agents", "skills");
