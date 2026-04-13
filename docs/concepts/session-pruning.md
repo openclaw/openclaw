@@ -92,6 +92,10 @@ To disable: set `mode: "off"`.
 They complement each other -- pruning keeps tool output lean between
 compaction cycles.
 
+With `contextPruning.microCompress.enabled`, prunable tool output always gets
+line-ending normalization plus outer empty-line trimming before any optional
+ANSI stripping, trailing-whitespace trimming, or blank-line collapse.
+
 ## Further reading
 
 - [Compaction](/concepts/compaction) -- summarization-based context reduction

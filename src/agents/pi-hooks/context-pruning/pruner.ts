@@ -72,6 +72,9 @@ function normalizeMicroCompressedText(
   settings: EffectiveContextPruningSettings["microCompress"] | undefined,
 ): string {
   const effectiveSettings = settings ?? DEFAULT_MICRO_COMPRESS_SETTINGS;
+  // CR/CRLF normalization plus outer empty-line trimming are always-on safety
+  // steps for prunable tool text; the per-flag toggles only control the more
+  // opinionated formatting-noise reductions below.
   let next = text.replace(/\r\n?/g, "\n");
   if (effectiveSettings.stripAnsi) {
     next = next.replace(ANSI_ESCAPE_PATTERN, "");
@@ -95,7 +98,7 @@ function maybeMicroCompressJoinedText(params: {
     return params.text;
   }
   const normalized = normalizeMicroCompressedText(params.text, microCompress);
-  return normalized.length < params.text.length ? normalized : params.text;
+  return normalized !== params.text ? normalized : params.text;
 }
 
 function maybeMicroCompressToolResultMessage(params: {
@@ -413,10 +416,6 @@ export function pruneContextMessages(params: {
   }
 
   ratio = totalChars / charWindow;
-  if (ratio < settings.softTrimRatio) {
-    return next ?? messages;
-  }
-
   for (const i of prunableToolIndexes) {
     const msg = (next ?? messages)[i];
     if (!msg || msg.role !== "toolResult") {

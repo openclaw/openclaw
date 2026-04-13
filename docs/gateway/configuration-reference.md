@@ -1323,7 +1323,7 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
 Notes:
 
 - Image blocks are never trimmed/cleared.
-- `microCompress` only affects prunable `toolResult` text in memory. It normalizes line endings, removes outer blank lines, and can strip ANSI escapes, trim trailing whitespace, and collapse repeated blank lines when that reduces size.
+- `microCompress` only affects prunable `toolResult` text in memory. When enabled, it always normalizes line endings and removes outer blank lines; the sub-flags additionally control ANSI stripping, trailing-whitespace trimming, and repeated blank-line collapse.
 - Ratios are character-based (approximate), not exact token counts.
 - If fewer than `keepLastAssistants` assistant messages exist, pruning is skipped.
 

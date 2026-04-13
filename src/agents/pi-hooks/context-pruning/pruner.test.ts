@@ -369,6 +369,34 @@ describe("pruneContextMessages", () => {
     expect(getToolResultText(result)).toBe("\u001b[31merror\u001b[0m");
   });
 
+  it("still normalizes CR-only line endings when that is the only change", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "alpha\rbeta\r" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        microCompress: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.microCompress,
+          stripAnsi: false,
+          trimTrailingWhitespace: false,
+          collapseBlankLines: false,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\nbeta");
+  });
+
   it("never micro-compresses user or assistant messages", () => {
     const messages: AgentMessage[] = [
       makeUser("alpha  \r\n\r\n"),
@@ -504,6 +532,40 @@ describe("pruneContextMessages", () => {
     expect(toolResult.content).toEqual([
       { type: "text", text: "[image removed during context pruning]" },
     ]);
+  });
+
+  it("still replaces image blocks after micro-compression drops below soft-trim ratio", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\r\n\r\nalpha\r\nbeta\r\n" }]),
+      makeToolResult([{ type: "image", data: "img", mimeType: "image/png" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.5,
+        hardClearRatio: 10,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 6,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\nbeta");
+    expect(getToolResultText(result, 2)).toBe("[image removed during context pruning]");
   });
 
   it("hard-clears image-containing tool results once ratios require clearing", () => {

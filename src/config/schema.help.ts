@@ -1034,7 +1034,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
     "Forces a session memory-search reindex after compaction-triggered transcript updates (default: true). Keep enabled when compacted summaries must be immediately searchable, or disable to reduce write-time indexing pressure.",
   "agents.defaults.contextPruning.microCompress.enabled":
-    "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). Disable to preserve current pruning behavior exactly.",
+    "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). When enabled, line endings are normalized and outer empty lines are removed before any optional ANSI stripping, trailing-whitespace trimming, or blank-line collapse. Disable to preserve current pruning behavior exactly.",
   "agents.defaults.contextPruning.microCompress.stripAnsi":
     "Strips ANSI escape sequences from prunable tool-result text before pruning (default: true). Disable only if terminal color codes themselves are semantically important.",
   "agents.defaults.contextPruning.microCompress.trimTrailingWhitespace":
