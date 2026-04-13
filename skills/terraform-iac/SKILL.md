@@ -73,7 +73,7 @@ Do NOT apply without explicit confirmation.
 python3 {baseDir}/scripts/tfc_client.py apply --dir /tmp/tf-aws
 
 # Destroy (requires separate confirmation)
-python3 {baseDir}/scripts/tfc_client.py destroy --dir /tmp/tf-aws
+python3 {baseDir}/scripts/tfc_client.py destroy --confirm DESTROY --dir /tmp/tf-aws
 ```
 
 ### Step 6: Show outputs
