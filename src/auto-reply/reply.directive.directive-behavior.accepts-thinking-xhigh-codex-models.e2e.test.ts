@@ -100,6 +100,62 @@ describe("directive behavior", () => {
       expect(texts).toContain("Thinking level set to xhigh.");
     });
   });
+  it("accepts /thinking xhigh for openai-codex gpt-5.4", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/thinking xhigh",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.4",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        },
+      );
+
+      const texts = (Array.isArray(res) ? res : [res]).map((entry) => entry?.text).filter(Boolean);
+      expect(texts).toContain("Thinking level set to xhigh.");
+    });
+  });
+  it("accepts /thinking xhigh for openai-codex gpt-5.2", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/thinking xhigh",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.2",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        },
+      );
+
+      const texts = (Array.isArray(res) ? res : [res]).map((entry) => entry?.text).filter(Boolean);
+      expect(texts).toContain("Thinking level set to xhigh.");
+    });
+  });
   it("accepts /thinking xhigh for openai gpt-5.2", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
@@ -154,7 +210,7 @@ describe("directive behavior", () => {
 
       const texts = (Array.isArray(res) ? res : [res]).map((entry) => entry?.text).filter(Boolean);
       expect(texts).toContain(
-        'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.2-codex or openai-codex/gpt-5.1-codex.',
+        'Thinking level "xhigh" is only supported for openai-codex/gpt-5.4, openai/gpt-5.2, openai-codex/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.2-codex or openai-codex/gpt-5.1-codex.',
       );
     });
   });

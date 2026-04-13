@@ -19,7 +19,7 @@ type InlineProviderConfig = {
   models?: ModelDefinitionConfig[];
 };
 
-const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
+const OPENAI_CODEX_FORWARD_COMPAT_MODEL_IDS = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2"] as const;
 
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
@@ -29,17 +29,18 @@ const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
 
-function resolveOpenAICodexGpt53FallbackModel(
+function resolveOpenAICodexForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
+  const normalizedModelId = trimmedModelId.toLowerCase();
   if (normalizedProvider !== "openai-codex") {
     return undefined;
   }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+  if (!OPENAI_CODEX_FORWARD_COMPAT_MODEL_IDS.some((entry) => entry === normalizedModelId)) {
     return undefined;
   }
 
@@ -180,14 +181,10 @@ export function resolveModel(
         modelRegistry,
       };
     }
-    // Codex gpt-5.3 forward-compat fallback must be checked BEFORE the generic providerCfg fallback.
+    // Codex forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
     // Otherwise, if cfg.models.providers["openai-codex"] is configured, the generic fallback fires
     // with api: "openai-responses" instead of the correct "openai-codex-responses".
-    const codexForwardCompat = resolveOpenAICodexGpt53FallbackModel(
-      provider,
-      modelId,
-      modelRegistry,
-    );
+    const codexForwardCompat = resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry);
     if (codexForwardCompat) {
       return { model: codexForwardCompat, authStorage, modelRegistry };
     }

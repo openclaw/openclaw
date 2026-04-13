@@ -135,7 +135,7 @@ describe("resolveModel", () => {
     expect(result.model?.id).toBe("missing-model");
   });
 
-  it("builds an openai-codex fallback for gpt-5.3-codex", () => {
+  it("builds an openai-codex fallback for gpt-5.4", () => {
     const templateModel = {
       id: "gpt-5.2-codex",
       name: "GPT-5.2 Codex",
@@ -158,12 +158,49 @@ describe("resolveModel", () => {
       }),
     } as unknown as ReturnType<typeof discoverModels>);
 
-    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      contextWindow: 272000,
+      maxTokens: 128000,
+    });
+  });
+
+  it("builds an openai-codex fallback for gpt-5.2", () => {
+    const templateModel = {
+      id: "gpt-5.2-codex",
+      name: "GPT-5.2 Codex",
+      provider: "openai-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 272000,
+      maxTokens: 128000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.2", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.2",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       reasoning: true,
@@ -222,7 +259,7 @@ describe("resolveModel", () => {
         providers: {
           "openai-codex": {
             baseUrl: "https://custom.example.com",
-            // No models array, or models without gpt-5.3-codex
+            // No models array, or models without gpt-5.4
           },
         },
       },
@@ -232,11 +269,11 @@ describe("resolveModel", () => {
       find: vi.fn(() => null),
     } as unknown as ReturnType<typeof discoverModels>);
 
-    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent", cfg);
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
 
     expect(result.error).toBeUndefined();
     expect(result.model?.api).toBe("openai-codex-responses");
-    expect(result.model?.id).toBe("gpt-5.3-codex");
+    expect(result.model?.id).toBe("gpt-5.4");
     expect(result.model?.provider).toBe("openai-codex");
   });
 });

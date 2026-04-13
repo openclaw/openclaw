@@ -26,6 +26,10 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import {
+  applyOpenAICodexModelDefault,
+  OPENAI_CODEX_DEFAULT_MODEL,
+} from "../openai-codex-model-default.js";
 import { updateConfig } from "./shared.js";
 
 const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
@@ -410,6 +414,10 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     });
   }
 
+  const normalizedProviderId = normalizeProviderId(selectedProvider.id);
+  const resolvedDefaultModel =
+    normalizedProviderId === "openai-codex" ? OPENAI_CODEX_DEFAULT_MODEL : result.defaultModel;
+
   await updateConfig((cfg) => {
     let next = cfg;
     if (result.configPatch) {
@@ -422,8 +430,11 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
         mode: credentialMode(profile.credential),
       });
     }
-    if (opts.setDefault && result.defaultModel) {
-      next = applyDefaultModel(next, result.defaultModel);
+    if (opts.setDefault && resolvedDefaultModel) {
+      next =
+        normalizedProviderId === "openai-codex"
+          ? applyOpenAICodexModelDefault(next).next
+          : applyDefaultModel(next, resolvedDefaultModel);
     }
     return next;
   });
@@ -434,11 +445,11 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
     );
   }
-  if (result.defaultModel) {
+  if (resolvedDefaultModel) {
     runtime.log(
       opts.setDefault
-        ? `Default model set to ${result.defaultModel}`
-        : `Default model available: ${result.defaultModel} (use --set-default to apply)`,
+        ? `Default model set to ${resolvedDefaultModel}`
+        : `Default model available: ${resolvedDefaultModel} (use --set-default to apply)`,
     );
   }
   if (result.notes && result.notes.length > 0) {
