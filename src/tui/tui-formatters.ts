@@ -240,6 +240,16 @@ function collectSanitizedBlockStrings(params: {
   return parts;
 }
 
+function normalizeThinkingWhitespace(text: string): string {
+  if (!text) {
+    return "";
+  }
+  // Streaming thinking often arrives as sentence-sized fragments. Preserve
+  // explicit paragraph breaks, but turn single-line boundaries into spaces so
+  // the markdown renderer does not smush sentences together.
+  return text.replace(/(?<!\n)\n(?!\n)/g, " ");
+}
+
 /**
  * Extract ONLY thinking blocks from message content.
  * Model-agnostic: returns empty string if no thinking blocks exist.
@@ -258,7 +268,7 @@ export function extractThinkingFromMessage(message: unknown): string {
     blockType: "thinking",
     valueKey: "thinking",
   });
-  return parts.join("\n").trim();
+  return normalizeThinkingWhitespace(parts.join("\n")).trim();
 }
 
 /**
@@ -327,7 +337,7 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
       : [];
 
   return composeThinkingAndContent({
-    thinkingText: thinkingParts.join("\n").trim(),
+    thinkingText: normalizeThinkingWhitespace(thinkingParts.join("\n")).trim(),
     contentText: textParts.join("\n").trim(),
     showThinking: opts?.includeThinking ?? false,
   });

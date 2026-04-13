@@ -79,6 +79,20 @@ describe("TuiStreamAssembler", () => {
     expect(output).toBe("Visible");
   });
 
+  it("keeps spaces between streamed thinking fragments", () => {
+    const assembler = new TuiStreamAssembler();
+    const output = assembler.ingestDelta(
+      "run-2-thinking-spaces",
+      messageWithContent([
+        thinking("First sentence."),
+        thinking("Second sentence."),
+        text("Visible"),
+      ]),
+      true,
+    );
+    expect(output).toBe("[thinking]\nFirst sentence. Second sentence.\n\nVisible");
+  });
+
   it("falls back to streamed text on empty final payload", () => {
     const assembler = new TuiStreamAssembler();
     assembler.ingestDelta("run-3", messageWithContent([text("Streamed")]), false);

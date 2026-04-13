@@ -219,7 +219,28 @@ describe("extractThinkingFromMessage", () => {
       ],
     });
 
-    expect(text).toBe("alpha\nbeta");
+    expect(text).toBe("alpha beta");
+  });
+
+  it("converts single-line thinking boundaries into spaces", () => {
+    const text = extractThinkingFromMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "First sentence." },
+        { type: "thinking", thinking: "Second sentence." },
+      ],
+    });
+
+    expect(text).toBe("First sentence. Second sentence.");
+  });
+
+  it("preserves paragraph breaks inside thinking text", () => {
+    const text = extractThinkingFromMessage({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "Paragraph one.\n\nParagraph two." }],
+    });
+
+    expect(text).toBe("Paragraph one.\n\nParagraph two.");
   });
 });
 
