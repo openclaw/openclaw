@@ -248,11 +248,22 @@ export async function handleBlueBubblesWebhookRequest(
         return true;
       }
       const reaction = normalizeWebhookReaction(payload);
+      // Allow updated-message events through when they carry attachments.
+      // BB fires new-message (text only), then updated-message ~2-3s later once
+      // attachment data is ready. Without this, inbound images/PDFs/files are
+      // silently dropped. Only check data.attachments (not root payload.attachments)
+      // -- normalizeWebhookMessage requires a message container
+      // (payload.data/message/payload/event); root-only attachment payloads would
+      // pass the filter but fail normalization.
+      const dataAttachments = (asRecord(asRecord(payload)?.data) as Record<string, unknown> | undefined)?.attachments;
+      const isAttachmentUpdate =
+        eventType === "updated-message" && Array.isArray(dataAttachments) && dataAttachments.length > 0;
       if (
         (eventType === "updated-message" ||
           eventType === "message-reaction" ||
           eventType === "reaction") &&
-        !reaction
+        !reaction &&
+        !isAttachmentUpdate
       ) {
         res.statusCode = 200;
         res.end("ok");
@@ -265,7 +276,13 @@ export async function handleBlueBubblesWebhookRequest(
         }
         return true;
       }
-      const message = reaction ? null : normalizeWebhookMessage(payload);
+      let message = reaction ? null : normalizeWebhookMessage(payload);
+      // Strip text from attachment updates to prevent duplicate delivery.
+      // The text was already dispatched via new-message; the debounce window (500ms)
+      // is shorter than the updated-message delay (~2-3s) so they won't coalesce.
+      if (message && isAttachmentUpdate) {
+        message = { ...message, text: "" };
+      }
       if (!message && !reaction) {
         res.statusCode = 400;
         res.end("invalid payload");
