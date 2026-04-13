@@ -254,9 +254,13 @@ export async function incrementCompactionCount(params: {
       newSessionId,
     });
   }
+  const normalizedTokensAfter =
+    typeof tokensAfter === "number" && Number.isFinite(tokensAfter)
+      ? Math.floor(tokensAfter)
+      : undefined;
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
-  if (tokensAfter != null && tokensAfter > 0) {
-    updates.totalTokens = tokensAfter;
+  if (normalizedTokensAfter != null && normalizedTokensAfter > 0) {
+    updates.totalTokens = normalizedTokensAfter;
     updates.totalTokensFresh = true;
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;

@@ -164,6 +164,47 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(sessionStore.main.compactionCount).toBe(2);
   });
 
+  it("falls back to transcript estimation when a fresh cached total is non-positive", async () => {
+    const transcriptPath = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        message: {
+          role: "user",
+          content: "x".repeat(320_000),
+          timestamp: Date.now(),
+        },
+      })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: transcriptPath,
+      updatedAt: Date.now(),
+      totalTokens: 0,
+      totalTokensFresh: true,
+      compactionCount: 1,
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: {} } } },
+      followupRun: createFollowupRun({ sessionFile: transcriptPath }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    expect(entry?.compactionCount).toBe(2);
+    expect(entry?.totalTokens).toBe(12_000);
+  });
+
   it("runs a memory flush turn, rotates after compaction, and persists metadata", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";

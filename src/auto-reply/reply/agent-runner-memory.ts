@@ -385,17 +385,20 @@ export async function runPreflightCompactionIfNeeded(params: {
     20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
+  const hasUsableFreshPersistedTokens =
+    typeof freshPersistedTokens === "number" &&
+    Number.isFinite(freshPersistedTokens) &&
+    freshPersistedTokens > 0;
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const transcriptPromptTokens =
-    typeof freshPersistedTokens === "number"
-      ? undefined
-      : estimatePromptTokensFromSessionTranscript({
-          sessionId: entry.sessionId,
-          storePath: params.storePath,
-          sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
-        });
+  const transcriptPromptTokens = hasUsableFreshPersistedTokens
+    ? undefined
+    : estimatePromptTokensFromSessionTranscript({
+        sessionId: entry.sessionId,
+        storePath: params.storePath,
+        sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
+      });
   const projectedTokenCount =
     typeof transcriptPromptTokens === "number"
       ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate)
