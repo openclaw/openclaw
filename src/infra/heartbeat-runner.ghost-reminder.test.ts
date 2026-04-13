@@ -372,6 +372,28 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not force owner downgrade for isolated interval runs with only base-session untrusted events", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-interval-untrusted-isolated-",
+      replyText: "Handled internally",
+      reason: "interval",
+      target: "none",
+      isolatedSession: true,
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
+          sessionKey,
+          trusted: false,
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.SessionKey).toContain(":heartbeat");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
