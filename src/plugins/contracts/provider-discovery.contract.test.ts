@@ -1,4 +1,5 @@
 import {
+  describeAtomProviderDiscoveryContract,
   describeCloudflareAiGatewayProviderDiscoveryContract,
   describeGithubCopilotProviderDiscoveryContract,
   describeMinimaxProviderDiscoveryContract,
@@ -8,6 +9,7 @@ import {
   describeVllmProviderDiscoveryContract,
 } from "../../../test/helpers/plugins/provider-discovery-contract.js";
 
+describeAtomProviderDiscoveryContract();
 describeCloudflareAiGatewayProviderDiscoveryContract();
 describeGithubCopilotProviderDiscoveryContract();
 describeMinimaxProviderDiscoveryContract();

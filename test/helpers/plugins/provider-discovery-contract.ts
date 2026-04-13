@@ -10,6 +10,7 @@ import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
+const buildAtomProviderMock = vi.hoisted(() => vi.fn());
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
 const buildSglangProviderMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
@@ -48,6 +49,15 @@ const bundledProviderModules = {
     pluginId: "ollama",
     artifactBasename: "index.js",
   }),
+  atomApiModuleId: resolveBundledPluginPublicModulePath({
+    pluginId: "atom",
+    artifactBasename: "api.js",
+  }),
+  atomIndexModuleUrl: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "atom",
+    artifactBasename: "index.js",
+  }),
   sglangApiModuleId: resolveBundledPluginPublicModulePath({
     pluginId: "sglang",
     artifactBasename: "api.js",
@@ -73,6 +83,7 @@ type ProviderHandle = Awaited<ReturnType<typeof requireProvider>>;
 type DiscoveryState = {
   runProviderCatalog: typeof import("../../../src/plugins/provider-discovery.js").runProviderCatalog;
   githubCopilotProvider?: ProviderHandle;
+  atomProvider?: ProviderHandle;
   ollamaProvider?: ProviderHandle;
   vllmProvider?: ProviderHandle;
   sglangProvider?: ProviderHandle;
@@ -83,6 +94,7 @@ type DiscoveryState = {
 };
 
 type BundledProviderUnderTest =
+  | "atom"
   | "github-copilot"
   | "ollama"
   | "vllm"
@@ -244,6 +256,15 @@ function installDiscoveryHooks(
         buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
       };
     });
+    vi.doMock(bundledProviderModules.atomApiModuleId, async () => {
+      return {
+        ATOM_DEFAULT_API_KEY_ENV_VAR: "ATOM_API_KEY",
+        ATOM_DEFAULT_BASE_URL: "http://127.0.0.1:8000/v1",
+        ATOM_MODEL_PLACEHOLDER: "Qwen/Qwen3-32B",
+        ATOM_PROVIDER_LABEL: "ATOM",
+        buildAtomProvider: (...args: unknown[]) => buildAtomProviderMock(...args),
+      };
+    });
     vi.doMock(bundledProviderModules.sglangApiModuleId, async () => {
       return {
         SGLANG_DEFAULT_API_KEY_ENV_VAR: "SGLANG_API_KEY",
@@ -264,6 +285,13 @@ function installDiscoveryHooks(
         await registerProviders(githubCopilotPlugin),
         "github-copilot",
       );
+    }
+
+    if (providerIds.includes("atom")) {
+      const { default: atomPlugin } = await importBundledProviderPlugin<{
+        default: Parameters<typeof registerProviders>[0];
+      }>(bundledProviderModules.atomIndexModuleUrl);
+      state.atomProvider = requireProvider(await registerProviders(atomPlugin), "atom");
     }
 
     if (providerIds.includes("ollama")) {
@@ -318,6 +346,7 @@ function installDiscoveryHooks(
   afterEach(() => {
     vi.restoreAllMocks();
     resolveCopilotApiTokenMock.mockReset();
+    buildAtomProviderMock.mockReset();
     buildOllamaProviderMock.mockReset();
     buildVllmProviderMock.mockReset();
     buildSglangProviderMock.mockReset();
@@ -481,6 +510,52 @@ export function describeOllamaProviderDiscoveryContract() {
       ).resolves.toBeNull();
       expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://127.0.0.1:11434", {
         quiet: true,
+      });
+    });
+  });
+}
+
+export function describeAtomProviderDiscoveryContract() {
+  const state = {} as DiscoveryState;
+
+  describe("atom provider discovery contract", () => {
+    installDiscoveryHooks(state, ["atom"]);
+
+    it("keeps self-hosted discovery provider-owned", async () => {
+      buildAtomProviderMock.mockResolvedValueOnce({
+        baseUrl: "http://127.0.0.1:8000/v1",
+        api: "openai-completions",
+        models: [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
+      });
+
+      await expect(
+        runCatalog(state, {
+          provider: state.atomProvider!,
+          config: {},
+          env: {
+            ATOM_API_KEY: "env-atom-key",
+          } as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({
+            apiKey: "ATOM_API_KEY",
+            discoveryApiKey: "env-atom-key",
+          }),
+          resolveProviderAuth: () => ({
+            apiKey: "ATOM_API_KEY",
+            discoveryApiKey: "env-atom-key",
+            mode: "api_key",
+            source: "env",
+          }),
+        }),
+      ).resolves.toEqual({
+        provider: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          api: "openai-completions",
+          apiKey: "ATOM_API_KEY",
+          models: [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
+        },
+      });
+      expect(buildAtomProviderMock).toHaveBeenCalledWith({
+        apiKey: "env-atom-key",
       });
     });
   });

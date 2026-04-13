@@ -818,6 +818,16 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     ],
     ["lmstudio", createLmstudioChoice()],
     [
+      "atom",
+      createSelfHostedChoice({
+        providerId: "atom",
+        label: "ATOM",
+        defaultBaseUrl: "http://127.0.0.1:8000/v1",
+        defaultApiKeyEnvVar: "ATOM_API_KEY",
+        modelPlaceholder: "Qwen/Qwen3-32B",
+      }),
+    ],
+    [
       "litellm-api-key",
       createApiKeyChoice({
         providerId: "litellm",

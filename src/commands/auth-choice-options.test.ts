@@ -243,6 +243,13 @@ describe("buildAuthChoiceOptions", () => {
         groupId: "sglang",
         groupLabel: "SGLang",
       },
+      {
+        value: "atom",
+        label: "ATOM",
+        hint: "AMD GPU inference engine (OpenAI-compatible)",
+        groupId: "atom",
+        groupLabel: "ATOM",
+      },
     ]);
     const options = getOptions();
 
@@ -258,6 +265,7 @@ describe("buildAuthChoiceOptions", () => {
       "mistral-api-key",
       "volcengine-api-key",
       "byteplus-api-key",
+      "atom",
       "vllm",
       "opencode-go",
       "ollama",

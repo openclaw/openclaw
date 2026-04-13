@@ -1248,6 +1248,7 @@
                   "providers/bedrock-mantle",
                   "providers/anthropic",
                   "providers/arcee",
+                  "providers/atom",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",

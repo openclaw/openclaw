@@ -292,6 +292,14 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expect(result.error).toContain("VLLM_API_KEY");
   });
 
+  it("includes auth hint for unknown atom models", () => {
+    const result = resolveModelForTest("atom", "Qwen/Qwen3-32B", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("Unknown model: atom/Qwen/Qwen3-32B");
+    expect(result.error).toContain("ATOM_API_KEY");
+  });
+
   it("does not add auth hint for non-local providers", () => {
     const result = resolveModelForTest("google-antigravity", "some-model", "/tmp/agent");
 

@@ -15,6 +15,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         ![
           "amazon-bedrock",
           "anthropic",
+          "atom",
           "google",
           "github-copilot",
           "kilocode",
@@ -38,7 +39,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
       ) {
         return undefined;
       }
-      if (provider === "sglang" || provider === "vllm") {
+      if (provider === "atom" || provider === "sglang" || provider === "vllm") {
         return {};
       }
       return {

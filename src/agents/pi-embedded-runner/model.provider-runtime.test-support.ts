@@ -447,6 +447,12 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
             'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
             "See: https://docs.openclaw.ai/providers/vllm"
           );
+        case "atom":
+          return (
+            "ATOM requires authentication to be registered as a provider. " +
+            'Set ATOM_API_KEY (any value works) or run "openclaw configure". ' +
+            "See: https://docs.openclaw.ai/providers/atom"
+          );
         default:
           return undefined;
       }

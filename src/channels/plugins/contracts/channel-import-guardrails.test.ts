@@ -191,6 +191,7 @@ const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
 
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "acpx",
+  "atom",
   "bluebubbles",
   "device-pair",
   "diagnostics-otel",

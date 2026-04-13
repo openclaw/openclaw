@@ -92,6 +92,14 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
       apiKey: "sglang-test-key",
       modelId: "Qwen/Qwen3-32B",
     },
+    {
+      providerId: "atom",
+      providerLabel: "ATOM",
+      envVar: "ATOM_API_KEY",
+      baseUrl: "http://127.0.0.1:8000/v1",
+      apiKey: "atom-test-key",
+      modelId: "Qwen/Qwen3-32B",
+    },
   ])("configures $providerLabel config and auth profile", async (params) => {
     const ctx = createContext(params);
 

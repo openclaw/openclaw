@@ -1,0 +1,25 @@
+{
+  "id": "atom",
+  "enabledByDefault": true,
+  "providers": ["atom"],
+  "providerAuthEnvVars": {
+    "atom": ["ATOM_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "atom",
+      "method": "custom",
+      "choiceId": "atom",
+      "choiceLabel": "ATOM",
+      "choiceHint": "Self-hosted OpenAI-compatible, optimized for AMD GPUs",
+      "groupId": "atom",
+      "groupLabel": "ATOM",
+      "groupHint": "Self-hosted OpenAI-compatible, optimized for AMD GPUs"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
