@@ -1,3 +1,4 @@
+import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
@@ -22,6 +23,8 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -34,6 +37,7 @@ const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
   getActiveMcpLoopbackRuntime,
+  ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
   resolveOpenClawDocsPath: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
@@ -112,9 +116,17 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const mcpLoopbackRuntime = backendResolved.bundleMcp
+  let mcpLoopbackRuntime = backendResolved.bundleMcp
     ? prepareDeps.getActiveMcpLoopbackRuntime()
     : undefined;
+  if (backendResolved.bundleMcp && !mcpLoopbackRuntime) {
+    try {
+      await prepareDeps.ensureMcpLoopbackServer();
+    } catch (error) {
+      cliBackendLog.warn(`mcp loopback server failed to start: ${String(error)}`);
+    }
+    mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
+  }
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
     mode: backendResolved.bundleMcpMode,
@@ -131,6 +143,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+          OPENCLAW_MCP_SENDER_IS_OWNER: params.senderIsOwner === true ? "true" : "false",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -162,7 +175,13 @@ export async function prepareCliRunContext(
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
-  const systemPrompt =
+  const skillsPrompt = resolveSkillsPromptForRun({
+    skillsSnapshot: params.skillsSnapshot,
+    workspaceDir,
+    config: params.config,
+    agentId: sessionAgentId,
+  });
+  const builtSystemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
       agentId: sessionAgentId,
@@ -175,11 +194,26 @@ export async function prepareCliRunContext(
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,
       docsPath: docsPath ?? undefined,
+      skillsPrompt,
       tools: [],
       contextFiles,
       modelDisplay,
       agentId: sessionAgentId,
     });
+  const transformedSystemPrompt =
+    backendResolved.transformSystemPrompt?.({
+      config: params.config,
+      workspaceDir,
+      provider: params.provider,
+      modelId,
+      modelDisplay,
+      agentId: sessionAgentId,
+      systemPrompt: builtSystemPrompt,
+    }) ?? builtSystemPrompt;
+  const systemPrompt = applyPluginTextReplacements(
+    transformedSystemPrompt,
+    backendResolved.textTransforms?.input,
+  );
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -199,7 +233,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 

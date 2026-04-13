@@ -19,8 +19,15 @@ import {
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,
+  registerSubagentRun,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
+import {
+  createSubagentRegistryTestDeps,
+  readSubagentSessionStore,
+  removeSubagentSessionEntry,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromDisk,
   resolveSubagentRegistryPath,
@@ -46,22 +53,6 @@ describe("subagent registry persistence", () => {
     return (match?.[1] ?? "main").trim().toLowerCase() || "main";
   };
 
-  const resolveSessionStorePath = (stateDir: string, agentId: string) =>
-    path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-
-  const readSessionStore = async (storePath: string) => {
-    try {
-      const raw = await fs.readFile(storePath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, Record<string, unknown>>;
-      }
-    } catch {
-      // ignore
-    }
-    return {} as Record<string, Record<string, unknown>>;
-  };
-
   const writeChildSessionEntry = async (params: {
     sessionKey: string;
     sessionId?: string;
@@ -71,16 +62,14 @@ describe("subagent registry persistence", () => {
       throw new Error("tempStateDir not initialized");
     }
     const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-    const storePath = resolveSessionStorePath(tempStateDir, agentId);
-    const store = await readSessionStore(storePath);
-    store[params.sessionKey] = {
-      ...store[params.sessionKey],
-      sessionId: params.sessionId ?? `sess-${agentId}-${Date.now()}`,
-      updatedAt: params.updatedAt ?? Date.now(),
-    };
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
-    return storePath;
+    return await writeSubagentSessionEntry({
+      stateDir: tempStateDir,
+      agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      updatedAt: params.updatedAt,
+      defaultSessionId: `sess-${agentId}-${Date.now()}`,
+    });
   };
 
   const removeChildSessionEntry = async (sessionKey: string) => {
@@ -88,12 +77,11 @@ describe("subagent registry persistence", () => {
       throw new Error("tempStateDir not initialized");
     }
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveSessionStorePath(tempStateDir, agentId);
-    const store = await readSessionStore(storePath);
-    delete store[sessionKey];
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
-    return storePath;
+    return await removeSubagentSessionEntry({
+      stateDir: tempStateDir,
+      agentId,
+      sessionKey,
+    });
   };
 
   const seedChildSessionsForPersistedRuns = async (persisted: Record<string, unknown>) => {
@@ -180,6 +168,7 @@ describe("subagent registry persistence", () => {
 
   beforeEach(() => {
     __testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
       runSubagentAnnounceFlow: announceSpy,
     });
     vi.mocked(callGateway).mockReset();
@@ -233,7 +222,7 @@ describe("subagent registry persistence", () => {
       outcome: { status: "ok" },
     } as never);
 
-    const store = await readSessionStore(storePath);
+    const store = await readSubagentSessionStore(storePath);
     const persisted = store["agent:main:subagent:timing"];
     expect(persisted?.endedAt).toBe(endedAt);
     expect(persisted?.runtimeMs).toBe(500);
@@ -317,6 +306,73 @@ describe("subagent registry persistence", () => {
 
     const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as { version?: number };
     expect(after.version).toBe(2);
+  });
+
+  it("normalizes persisted and newly registered session keys to canonical trimmed values", async () => {
+    const persisted = {
+      version: 2,
+      runs: {
+        "run-spaced": {
+          runId: "run-spaced",
+          childSessionKey: " agent:main:subagent:spaced-child ",
+          controllerSessionKey: " agent:main:subagent:controller ",
+          requesterSessionKey: " agent:main:main ",
+          requesterDisplayKey: "main",
+          task: "spaced persisted keys",
+          cleanup: "keep",
+          createdAt: 1,
+          startedAt: 1,
+        },
+      },
+    };
+    await writePersistedRegistry(persisted, { seedChildSessions: false });
+
+    const restored = loadSubagentRegistryFromDisk();
+    const restoredEntry = restored.get("run-spaced");
+    expect(restoredEntry).toMatchObject({
+      childSessionKey: "agent:main:subagent:spaced-child",
+      controllerSessionKey: "agent:main:subagent:controller",
+      requesterSessionKey: "agent:main:main",
+    });
+
+    resetSubagentRegistryForTests({ persist: false });
+    addSubagentRunForTests(restoredEntry as never);
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({
+        runId: "run-spaced",
+      }),
+    ]);
+    expect(getSubagentRunByChildSessionKey("agent:main:subagent:spaced-child")).toMatchObject({
+      runId: "run-spaced",
+    });
+
+    resetSubagentRegistryForTests({ persist: false });
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    vi.mocked(callGateway).mockImplementationOnce(async () => await new Promise(() => {}));
+
+    registerSubagentRun({
+      runId: " run-live ",
+      childSessionKey: " agent:main:subagent:live-child ",
+      controllerSessionKey: " agent:main:subagent:live-controller ",
+      requesterSessionKey: " agent:main:main ",
+      requesterDisplayKey: "main",
+      task: "live spaced keys",
+      cleanup: "keep",
+    });
+
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({
+        runId: "run-live",
+        childSessionKey: "agent:main:subagent:live-child",
+        controllerSessionKey: "agent:main:subagent:live-controller",
+        requesterSessionKey: "agent:main:main",
+      }),
+    ]);
+    expect(getSubagentRunByChildSessionKey("agent:main:subagent:live-child")).toMatchObject({
+      runId: "run-live",
+    });
   });
 
   it("retries cleanup announce after a failed announce", async () => {

@@ -1,14 +1,6 @@
+import type { ChatModelOverride } from "./chat-model-ref.types.ts";
 import type { ModelCatalogEntry } from "./types.ts";
-
-export type ChatModelOverride =
-  | {
-      kind: "qualified";
-      value: string;
-    }
-  | {
-      kind: "raw";
-      value: string;
-    };
+export type { ChatModelOverride } from "./chat-model-ref.types.ts";
 
 export function buildQualifiedChatModelValue(model: string, provider?: string | null): string {
   const trimmedModel = model.trim();
@@ -276,13 +268,6 @@ export function buildChatModelOptionFromLookup(
   displayLookup: ChatModelDisplayLookup,
 ): { value: string; label: string } {
   const provider = entry.provider?.trim();
-  const value = (() => {
-    if (!provider) {
-      return entry.id;
-    }
-    const providerPrefix = `${provider.toLowerCase()}/`;
-    return entry.id.toLowerCase().startsWith(providerPrefix) ? entry.id : `${provider}/${entry.id}`;
-  })();
   return {
     value: buildQualifiedChatModelValue(entry.id, provider),
     label: formatCatalogEntryDisplay(entry, displayLookup),

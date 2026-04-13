@@ -12,19 +12,25 @@ import { resolveOpenAITextVerbosity } from "../agents/pi-embedded-runner/openai-
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
-import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
+import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.types.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
+  resolveSessionPluginStatusLines,
+  resolveSessionPluginTraceLines,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
+import {
+  findDecisionReason,
+  summarizeDecisionReason,
+} from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
@@ -374,11 +380,14 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
         return `${decision.capability} denied`;
       }
       if (decision.outcome === "skipped") {
-        const reason = decision.attachments
-          .flatMap((entry) => entry.attempts.map((attempt) => attempt.reason).filter(Boolean))
-          .find(Boolean);
-        const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
+        const reason = findDecisionReason(decision);
+        const shortReason = summarizeDecisionReason(reason);
         return `${decision.capability} skipped${shortReason ? ` (${shortReason})` : ""}`;
+      }
+      if (decision.outcome === "failed") {
+        const reason = findDecisionReason(decision, "failed");
+        const shortReason = summarizeDecisionReason(reason);
+        return `${decision.capability} failed${shortReason ? ` (${shortReason})` : ""}`;
       }
       return null;
     })
@@ -466,7 +475,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
         normalizeLowercaseStringOrEmpty(
-          normalizeOptionalString(String(entry?.fallbackNoticeActiveModel ?? "")) ?? "",
+          normalizeOptionalString(entry?.fallbackNoticeActiveModel ?? "") ?? "",
         );
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
@@ -673,6 +682,14 @@ export function buildStatusMessage(args: StatusArgs): string {
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
     verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
+  const traceLevel = entry?.traceLevel === "on" ? "on" : "off";
+  const traceLabel = traceLevel === "on" ? "trace" : null;
+  const pluginStatusLines = verboseLevel !== "off" ? resolveSessionPluginStatusLines(entry) : [];
+  const pluginTraceLines = traceLevel === "on" ? resolveSessionPluginTraceLines(entry) : [];
+  const pluginStatusLine =
+    pluginStatusLines.length > 0 || pluginTraceLines.length > 0
+      ? [...pluginStatusLines, ...pluginTraceLines].join(" · ")
+      : null;
   const elevatedLabel =
     elevatedLevel && elevatedLevel !== "off"
       ? elevatedLevel === "on"
@@ -691,6 +708,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     fastMode ? "Fast: on" : null,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
+    traceLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,
   ];
@@ -833,6 +851,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.subagentsLine,
     args.taskLine,
     `⚙️ ${optionsLine}`,
+    pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
     voiceLine,
     activationLine,
   ]
