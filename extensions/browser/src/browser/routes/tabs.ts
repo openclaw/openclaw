@@ -1,4 +1,8 @@
-import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "../errors.js";
+import {
+  BrowserProfileUnavailableError,
+  BrowserTabNotFoundError,
+  BrowserTargetAmbiguousError,
+} from "../errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -190,6 +194,9 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         const tabs = await profileCtx.listTabs();
         const resolved = resolveTargetIdFromTabs(id, tabs);
         if (!resolved.ok) {
+          if (resolved.reason === "ambiguous") {
+            throw new BrowserTargetAmbiguousError();
+          }
           throw new BrowserTabNotFoundError();
         }
         const tab = tabs.find((currentTab) => currentTab.targetId === resolved.targetId);

@@ -63,9 +63,13 @@ function createRouteContext(
     state: () => ({ resolved: { ssrfPolicy: options?.ssrfPolicy } }),
     forProfile: () => profileCtx,
     listProfiles: vi.fn(async () => []),
-    mapTabError: vi.fn((err: unknown) =>
-      err instanceof Error ? { status: 400, message: err.message } : null,
-    ),
+    mapTabError: vi.fn((err: unknown) => {
+      if (!(err instanceof Error)) {
+        return null;
+      }
+      const status = "status" in err && typeof err.status === "number" ? err.status : 400;
+      return { status, message: err.message };
+    }),
     ensureBrowserAvailable: profileCtx.ensureBrowserAvailable,
     ensureTabAvailable: profileCtx.ensureTabAvailable,
     isHttpReachable: profileCtx.isHttpReachable,
@@ -262,9 +266,37 @@ describe("browser tab routes", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(404);
     expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(profileCtx.focusTab).not.toHaveBeenCalled();
+  });
+
+  it("returns conflict for ambiguous target-id prefixes in /tabs/focus", async () => {
+    const profileCtx = createProfileContext({
+      listTabs: vi.fn(async () => [
+        {
+          targetId: "T1abc",
+          title: "Tab 1",
+          url: "https://example.com",
+          type: "page",
+        },
+        {
+          targetId: "T1def",
+          title: "Tab 2",
+          url: "https://example.org",
+          type: "page",
+        },
+      ]),
+    });
+
+    const response = await callTabsFocus({
+      profileCtx,
+      body: { targetId: "T1" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(profileCtx.focusTab).not.toHaveBeenCalled();
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
   it("blocks /tabs/action select when target tab URL fails SSRF checks", async () => {
