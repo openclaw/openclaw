@@ -310,6 +310,25 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not classify base-session hook:wake exec completions as exec-event prompts when isolated sessions are enabled", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-hook-exec-isolated-",
+      replyText: "Handled internally",
+      reason: "hook:wake",
+      target: "none",
+      isolatedSession: true,
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("exec finished: webhook-triggered backup completed", { sessionKey });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.SessionKey).toContain(":heartbeat");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
   it("forces owner downgrade for untrusted hook:wake system events", async () => {
     const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
       tmpPrefix: "openclaw-hook-untrusted-",
@@ -350,7 +369,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
-  it("forces owner downgrade for untrusted hook:wake events with isolated sessions", async () => {
+  it("does not force owner downgrade for untrusted hook:wake events with isolated sessions", async () => {
     const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
       tmpPrefix: "openclaw-hook-untrusted-isolated-",
       replyText: "Handled internally",
@@ -368,7 +387,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("heartbeat");
     expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
