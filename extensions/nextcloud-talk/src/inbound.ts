@@ -16,6 +16,7 @@ import {
   type RuntimeEnv,
 } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { consumeApproval, lookupApproval, resolveReactionDecision } from "./approval-stash.js";
 import {
   normalizeNextcloudTalkAllowlist,
@@ -457,44 +458,62 @@ export async function handleNextcloudTalkInboundReaction(params: {
   const roomLabel = isGroup ? reaction.roomName?.trim() || roomToken : `DM ${senderLabel}`;
 
   // Check if this reaction targets a stashed approval prompt before falling through
-  // to the generic system-event path.
+  // to the generic system-event path. An emoji-to-decision hit is not sufficient —
+  // the reacting sender must also be in the account's approver list (same gate as
+  // the /approve text-command path), otherwise any room member could dispatch a
+  // decision they aren't authorized to make.
   if (reaction.action === "added") {
     const stashEntry = lookupApproval(account.accountId, roomToken, messageId);
     if (stashEntry) {
       const decision = resolveReactionDecision(stashEntry, emoji);
       if (decision) {
-        try {
-          await resolveApprovalOverGateway({
-            cfg: config as OpenClawConfig,
-            approvalId: stashEntry.approvalId,
-            decision,
-            senderId,
-            clientDisplayName: `Nextcloud Talk approval (${senderLabel})`,
-          });
-          consumeApproval(account.accountId, roomToken, messageId);
-          // Post a follow-up confirmation using replyTo so context is preserved.
+        const auth = nextcloudTalkApprovalAuth.authorizeActorAction({
+          cfg: config as OpenClawConfig,
+          accountId: account.accountId,
+          senderId,
+          action: "approve",
+          approvalKind: stashEntry.approvalKind,
+        });
+        if (!auth.authorized) {
+          runtime.log?.(
+            `nextcloud-talk approval: unauthorized sender ${senderId} reacted ${emoji} on ${stashEntry.approvalId} (room=${roomToken})`,
+          );
+          // Leave stash intact so a later authorized approver can still resolve;
+          // fall through to system event so the reaction is recorded.
+        } else {
           try {
-            await sendMessageNextcloudTalk(
-              roomToken,
-              `> Decision recorded — **${decision}** by ${senderLabel}`,
-              {
-                accountId: account.accountId,
-                replyTo: messageId,
-                cfg: config,
-              },
+            await resolveApprovalOverGateway({
+              cfg: config as OpenClawConfig,
+              approvalId: stashEntry.approvalId,
+              decision,
+              senderId,
+              clientDisplayName: `Nextcloud Talk approval (${senderLabel})`,
+            });
+            consumeApproval(account.accountId, roomToken, messageId);
+            // Post a follow-up confirmation using replyTo so context is preserved.
+            try {
+              await sendMessageNextcloudTalk(
+                roomToken,
+                `> Decision recorded — **${decision}** by ${senderLabel}`,
+                {
+                  accountId: account.accountId,
+                  replyTo: messageId,
+                  cfg: config,
+                },
+              );
+            } catch {
+              // Best-effort: confirmation failure should not undo the approval dispatch.
+            }
+            runtime.log?.(
+              `nextcloud-talk approval: ${decision} by ${senderLabel} for ${stashEntry.approvalId} room=${roomToken}`,
             );
-          } catch {
-            // Best-effort: confirmation failure should not undo the approval dispatch.
+            return;
+          } catch (err) {
+            runtime.log?.(
+              `nextcloud-talk approval dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            // Fall through to system event on dispatch failure.
           }
-          runtime.log?.(
-            `nextcloud-talk approval: ${decision} by ${senderLabel} for ${stashEntry.approvalId} room=${roomToken}`,
-          );
-          return;
-        } catch (err) {
-          runtime.log?.(
-            `nextcloud-talk approval dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          // Fall through to system event on dispatch failure.
         }
       }
     }
