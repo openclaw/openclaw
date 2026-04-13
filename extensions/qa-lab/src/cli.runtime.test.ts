@@ -14,6 +14,7 @@ const {
   writeQaDockerHarnessFiles,
   buildQaDockerHarnessImage,
   runQaDockerUp,
+  defaultQaRuntimeModelForMode,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
   runQaSuiteFromRuntime: vi.fn(),
@@ -25,6 +26,14 @@ const {
   writeQaDockerHarnessFiles: vi.fn(),
   buildQaDockerHarnessImage: vi.fn(),
   runQaDockerUp: vi.fn(),
+  defaultQaRuntimeModelForMode: vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(
+    (mode, options) =>
+      mode === "live-frontier"
+        ? "openai/gpt-5.4"
+        : options?.alternate
+          ? "mock-openai/gpt-5.4-alt"
+          : "mock-openai/gpt-5.4",
+  ),
 }));
 
 vi.mock("./manual-lane.runtime.js", () => ({
@@ -64,6 +73,10 @@ vi.mock("./docker-up.runtime.js", () => ({
   runQaDockerUp,
 }));
 
+vi.mock("./model-selection.runtime.js", () => ({
+  defaultQaRuntimeModelForMode,
+}));
+
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import {
   runQaLabSelfCheckCommand,
@@ -93,6 +106,14 @@ describe("qa cli runtime", () => {
     writeQaDockerHarnessFiles.mockReset();
     buildQaDockerHarnessImage.mockReset();
     runQaDockerUp.mockReset();
+    defaultQaRuntimeModelForMode.mockImplementation(
+      (mode: string, options?: { alternate?: boolean }) =>
+        mode === "live-frontier"
+          ? "openai/gpt-5.4"
+          : options?.alternate
+            ? "mock-openai/gpt-5.4-alt"
+            : "mock-openai/gpt-5.4",
+    );
     runQaSuiteFromRuntime.mockResolvedValue({
       watchUrl: "http://127.0.0.1:43124",
       reportPath: "/tmp/report.md",
@@ -688,6 +709,32 @@ describe("qa cli runtime", () => {
         alternateModel: "openai/gpt-5.4",
       }),
     );
+  });
+
+  it("defaults manual frontier runs onto Codex OAuth when the runtime resolver prefers it", async () => {
+    defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
+      mode === "live-frontier"
+        ? "openai-codex/gpt-5.4"
+        : options?.alternate
+          ? "mock-openai/gpt-5.4-alt"
+          : "mock-openai/gpt-5.4",
+    );
+
+    await runQaManualLaneCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      message: "read qa kickoff and reply short",
+    });
+
+    expect(runQaManualLane).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
+      providerMode: "live-frontier",
+      primaryModel: "openai-codex/gpt-5.4",
+      alternateModel: "openai-codex/gpt-5.4",
+      fastMode: undefined,
+      message: "read qa kickoff and reply short",
+      timeoutMs: undefined,
+    });
   });
 
   it("resolves self-check repo-root-relative paths before starting the lab server", async () => {
