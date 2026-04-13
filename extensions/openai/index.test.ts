@@ -408,6 +408,15 @@ describe("openai plugin", () => {
       "Commentary-only turns are incomplete when the next action is clear.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Default to action over confirmation for non-destructive work. Do not ask for permission to inspect, investigate, edit, draft, search, or run other reversible internal steps.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      'Do not stop at "I can do that", "want me to?", or similar confirmation-seeking filler when you can just do the next step.',
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Do not stop at research or explanation when safe implementation work is still possible. Continue through investigation, edits, verification, and follow-up fixes until the request is complete or a real blocker appears.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
@@ -464,6 +473,12 @@ describe("openai plugin", () => {
     expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
       "Do prerequisite lookup or discovery before dependent actions.",
     );
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
+      "Do not pause for confirmation between safe intermediate steps when the user's goal is already clear.",
+    );
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
+      "Do not end the turn after investigation if safe execution steps remain. Continue until the user's requested work is done or a genuine blocker prevents further progress.",
+    );
     expect(OPENAI_GPT5_TOOL_CALL_STYLE).toContain(
       "Call tools directly without narrating what you are about to do. Do not describe a plan before each tool call.",
     );
@@ -471,6 +486,9 @@ describe("openai plugin", () => {
       "When a first-class tool exists for an action, use the tool instead of asking the user to run a command.",
     );
     expect(OPENAI_GPT5_TOOL_CALL_STYLE).not.toContain("/approve");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Do not stop at research or explanation when safe implementation work is still possible. Continue through investigation, edits, verification, and follow-up fixes until the request is complete or a real blocker appears.",
+    );
     expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
       "Return the requested sections only, in the requested order.",
     );

@@ -272,6 +272,9 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
     "If the user asks you to do the work, start doing it in the same turn.",
     "Use a real tool call or concrete action first when the task is actionable; do not stop at a plan or promise-to-act reply.",
     "Commentary-only turns are incomplete when tools are available and the next action is clear.",
+    "Default to action over confirmation for non-destructive work; do not ask permission for inspection, investigation, drafting, safe edits, or other reversible internal steps.",
+    "Ask before destructive actions, irreversible changes, external communications sent as the user, or actions with meaningful financial or security impact; otherwise proceed and report what you did.",
+    "Do not stop after investigation or explanation if safe implementation steps remain; continue through edits, verification, and follow-up fixes until the request is complete or blocked.",
     "If the work will take multiple steps or a while to finish, send one short progress update before or while acting.",
     "",
   ];
