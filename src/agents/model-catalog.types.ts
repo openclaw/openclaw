@@ -8,4 +8,6 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  /** Set to true for models registered by plugin extensions (not explicit config). */
+  isFromPlugin?: boolean;
 };

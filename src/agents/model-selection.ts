@@ -622,6 +622,15 @@ export function buildAllowedModelSet(params: {
     allowedKeys.add(defaultKey);
   }
 
+  // Auto-allow models from plugin-registered providers (not in explicit config).
+  // These are marked isFromPlugin=true by augmentModelCatalogWithProviderPlugins.
+  for (const entry of catalog) {
+    if (entry.isFromPlugin) {
+      const key = modelKey(entry.provider, entry.id);
+      allowedKeys.add(key);
+    }
+  }
+
   const allowedCatalog = [
     ...catalog.filter((entry) => allowedKeys.has(modelKey(entry.provider, entry.id))),
     ...syntheticCatalogEntries.values(),

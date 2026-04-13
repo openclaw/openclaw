@@ -170,7 +170,8 @@ export async function loadModelCatalog(params?: {
           if (seen.has(key)) {
             continue;
           }
-          models.push(entry);
+          // Mark plugin-registered models so buildAllowedModelSet can auto-allow them.
+          models.push({ ...entry, isFromPlugin: true });
           seen.add(key);
         }
       }
