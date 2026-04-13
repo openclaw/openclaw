@@ -14,6 +14,52 @@ export type SlackResolvedMessageContent = {
   effectiveDirectMedia: SlackMediaResult[] | null;
 };
 
+const SLACK_USER_MENTION_TOKEN_RE = /<@([A-Z0-9]+)(?:\|([^>]+))?>/gi;
+
+async function normalizeSlackInboundMentions(
+  text: string,
+  resolveUserName?: (userId: string) => Promise<{ name?: string }>,
+): Promise<string> {
+  if (!text.includes("<@")) {
+    return text;
+  }
+
+  const matches = [...text.matchAll(SLACK_USER_MENTION_TOKEN_RE)];
+  if (matches.length === 0) {
+    return text;
+  }
+
+  const resolvedNames = new Map<string, string | null>();
+  if (resolveUserName) {
+    const uniqueIds = [...new Set(matches.map((match) => match[1] ?? "").filter(Boolean))];
+    await Promise.all(
+      uniqueIds.map(async (userId) => {
+        try {
+          const resolved = normalizeOptionalString((await resolveUserName(userId))?.name);
+          resolvedNames.set(userId, resolved ?? null);
+        } catch {
+          resolvedNames.set(userId, null);
+        }
+      }),
+    );
+  }
+
+  return text.replaceAll(
+    SLACK_USER_MENTION_TOKEN_RE,
+    (token, userId: string, inlineLabel: string | undefined) => {
+      const resolvedName = normalizeOptionalString(resolvedNames.get(userId) ?? undefined);
+      if (resolvedName) {
+        return `@${resolvedName}`;
+      }
+      const normalizedInlineLabel = normalizeOptionalString(inlineLabel);
+      if (normalizedInlineLabel) {
+        return `@${normalizedInlineLabel}`;
+      }
+      return token;
+    },
+  );
+}
+
 function filterInheritedParentFiles(params: {
   files: SlackFile[] | undefined;
   isThreadReply: boolean;
@@ -43,6 +89,7 @@ export async function resolveSlackMessageContent(params: {
   isBotMessage: boolean;
   botToken: string;
   mediaMaxBytes: number;
+  resolveUserName?: (userId: string) => Promise<{ name?: string }>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
     files: params.message.files,
@@ -105,7 +152,7 @@ export async function resolveSlackMessageContent(params: {
   }
 
   return {
-    rawBody,
+    rawBody: await normalizeSlackInboundMentions(rawBody, params.resolveUserName),
     effectiveDirectMedia,
   };
 }

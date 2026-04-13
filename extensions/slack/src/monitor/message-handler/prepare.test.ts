@@ -236,6 +236,28 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
   });
 
+  it("renders inbound Slack user mentions to readable names in RawBody and BodyForAgent", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    slackCtx.resolveUserName = async (userId) =>
+      ({ name: userId === "U2" ? "Bek" : userId === "U3" ? "Ava" : undefined }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        text: "hi <@U2> and <@U3|fallback-name> and <@U4>",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toBe("hi @Bek and @Ava and <@U4>");
+    expect(prepared!.ctxPayload.BodyForAgent).toBe("hi @Bek and @Ava and <@U4>");
+  });
+
   it("ignores non-forward attachments when no direct text/files are present", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
