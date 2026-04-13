@@ -1,4 +1,5 @@
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { getPrimaryIdentityId, getReplyContext, getSenderIdentity } from "../../identity.js";
 import type { WebInboundMsg } from "../types.js";
 import {
@@ -40,7 +41,10 @@ export function buildInboundLine(params: {
     channel: "WhatsApp",
     from: msg.chatType === "group" ? msg.from : msg.from?.replace(/^whatsapp:/, ""),
     timestamp: msg.timestamp,
-    body: baseLine,
+    body: wrapExternalContent(`UNTRUSTED WhatsApp message body\n${baseLine.trim()}`, {
+      source: "unknown",
+      includeWarning: false,
+    }),
     chatType: msg.chatType,
     sender: {
       name: sender.name ?? undefined,

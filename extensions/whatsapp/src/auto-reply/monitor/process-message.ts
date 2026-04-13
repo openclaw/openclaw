@@ -1,3 +1,4 @@
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -197,7 +198,10 @@ export async function processMessage(params: {
             channel: "WhatsApp",
             from: conversationId,
             timestamp: entry.timestamp,
-            body: entry.body,
+            body: wrapExternalContent(`UNTRUSTED WhatsApp message body\n${entry.body.trim()}`, {
+              source: "unknown",
+              includeWarning: false,
+            }),
             chatType: "group",
             senderLabel: entry.sender,
             envelope: envelopeOptions,
