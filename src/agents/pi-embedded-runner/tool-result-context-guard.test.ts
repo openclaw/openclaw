@@ -495,12 +495,8 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, batch2);
 
     expect(engine.ingestBatch).toHaveBeenCalledTimes(2);
-    expect(engine.ingestBatch?.mock.calls[0]?.[0]).toMatchObject({
-      messages: [makeUser("second"), makeToolResult("call_2", "r2")],
-    });
-    expect(engine.ingestBatch?.mock.calls[1]?.[0]).toMatchObject({
-      messages: [makeUser("third"), makeToolResult("call_3", "r3")],
-    });
+    expect(engine.ingestBatch?.mock.calls[0]?.[0]?.messages).toEqual(batch1.slice(2));
+    expect(engine.ingestBatch?.mock.calls[1]?.[0]?.messages).toEqual(batch2.slice(4));
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
