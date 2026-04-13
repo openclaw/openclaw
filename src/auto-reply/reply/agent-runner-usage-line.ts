@@ -1,4 +1,5 @@
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import { formatProviderModelRef } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
 
 export const formatResponseUsageLine = (params: {
@@ -9,6 +10,8 @@ export const formatResponseUsageLine = (params: {
     cacheWrite?: number;
   };
   showCost: boolean;
+  providerUsed?: string;
+  modelUsed?: string;
   costConfig?: {
     input: number;
     output: number;
@@ -40,7 +43,8 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  const suffix = costLabel ? ` · est ${costLabel}` : "";
+  const modelLabel = formatProviderModelRef(params.providerUsed ?? "", params.modelUsed ?? "");
+  const suffix = `${costLabel ? ` · est ${costLabel}` : ""}${modelLabel ? ` · model ${modelLabel}` : ""}`;
   return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
 };
 
