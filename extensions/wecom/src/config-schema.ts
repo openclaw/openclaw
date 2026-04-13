@@ -40,6 +40,9 @@ const WecomGroupConfigSchema = z
 const WecomDynamicAgentsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    dmCreateAgent: z.boolean().optional(),
+    groupEnabled: z.boolean().optional(),
+    adminUsers: z.array(z.string()).optional(),
   })
   .strict()
   .optional();

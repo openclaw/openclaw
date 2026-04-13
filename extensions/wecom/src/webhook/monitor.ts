@@ -450,7 +450,6 @@ export async function startAgentForStream(params: {
             resolved = pathModule.resolve(p);
           }
           if (
-            allowedRoots.length > 0 &&
             !(await (async () => {
               for (const r of allowedRoots) {
                 let root: string;
@@ -1029,7 +1028,6 @@ export async function startAgentForStream(params: {
                 }
                 const roots = target.account.config.mediaLocalRoots ?? [];
                 if (
-                  roots.length > 0 &&
                   !(await (async () => {
                     for (const r of roots) {
                       let root: string;
@@ -1172,7 +1170,6 @@ export async function startAgentForStream(params: {
               }
               const roots = target.account.config.mediaLocalRoots ?? [];
               if (
-                roots.length > 0 &&
                 !(await (async () => {
                   for (const r of roots) {
                     let root: string;
@@ -1602,7 +1599,6 @@ async function agentDmMedia(params: {
     }
     const roots = target.account.config.mediaLocalRoots ?? [];
     if (
-      roots.length > 0 &&
       !(await (async () => {
         for (const r of roots) {
           let root: string;

@@ -710,17 +710,30 @@ async function processAgentMessage(params: {
               const fs = await import("node:fs/promises");
               const pathModule = await import("node:path");
               // Validate local path against mediaLocalRoots from merged account config
-              const resolved = pathModule.resolve(mediaPath);
+              // Use realpath to canonicalize symlinks before containment checks
+              let resolved: string;
+              try {
+                resolved = await fs.realpath(pathModule.resolve(mediaPath));
+              } catch {
+                resolved = pathModule.resolve(mediaPath);
+              }
               const { resolveWeComAccountMulti } = await import("../accounts.js");
               const mergedAccount = resolveWeComAccountMulti({
                 cfg: config,
                 accountId: agent.accountId,
               });
               const roots = mergedAccount.config.mediaLocalRoots ?? [];
+              const realRoots = await Promise.all(
+                roots.map(async (r) => {
+                  try {
+                    return await fs.realpath(pathModule.resolve(r));
+                  } catch {
+                    return pathModule.resolve(r);
+                  }
+                }),
+              );
               if (
-                roots.length > 0 &&
-                !roots.some((r) => {
-                  const root = pathModule.resolve(r);
+                !realRoots.some((root) => {
                   return resolved === root || resolved.startsWith(root + pathModule.sep);
                 })
               ) {
