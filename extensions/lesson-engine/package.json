@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/lesson-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw lesson-engine — dedupe, forget, schema migration, CLI for agent lessons-learned.json",
+  "bin": {
+    "lesson-engine": "./cli/lesson-engine.ts"
+  },
+  "files": [
+    "cli/",
+    "src/",
+    "cron-example.json",
+    "README.md"
+  ],
+  "type": "module",
+  "scripts": {
+    "lesson-engine": "tsx cli/lesson-engine.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "openclaw": {
+    "kind": "tool",
+    "cli": "./cli/lesson-engine.ts"
+  }
+}

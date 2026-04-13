@@ -1,0 +1,10 @@
+{
+  "id": "lesson-engine",
+  "kind": "tool",
+  "description": "Offline maintenance CLI for agent lessons-learned.json (dedupe, forget, schema migration).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "lesson-engine-maintenance",
+  "description": "Daily lesson store maintenance — dedupe + forget + state bookkeeping.",
+  "schedule": { "kind": "cron", "expr": "0 4 * * *" },
+  "target": "builder",
+  "prompt": "lesson-engine maintenance --all --apply",
+  "notes": [
+    "Runs at 04:00 local time every day.",
+    "Operator installs this into their OpenClaw cron registry manually — the extension never installs itself.",
+    "Use --dry-run first to preview transitions before switching to --apply.",
+    "State written to $AGENT_DATA_ROOT/shared/lessons/maintenance-state.json."
+  ]
+}
