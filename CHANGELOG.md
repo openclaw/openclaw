@@ -123,6 +123,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/sessions: keep topic-scoped session initialization on the canonical topic transcript path when inbound turns omit `MessageThreadId`, so one topic session no longer alternates between bare and topic-qualified transcript files. (#64869) Thanks @jalehman.
 - Agents/failover: scope assistant-side fallback classification and surfaced provider errors to the current attempt instead of stale session history, so cross-provider fallback runs stop inheriting the previous provider's failure. (#62907) Thanks @stainlu.
 - MiniMax/OAuth: write `api: "anthropic-messages"` and `authHeader: true` into the `minimax-portal` config patch during `openclaw configure`, so re-authenticated portal setups keep Bearer auth routing working. (#64964) Thanks @ryanlee666.
+- Agents/tools: stop repeated unavailable-tool retries from escaping loop detection when the model changes arguments, and rewrite over-threshold unknown tool calls into plain assistant text before dispatch. (#65922) Thanks @dutifulbob.
 
 ## 2026.4.10
 
