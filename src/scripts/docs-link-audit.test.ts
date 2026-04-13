@@ -6,12 +6,14 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const {
   normalizeRoute,
+  parseFenceDelimiter,
   prepareAnchorAuditDocsDir,
   resolveRoute,
   runDocsLinkAuditCli,
   sanitizeDocsConfigForEnglishOnly,
 } = (await import("../../scripts/docs-link-audit.mjs")) as unknown as {
   normalizeRoute: (route: string) => string;
+  parseFenceDelimiter: (line: string) => { marker: "`" | "~"; length: number } | null;
   prepareAnchorAuditDocsDir: (sourceDir?: string) => string;
   resolveRoute: (
     route: string,
@@ -49,6 +51,17 @@ describe("docs-link-audit", () => {
       ok: true,
       terminal: "/plugins/building-plugins",
     });
+  });
+
+  it("parses backtick and tilde fences with length", () => {
+    expect(parseFenceDelimiter("```ts")).toEqual({ marker: "`", length: 3 });
+    expect(parseFenceDelimiter("~~~~md")).toEqual({ marker: "~", length: 4 });
+  });
+
+  it("ignores non-fence lines when parsing delimiters", () => {
+    expect(parseFenceDelimiter("``short")).toBeNull();
+    expect(parseFenceDelimiter("  [text](/route)")).toBeNull();
+    expect(parseFenceDelimiter("code ``` inline")).toBeNull();
   });
 
   it("sanitizes docs.json to English-only route targets", () => {
