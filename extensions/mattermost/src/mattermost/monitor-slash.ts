@@ -98,6 +98,14 @@ function warnOnSuspiciousCallbackUrl(params: {
   }
 }
 
+function isHttpsCallbackUrl(callbackUrl: string): boolean {
+  try {
+    return new URL(callbackUrl).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function registerSlashCommandsAcrossTeams(params: {
   client: MattermostClient;
   teams: Array<{ id: string }>;
@@ -159,6 +167,13 @@ export async function registerMattermostMonitorSlashCommands(params: {
       gatewayPort: slashGatewayPort,
       gatewayHost: params.cfg.gateway?.customBindHost ?? undefined,
     });
+
+    if (!isHttpsCallbackUrl(slashCallbackUrl)) {
+      params.runtime.error?.(
+        `mattermost: native slash commands require an HTTPS callbackUrl. Resolved ${slashCallbackUrl}. Set channels.mattermost.commands.callbackUrl to an HTTPS URL reachable from the Mattermost server.`,
+      );
+      return;
+    }
 
     warnOnSuspiciousCallbackUrl({
       runtime: params.runtime,

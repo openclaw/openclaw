@@ -51,6 +51,8 @@ type SlashHttpHandlerParams = {
   runtime: RuntimeEnv;
   /** Expected token from registered commands (for validation). */
   commandTokens: Set<string>;
+  /** Bind each registered token to the trigger Mattermost issued it for. */
+  commandTokenBindings?: ReadonlyMap<string, string>;
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
@@ -86,6 +88,19 @@ function matchesRegisteredCommandToken(
   for (const token of commandTokens) {
     if (safeEqualSecret(candidate, token)) {
       return true;
+    }
+  }
+  return false;
+}
+
+function matchesRegisteredCommandBinding(
+  commandTokenBindings: ReadonlyMap<string, string>,
+  candidate: string,
+  trigger: string,
+): boolean {
+  for (const [token, expectedTrigger] of commandTokenBindings) {
+    if (safeEqualSecret(candidate, token)) {
+      return trigger === expectedTrigger;
     }
   }
   return false;
@@ -219,7 +234,7 @@ async function authorizeSlashInvocation(params: {
  * from the Mattermost server when a user invokes a registered slash command.
  */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, commandTokens, triggerMap, log } = params;
+  const { account, cfg, runtime, commandTokens, commandTokenBindings, triggerMap, log } = params;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method !== "POST") {
@@ -253,6 +268,8 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
+    const trigger = payload.command.replace(/^\//, "").trim();
+
     // Validate token — fail closed: reject when no tokens are registered
     // (e.g. registration failed or startup was partial)
     if (commandTokens.size === 0 || !matchesRegisteredCommandToken(commandTokens, payload.token)) {
@@ -263,8 +280,20 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
+    // Preserve Mattermost's per-command token binding so a captured token
+    // cannot be replayed against a different slash trigger.
+    if (
+      commandTokenBindings?.size &&
+      !matchesRegisteredCommandBinding(commandTokenBindings, payload.token, trigger)
+    ) {
+      sendJsonResponse(res, 401, {
+        response_type: "ephemeral",
+        text: "Unauthorized: invalid command token.",
+      });
+      return;
+    }
+
     // Extract command info
-    const trigger = payload.command.replace(/^\//, "").trim();
     const commandText = resolveCommandText(trigger, payload.text, triggerMap);
     const channelId = payload.channel_id;
     const senderId = payload.user_id;

@@ -4,6 +4,7 @@ import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   activateSlashCommands,
   deactivateSlashCommands,
+  getSlashCommandState,
   resolveSlashHandlerForToken,
 } from "./slash-state.js";
 
@@ -62,5 +63,26 @@ describe("slash-state token routing", () => {
     const match = resolveSlashHandlerForToken("tok-shared");
     expect(match.kind).toBe("ambiguous");
     expect(match.accountIds?.toSorted()).toEqual(["a1", "a2"]);
+  });
+
+  it("stores per-command token bindings for the active account", () => {
+    deactivateSlashCommands();
+    activateSlashCommands({
+      account: createResolvedMattermostAccount("a1"),
+      commandTokens: ["tok-a"],
+      registeredCommands: [
+        {
+          id: "cmd-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-a",
+          managed: true,
+        },
+      ],
+      api: slashApi,
+    });
+
+    const state = getSlashCommandState("a1");
+    expect(state?.commandTokenBindings).toEqual(new Map([["tok-a", "oc_status"]]));
   });
 });

@@ -12,7 +12,7 @@ function createRequest(params: {
   autoEnd?: boolean;
 }): IncomingMessage {
   const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
+  const incoming = req as unknown as IncomingMessage;
   incoming.method = params.method ?? "POST";
   incoming.headers = {
     "content-type": params.contentType ?? "application/x-www-form-urlencoded",
@@ -40,7 +40,7 @@ function createResponse(): {
     setHeader(name: string, value: string) {
       headers.set(name.toLowerCase(), value);
     },
-    end(chunk?: string | Buffer) {
+    end(chunk?: string | Uint8Array) {
       body = chunk ? String(chunk) : "";
     },
   } as ServerResponse;
@@ -63,6 +63,7 @@ const accountFixture: ResolvedMattermostAccount = {
 
 async function runSlashRequest(params: {
   commandTokens: Set<string>;
+  commandTokenBindings?: ReadonlyMap<string, string>;
   body: string;
   method?: string;
 }) {
@@ -71,6 +72,7 @@ async function runSlashRequest(params: {
     cfg: {} as OpenClawConfig,
     runtime: {} as RuntimeEnv,
     commandTokens: params.commandTokens,
+    commandTokenBindings: params.commandTokenBindings,
   });
   const req = createRequest({ method: params.method, body: params.body });
   const response = createResponse();
@@ -126,6 +128,17 @@ describe("slash-http", () => {
     const response = await runSlashRequest({
       commandTokens: new Set(["known-token"]),
       body: "token=unknown&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+    });
+
+    expect(response.res.statusCode).toBe(401);
+    expect(response.getBody()).toContain("Unauthorized: invalid command token.");
+  });
+
+  it("rejects tokens replayed against a different registered trigger", async () => {
+    const response = await runSlashRequest({
+      commandTokens: new Set(["known-token"]),
+      commandTokenBindings: new Map([["known-token", "oc_status"]]),
+      body: "token=known-token&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_model&text=",
     });
 
     expect(response.res.statusCode).toBe(401);

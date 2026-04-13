@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/startup: defer scheduled services until sidecars finish, gate chat history and model listing during sidecar resume, and let Control UI retry startup-gated history loads so Sandbox wake resumes channels first. (#65365) Thanks @lml2468.
+- Mattermost/slash commands: require HTTPS callback URLs before registering native slash commands, and bind each Mattermost slash token to its original trigger so captured tokens cannot be replayed across different slash commands. (#65624)
 
 ## 2026.4.12-beta.1
 
