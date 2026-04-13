@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+## 2026.4.12
+
 ### Changes
 
 - QA/lab: add Convex-backed pooled Telegram credential leasing plus `openclaw qa credentials` admin commands and broker setup docs. (#65596) Thanks @joshavant.
@@ -20,6 +22,10 @@ Docs: https://docs.openclaw.ai
 - QA/Telegram: add a live `openclaw qa telegram` lane for private-group bot-to-bot checks, harden its artifact handling, and preserve native Telegram command reply threading for QA verification. (#64303) Thanks @obviyus.
 - Models/Codex: add the bundled Codex provider and plugin-owned app-server harness so `codex/gpt-*` models use Codex-managed auth, native threads, model discovery, and compaction while `openai/gpt-*` stays on the normal OpenAI provider path. (#64298) Thanks @steipete.
 - Models/providers: add a bundled LM Studio provider with onboarding, runtime model discovery, stream preload support, and memory-search embeddings for local/self-hosted OpenAI-compatible models. (#53248) Thanks @rugvedS07.
+- Plugins/loading: narrow CLI, provider, and channel activation to manifest-declared needs, preserve explicit scope and trust boundaries, and centralize manifest-owner policy so startup, command discovery, and runtime activation avoid loading unrelated plugin runtime. (#65120, #65259, #65298, #65429, #65459) Thanks @vincentkoc.
+- Memory/active-memory: default QMD recall to search and surface better search-path telemetry so memory-backed recall works more predictably out of the box. (#65068) Thanks @Takhoffman.
+- Docs/providers: expand bundled provider docs with richer capability, env-var, and setup guidance across provider pages.
+- Docs/memory-wiki: add the recommended QMD + bridge-mode hybrid recipe plus zero-artifact troubleshooting guidance for `memory-wiki` bridge setups. (#63165) Thanks @sercada and @vincentkoc.
 
 ### Fixes
 
@@ -28,18 +34,6 @@ Docs: https://docs.openclaw.ai
 - fix(security): broaden shell-wrapper detection and block env-argv assignment injection [AI-assisted]. (#65717) Thanks @pgondhi987.
 - Gateway/startup: defer scheduled services until sidecars finish, gate chat history and model listing during sidecar resume, and let Control UI retry startup-gated history loads so Sandbox wake resumes channels first. (#65365) Thanks @lml2468.
 - Control UI/chat: load the live gateway slash-command catalog into the composer and command palette so dock commands, plugin commands, and direct skill aliases appear in chat, while keeping trusted local commands authoritative and bounding remote command metadata. (#65620) Thanks @BunsDev.
-
-## 2026.4.12-beta.1
-
-### Changes
-
-- Plugins/loading: narrow CLI, provider, and channel activation to manifest-declared needs, preserve explicit scope and trust boundaries, and centralize manifest-owner policy so startup, command discovery, and runtime activation avoid loading unrelated plugin runtime. (#65120, #65259, #65298, #65429, #65459) Thanks @vincentkoc.
-- Memory/active-memory: default QMD recall to search and surface better search-path telemetry so memory-backed recall works more predictably out of the box. (#65068) Thanks @Takhoffman.
-- Docs/providers: expand bundled provider docs with richer capability, env-var, and setup guidance across provider pages.
-- Docs/memory-wiki: add the recommended QMD + bridge-mode hybrid recipe plus zero-artifact troubleshooting guidance for `memory-wiki` bridge setups. (#63165) Thanks @sercada and @vincentkoc.
-
-### Fixes
-
 - CLI/update: respawn tracked plugin refresh from the updated entrypoint after package self-updates so `openclaw update` stops failing on stale hashed `dist/install.runtime-*.js` chunk imports. (#65471)
 - Memory/active-memory: keep recall runs on the resolved channel when wrappers like `mx-claw` are enabled, improve lexical fallback ranking, and keep lexical boosts out of hybrid search so recall finds the right memories more consistently. (#65049, #65395) Thanks @Takhoffman.
 - Dreaming: consume managed heartbeat events exactly once, stage light-sleep confidence from all recorded short-term signals, wake scheduled jobs immediately, raise dreaming-only promotion enough to cross the durable-memory gate, and stop dreaming from re-ingesting its own narrative transcripts.
