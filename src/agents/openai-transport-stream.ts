@@ -1331,7 +1331,7 @@ async function processOpenAICompletionsStream(
           // the actual position in output.content (which now includes toolCall
           // blocks), causing subsequent text_deltas to reference the wrong
           // content slot.
-          const postToolBlock: TextBlock = { type: "text", text: "" };
+          const postToolBlock: MutableAssistantOutput["content"][number] = { type: "text", text: "" };
           output.content.push(postToolBlock);
           currentBlock = postToolBlock;
           stream.push({
