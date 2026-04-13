@@ -432,7 +432,11 @@ async function clearChatHistory(host: ChatHost) {
     host.chatSideResultTerminalRuns?.clear();
     host.chatStream = null;
     host.chatRunId = null;
-    await loadChatHistory(host as unknown as ChatState);
+    // Do NOT reload history here: sessions.reset archives the old session
+    // asynchronously on the server, and a follow-up chat.history request
+    // races the flush and pulls back the just-cleared messages (#65719).
+    // Local state is already zeroed; the subscription path will refresh
+    // history on the next interaction.
   } catch (err) {
     host.lastError = String(err);
   }
