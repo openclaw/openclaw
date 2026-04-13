@@ -106,6 +106,10 @@ export type AgentConfig = {
     personalityMode?: "off" | "hybrid";
     /** Optional per-agent personality model override. */
     personalityModel?: string;
+    /** Optional per-agent sanitizer on/off override. */
+    personalitySanitizer?: boolean;
+    /** Optional per-agent sanitizer max chars override. */
+    personalitySanitizerMaxChars?: number;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

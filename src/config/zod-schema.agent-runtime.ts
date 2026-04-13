@@ -835,6 +835,8 @@ export const AgentEntrySchema = z
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
         personalityMode: z.union([z.literal("off"), z.literal("hybrid")]).optional(),
         personalityModel: z.string().optional(),
+        personalitySanitizer: z.boolean().optional(),
+        personalitySanitizerMaxChars: z.number().int().min(0).optional(),
       })
       .strict()
       .optional(),

@@ -1217,6 +1217,14 @@ export const FIELD_HELP: Record<string, string> = {
     'Optional per-agent personality mode override. Set "hybrid" to enable dual-model personality routing for this agent, or "off" to use single-model behavior.',
   "agents.list[].embeddedPi.personalityModel":
     "Optional per-agent personality model override. Defaults to the global personalityModel setting.",
+  "agents.defaults.embeddedPi.personalitySanitizer":
+    "Personality sanitizer — when true, execution turn output is rewritten through the personality model before delivery. Independent of turn routing (personalityMode). Default: true when personalityMode is hybrid, false otherwise.",
+  "agents.defaults.embeddedPi.personalitySanitizerMaxChars":
+    "Maximum character count for the personality sanitizer. Messages under this limit are fully rewritten. Messages over this limit have only the trailing portion rewritten so the factual head stays intact. Default: 16000. Set to 0 to disable the length check.",
+  "agents.list[].embeddedPi.personalitySanitizer":
+    "Optional per-agent personality sanitizer override.",
+  "agents.list[].embeddedPi.personalitySanitizerMaxChars":
+    "Optional per-agent sanitizer max chars override.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

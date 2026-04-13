@@ -567,6 +567,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].embeddedPi.executionContract": "Agent Embedded Pi Execution Contract",
   "agents.list[].embeddedPi.personalityMode": "Agent Embedded Pi Personality Mode",
   "agents.list[].embeddedPi.personalityModel": "Agent Embedded Pi Personality Model",
+  "agents.defaults.embeddedPi.personalitySanitizer": "Embedded Pi Personality Sanitizer",
+  "agents.defaults.embeddedPi.personalitySanitizerMaxChars":
+    "Embedded Pi Personality Sanitizer Max Chars",
+  "agents.list[].embeddedPi.personalitySanitizer": "Agent Embedded Pi Personality Sanitizer",
+  "agents.list[].embeddedPi.personalitySanitizerMaxChars":
+    "Agent Embedded Pi Personality Sanitizer Max Chars",
   "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.list.*.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.defaults.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",

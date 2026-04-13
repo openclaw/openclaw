@@ -249,22 +249,41 @@ export type AgentDefaultsConfig = {
      */
     executionContract?: EmbeddedPiExecutionContract;
     /**
-     * Hybrid personality mode. When "hybrid", the harness routes personality
-     * and conversational turns (short messages, heartbeats) to
+     * Hybrid personality mode. When "hybrid", the harness auto-routes
+     * personality/conversational turns (short messages, heartbeats) to
      * `personalityModel` (e.g. gpt-5.2) and execution turns (tool work,
      * code tasks) to the primary model (e.g. gpt-5.4). Both models share
      * the GPT-5 KV cache so switching is near-zero latency.
      * - off (default): single-model behavior
-     * - hybrid: turn-level routing based on intent classification
+     * - hybrid: turn-level auto-routing based on intent classification
      */
     personalityMode?: "off" | "hybrid";
     /**
-     * Model used for personality turns and emotional closeouts when
+     * Model used for personality turns and the sanitizer when
      * `personalityMode` is `"hybrid"`. Should be a GPT-5 family model
      * that shares KV cache with the primary model for near-zero
      * switching latency. Default: `"openai/gpt-5.2"`.
      */
     personalityModel?: string;
+    /**
+     * Personality sanitizer — independent of turn routing. When enabled,
+     * execution turn output is rewritten through the personality model
+     * before delivery. The rewrite adds warmth from SOUL.md while
+     * preserving all factual content, code, and tool results.
+     * Works with or without `personalityMode: "hybrid"` — you can use
+     * the sanitizer alone (keep 5.4 for all turns but add warmth to
+     * outputs) or combined with auto-routing.
+     * Default: true when `personalityMode` is `"hybrid"`, false otherwise.
+     */
+    personalitySanitizer?: boolean;
+    /**
+     * Maximum character count for the personality sanitizer. Messages
+     * under this limit are fully rewritten. Messages over this limit
+     * have only the trailing portion rewritten (the "personality tail")
+     * so the factual head stays intact and the closing feels warm.
+     * Default: 16000. Set to 0 to disable the length check entirely.
+     */
+    personalitySanitizerMaxChars?: number;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

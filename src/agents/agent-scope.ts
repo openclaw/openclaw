@@ -213,6 +213,34 @@ export function resolveAgentPersonalityModel(
   );
 }
 
+export function resolveAgentPersonalitySanitizer(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): boolean | undefined {
+  const defaultVal = cfg?.agents?.defaults?.embeddedPi?.personalitySanitizer;
+  if (!cfg || !agentId) {
+    return defaultVal;
+  }
+  return resolveAgentConfig(cfg, agentId)?.embeddedPi?.personalitySanitizer ?? defaultVal;
+}
+
+const DEFAULT_PERSONALITY_SANITIZER_MAX_CHARS = 16_000;
+
+export function resolveAgentPersonalitySanitizerMaxChars(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): number {
+  const defaultVal = cfg?.agents?.defaults?.embeddedPi?.personalitySanitizerMaxChars;
+  if (!cfg || !agentId) {
+    return defaultVal ?? DEFAULT_PERSONALITY_SANITIZER_MAX_CHARS;
+  }
+  return (
+    resolveAgentConfig(cfg, agentId)?.embeddedPi?.personalitySanitizerMaxChars ??
+    defaultVal ??
+    DEFAULT_PERSONALITY_SANITIZER_MAX_CHARS
+  );
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,

@@ -17,6 +17,8 @@ import {
   resolveAgentExecutionContract,
   resolveAgentPersonalityMode,
   resolveAgentPersonalityModel,
+  resolveAgentPersonalitySanitizer,
+  resolveAgentPersonalitySanitizerMaxChars,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import {
@@ -1573,13 +1575,25 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
-          // --- Personality closeout (pre-send sanitizer, Option B) ---
-          // Runs BEFORE payloadsWithToolMedia so the rewritten text is
-          // included in the merged output the user receives.
+          // --- Personality sanitizer (pre-send, Option B) ---
+          // Two independent controls:
+          // 1. personalityMode === "hybrid" enables turn routing
+          // 2. sanitizerEnabled enables the execution-output rewrite
+          // Both can be used together or independently.
+          const sanitizerExplicit = resolveAgentPersonalitySanitizer(
+            params.config,
+            earlySessionAgentId,
+          );
+          const sanitizerEnabled =
+            sanitizerExplicit !== undefined ? sanitizerExplicit : personalityMode === "hybrid"; // default on when hybrid
+          const sanitizerMaxChars = resolveAgentPersonalitySanitizerMaxChars(
+            params.config,
+            earlySessionAgentId,
+          );
           if (
-            personalityMode === "hybrid" &&
-            turnIntent === "execution" &&
+            sanitizerEnabled &&
             personalityModelRef &&
+            turnIntent === "execution" &&
             !aborted &&
             payloads.length > 0 &&
             !attempt.didSendViaMessagingTool
@@ -1589,7 +1603,20 @@ export async function runEmbeddedPiAgent(
               .map((p) => p.text)
               .join("\n\n")
               .trim();
-            if (visibleText.length > 0 && visibleText.length < 4000) {
+            if (visibleText.length > 0) {
+              // Trailing-portion logic: if the message exceeds maxChars,
+              // only rewrite the last maxChars characters. The factual head
+              // stays intact; the personality tail gets warmth from SOUL.md.
+              // If maxChars === 0, no length limit is applied.
+              let textToRewrite: string;
+              let preservedHead: string;
+              if (sanitizerMaxChars > 0 && visibleText.length > sanitizerMaxChars) {
+                preservedHead = visibleText.slice(0, visibleText.length - sanitizerMaxChars);
+                textToRewrite = visibleText.slice(visibleText.length - sanitizerMaxChars);
+              } else {
+                preservedHead = "";
+                textToRewrite = visibleText;
+              }
               const personalitySlash = personalityModelRef.indexOf("/");
               const pProvider =
                 personalitySlash > 0
@@ -1600,19 +1627,21 @@ export async function runEmbeddedPiAgent(
                   ? personalityModelRef.slice(personalitySlash + 1)
                   : personalityModelRef;
               log.info(
-                `personality-closeout: runId=${params.runId} ` +
-                  `executionModel=${executionProvider}/${executionModelId} ` +
-                  `personalityModel=${pProvider}/${pModelId} — rewriting ${visibleText.length} chars`,
+                `personality-sanitizer: runId=${params.runId} ` +
+                  `personalityModel=${pProvider}/${pModelId} ` +
+                  `total=${visibleText.length} rewriting=${textToRewrite.length} ` +
+                  `preserved=${preservedHead.length}`,
               );
               const rewritten = await runPersonalityCloseout({
                 cfg: params.config,
                 personalityProvider: pProvider,
                 personalityModelId: pModelId,
                 agentDir,
-                executionText: visibleText,
+                executionText: textToRewrite,
                 signal: params.abortSignal,
               });
               if (rewritten) {
+                const finalText = preservedHead ? `${preservedHead}${rewritten}` : rewritten;
                 let rewrittenUsed = false;
                 payloads = payloads.map((p) => {
                   if (
@@ -1622,7 +1651,7 @@ export async function runEmbeddedPiAgent(
                     !rewrittenUsed
                   ) {
                     rewrittenUsed = true;
-                    return { ...p, text: rewritten };
+                    return { ...p, text: finalText };
                   }
                   if (typeof p.text === "string" && !p.isError && !p.isReasoning && rewrittenUsed) {
                     return { ...p, text: "" };
@@ -1632,7 +1661,7 @@ export async function runEmbeddedPiAgent(
               }
             }
           }
-          // --- End personality closeout ---
+          // --- End personality sanitizer ---
 
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
             payloads,
