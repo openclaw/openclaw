@@ -295,6 +295,7 @@ export function buildQaRuntimeEnv(params: {
   configPath: string;
   gatewayToken: string;
   homeDir: string;
+  forwardHostHome?: boolean;
   stateDir: string;
   xdgConfigHome: string;
   xdgDataHome: string;
@@ -307,9 +308,12 @@ export function buildQaRuntimeEnv(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const baseEnv = params.baseEnv ?? process.env;
+  const forwardedHostHome = params.forwardHostHome
+    ? baseEnv.HOME?.trim() || os.homedir()
+    : undefined;
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
-    HOME: params.homeDir,
+    HOME: forwardedHostHome ?? params.homeDir,
     ...(params.providerMode === "live-frontier"
       ? resolveQaLiveCliAuthEnv(baseEnv, {
           forwardHostHomeForClaudeCli: params.forwardHostHomeForClaudeCli,
@@ -837,6 +841,7 @@ export async function startQaGatewayChild(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
+  forwardHostHome?: boolean;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
   const tempRoot = await fs.mkdtemp(
@@ -969,6 +974,7 @@ export async function startQaGatewayChild(params: {
           configPath,
           gatewayToken,
           homeDir,
+          forwardHostHome: params.forwardHostHome,
           stateDir,
           xdgConfigHome,
           xdgDataHome,

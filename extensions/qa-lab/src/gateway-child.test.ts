@@ -115,6 +115,25 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-qa/state");
   });
 
+  it("can forward host HOME for browser-backed QA runs while keeping OpenClaw home sandboxed", async () => {
+    const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
+    cleanups.push(async () => {
+      await rm(hostHome, { recursive: true, force: true });
+    });
+
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        HOME: hostHome,
+      }),
+      providerMode: "mock-openai",
+      forwardHostHome: true,
+    });
+
+    expect(env.HOME).toBe(hostHome);
+    expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
+    expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-qa/state");
+  });
+
   it("preserves the live Anthropic key for live Claude CLI runs without writing it into config", async () => {
     const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
     cleanups.push(async () => {

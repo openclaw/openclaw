@@ -81,6 +81,12 @@ describe("qa scenario catalog", () => {
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
   });
 
+  it("loads scenario-declared gateway runtime options from markdown", () => {
+    const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
+
+    expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
+  });
+
   it("keeps the character eval scenario natural and task-shaped", () => {
     const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
       | {

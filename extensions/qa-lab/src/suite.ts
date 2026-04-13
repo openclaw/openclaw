@@ -15,6 +15,13 @@ import {
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  callQaBrowserRequest,
+  qaBrowserAct,
+  qaBrowserOpenTab,
+  qaBrowserSnapshot,
+  waitForQaBrowserReady,
+} from "./browser-runtime.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { waitForCronRunCompletion } from "./cron-run-wait.js";
 import {
@@ -60,6 +67,14 @@ import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
+import {
+  closeAllQaWebSessions,
+  qaWebEvaluate,
+  qaWebOpenPage,
+  qaWebSnapshot,
+  qaWebType,
+  qaWebWait,
+} from "./web-runtime.js";
 
 type QaSuiteStep = {
   name: string;
@@ -311,6 +326,18 @@ function collectQaSuiteGatewayConfigPatch(
     >;
   }
   return merged;
+}
+
+function collectQaSuiteGatewayRuntimeOptions(
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+) {
+  let forwardHostHome = false;
+  for (const scenario of scenarios) {
+    if (scenario.gatewayRuntime?.forwardHostHome === true) {
+      forwardHostHome = true;
+    }
+  }
+  return forwardHostHome ? { forwardHostHome: true } : undefined;
 }
 
 function liveTurnTimeoutMs(env: QaSuiteEnvironment, fallbackMs: number) {
@@ -1236,6 +1263,16 @@ function createScenarioFlowApi(
       waitForGatewayHealthy,
       waitForTransportReady,
       waitForQaChannelReady,
+      browserRequest: callQaBrowserRequest,
+      waitForBrowserReady: waitForQaBrowserReady,
+      browserOpenTab: qaBrowserOpenTab,
+      browserSnapshot: qaBrowserSnapshot,
+      browserAct: qaBrowserAct,
+      webOpenPage: qaWebOpenPage,
+      webWait: qaWebWait,
+      webType: qaWebType,
+      webSnapshot: qaWebSnapshot,
+      webEvaluate: qaWebEvaluate,
       waitForConfigRestartSettle,
       patchConfig,
       applyConfig,
@@ -1284,6 +1321,7 @@ function createScenarioFlowApi(
 
 export const qaSuiteTesting = {
   collectQaSuiteGatewayConfigPatch,
+  collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
   createScenarioWaitForCondition,
   findFailureOutboundMessage,
@@ -1397,6 +1435,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   });
   const enabledPluginIds = collectQaSuitePluginIds(selectedCatalogScenarios);
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
+  const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
     selectedCatalogScenarios.length,
@@ -1594,6 +1633,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     claudeCliAuthMode: params?.claudeCliAuthMode,
     controlUiEnabled: params?.controlUiEnabled ?? true,
     enabledPluginIds,
+    forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
     mutateConfig: gatewayConfigPatch
       ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
       : undefined,
@@ -1606,9 +1646,9 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     lab,
     mock,
     gateway,
-    cfg: transport.createGatewayConfig({
-      baseUrl: lab.listenUrl,
-    }),
+    // Markdown scenarios should see the full staged gateway config, not just
+    // the transport fragment. Routing/session/plugin assertions depend on it.
+    cfg: gateway.cfg,
     transport,
     repoRoot,
     providerMode,
@@ -1717,6 +1757,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     throw error;
   } finally {
+    await closeAllQaWebSessions();
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
     await gateway.stop({
       keepTemp,

@@ -10,8 +10,10 @@ import {
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import {
+  buildAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
+  PLANNING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
@@ -281,7 +283,10 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
-        toolMetas: [{ toolName: "bash", meta: "ls" }],
+        toolMetas: [
+          { toolName: "read", meta: "path=src/index.ts" },
+          { toolName: "search", meta: "pattern=runEmbeddedPiAgent" },
+        ],
       }),
     });
 
@@ -434,5 +439,158 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         attempt,
       }),
     ).toBe("paused");
+  });
+});
+
+describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
+  const openaiParams = { provider: "openai", modelId: "gpt-5.4" } as const;
+
+  function makeAttemptWithTools(
+    toolNames: string[],
+    assistantText: string,
+  ): Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"] {
+    const toolMetas = toolNames.map((toolName) => ({ toolName }));
+    return {
+      toolMetas,
+      assistantTexts: [assistantText],
+      lastAssistant: { stopReason: "stop" },
+      itemLifecycle: { startedCount: toolNames.length },
+      replayMetadata: buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool: false,
+      }),
+      clientToolCall: null,
+      yieldDetected: false,
+      didSendDeterministicApprovalPrompt: false,
+      didSendViaMessagingTool: false,
+      lastToolError: null,
+    } as unknown as Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"];
+  }
+
+  it("retries when exactly 1 non-plan tool call plus 'i can do that' prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I can do that next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries when exactly 1 non-plan tool call plus planning prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll analyze the structure next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry when 2+ non-plan tool calls are present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read", "search"], "I'll verify the output."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus completion language is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "Done. The file looks correct."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus 'let me know' handoff is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "Let me know if you need anything else."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus an answer-style summary is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(
+        ["read"],
+        "I'll summarize the root cause: the provider auth scope is missing.",
+      ),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus a future-tense description is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(
+        ["read"],
+        "I'll describe the issue: the provider auth scope is missing.",
+      ),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 safe tool call is followed by answer prose joined with 'and'", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll explain and recommend a fix."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus a bare 'i can do that' reply is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I can do that."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when the lone tool call already had side effects", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["sessions_spawn"], "I'll continue from there next."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when the lone tool call is unclassified", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["vendor_widget"], "I'll continue from there next."),
+    });
+
+    expect(result).toBeNull();
   });
 });
