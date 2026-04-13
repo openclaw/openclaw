@@ -1,4 +1,8 @@
-import { fetchRemoteMedia, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import {
+  MAX_IMAGE_BYTES,
+  fetchRemoteMedia,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
@@ -64,7 +68,7 @@ async function downloadMediaToLocal(
     const url = mediaUrls[i];
     const mime = mediaTypes[i];
     try {
-      const fetched = await fetchRemoteMedia({ url });
+      const fetched = await fetchRemoteMedia({ url, maxBytes: MAX_IMAGE_BYTES });
       const saved = await saveMediaBuffer(fetched.buffer, mime ?? fetched.contentType, "inbound");
       paths.push(saved.path);
       urls.push(url);

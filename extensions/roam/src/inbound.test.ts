@@ -51,6 +51,7 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  MAX_IMAGE_BYTES: 20 * 1024 * 1024,
   fetchRemoteMedia: mockFetchRemoteMedia,
   saveMediaBuffer: mockSaveMediaBuffer,
 }));
@@ -354,7 +355,12 @@ describe("handleRoamInbound", () => {
         runtime: defaultRuntime,
       });
 
-      expect(mockFetchRemoteMedia).toHaveBeenCalledWith({ url: "https://example.com/photo.png" });
+      expect(mockFetchRemoteMedia).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://example.com/photo.png",
+          maxBytes: expect.any(Number),
+        }),
+      );
       expect(mockSaveMediaBuffer).toHaveBeenCalledWith(
         Buffer.from("image-data"),
         "image/png",

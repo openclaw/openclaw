@@ -36,6 +36,7 @@ export const RoamAccountSchemaBase = z
     webhookPath: z.string().optional(),
     apiBaseUrl: z.string().optional(),
     webhookUrl: z.string().optional(),
+    webhookSecret: z.string().optional(),
     ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();
