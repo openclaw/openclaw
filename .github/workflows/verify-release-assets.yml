@@ -26,12 +26,22 @@ jobs:
     steps:
       - name: Determine release tag
         id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
           else
-            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            TAG="$RELEASE_TAG_NAME"
           fi
+          if [[ ! "$TAG" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Invalid tag format: $TAG"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Poll for release assets
         env:
@@ -39,8 +49,6 @@ jobs:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          # Private signing pipeline typically completes in 10–20 min.
-          # Poll every 60s for up to 45 min before declaring failure.
           for i in $(seq 1 45); do
             ASSET_COUNT=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
               --jq '.assets | length' 2>/dev/null || echo "0")
