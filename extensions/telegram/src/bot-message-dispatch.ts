@@ -611,9 +611,11 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...replyPipeline,
         deliver: async (payload, info) => {
-          // When suppressTextBlockDelivery is enabled, only messages sent
-          // explicitly via the message() tool reach the user.
-          if (telegramCfg.suppressTextBlockDelivery) {
+          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          // When suppressTextBlockDelivery is enabled, skip text-only deliveries.
+          // Media payloads (images, TTS audio) must still go through so that
+          // voice sending and VOICE_MESSAGES_FORBIDDEN fallback work correctly.
+          if (telegramCfg.suppressTextBlockDelivery && !hasMedia) {
             return;
           }
           if (payload.isError === true) {
