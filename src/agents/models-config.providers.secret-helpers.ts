@@ -9,6 +9,7 @@ import {
   resolveEnvSecretRefHeaderValueMarker,
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
+  resolveOAuthApiKeyMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
@@ -308,6 +309,16 @@ export function resolveMissingProviderApiKey(params: {
   const fromEnv = resolveEnvApiKeyVarName(params.providerKey, params.env);
   const apiKey = fromEnv ?? params.profileApiKey?.apiKey;
   if (!apiKey?.trim()) {
+    // Auth modes that don't require a static API key (OAuth, external CLI
+    // token sync) need a non-secret marker to satisfy ModelRegistry
+    // validation, which rejects models.json if any provider with custom
+    // models lacks an apiKey. Actual auth is resolved at runtime.
+    if (authMode === "token" || authMode === "oauth") {
+      return {
+        ...params.provider,
+        apiKey: resolveOAuthApiKeyMarker(params.providerKey),
+      };
+    }
     return params.provider;
   }
   if (params.profileApiKey && params.profileApiKey.source !== "plaintext") {
