@@ -83,7 +83,7 @@ export function createGoogleGenAiStreamFnForModel(
                   }
                   return null;
                 })
-                .filter((p): p is nonNullable<typeof p> => p !== null);
+                .filter((p): p is NonNullable<typeof p> => p !== null);
             }
 
             return {
@@ -141,7 +141,7 @@ export function createGoogleGenAiStreamFnForModel(
 
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error: unknown) {
-        log.error("Stream error:", error);
+        log.error("Stream error: " + String(error));
         let processedError = error;
         const errorMessage = error instanceof Error ? error.message : String(error);
 
