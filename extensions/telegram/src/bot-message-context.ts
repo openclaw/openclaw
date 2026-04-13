@@ -149,9 +149,11 @@ export const buildTelegramMessageContext = async ({
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-  const topicNameCachePath = resolveTopicNameCachePath(
-    sessionRuntime.resolveStorePath(cfg.session?.store, { agentId: account.accountId }),
-  );
+  const topicNameCachePath = sessionRuntime?.resolveStorePath
+    ? resolveTopicNameCachePath(
+        sessionRuntime.resolveStorePath(cfg.session?.store, { agentId: account.accountId }),
+      )
+    : undefined;
   let topicName: string | undefined;
   if (isForum && resolvedThreadId != null) {
     const ftCreated = msg.forum_topic_created;

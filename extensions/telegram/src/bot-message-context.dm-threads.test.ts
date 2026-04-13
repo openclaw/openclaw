@@ -168,6 +168,29 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
   });
 
+  it("handles forum messages without session runtime overrides", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 3,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+        date: 1700000002,
+        text: "@bot hello",
+        message_thread_id: 99,
+        from: { id: 42, first_name: "Alice" },
+        reply_to_message: {
+          message_id: 2,
+          forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
+        },
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+      sessionRuntime: null,
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+  });
+
   it("reloads topic name from disk after cache reset", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-topic-name-"));
     const sessionStorePath = path.join(tempDir, "sessions.json");
