@@ -104,6 +104,10 @@ function parseRoamWebhookEvent(raw: unknown): RoamWebhookEvent | null {
   if (obj.text !== undefined && typeof obj.text !== "string") {
     return null;
   }
+  // chatType is required for correct DM/group routing.
+  if (obj.chatType !== "dm" && obj.chatType !== "channel") {
+    return null;
+  }
   return obj as unknown as RoamWebhookEvent;
 }
 

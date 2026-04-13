@@ -54,6 +54,18 @@ export function clearRoamAccountFields(
     for (const field of fields) {
       delete nextSection[field];
     }
+    // Also clear from accounts.default if it exists, so nested entries don't shadow.
+    const defaultEntry = section.accounts?.[DEFAULT_ACCOUNT_ID];
+    if (defaultEntry) {
+      const nextDefault = { ...defaultEntry } as Record<string, unknown>;
+      for (const field of fields) {
+        delete nextDefault[field];
+      }
+      nextSection.accounts = {
+        ...section.accounts,
+        [DEFAULT_ACCOUNT_ID]: nextDefault,
+      };
+    }
     return {
       ...cfg,
       channels: {

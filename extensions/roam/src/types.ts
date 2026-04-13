@@ -118,7 +118,7 @@ export type RoamWebhookEvent = {
   /** Message ID. */
   messageId?: string;
   /** Chat type: "dm" for direct messages, "channel" for group/channel messages. */
-  chatType?: "dm" | "channel";
+  chatType: "dm" | "channel";
 };
 
 /** An item attached to a Roam webhook event (image, file, etc.). */
