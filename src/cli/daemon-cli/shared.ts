@@ -38,6 +38,26 @@ export function failIfNixDaemonInstallMode(
   return true;
 }
 
+export function failIfSudoInstall(
+  fail: (message: string, hints?: string[]) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  const sudoUser = env.SUDO_USER?.trim();
+  if (!sudoUser || sudoUser === "root") {
+    return false;
+  }
+  if (process.getuid?.() !== 0) {
+    return false;
+  }
+  fail("Run without sudo: openclaw gateway install", [
+    `To keep the gateway running after logout: sudo loginctl enable-linger ${sudoUser}`,
+  ]);
+  return true;
+}
+
 export function createCliStatusTextStyles() {
   const rich = isRich();
   return {

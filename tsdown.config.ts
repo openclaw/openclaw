@@ -87,6 +87,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
     fixedExtension: false,
     platform: "node",
     inputOptions: buildInputOptions,
+    sourcemap: true,
   };
 }
 

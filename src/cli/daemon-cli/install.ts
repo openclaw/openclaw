@@ -5,15 +5,21 @@ import {
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
+import { ensureSystemdUserLingerNonInteractive } from "../../commands/systemd-linger.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewaySystemdServiceName } from "../../daemon/constants.js";
 import { resolveGatewayService } from "../../daemon/service.js";
-import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
+import {
+  isNonFatalSystemdInstallProbeError,
+  readSystemdServiceRuntime,
+} from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
   createDaemonInstallActionContext,
   failIfNixDaemonInstallMode,
+  failIfSudoInstall,
   parsePort,
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
@@ -34,6 +40,9 @@ function mergeInstallInvocationEnv(params: {
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
+    return;
+  }
+  if (failIfSudoInstall(fail)) {
     return;
   }
 
@@ -151,6 +160,30 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       });
     },
   });
+
+  if (!json && process.platform === "linux") {
+    await ensureSystemdUserLingerNonInteractive({ runtime: defaultRuntime });
+    await warnIfGatewayServiceNotRunning({ env: installEnv });
+  }
+}
+
+async function warnIfGatewayServiceNotRunning(params: { env: NodeJS.ProcessEnv }): Promise<void> {
+  try {
+    const runtime = await readSystemdServiceRuntime(params.env);
+    if (runtime.status === "running") {
+      return;
+    }
+    const serviceName = resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE);
+    const detail = [runtime.state, runtime.subState].filter(Boolean).join("/");
+    const detailSuffix = detail ? ` (${detail})` : "";
+    defaultRuntime.log(`Warning: gateway service not running after install${detailSuffix}.`);
+    defaultRuntime.log(`  Status: ${formatCliCommand(`systemctl --user status ${serviceName}`)}`);
+    defaultRuntime.log(
+      `  Logs:   ${formatCliCommand(`journalctl --user -u ${serviceName} -n 50`)}`,
+    );
+  } catch {
+    // Non-fatal — best-effort post-install diagnostic only.
+  }
 }
 
 async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {

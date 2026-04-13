@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { theme } from "../../terminal/theme.js";
 import {
+  failIfSudoInstall,
   filterContainerGenericHints,
   renderGatewayServiceStartHints,
   resolveDaemonContainerContext,
@@ -82,5 +83,99 @@ describe("filterContainerGenericHints", () => {
         { OPENCLAW_CONTAINER_HINT: "openclaw-demo-container" } as NodeJS.ProcessEnv,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("failIfSudoInstall", () => {
+  it("blocks install when SUDO_USER is set and uid is 0 on Linux", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const originalGetuid = process.getuid;
+    Object.defineProperty(process, "getuid", {
+      value: () => 0,
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      const fail = vi.fn();
+      const result = failIfSudoInstall(fail, { SUDO_USER: "alice" });
+      expect(result).toBe(true);
+      expect(fail).toHaveBeenCalledOnce();
+      expect(fail.mock.calls[0]?.[0]).toContain("sudo is not needed");
+      const hints: string[] = fail.mock.calls[0]?.[1] ?? [];
+      expect(hints.some((h) => h.includes("loginctl enable-linger alice"))).toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+      Object.defineProperty(process, "getuid", {
+        value: originalGetuid,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  it("allows install when not running as root", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const originalGetuid = process.getuid;
+    Object.defineProperty(process, "getuid", {
+      value: () => 1000,
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      const fail = vi.fn();
+      const result = failIfSudoInstall(fail, { SUDO_USER: "alice" });
+      expect(result).toBe(false);
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+      Object.defineProperty(process, "getuid", {
+        value: originalGetuid,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  it("allows install when SUDO_USER is unset (direct root login)", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const originalGetuid = process.getuid;
+    Object.defineProperty(process, "getuid", {
+      value: () => 0,
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      const fail = vi.fn();
+      const result = failIfSudoInstall(fail, {});
+      expect(result).toBe(false);
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+      Object.defineProperty(process, "getuid", {
+        value: originalGetuid,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  it("is a no-op on non-Linux platforms", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+
+    try {
+      const fail = vi.fn();
+      const result = failIfSudoInstall(fail, { SUDO_USER: "alice" });
+      expect(result).toBe(false);
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
   });
 });
