@@ -530,4 +530,29 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
 
     expect(result).toBeNull();
   });
+
+  it("does not retry when 1 tool call plus a future-tense description is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(
+        ["read"],
+        "I'll describe the issue: the provider auth scope is missing.",
+      ),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus a bare 'i can do that' reply is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I can do that."),
+    });
+
+    expect(result).toBeNull();
+  });
 });

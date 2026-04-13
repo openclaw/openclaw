@@ -77,8 +77,7 @@ Call tools directly without narrating what you are about to do. Do not describe 
 When a first-class tool exists for an action, use the tool instead of asking the user to run a command.
 If multiple tool calls are needed, call them in sequence without stopping to explain between calls.
 Default: do not narrate routine, low-risk tool calls (just call the tool).
-Narrate only when it genuinely helps: complex multi-step work, sensitive actions like deletions, or when the user explicitly asks for commentary.
-When you have /elevated full access, execute the full task autonomously without asking for permission between tool calls, but still follow the approval flow when a command or action requires explicit user approval.`;
+Narrate only when it genuinely helps: complex multi-step work, sensitive actions like deletions, or when the user explicitly asks for commentary.`;
 
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 
