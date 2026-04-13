@@ -38,6 +38,13 @@ type CommandLike = {
 };
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
+const MAX_REMOTE_COMMANDS = 500;
+const MAX_REMOTE_ALIAS_COUNT = 20;
+const MAX_REMOTE_ARGS = 20;
+const MAX_REMOTE_CHOICES = 50;
+const MAX_REMOTE_NAME_LENGTH = 200;
+const MAX_REMOTE_DESCRIPTION_LENGTH = 2_000;
+const MAX_REMOTE_ARG_NAME_LENGTH = 200;
 
 const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   help: "book",
@@ -228,12 +235,17 @@ function toSlashCommand(
 }
 
 function normalizeSlashIdentifier(raw: string): string | null {
-  const trimmed = raw.trim().replace(/^\//u, "");
+  const trimmed = raw.trim().replace(/^\//u, "").slice(0, MAX_REMOTE_NAME_LENGTH);
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (!normalized || !REMOTE_SLASH_IDENTIFIER_PATTERN.test(normalized)) {
     return null;
   }
   return normalized;
+}
+
+function clampText(value: string | undefined, maxLength: number): string {
+  const text = value ?? "";
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
 }
 
 function buildLocalSlashCommands(): SlashCommandDef[] {
@@ -274,6 +286,7 @@ function normalizeCommandEntry(
   reservedLocalNames: Set<string>,
 ): CommandLike | null {
   const aliases = (Array.isArray(entry.textAliases) ? entry.textAliases : [])
+    .slice(0, MAX_REMOTE_ALIAS_COUNT)
     .filter((alias): alias is string => typeof alias === "string")
     .map(normalizeSlashIdentifier)
     .filter((alias): alias is string => Boolean(alias))
@@ -286,11 +299,16 @@ function normalizeCommandEntry(
     key: primaryName,
     name: primaryName,
     aliases: aliases.map((alias) => `/${alias}`),
-    description: entry.description,
-    args: entry.args?.map((arg) => ({
-      name: arg.name,
+    description: clampText(entry.description, MAX_REMOTE_DESCRIPTION_LENGTH),
+    args: entry.args?.slice(0, MAX_REMOTE_ARGS).map((arg) => ({
+      name: clampText(arg.name, MAX_REMOTE_ARG_NAME_LENGTH),
       required: arg.required,
-      choices: arg.dynamic ? undefined : arg.choices,
+      choices: arg.dynamic
+        ? undefined
+        : arg.choices?.slice(0, MAX_REMOTE_CHOICES).map((choice) => ({
+            value: clampText(choice.value, MAX_REMOTE_NAME_LENGTH),
+            label: clampText(choice.label, MAX_REMOTE_NAME_LENGTH),
+          })),
     })),
     category: entry.category,
   };
@@ -304,6 +322,7 @@ function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef
   const local = buildLocalSlashCommands();
   const reservedLocalNames = buildReservedLocalSlashNames();
   const mapped = entries
+    .slice(0, MAX_REMOTE_COMMANDS)
     .map((entry) => normalizeCommandEntry(entry, reservedLocalNames))
     .filter((command): command is CommandLike => command !== null)
     .map((command) => toSlashCommand(command, "remote"))

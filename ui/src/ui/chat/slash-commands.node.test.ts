@@ -244,6 +244,46 @@ describe("parseSlashCommand", () => {
     });
   });
 
+  it("caps remote command payload size and long metadata before it reaches UI state", async () => {
+    const longName = "x".repeat(260);
+    const longDescription = "d".repeat(2_500);
+    const request = async () => ({
+      commands: Array.from({ length: 520 }, (_, index) => ({
+        name: `plugin-${index}`,
+        textAliases: Array.from(
+          { length: 25 },
+          (_, aliasIndex) => `/plugin-${index}-${aliasIndex}`,
+        ),
+        description: longDescription,
+        source: "plugin" as const,
+        scope: "both" as const,
+        acceptsArgs: true,
+        args: Array.from({ length: 25 }, (_, argIndex) => ({
+          name: `${longName}-${argIndex}`,
+          description: longDescription,
+          type: "string" as const,
+          choices: Array.from({ length: 55 }, (_, choiceIndex) => ({
+            value: `${longName}-${choiceIndex}`,
+            label: `${longName}-${choiceIndex}`,
+          })),
+        })),
+      })),
+    });
+
+    await refreshSlashCommands({
+      client: { request } as never,
+      agentId: "main",
+    });
+
+    const remoteCommands = SLASH_COMMANDS.filter((entry) => entry.name.startsWith("plugin-"));
+    expect(remoteCommands).toHaveLength(500);
+    const first = remoteCommands[0];
+    expect(first.aliases).toHaveLength(19);
+    expect(first.description.length).toBeLessThanOrEqual(2_000);
+    expect(first.args?.split(" ")).toHaveLength(20);
+    expect(first.argOptions).toHaveLength(50);
+  });
+
   it("ignores stale refresh responses and keeps the latest command set", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     const first = new Promise((resolve) => {
