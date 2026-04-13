@@ -196,13 +196,22 @@ export class MediaAttachmentCache {
     const entry = await this.ensureEntry(params.attachmentIndex);
     if (entry.resolvedPath) {
       if (params.maxBytes) {
-        const size = await this.ensureLocalStat(entry);
-        if (entry.resolvedPath) {
-          if (size !== undefined && size > params.maxBytes) {
-            throw new MediaUnderstandingSkipError(
-              "maxBytes",
-              `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-            );
+        try {
+          const size = await this.ensureLocalStat(entry);
+          if (entry.resolvedPath) {
+            if (size !== undefined && size > params.maxBytes) {
+              throw new MediaUnderstandingSkipError(
+                "maxBytes",
+                `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+              );
+            }
+          }
+        } catch (err) {
+          if (
+            !(err instanceof MediaUnderstandingSkipError) ||
+            (err.reason !== "blocked" && err.reason !== "empty")
+          ) {
+            throw err;
           }
         }
       }
