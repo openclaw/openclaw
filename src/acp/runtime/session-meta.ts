@@ -82,15 +82,29 @@ export function readAcpSessionEntry(params: {
     storeReadFailed = true;
     store = {};
   }
-  const storeSessionKey = resolveStoreSessionKey(store, sessionKey);
-  const entry = store[storeSessionKey];
+  let storeSessionKey = resolveStoreSessionKey(store, sessionKey);
+  let entry = store[storeSessionKey];
+  let acp = entry?.acp;
+  if (!acp) {
+    const threadMarker = sessionKey.indexOf(":thread:");
+    if (threadMarker > 0) {
+      const baseSessionKey = sessionKey.slice(0, threadMarker);
+      const fallbackStoreSessionKey = resolveStoreSessionKey(store, baseSessionKey);
+      const fallbackEntry = store[fallbackStoreSessionKey];
+      if (fallbackEntry?.acp) {
+        storeSessionKey = fallbackStoreSessionKey;
+        entry = fallbackEntry;
+        acp = fallbackEntry.acp;
+      }
+    }
+  }
   return {
     cfg,
     storePath,
     sessionKey,
     storeSessionKey,
     entry,
-    acp: entry?.acp,
+    acp,
     storeReadFailed,
   };
 }

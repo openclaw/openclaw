@@ -19,14 +19,67 @@ vi.mock("../../config/sessions/targets.js", () => ({
     hoisted.resolveAllAgentSessionStoreTargetsMock(cfg, opts),
 }));
 let listAcpSessionEntries: typeof import("./session-meta.js").listAcpSessionEntries;
+let readAcpSessionEntry: typeof import("./session-meta.js").readAcpSessionEntry;
 
-describe("listAcpSessionEntries", () => {
+describe("session-meta", () => {
   beforeAll(async () => {
-    ({ listAcpSessionEntries } = await import("./session-meta.js"));
+    ({ listAcpSessionEntries, readAcpSessionEntry } = await import("./session-meta.js"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("falls back from thread-scoped ACP aliases to the base ACP session entry", () => {
+    const cfg = {
+      session: {
+        store: "/custom/sessions/{agentId}.json",
+      },
+    } as OpenClawConfig;
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:codex:acp:base-session": {
+        sessionId: "session-1",
+        updatedAt: 123,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "acpx:v2:example",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+      "agent:codex:acp:base-session:thread:7657523082:4403": {
+        sessionId: "session-2",
+        updatedAt: 124,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:7657523082",
+          accountId: "default",
+          threadId: "4403",
+        },
+      },
+    });
+
+    const entry = readAcpSessionEntry({
+      cfg,
+      sessionKey: "agent:codex:acp:base-session:thread:7657523082:4403",
+    });
+
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/custom/sessions/codex.json");
+    expect(entry).toEqual(
+      expect.objectContaining({
+        cfg,
+        storePath: "/custom/sessions/codex.json",
+        sessionKey: "agent:codex:acp:base-session:thread:7657523082:4403",
+        storeSessionKey: "agent:codex:acp:base-session",
+        acp: expect.objectContaining({
+          agent: "codex",
+          backend: "acpx",
+          runtimeSessionName: "acpx:v2:example",
+        }),
+      }),
+    );
   });
 
   it("reads ACP sessions from resolved configured store targets", async () => {
