@@ -80,9 +80,19 @@ under `/sandbox`, then symlink the entry point onto the sandbox `PATH`.
 ```bash
 # From the host
 openshell sandbox create --name agent \
+  --from openclaw \
   --policy ~/openshell-policy.yaml \
   --forward 18789
 ```
+
+The `--from openclaw` flag pulls the OpenClaw community sandbox image
+(`ghcr.io/nvidia/openshell-community/sandboxes/openclaw:latest`), which
+ships with the `/sandbox` layout, Node runtime, and proxy env injection
+that the rest of this guide assumes. Without a `--from` value the CLI
+resolves to a different default template and the later steps
+(`cd /sandbox`, `npm install openclaw`, launcher patterns) will not line
+up. Override the registry with `OPENSHELL_COMMUNITY_REGISTRY` when
+needed.
 
 Then, inside the sandbox:
 
@@ -159,7 +169,11 @@ export BOT_TOKEN="<your-bot-token>"
 export API_KEY="<your-api-key>"
 
 # 5. Self-heal local patches that are wiped by `npm install` (see below).
-bash /sandbox/heal-fetch-guard.sh || true
+#    No `|| true`: the heal script exits non-zero when the upstream bundle
+#    format drifts past its sed pattern, and the launcher must surface
+#    that fail-fast signal to the sandbox supervisor so operators notice
+#    the drift on the next restart (see "Fetch-guard self-heal" below).
+bash /sandbox/heal-fetch-guard.sh
 
 # 6. Start the gateway in the foreground so the sandbox supervisor owns its
 #    lifecycle. For background use, redirect to a logfile and write a pidfile.
@@ -566,7 +580,7 @@ them, the fleet needs a host-side recovery path.
   long after the pod it served is gone. A fresh `openshell forward start`
   then fails silently because the port is already in use. The symptom is
   "forward start returns 0 but nothing is listening" — the giveaway is
-  that `ss -tln` still shows the port bound to a PID that no longer
+  that `ss -tlnp` still shows the port bound to a PID that no longer
   belongs to openshell.
 
 ### Manual recovery
@@ -582,7 +596,12 @@ openshell sandbox list
 openshell forward list
 
 # 3. Is anything else holding the forward port?
-ss -tln | grep <port>
+#    Use `-p` so the output includes the owning PID; plain `ss -tln`
+#    prints only the address/state columns and you cannot act on it.
+#    Non-root invocations see PIDs only for sockets owned by the current
+#    user — prefix with `sudo` if the orphan tunnel belongs to another
+#    user (or pair with `lsof -i :<port>`).
+ss -tlnp | grep <port>
 
 # 4. If ss shows an orphan SSH tunnel, kill it before restarting the forward
 kill <pid>
