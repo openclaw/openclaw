@@ -16,11 +16,11 @@ import { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtim
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import { scheduleSubagentOrphanRecovery } from "../agents/subagent-registry.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { loadConfig } from "../config/config.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   createInternalHookEvent,
@@ -43,12 +43,13 @@ import {
 } from "./server-restart-sentinel.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
 async function prewarmConfiguredPrimaryModel(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
   const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
@@ -88,7 +89,7 @@ async function prewarmConfiguredPrimaryModel(params: {
 }
 
 export async function startGatewaySidecars(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -239,7 +240,7 @@ export async function startGatewaySidecars(params: {
 
 export async function startGatewayPostAttachRuntime(params: {
   minimalTestGateway: boolean;
-  cfgAtStart: ReturnType<typeof loadConfig>;
+  cfgAtStart: OpenClawConfig;
   bindHost: string;
   bindHosts: string[];
   port: number;
@@ -260,7 +261,7 @@ export async function startGatewayPostAttachRuntime(params: {
     error: (msg: string) => void;
     debug?: (msg: string) => void;
   };
-  gatewayPluginConfigAtStart: ReturnType<typeof loadConfig>;
+  gatewayPluginConfigAtStart: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -322,7 +323,9 @@ export async function startGatewayPostAttachRuntime(params: {
       logHooks: params.logHooks,
       logChannels: params.logChannels,
     }));
-    params.unavailableGatewayMethods.delete("chat.history");
+    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+      params.unavailableGatewayMethods.delete(method);
+    }
   }
 
   if (!params.minimalTestGateway) {

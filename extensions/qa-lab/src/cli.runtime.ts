@@ -1,4 +1,11 @@
+import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  buildQaAgenticParityComparison,
+  renderQaAgenticParityMarkdownReport,
+  type QaParitySuiteSummary,
+} from "./agentic-parity-report.js";
+import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
@@ -9,6 +16,7 @@ import { runQaManualLane } from "./manual-lane.runtime.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
+import { normalizeQaTransportId } from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -207,12 +215,14 @@ export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output
 export async function runQaSuiteCommand(opts: {
   repoRoot?: string;
   outputDir?: string;
+  transportId?: string;
   runner?: string;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
   cliAuthMode?: string;
+  parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   image?: string;
@@ -221,7 +231,12 @@ export async function runQaSuiteCommand(opts: {
   disk?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
+  const scenarioIds = resolveQaParityPackScenarioIds({
+    parityPack: opts.parityPack,
+    scenarioIds: opts.scenarioIds,
+  });
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -243,11 +258,12 @@ export async function runQaSuiteCommand(opts: {
     const result = await runQaMultipass({
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+      transportId,
       providerMode,
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
-      scenarioIds: opts.scenarioIds,
+      scenarioIds,
       ...(opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
@@ -266,12 +282,13 @@ export async function runQaSuiteCommand(opts: {
   const result = await runQaSuiteFromRuntime({
     repoRoot,
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+    transportId,
     providerMode,
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
-    scenarioIds: opts.scenarioIds,
+    scenarioIds,
     ...(opts.concurrency !== undefined
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),
@@ -281,6 +298,48 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
 }
 
+export async function runQaParityReportCommand(opts: {
+  repoRoot?: string;
+  candidateSummary: string;
+  baselineSummary: string;
+  candidateLabel?: string;
+  baselineLabel?: string;
+  outputDir?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
+
+  const candidateSummaryPath = path.resolve(repoRoot, opts.candidateSummary);
+  const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
+  const candidateSummary = JSON.parse(
+    await fs.readFile(candidateSummaryPath, "utf8"),
+  ) as QaParitySuiteSummary;
+  const baselineSummary = JSON.parse(
+    await fs.readFile(baselineSummaryPath, "utf8"),
+  ) as QaParitySuiteSummary;
+
+  const comparison = buildQaAgenticParityComparison({
+    candidateLabel: opts.candidateLabel?.trim() || "openai/gpt-5.4",
+    baselineLabel: opts.baselineLabel?.trim() || "anthropic/claude-opus-4-6",
+    candidateSummary,
+    baselineSummary,
+  });
+  const report = renderQaAgenticParityMarkdownReport(comparison);
+  const reportPath = path.join(outputDir, "qa-agentic-parity-report.md");
+  const summaryPath = path.join(outputDir, "qa-agentic-parity-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(comparison, null, 2)}\n`, "utf8");
+
+  process.stdout.write(`QA parity report: ${reportPath}\n`);
+  process.stdout.write(`QA parity summary: ${summaryPath}\n`);
+  process.stdout.write(`QA parity verdict: ${comparison.pass ? "pass" : "fail"}\n`);
+  if (!comparison.pass) {
+    process.exitCode = 1;
+  }
+}
 export async function runQaCharacterEvalCommand(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -321,6 +380,7 @@ export async function runQaCharacterEvalCommand(opts: {
 
 export async function runQaManualLaneCommand(opts: {
   repoRoot?: string;
+  transportId?: string;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
@@ -329,6 +389,7 @@ export async function runQaManualLaneCommand(opts: {
   timeoutMs?: number;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const transportId = normalizeQaTransportId(opts.transportId);
   const providerMode: QaProviderMode =
     opts.providerMode === undefined ? "live-frontier" : normalizeQaProviderMode(opts.providerMode);
   const models = resolveQaManualLaneModels({
@@ -338,6 +399,7 @@ export async function runQaManualLaneCommand(opts: {
   });
   const result = await runQaManualLane({
     repoRoot,
+    transportId,
     providerMode,
     primaryModel: models.primaryModel,
     alternateModel: models.alternateModel,

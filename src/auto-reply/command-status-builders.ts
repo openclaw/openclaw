@@ -1,7 +1,7 @@
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import { isCommandFlagEnabled } from "../config/commands.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { isCommandFlagEnabled } from "../config/commands.flags.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -58,7 +58,13 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  const optionParts = ["/think <level>", "/model <id>", "/fast status|on|off", "/verbose on|off"];
+  const optionParts = [
+    "/think <level>",
+    "/model <id>",
+    "/fast status|on|off",
+    "/verbose on|off",
+    "/trace on|off",
+  ];
   if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }

@@ -104,6 +104,117 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ]);
   });
 
+  it("emits explicit replayInvalid + blocked liveness state at the strict-agentic blocked exit", async () => {
+    // Criterion 4 of the GPT-5.4 parity gate requires every terminal exit path
+    // to emit explicit replayInvalid + livenessState. The strict-agentic
+    // blocked exit is the exact place where strict-agentic is supposed to be
+    // loudest; it must not fall through to "silent disappearance".
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-blocked-liveness",
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              executionContract: "strict-agentic",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: STRICT_AGENTIC_BLOCKED_TEXT,
+        isError: true,
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.replayInvalid).toBe(false);
+  });
+
+  it("auto-activates strict-agentic for unconfigured GPT-5 openai runs and surfaces the blocked state", async () => {
+    // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") must
+    // cover out-of-the-box installs, not only users who opted in. An
+    // unconfigured GPT-5.4 openai run should receive the strict-agentic retry
+    // + blocked-state treatment automatically.
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-auto-activated",
+      config: {
+        agents: {
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    // Two retries (strict-agentic retry cap) plus the original attempt = 3 calls.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads).toEqual([
+      {
+        text: STRICT_AGENTIC_BLOCKED_TEXT,
+        isError: true,
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+  });
+
+  it("respects explicit default contract opt-out on GPT-5 openai runs", async () => {
+    // Users who explicitly set executionContract: "default" opt out of
+    // auto-activated strict-agentic. They keep the old pre-parity-program
+    // behavior (1 retry, then fall through to the normal completion path).
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-explicit-default-optout",
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              executionContract: "default",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    // Default contract: 1 retry then falls through. Should NOT surface the
+    // strict-agentic blocked payload.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const payloadTexts = (result.payloads ?? []).map((payload) => payload.text ?? "");
+    for (const text of payloadTexts) {
+      expect(text).not.toContain("plan-only turns");
+    }
+  });
+
   it("detects replay-safe planning-only GPT turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
@@ -243,6 +354,30 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const instruction = resolveAckExecutionFastPathInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "go ahead",
+    });
+
+    expect(instruction).toContain("Do not recap or restate the plan");
+  });
+
+  it("applies the planning-only retry guard to prefixed GPT-5 ids", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "  openai/gpt-5.4  ",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("applies the ack-turn fast path to broadened GPT-5-family ids", () => {
+    const instruction = resolveAckExecutionFastPathInstruction({
+      provider: "openai",
+      modelId: "gpt-5o-mini",
       prompt: "go ahead",
     });
 

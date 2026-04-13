@@ -1,8 +1,8 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import {
@@ -18,6 +18,7 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveSessionTranscriptPath } from "./run-execution.runtime.js";
 import { executeCronRun, type CronExecutionResult } from "./run-executor.js";
 import {
   createPersistCronSessionEntry,
@@ -272,6 +273,9 @@ async function prepareCronRunContext(params: {
     forceNew: input.job.sessionTarget === "isolated",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
+  if (!cronSession.sessionEntry.sessionFile?.trim()) {
+    cronSession.sessionEntry.sessionFile = resolveSessionTranscriptPath(runSessionId, agentId);
+  }
   const runSessionKey = baseSessionKey.startsWith("cron:")
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;

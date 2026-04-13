@@ -70,6 +70,30 @@ async function expectSchemaLookupInvalid(path: unknown) {
   expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
 }
 
+async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
+  delete process.env[missingEnvVar];
+  const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
+  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+  await fs.writeFile(
+    authStorePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        profiles: {
+          "custom:token": {
+            type: "token",
+            provider: "custom",
+            tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
 beforeEach(() => {
   controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
 });
@@ -87,12 +111,11 @@ describe("gateway config methods", () => {
     expect(current.payload?.config).toBeTruthy();
 
     const nextConfig = structuredClone(current.payload?.config ?? {});
-    const channels = (nextConfig.channels ??= {}) as Record<string, unknown>;
-    const telegram = (channels.telegram ??= {}) as Record<string, unknown>;
-    telegram.botToken = { source: "env", provider: "default", id: missingEnvVar };
-    const telegramAccounts = (telegram.accounts ??= {}) as Record<string, unknown>;
-    const defaultTelegramAccount = (telegramAccounts.default ??= {}) as Record<string, unknown>;
-    defaultTelegramAccount.enabled = true;
+    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+    gateway.auth = {
+      mode: "token",
+      token: { source: "env", provider: "default", id: missingEnvVar },
+    };
 
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
       requireWs(),
@@ -136,28 +159,7 @@ describe("gateway config methods", () => {
 
   it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
-    delete process.env[missingEnvVar];
-
-    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-    await fs.writeFile(
-      authStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "custom:token": {
-              type: "token",
-              provider: "custom",
-              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+    await writeUnresolvedAuthProfileTokenRef(missingEnvVar);
 
     const current = await rpcReq<{
       hash?: string;
@@ -306,17 +308,13 @@ describe("gateway config methods", () => {
       "config.patch",
       {
         raw: JSON.stringify({
-          channels: {
-            telegram: {
-              botToken: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: {
                 source: "env",
                 provider: "default",
                 id: missingEnvVar,
-              },
-              accounts: {
-                default: {
-                  enabled: true,
-                },
               },
             },
           },
@@ -344,12 +342,11 @@ describe("gateway config.apply", () => {
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
     const nextConfig = structuredClone(current.payload?.config ?? {});
-    const channels = (nextConfig.channels ??= {}) as Record<string, unknown>;
-    const telegram = (channels.telegram ??= {}) as Record<string, unknown>;
-    telegram.botToken = { source: "env", provider: "default", id: missingEnvVar };
-    const telegramAccounts = (telegram.accounts ??= {}) as Record<string, unknown>;
-    const defaultTelegramAccount = (telegramAccounts.default ??= {}) as Record<string, unknown>;
-    defaultTelegramAccount.enabled = true;
+    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+    gateway.auth = {
+      mode: "token",
+      token: { source: "env", provider: "default", id: missingEnvVar },
+    };
 
     const res = await sendConfigApply(
       {
@@ -372,28 +369,7 @@ describe("gateway config.apply", () => {
 
   it("does not reject config.apply for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_APPLY_${Date.now()}`;
-    delete process.env[missingEnvVar];
-
-    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-    await fs.writeFile(
-      authStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "custom:token": {
-              type: "token",
-              provider: "custom",
-              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+    await writeUnresolvedAuthProfileTokenRef(missingEnvVar);
 
     const current = await rpcReq<{
       config?: Record<string, unknown>;
