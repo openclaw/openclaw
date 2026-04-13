@@ -87,11 +87,14 @@ function applyLitellmProviderWithModels(
   discoveredModelIds: string[],
 ): OpenClawConfig {
   const defaultModel = buildLitellmModelDefinition();
+  // Default to permissive capabilities (reasoning + image input) since LiteLLM
+  // proxies typically front capable models and the /v1/models response does not
+  // include capability metadata.
   const defaultDiscoveredModel: ModelDefinitionConfig = {
     id: "",
     name: "",
-    reasoning: false,
-    input: ["text"],
+    reasoning: true,
+    input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 8_192,
@@ -103,6 +106,7 @@ function applyLitellmProviderWithModels(
   if (!discoveredModelIds.includes(defaultModel.id)) {
     models.push(defaultModel);
   }
+  const existingProvider = cfg.models?.providers?.litellm;
   return {
     ...cfg,
     models: {
@@ -111,6 +115,7 @@ function applyLitellmProviderWithModels(
       providers: {
         ...cfg.models?.providers,
         litellm: {
+          ...existingProvider,
           baseUrl,
           api: "openai-completions",
           apiKey: "LITELLM_API_KEY",
@@ -181,19 +186,27 @@ export async function configureLitellmNonInteractive(ctx: ProviderAuthMethodNonI
       mode: "api_key",
     });
     next = applyLitellmConfig(next);
-    return next;
+    const fallbackModelId = customModelId ?? LITELLM_DEFAULT_MODEL_ID;
+    return applyAgentDefaultModelPrimary(next, `litellm/${fallbackModelId}`);
   }
 
-  // Build config with discovered models.
-  let next = applyLitellmProviderWithModels(ctx.config, baseUrl, discoveredModelIds);
+  // Resolve default model.
+  const defaultModelId = customModelId ?? pickDefaultModel(discoveredModelIds);
+
+  // Ensure the chosen model appears in the model list so the primary ref resolves.
+  const allModelIds =
+    customModelId && !discoveredModelIds.includes(customModelId)
+      ? [...discoveredModelIds, customModelId]
+      : discoveredModelIds;
+
+  // Build config with discovered (+ custom) models.
+  let next = applyLitellmProviderWithModels(ctx.config, baseUrl, allModelIds);
   next = applyAuthProfileConfig(next, {
     profileId: "litellm:default",
     provider: "litellm",
     mode: "api_key",
   });
 
-  // Resolve default model.
-  const defaultModelId = customModelId ?? pickDefaultModel(discoveredModelIds);
   ctx.runtime.log(`Default LiteLLM model: ${defaultModelId}`);
   if (discoveredModelIds.length > 0) {
     ctx.runtime.log(`Discovered ${discoveredModelIds.length} model(s) from LiteLLM proxy.`);
