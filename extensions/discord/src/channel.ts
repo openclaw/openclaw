@@ -602,6 +602,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           lastDisconnect: null,
           lastEventAt: null,
         }),
+        skipStaleSocketHealthCheck: true,
         collectStatusIssues: collectDiscordStatusIssues,
         buildChannelSummary: ({ snapshot }) =>
           buildTokenChannelStatusSummary(snapshot, { includeMode: false }),

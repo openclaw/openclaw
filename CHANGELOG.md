@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/health: skip stale-socket restarts for healthy idle Discord gateway sessions so the health monitor no longer cycles otherwise stable connections every ~35 minutes. Fixes #65613.
+
 ## 2026.4.12-beta.1
 
 ### Changes

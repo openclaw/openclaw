@@ -99,6 +99,7 @@ function createComputedStatusAdapter() {
     { ok: boolean }
   >({
     defaultRuntime: createDefaultChannelRuntimeState("default"),
+    skipStaleSocketHealthCheck: true,
     resolveAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,
       enabled: account.enabled,
@@ -118,6 +119,7 @@ function createAsyncStatusAdapter() {
     { ok: boolean }
   >({
     defaultRuntime: createDefaultChannelRuntimeState("default"),
+    skipStaleSocketHealthCheck: true,
     resolveAccountSnapshot: async ({ account, runtime, probe }) => ({
       accountId: account.accountId,
       enabled: account.enabled,
@@ -270,6 +272,19 @@ describe("buildComputedAccountStatusSnapshot", () => {
 });
 
 describe("computed account status adapters", () => {
+  it.each([
+    {
+      name: "sync",
+      createStatus: createComputedStatusAdapter,
+    },
+    {
+      name: "async",
+      createStatus: createAsyncStatusAdapter,
+    },
+  ])("preserves skipStaleSocketHealthCheck on $name adapters", ({ createStatus }) => {
+    expect(createStatus().skipStaleSocketHealthCheck).toBe(true);
+  });
+
   it.each([
     {
       name: "sync",

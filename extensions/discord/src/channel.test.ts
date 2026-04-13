@@ -114,6 +114,10 @@ describe("discordPlugin outbound", () => {
     expect(source).not.toContain('require("./channel-actions.js")');
   });
 
+  it("skips stale-socket health restarts for healthy idle sessions", () => {
+    expect(discordPlugin.status?.skipStaleSocketHealthCheck).toBe(true);
+  });
+
   it("honors per-account replyToMode overrides", () => {
     const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
     if (!resolveReplyToMode) {
