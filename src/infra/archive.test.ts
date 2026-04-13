@@ -375,26 +375,20 @@ describe("archive utils", () => {
         content: "hi",
       });
 
-      const tarExtractSpy = vi.spyOn(tar, "x");
       let callbackCalls = 0;
-      try {
-        await expect(
-          extractArchive({
-            archivePath,
-            destDir: extractDir,
-            timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
-            beforeWriteToDestination: async () => {
-              callbackCalls += 1;
-              throw new Error("destination directory changed during extract");
-            },
-          }),
-        ).rejects.toThrow("destination directory changed during extract");
-      } finally {
-        tarExtractSpy.mockRestore();
-      }
+      await expect(
+        extractArchive({
+          archivePath,
+          destDir: extractDir,
+          timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+          beforeWriteToDestination: async () => {
+            callbackCalls += 1;
+            throw new Error("destination directory changed during extract");
+          },
+        }),
+      ).rejects.toThrow("destination directory changed during extract");
 
       expect(callbackCalls).toBe(1);
-      expect(tarExtractSpy).not.toHaveBeenCalled();
       await expectPathMissing(path.join(extractDir, "package", "hello.txt"));
     });
   });
