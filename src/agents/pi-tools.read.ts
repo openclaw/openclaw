@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
@@ -12,8 +11,6 @@ import {
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
-import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
@@ -25,7 +22,6 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
   REQUIRED_PARAM_GROUPS,
@@ -46,50 +42,12 @@ const CLAUDE_PARAM_GROUPS = {
   edit: [{ keys: ["file_path", "old_string", "new_string"] }] as const,
 };
 
-type ToolContentBlock = AgentToolResult<unknown>["content"][number];
-type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
-type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
-
-const DEFAULT_READ_PAGE_MAX_BYTES = 512 * 1024;
-const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
-const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
-const CHARS_PER_TOKEN_ESTIMATE = 4;
-const MAX_ADAPTIVE_READ_PAGES = 8;
-
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
-  imageSanitization?: ImageSanitizationLimits;
+  imageSanitization?: import("./image-sanitization.js").ImageSanitizationLimits;
   root?: string;
   containerWorkdir?: string;
 };
-
-type ReadTruncationDetails = {
-  truncated: boolean;
-  outputLines: number;
-  firstLineExceedsLimit: boolean;
-};
-
-const READ_CONTINUATION_NOTICE_RE =
-  /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
-  const contextWindowTokens = options?.modelContextWindowTokens;
-  if (
-    typeof contextWindowTokens !== "number" ||
-    !Number.isFinite(contextWindowTokens) ||
-    contextWindowTokens <= 0
-  ) {
-    return DEFAULT_READ_PAGE_MAX_BYTES;
-  }
-  const fromContext = Math.floor(
-    contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * ADAPTIVE_READ_CONTEXT_SHARE,
-  );
-  return clamp(fromContext, DEFAULT_READ_PAGE_MAX_BYTES, MAX_ADAPTIVE_READ_MAX_BYTES);
-}
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) {
@@ -99,277 +57,6 @@ function formatBytes(bytes: number): string {
     return `${Math.round(bytes / 1024)}KB`;
   }
   return `${bytes}B`;
-}
-
-function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
-  const content = Array.isArray(result.content) ? result.content : [];
-  const textBlocks = content
-    .map((block) => {
-      if (
-        block &&
-        typeof block === "object" &&
-        (block as { type?: unknown }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string"
-      ) {
-        return (block as { text: string }).text;
-      }
-      return undefined;
-    })
-    .filter((value): value is string => typeof value === "string");
-  if (textBlocks.length === 0) {
-    return undefined;
-  }
-  return textBlocks.join("\n");
-}
-
-function withToolResultText(
-  result: AgentToolResult<unknown>,
-  text: string,
-): AgentToolResult<unknown> {
-  const content = Array.isArray(result.content) ? result.content : [];
-  let replaced = false;
-  const nextContent: ToolContentBlock[] = content.map((block) => {
-    if (
-      !replaced &&
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text"
-    ) {
-      replaced = true;
-      return {
-        ...(block as TextContentBlock),
-        text,
-      };
-    }
-    return block;
-  });
-  if (replaced) {
-    return {
-      ...result,
-      content: nextContent as unknown as AgentToolResult<unknown>["content"],
-    };
-  }
-  const textBlock = { type: "text", text } as unknown as TextContentBlock;
-  return {
-    ...result,
-    content: [textBlock] as unknown as AgentToolResult<unknown>["content"],
-  };
-}
-
-function extractReadTruncationDetails(
-  result: AgentToolResult<unknown>,
-): ReadTruncationDetails | null {
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-  const truncation = (details as { truncation?: unknown }).truncation;
-  if (!truncation || typeof truncation !== "object") {
-    return null;
-  }
-  const record = truncation as Record<string, unknown>;
-  if (record.truncated !== true) {
-    return null;
-  }
-  const outputLinesRaw = record.outputLines;
-  const outputLines =
-    typeof outputLinesRaw === "number" && Number.isFinite(outputLinesRaw)
-      ? Math.max(0, Math.floor(outputLinesRaw))
-      : 0;
-  return {
-    truncated: true,
-    outputLines,
-    firstLineExceedsLimit: record.firstLineExceedsLimit === true,
-  };
-}
-
-function stripReadContinuationNotice(text: string): string {
-  return text.replace(READ_CONTINUATION_NOTICE_RE, "");
-}
-
-function stripReadTruncationContentDetails(
-  result: AgentToolResult<unknown>,
-): AgentToolResult<unknown> {
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return result;
-  }
-
-  const detailsRecord = details as Record<string, unknown>;
-  const truncationRaw = detailsRecord.truncation;
-  if (!truncationRaw || typeof truncationRaw !== "object") {
-    return result;
-  }
-
-  const truncation = truncationRaw as Record<string, unknown>;
-  if (!Object.prototype.hasOwnProperty.call(truncation, "content")) {
-    return result;
-  }
-
-  const { content: _content, ...restTruncation } = truncation;
-  return {
-    ...result,
-    details: {
-      ...detailsRecord,
-      truncation: restTruncation,
-    },
-  };
-}
-
-async function executeReadWithAdaptivePaging(params: {
-  base: AnyAgentTool;
-  toolCallId: string;
-  args: Record<string, unknown>;
-  signal?: AbortSignal;
-  maxBytes: number;
-}): Promise<AgentToolResult<unknown>> {
-  const userLimit = params.args.limit;
-  const hasExplicitLimit =
-    typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
-  if (hasExplicitLimit) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
-  }
-
-  const offsetRaw = params.args.offset;
-  let nextOffset =
-    typeof offsetRaw === "number" && Number.isFinite(offsetRaw) && offsetRaw > 0
-      ? Math.floor(offsetRaw)
-      : 1;
-  let firstResult: AgentToolResult<unknown> | null = null;
-  let aggregatedText = "";
-  let aggregatedBytes = 0;
-  let capped = false;
-  let continuationOffset: number | undefined;
-
-  for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
-    const pageArgs = { ...params.args, offset: nextOffset };
-    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
-    firstResult ??= pageResult;
-
-    const content = Array.isArray(pageResult.content) ? pageResult.content : [];
-    const hasMediaBlock = content.some(
-      (block) =>
-        block &&
-        typeof block === "object" &&
-        typeof (block as { type?: unknown }).type === "string" &&
-        ["image", "audio", "video"].includes((block as { type: string }).type),
-    );
-
-    if (hasMediaBlock) {return pageResult;}
-
-    const rawText = getToolResultText(pageResult);
-    if (typeof rawText !== "string") {
-      return pageResult;
-    }
-
-    const truncation = extractReadTruncationDetails(pageResult);
-    const canContinue =
-      Boolean(truncation?.truncated) &&
-      !truncation?.firstLineExceedsLimit &&
-      (truncation?.outputLines ?? 0) > 0 &&
-      page < MAX_ADAPTIVE_READ_PAGES - 1;
-    const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
-    const delimiter = aggregatedText ? "\n\n" : "";
-    const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
-
-    if (aggregatedText && aggregatedBytes + nextBytes > params.maxBytes) {
-      capped = true;
-      continuationOffset = nextOffset;
-      break;
-    }
-
-    aggregatedText += `${delimiter}${pageText}`;
-    aggregatedBytes += nextBytes;
-
-    if (!canContinue || !truncation) {
-      return withToolResultText(pageResult, aggregatedText);
-    }
-
-    nextOffset += truncation.outputLines;
-    continuationOffset = nextOffset;
-
-    if (aggregatedBytes >= params.maxBytes) {
-      capped = true;
-      break;
-    }
-  }
-
-  if (!firstResult) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
-  }
-
-  let finalText = aggregatedText;
-  if (capped && continuationOffset) {
-    finalText += `\n\n[Read output capped at ${formatBytes(params.maxBytes)} for this call. Use offset=${continuationOffset} to continue.]`;
-  }
-  return withToolResultText(firstResult, finalText);
-}
-
-function rewriteReadImageHeader(text: string, mimeType: string): string {
-  if (text.startsWith("Read image file [") && text.endsWith("]")) {
-    return `Read image file [${mimeType}]`;
-  }
-  return text;
-}
-
-async function normalizeReadImageResult(
-  result: AgentToolResult<unknown>,
-  filePath: string,
-): Promise<AgentToolResult<unknown>> {
-  const content = Array.isArray(result.content) ? result.content : [];
-
-  const image = content.find(
-    (b): b is ImageContentBlock =>
-      !!b &&
-      typeof b === "object" &&
-      (b as { type?: unknown }).type === "image" &&
-      typeof (b as { data?: unknown }).data === "string" &&
-      typeof (b as { mimeType?: unknown }).mimeType === "string",
-  );
-  if (!image) {
-    return result;
-  }
-
-  if (!image.data.trim()) {
-    throw new Error(`read: image payload is empty (${filePath})`);
-  }
-
-  const sniffed = await sniffMimeFromBase64(image.data);
-  if (!sniffed) {
-    return result;
-  }
-
-  if (!sniffed.startsWith("image/")) {
-    throw new Error(
-      `read: file looks like ${sniffed} but was treated as ${image.mimeType} (${filePath})`,
-    );
-  }
-
-  if (sniffed === image.mimeType) {
-    return result;
-  }
-
-  const nextContent = content.map((block) => {
-    if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
-      const b = block as ImageContentBlock & { mimeType: string };
-      return { ...b, mimeType: sniffed } satisfies ImageContentBlock;
-    }
-    if (
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string"
-    ) {
-      const b = block as TextContentBlock & { text: string };
-      return {
-        ...b,
-        text: rewriteReadImageHeader(b.text, sniffed),
-      } satisfies TextContentBlock;
-    }
-    return block;
-  });
-
-  return { ...result, content: nextContent };
 }
 
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
@@ -607,8 +294,8 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 }
 
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg"]);
-const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac", "opus"]);
-const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "avi", "mov", "mkv", "m4v"]);
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 
 function getImageMimeType(ext: string): string {
   if (ext === "svg") {return "image/svg+xml";}
@@ -620,7 +307,7 @@ type SandboxToolParams = {
   root: string;
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
-  imageSanitization?: ImageSanitizationLimits;
+  imageSanitization?: import("./image-sanitization.js").ImageSanitizationLimits;
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -677,7 +364,7 @@ export function createOpenClawReadTool(
 ): AnyAgentTool {
   return {
     ...base,
-    execute: async (toolCallId, params, signal) => {
+    execute: async (toolCallId, params, _signal) => {
       const normalized = normalizeToolParams(params);
       const record =
         normalized ??
@@ -685,14 +372,10 @@ export function createOpenClawReadTool(
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
 
       let rawPath = typeof record?.path === "string" ? record.path : ".";
-      rawPath = rawPath.replace(/[^\x00-\x7F]/g, "");
+      rawPath = rawPath.match(/[\x20-\x7E]/g)?.join('') || '';
 
       const rootDir = options?.root ? path.resolve(options.root) : process.cwd();
       
-      // SMART PATH RESOLUTION:
-      // 1. If path is absolute, use it directly
-      // 2. Otherwise resolve relative to rootDir
-      // 3. But also check if the absolute path exists (in case it was passed incorrectly)
       let inputPath: string;
       
       if (path.isAbsolute(rawPath)) {
@@ -701,11 +384,9 @@ export function createOpenClawReadTool(
         inputPath = path.resolve(rootDir, rawPath);
       }
       
-      // If file doesn't exist at resolved path, try alternative resolution
       try {
         await fs.access(inputPath);
-      } catch (err) {
-        // If the path contains workspace root but wasn't absolute, try to extract
+      } catch {
         const workspacePattern = new RegExp(`${rootDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(.+)`);
         const match = rawPath.match(workspacePattern);
         if (match) {
@@ -713,13 +394,12 @@ export function createOpenClawReadTool(
           try {
             await fs.access(alternativePath);
             inputPath = alternativePath;
-          } catch (e) {
+          } catch {
             // Keep original inputPath
           }
         }
       }
 
-      // 🔒 SECURITY: Validate sandbox boundary BEFORE any file operations
       try {
         await assertSandboxPath({ 
           filePath: inputPath, 
@@ -753,8 +433,6 @@ export function createOpenClawReadTool(
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
         const mediaUrl = `http://localhost:18791${inputPath}`;
-
-        // ... [Rest of media handling code remains exactly the same]
         
         if (IMAGE_EXTENSIONS.has(ext)) {
           const fileBuffer = await fs.readFile(inputPath);
@@ -786,10 +464,64 @@ export function createOpenClawReadTool(
               },
             ],
             details: { path: inputPath, size: fileBuffer.length },
-          } as any;
+          } as AgentToolResult<unknown>;
         }
 
-        // ... [Continue with audio, video, and text file handling]
+        if (AUDIO_EXTENSIONS.has(ext)) {
+          const fileBuffer = await fs.readFile(inputPath);
+          const mimeType = ext === "mp3" ? "audio/mpeg" : ext === "wav" ? "audio/wav" : "audio/ogg";
+          return {
+            toolCallId,
+            content: [
+              {
+                type: "audio",
+                data: fileBuffer.toString("base64"),
+                mimeType: mimeType,
+              },
+              {
+                type: "text",
+                text: `🎵 [${fileName}](${mediaUrl})`,
+              },
+            ],
+            details: { path: inputPath, size: fileBuffer.length },
+          } as AgentToolResult<unknown>;
+        }
+
+        if (VIDEO_EXTENSIONS.has(ext)) {
+          const fileBuffer = await fs.readFile(inputPath);
+          const mimeType = ext === "mp4" ? "video/mp4" : ext === "webm" ? "video/webm" : "video/quicktime";
+          return {
+            toolCallId,
+            content: [
+              {
+                type: "video",
+                data: fileBuffer.toString("base64"),
+                mimeType: mimeType,
+              },
+              {
+                type: "text",
+                text: `🎬 [${fileName}](${mediaUrl})`,
+              },
+            ],
+            details: { path: inputPath, size: fileBuffer.length },
+          } as AgentToolResult<unknown>;
+        }
+
+        const fileBuffer = await fs.readFile(inputPath, "utf-8");
+        const maxChars = (options?.modelContextWindowTokens || 100000) * 4;
+        let text = fileBuffer;
+        let truncated = false;
+
+        if (text.length > maxChars) {
+          text = text.slice(0, maxChars) + `\n\n[Truncated: File is ${formatBytes(fileBuffer.length)}]`;
+          truncated = true;
+        }
+
+        return {
+          toolCallId,
+          content: [{ type: "text", text }],
+          details: { path: inputPath, size: fileBuffer.length, truncated },
+        };
         
       } catch (err) {
         const error = err as Error;

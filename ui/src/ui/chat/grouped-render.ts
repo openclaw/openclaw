@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { ifDefined } from "lit/directives/if-defined.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -36,7 +35,7 @@ import {
   renderToolCard,
   renderToolPreview,
 } from "./tool-cards.ts";
-import { setupResizeHandles, getStoredMessageSize, ResizeDirection } from "./message-resize.ts";
+import { setupResizeHandles, getStoredMessageSize } from "./message-resize.ts";
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
@@ -98,7 +97,10 @@ function getDetailsState(id: string): boolean {
 function generateDetailsId(message: unknown, index: number): string {
   const m = message as Record<string, unknown>;
   const id = m.id || m.messageId || m.timestamp;
-  return `tool-${id}-${index}`;
+  // Convert id to string safely
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
+  const idString = id ? (typeof id === 'object' ? JSON.stringify(id) : String(id)) : 'unknown';
+  return `tool-${idString}-${index}`;
 }
 
 function extractImages(message: unknown): ImageBlock[] {
@@ -693,10 +695,6 @@ function renderMessageImages(images: ImageBlock[]) {
     return nothing;
   }
 
-  const openImage = (url: string) => {
-    openExternalUrlSafe(url, { allowDataImage: true });
-  };
-
   return html`
     <div class="chat-message-images">
       ${images.map(
@@ -853,9 +851,7 @@ function renderCollapsedToolCards(
   toolCards: ToolCard[],
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
-  const calls = toolCards.filter((c) => c.kind === "call");
-  const results = toolCards.filter((c) => c.kind === "result");
-  const totalTools = Math.max(calls.length, results.length) || toolCards.length;
+  const totalTools = toolCards.length;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const summaryLabel =
     toolNames.length <= 3
@@ -1389,8 +1385,6 @@ function renderGroupedMessage(
   }
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
-  const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const toolSummaryLabel =
     toolNames.length <= 3
@@ -1412,8 +1406,10 @@ function renderGroupedMessage(
     ? `width: ${storedSize.width}px;`
     : '';
   
-  const resizeRef = (el: HTMLElement | undefined) => {
+  const resizeRef = (el: Element | undefined) => {
     if (!isResizable || !el) {return;}
+    // Ensure it's an HTMLElement before proceeding
+    if (!(el instanceof HTMLElement)) {return;}
     if (el.hasAttribute('data-resize-initialized')) {return;}
     el.setAttribute('data-resize-initialized', 'true');
     setTimeout(() => {

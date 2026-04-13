@@ -1078,6 +1078,14 @@
         }
       }
     },
+    "download_video": {
+      "emoji": "📹",
+      "title": "Download Video",
+      "detailKeys": [
+        "url",
+        "quality"
+      ]
+    },
     "pdf": {
       "emoji": "📑",
       "title": "PDF",

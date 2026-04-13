@@ -4,10 +4,10 @@ import type {
   AgentToolUpdateCallback
 } from "@mariozechner/pi-agent-core";
 
-// Use `any` for the schema type to bypass the constraint
-export type AnyAgentTool<TDetails = any> = AgentTool<any, TDetails>;
+// Use `unknown` for the schema type to bypass the constraint
+export type AnyAgentTool<TDetails = unknown> = AgentTool<unknown, TDetails>;
 
-export type AgentToolResult<TDetails = any> = CoreAgentToolResult<TDetails>;
+export type AgentToolResult<TDetails = unknown> = CoreAgentToolResult<TDetails>;
 
 // Your working content block types
 export type ImageContentBlock = {

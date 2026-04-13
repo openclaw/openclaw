@@ -25,7 +25,9 @@ const YTDLP_URLS: Record<string, string> = {
 async function downloadFile(url: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
     function doGet(currentUrl: string, redirectsLeft: number): void {
-      if (redirectsLeft <= 0) return reject(new Error(`Too many redirects: ${url}`));
+      if (redirectsLeft <= 0) {
+        return reject(new Error(`Too many redirects: ${url}`));
+      }
 
       https.get(currentUrl, (response) => {
         // Handle Redirects
@@ -76,7 +78,9 @@ async function ensureYtDlp(): Promise<string> {
     return ytDlpPath;
   } catch {
     const url = YTDLP_URLS[process.platform];
-    if (!url) throw new Error(`Unsupported platform: ${process.platform}`);
+    if (!url) {
+      throw new Error(`Unsupported platform: ${process.platform}`);
+    }
     await downloadFile(url, ytDlpPath);
     return ytDlpPath;
   }
@@ -98,9 +102,15 @@ async function findWorkspaceFolder(): Promise<string> {
   let currentPath = path.resolve(process.cwd());
   const root = path.parse(currentPath).root;
   while (currentPath !== root) {
-    if (path.basename(currentPath) === 'workspace') return currentPath;
+    if (path.basename(currentPath) === 'workspace') {
+      return currentPath;
+    }
     const sub = path.join(currentPath, 'workspace');
-    try { if ((await fs.stat(sub)).isDirectory()) return sub; } catch {}
+    try { 
+      if ((await fs.stat(sub)).isDirectory()) {
+        return sub;
+      }
+    } catch {}
     currentPath = path.dirname(currentPath);
   }
   const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
@@ -124,27 +134,34 @@ export const downloadVideoTool = {
     },
     required: ["url"]
   },
-  execute: async (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): Promise<AgentToolResult<unknown>> => {
+  execute: async (toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): Promise<AgentToolResult<unknown>> => {
     try {
       await ensureFfmpeg();
       const ytDlpPath = await ensureYtDlp();
       const workspaceRoot = await findWorkspaceFolder();
 
+      const typedParams = params as Record<string, unknown>;
       let formatSelector = "best[height<=1080]";
-      if (params.quality === "720") formatSelector = "best[height<=720]";
-      else if (params.quality === "best") formatSelector = "best";
-      else if (params.quality === "worst") formatSelector = "worst";
-      else if (params.quality && params.quality.includes("[")) formatSelector = params.quality;
+      if (typedParams.quality === "720") {
+        formatSelector = "best[height<=720]";
+      } else if (typedParams.quality === "best") {
+        formatSelector = "best";
+      } else if (typedParams.quality === "worst") {
+        formatSelector = "worst";
+      } else if (typedParams.quality && typeof typedParams.quality === "string" && typedParams.quality.includes("[")) {
+        formatSelector = typedParams.quality;
+      }
 
-      const { stdout: rawTitle } = await execFileAsync(ytDlpPath, ['--get-title', params.url]);
+      const { stdout: rawTitle } = await execFileAsync(ytDlpPath, ['--get-title', typedParams.url as string]);
       const sanitized = rawTitle.trim().replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
       const outputTemplate = `${sanitized}.%(ext)s`;
 
       if (onUpdate) {
-        await onUpdate({ 
-          content: [{ type: "text", text: `Downloading in ${params.quality || '1080p'}...` }],
-          details: { status: "downloading", quality: params.quality || '1080' }
-        });
+          const qualityStr = typeof typedParams.quality === 'string' ? typedParams.quality : '1080';
+          onUpdate({
+            content: [{ type: "text", text: `Downloading in ${qualityStr}p...` }],
+            details: { status: "downloading", quality: qualityStr }
+          });
       }
 
       await execFileAsync(ytDlpPath, [
@@ -153,13 +170,15 @@ export const downloadVideoTool = {
         '--restrict-filenames',
         '--force-overwrites',
         '-o', outputTemplate,
-        params.url
+        typedParams.url as string
       ], { cwd: workspaceRoot, timeout: 300000 });
 
       const files = await fs.readdir(workspaceRoot);
       const downloadedFile = files.find(f => f.startsWith(sanitized) && !f.endsWith('.part'));
 
-      if (!downloadedFile) throw new Error("Verification failed: file not found.");
+      if (!downloadedFile) {
+        throw new Error("Verification failed: file not found.");
+      }
 
       const finalPath = path.join(workspaceRoot, downloadedFile);
       const stats = await fs.stat(finalPath);
@@ -181,10 +200,11 @@ export const downloadVideoTool = {
           sizeMB: (stats.size / 1e6).toFixed(2) 
         }
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const error = err as Error;
       return {
-        content: [{ type: "text", text: `❌ Error: ${err.message}` }],
-        details: { error: err.message, status: "failed" }
+        content: [{ type: "text", text: `❌ Error: ${error.message}` }],
+        details: { error: error.message, status: "failed" }
       };
     }
   }
