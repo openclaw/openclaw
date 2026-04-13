@@ -88,10 +88,10 @@ export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
         return;
       } // timed out — keep last output
 
-      if (code === 0 && stdout.length > 0) {
+      if (code === 0) {
         lastOutput = stdout;
-        opts.onOutput(stdout);
-      } else if (code !== 0 && lastOutput.length > 0) {
+        opts.onOutput(stdout); // empty string clears the display
+      } else if (lastOutput.length > 0) {
         // Non-zero exit: keep displaying last good output
         opts.onOutput(lastOutput);
       }
