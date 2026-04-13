@@ -480,6 +480,16 @@ export function parseCliJsonl(
         if (!type || type.includes("message")) {
           texts.push(item.text);
         }
+        continue;
+      }
+
+      const messageText =
+        collectCliText(parsed.message) ||
+        collectCliText(parsed.content) ||
+        collectCliText(parsed.result) ||
+        collectCliText(parsed.response);
+      if (messageText.trim()) {
+        texts.push(messageText.trim());
       }
     }
   }

@@ -475,6 +475,87 @@ describe("runCliAgent spawn path", () => {
     expect(promptFileText).toBe("You are a helpful assistant.");
   });
 
+  it("prefers Codex output-last-message artifacts over stdout for the final reply", async () => {
+    let artifactPath = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const artifactArgIndex = input.argv?.indexOf("--output-last-message") ?? -1;
+      expect(artifactArgIndex).toBeGreaterThanOrEqual(0);
+      artifactPath = input.argv?.[artifactArgIndex + 1] ?? "";
+      expect(artifactPath).toBeTruthy();
+      await fs.writeFile(artifactPath, "ARTIFACT_WINS_20260413", "utf-8");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: JSON.stringify({
+          thread_id: "thread-123",
+          type: "message",
+          content: [{ type: "output_text", text: "STDOUT_ONLY_20260413" }],
+        }),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-codex-output-last-message",
+        backend: {
+          output: "jsonl",
+        },
+      }),
+      "thread-123",
+    );
+
+    expect(result.text).toBe("ARTIFACT_WINS_20260413");
+    expect(result.sessionId).toBe("thread-123");
+    await expect(fs.access(artifactPath)).rejects.toThrow();
+  });
+
+  it("falls back to Codex stdout when the output-last-message artifact is empty", async () => {
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const artifactArgIndex = input.argv?.indexOf("--output-last-message") ?? -1;
+      expect(artifactArgIndex).toBeGreaterThanOrEqual(0);
+      const artifactPath = input.argv?.[artifactArgIndex + 1] ?? "";
+      await fs.writeFile(artifactPath, "", "utf-8");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: JSON.stringify({
+          thread_id: "thread-123",
+          type: "message",
+          content: [{ type: "output_text", text: "STDOUT_ONLY_20260413" }],
+        }),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-codex-output-last-message-empty",
+        backend: {
+          output: "jsonl",
+        },
+      }),
+      "thread-123",
+    );
+
+    expect(result.text).toBe("STDOUT_ONLY_20260413");
+    expect(result.sessionId).toBe("thread-123");
+  });
+
   it("cancels the managed CLI run when the abort signal fires", async () => {
     const abortController = new AbortController();
     let resolveWait!: (value: {
