@@ -111,19 +111,23 @@ case "$command" in
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --integration-enabled)
-          integration_enabled="${2:-}"
+          [[ $# -ge 2 ]] || err "--integration-enabled requires a value"
+          integration_enabled="$2"
           shift 2
           ;;
         --remote-control-enabled)
-          remote_control_enabled="${2:-}"
+          [[ $# -ge 2 ]] || err "--remote-control-enabled requires a value"
+          remote_control_enabled="$2"
           shift 2
           ;;
         --monitoring-enabled)
-          monitoring_enabled="${2:-}"
+          [[ $# -ge 2 ]] || err "--monitoring-enabled requires a value"
+          monitoring_enabled="$2"
           shift 2
           ;;
         --ui-badge-enabled)
-          ui_badge_enabled="${2:-}"
+          [[ $# -ge 2 ]] || err "--ui-badge-enabled requires a value"
+          ui_badge_enabled="$2"
           shift 2
           ;;
         *)
