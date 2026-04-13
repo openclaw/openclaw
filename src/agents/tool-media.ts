@@ -6,12 +6,15 @@ export async function sanitizeToolResultMedia(
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
   
-  // Check if this is audio or video content
-  // @ts-ignore - types don't include audio/video but runtime might
-  const hasMedia = content.some(block => 
-    block && typeof block === 'object' && 
-    'type' in block && (block.type === 'audio' || block.type === 'video')
-  );
+  // Check if this is audio or video content (runtime check, bypass type errors)
+  const hasMedia = content.some(block => {
+    if (!block || typeof block !== 'object') {
+      return false;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const blockType = (block as any).type;
+    return blockType === 'audio' || blockType === 'video';
+  });
   
   if (hasMedia) {
     // Return untouched - don't sanitize audio/video

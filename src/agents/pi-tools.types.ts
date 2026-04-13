@@ -1,10 +1,11 @@
-import type { 
-  AgentTool, 
-  AgentToolResult as CoreAgentToolResult, 
-  AgentToolUpdateCallback
+import type {
+  AgentTool,
+  AgentToolResult as CoreAgentToolResult,
+  AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 
-// Use `unknown` for the schema type to bypass the constraint
+// Use `any` for the schema type to bypass the constraint
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyAgentTool<TDetails = unknown> = AgentTool<any, TDetails>;
 
 export type AgentToolResult<TDetails = unknown> = CoreAgentToolResult<TDetails>;
