@@ -1,11 +1,11 @@
-import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
@@ -177,7 +177,7 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  const channelPlugin = getLoadedChannelPlugin(channel);
+  const channelPlugin = getLoadedChannelPluginForRead(channel);
   const resolvedAccountId = normalizeAccountId(accountId);
   const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
     cfg,

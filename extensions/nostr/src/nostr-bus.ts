@@ -617,15 +617,13 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         }
       }
 
-      // Mark seen AFTER verify (don't cache invalid IDs)
-      markSeen();
-
       // Decrypt the message
       let plaintext: string;
       try {
         plaintext = decrypt(sk, event.pubkey, event.content);
         metrics.emit("decrypt.success");
       } catch (err) {
+        markSeen();
         metrics.emit("decrypt.failure");
         metrics.emit("event.rejected.decrypt_failed");
         onError?.(err as Error, `decrypt from ${event.pubkey}`);
@@ -633,6 +631,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
 
       if (Buffer.byteLength(plaintext, "utf8") > guardPolicy.maxPlaintextBytes) {
+        markSeen();
         metrics.emit("event.rejected.oversized_plaintext");
         return;
       }
@@ -642,6 +641,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         eventId: event.id,
         createdAt: event.created_at,
       });
+
+      // Only cache successful deliveries so handler failures can retry.
+      markSeen();
 
       // Mark as processed
       metrics.emit("event.processed");

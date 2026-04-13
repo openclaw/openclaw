@@ -6,8 +6,8 @@ const mocks = vi.hoisted(() => ({
   getLoadedChannelPlugin: vi.fn(),
 }));
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: mocks.getLoadedChannelPlugin,
+vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+  getLoadedChannelPluginForRead: mocks.getLoadedChannelPlugin,
 }));
 
 describe("tryResolveLoadedOutboundTarget", () => {
