@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/agent-p2p",
+  "version": "0.1.0",
+  "description": "Agent P2P channel plugin for OpenClaw",
+  "type": "module",
+  "main": "./api.js",
+  "types": "./api.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  },
+  "peerDependencies": {
+    "openclaw": "^0.x"
+  }
+}
