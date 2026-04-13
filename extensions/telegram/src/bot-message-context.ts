@@ -27,6 +27,7 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { getTopicName, updateTopicName } from "./topic-name-cache.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
@@ -140,6 +141,46 @@ export const buildTelegramMessageContext = async ({
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+
+  // --- Topic name cache: learn names from service messages & reply_to_message ---
+  if (isForum && resolvedThreadId != null) {
+    const ftCreated = msg.forum_topic_created;
+    const ftEdited = msg.forum_topic_edited;
+    const ftClosed = msg.forum_topic_closed;
+    const ftReopened = msg.forum_topic_reopened;
+
+    if (ftCreated?.name) {
+      updateTopicName(chatId, resolvedThreadId, {
+        name: ftCreated.name,
+        iconColor: ftCreated.icon_color,
+        iconCustomEmojiId: ftCreated.icon_custom_emoji_id,
+        closed: false,
+      });
+    } else if (ftEdited?.name) {
+      updateTopicName(chatId, resolvedThreadId, {
+        name: ftEdited.name,
+        iconCustomEmojiId: ftEdited.icon_custom_emoji_id,
+      });
+    } else if (ftClosed) {
+      updateTopicName(chatId, resolvedThreadId, { closed: true });
+    } else if (ftReopened) {
+      updateTopicName(chatId, resolvedThreadId, { closed: false });
+    }
+
+    // Seed from reply_to_message.forum_topic_created (creation-time name)
+    // only when no entry exists yet — avoids overwriting a rename.
+    if (!getTopicName(chatId, resolvedThreadId)) {
+      const replyFtCreated = msg.reply_to_message?.forum_topic_created;
+      if (replyFtCreated?.name) {
+        updateTopicName(chatId, resolvedThreadId, {
+          name: replyFtCreated.name,
+          iconColor: replyFtCreated.icon_color,
+          iconCustomEmojiId: replyFtCreated.icon_custom_emoji_id,
+        });
+      }
+    }
+  }
+
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
   // Use direct config dmPolicy override if available for DMs
@@ -505,6 +546,10 @@ export const buildTelegramMessageContext = async ({
     dmAllowFrom,
     effectiveGroupAllow,
     commandAuthorized: bodyResult.commandAuthorized,
+    topicName:
+      isForum && resolvedThreadId != null
+        ? getTopicName(chatId, resolvedThreadId)
+        : undefined,
     sessionRuntime,
   });
 
