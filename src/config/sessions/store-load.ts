@@ -66,6 +66,22 @@ export function rememberLoadedSessionStoreSnapshot(params: {
   });
 }
 
+export function copyLoadedSessionStoreSnapshot(params: {
+  source: Record<string, SessionEntry> | undefined;
+  target: Record<string, SessionEntry>;
+}): void {
+  const snapshot = getLoadedSessionStoreSnapshot(params.source);
+  if (!snapshot) {
+    forgetLoadedSessionStoreSnapshot(params.target);
+    return;
+  }
+  loadedSessionStoreSnapshots.set(params.target, {
+    serializedFromDisk: snapshot.serializedFromDisk,
+    serializedDigest: snapshot.serializedDigest,
+    acpByKey: new Map(snapshot.acpByKey),
+  });
+}
+
 export function getLoadedSessionStoreSnapshot(
   store: Record<string, SessionEntry> | undefined,
 ): LoadedSessionStoreSnapshot | undefined {

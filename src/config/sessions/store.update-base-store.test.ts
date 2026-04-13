@@ -193,4 +193,77 @@ describe("session store base snapshot reuse", () => {
     const saved = loadSessionStore(storePath, { skipCache: true });
     expect(saved["session:1"].label).toBe("updated-large-twice");
   });
+
+  it("does not persist unrelated shared base-store mutations while an update is in flight", async () => {
+    await saveSessionStore(storePath, createStore(), { skipMaintenance: true });
+
+    const baseStore = loadSessionStore(storePath, { skipCache: true });
+    let releaseMutator: (() => void) | undefined;
+    let markMutatorStarted: (() => void) | undefined;
+    const mutatorPaused = new Promise<void>((resolve) => {
+      releaseMutator = resolve;
+    });
+    const mutatorStarted = new Promise<void>((resolve) => {
+      markMutatorStarted = resolve;
+    });
+
+    const updatePromise = updateSessionStore(
+      storePath,
+      async (store) => {
+        markMutatorStarted?.();
+        store["session:1"] = {
+          ...store["session:1"],
+          label: "updated-in-mutator",
+        };
+        await mutatorPaused;
+      },
+      { skipMaintenance: true, baseStore },
+    );
+
+    await mutatorStarted;
+    baseStore["session:2"] = {
+      ...baseStore["session:2"],
+      label: "unrelated-out-of-band-change",
+    };
+    releaseMutator?.();
+
+    await updatePromise;
+
+    const saved = loadSessionStore(storePath, { skipCache: true });
+    expect(saved["session:1"].label).toBe("updated-in-mutator");
+    expect(saved["session:2"].label).toBe("stable");
+    expect(baseStore["session:1"].label).toBe("updated-in-mutator");
+    expect(baseStore["session:2"].label).toBe("stable");
+  });
+
+  it("falls back to reparsing when baseStore drifted before the update started", async () => {
+    await saveSessionStore(storePath, createStore(), { skipMaintenance: true });
+
+    const baseStore = loadSessionStore(storePath, { skipCache: true });
+    baseStore["session:2"] = {
+      ...baseStore["session:2"],
+      label: "unrelated-preexisting-change",
+    };
+
+    const parseSpy = vi.spyOn(JSON, "parse");
+    parseSpy.mockClear();
+
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        store["session:1"] = {
+          ...store["session:1"],
+          label: "updated-after-base-drift",
+        };
+      },
+      { skipMaintenance: true, baseStore },
+    );
+
+    expect(parseSpy).toHaveBeenCalled();
+    parseSpy.mockRestore();
+
+    const saved = loadSessionStore(storePath, { skipCache: true });
+    expect(saved["session:1"].label).toBe("updated-after-base-drift");
+    expect(saved["session:2"].label).toBe("stable");
+  });
 });

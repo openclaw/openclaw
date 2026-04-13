@@ -29,6 +29,7 @@ import {
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import {
+  copyLoadedSessionStoreSnapshot,
   forgetLoadedSessionStoreSnapshot,
   getLoadedSessionStoreSnapshot,
   isSessionStoreObjectCacheEligible,
@@ -259,6 +260,19 @@ function tryReuseLoadedSessionStoreSnapshot(params: {
     return undefined;
   }
   try {
+    // Reject reuse if the caller-owned store has drifted from the loaded snapshot.
+    const currentBaseStoreSerialized = JSON.stringify(params.baseStore, null, 2);
+    if (snapshot.serializedFromDisk !== undefined) {
+      if (currentBaseStoreSerialized !== snapshot.serializedFromDisk) {
+        return undefined;
+      }
+    } else if (
+      createHash("sha256").update(currentBaseStoreSerialized).digest("hex") !==
+      snapshot.serializedDigest
+    ) {
+      return undefined;
+    }
+
     const serialized = fs.readFileSync(params.storePath, "utf-8");
     if (snapshot.serializedFromDisk !== undefined) {
       if (serialized !== snapshot.serializedFromDisk) {
@@ -272,6 +286,20 @@ function tryReuseLoadedSessionStoreSnapshot(params: {
     return params.baseStore;
   } catch {
     return undefined;
+  }
+}
+
+function syncSessionStoreInPlace(params: {
+  target: Record<string, SessionEntry>;
+  source: Record<string, SessionEntry>;
+}): void {
+  for (const key of Object.keys(params.target)) {
+    if (!(key in params.source)) {
+      delete params.target[key];
+    }
+  }
+  for (const [key, entry] of Object.entries(params.source)) {
+    params.target[key] = structuredClone(entry);
   }
 }
 
@@ -542,7 +570,16 @@ export async function updateSessionStore<T>(
       storePath,
       baseStore: opts?.baseStore,
     });
-    const store = reusedBaseStore ?? loadSessionStore(storePath, { skipCache: true });
+    // Work on a clone so unrelated mutations on a shared baseStore object do not leak into saves.
+    const store = reusedBaseStore
+      ? structuredClone(reusedBaseStore)
+      : loadSessionStore(storePath, { skipCache: true });
+    if (reusedBaseStore) {
+      copyLoadedSessionStoreSnapshot({
+        source: reusedBaseStore,
+        target: store,
+      });
+    }
     const previousAcpByKey =
       getLoadedSnapshotAcpMetadata(reusedBaseStore) ?? collectAcpMetadataSnapshot(store);
     try {
@@ -553,6 +590,16 @@ export async function updateSessionStore<T>(
         allowDropSessionKeys: opts?.allowDropAcpMetaSessionKeys,
       });
       await saveSessionStoreUnlocked(storePath, store, opts);
+      if (reusedBaseStore) {
+        syncSessionStoreInPlace({
+          target: reusedBaseStore,
+          source: store,
+        });
+        copyLoadedSessionStoreSnapshot({
+          source: store,
+          target: reusedBaseStore,
+        });
+      }
       return result;
     } catch (error) {
       forgetLoadedSessionStoreSnapshot(store);
