@@ -379,8 +379,8 @@ describe("loadModelCatalog", () => {
 
   it("filters catalog to configured providers when models.mode is 'replace'", async () => {
     mockPiDiscoveryModels([
-      { id: "gpt-4.1", provider: "openai", name: "GPT-4.1" },
-      { id: "claude-sonnet-4", provider: "anthropic", name: "Claude Sonnet 4" },
+      { id: "gpt-5.4", provider: "openai", name: "GPT-5.4" },
+      { id: "claude-sonnet-4-6", provider: "anthropic", name: "Claude Sonnet 4.6" },
       { id: "gemini-3-pro", provider: "google", name: "Gemini 3 Pro" },
     ]);
 
@@ -392,8 +392,8 @@ describe("loadModelCatalog", () => {
             baseUrl: "https://api.anthropic.com",
             models: [
               {
-                id: "claude-sonnet-4",
-                name: "Claude Sonnet 4",
+                id: "claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
                 reasoning: true,
                 input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -410,7 +410,7 @@ describe("loadModelCatalog", () => {
 
     // Only anthropic models should survive.
     expect(result).toContainEqual(
-      expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4" }),
+      expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4-6" }),
     );
     expect(result).not.toContainEqual(expect.objectContaining({ provider: "openai" }));
     expect(result).not.toContainEqual(expect.objectContaining({ provider: "google" }));
@@ -418,8 +418,8 @@ describe("loadModelCatalog", () => {
 
   it("returns full catalog when models.mode is 'merge'", async () => {
     mockPiDiscoveryModels([
-      { id: "gpt-4.1", provider: "openai", name: "GPT-4.1" },
-      { id: "claude-sonnet-4", provider: "anthropic", name: "Claude Sonnet 4" },
+      { id: "gpt-5.4", provider: "openai", name: "GPT-5.4" },
+      { id: "claude-sonnet-4-6", provider: "anthropic", name: "Claude Sonnet 4.6" },
     ]);
 
     const cfg = {
@@ -430,8 +430,8 @@ describe("loadModelCatalog", () => {
             baseUrl: "https://api.anthropic.com",
             models: [
               {
-                id: "claude-sonnet-4",
-                name: "Claude Sonnet 4",
+                id: "claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
                 reasoning: true,
                 input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -448,9 +448,9 @@ describe("loadModelCatalog", () => {
 
     // Both providers should be present in merge mode.
     expect(result).toContainEqual(
-      expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4" }),
+      expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4-6" }),
     );
-    expect(result).toContainEqual(expect.objectContaining({ provider: "openai", id: "gpt-4.1" }));
+    expect(result).toContainEqual(expect.objectContaining({ provider: "openai", id: "gpt-5.4" }));
   });
 
   it("matches models across canonical provider aliases", () => {
