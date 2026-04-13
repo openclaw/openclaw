@@ -57,6 +57,22 @@ function buildRequestUrl(
   return new URL(requestUrl ?? "/", `http://${requestHost ?? fallbackHost}`);
 }
 
+function resolveForwardedClientIp(request: http.IncomingMessage): string | undefined {
+  const forwardedFor = getHeader(request.headers, "x-forwarded-for");
+  if (forwardedFor) {
+    const firstHop = forwardedFor
+      .split(",")
+      .map((part) => part.trim())
+      .find(Boolean);
+    if (firstHop) {
+      return firstHop;
+    }
+  }
+
+  const realIp = getHeader(request.headers, "x-real-ip")?.trim();
+  return realIp || undefined;
+}
+
 function normalizeWebhookResponse(parsed: {
   statusCode?: number;
   providerResponseHeaders?: Record<string, string>;
@@ -132,6 +148,26 @@ export class VoiceCallWebhookServer {
     this.pendingDisconnectHangups.delete(providerCallId);
   }
 
+  private resolveMediaStreamClientIp(request: http.IncomingMessage): string | undefined {
+    const remoteIp = request.socket.remoteAddress ?? undefined;
+    const trustedProxyIPs = this.config.webhookSecurity.trustedProxyIPs.filter(Boolean);
+    const fromTrustedProxy =
+      trustedProxyIPs.length === 0 || (remoteIp ? trustedProxyIPs.includes(remoteIp) : false);
+    const shouldTrustForwardingHeaders =
+      (this.config.webhookSecurity.trustForwardingHeaders ||
+        this.config.webhookSecurity.allowedHosts.length > 0) &&
+      fromTrustedProxy;
+
+    if (shouldTrustForwardingHeaders) {
+      const forwardedIp = resolveForwardedClientIp(request);
+      if (forwardedIp) {
+        return forwardedIp;
+      }
+    }
+
+    return remoteIp;
+  }
+
   private shouldSuppressBargeInForInitialMessage(call: CallRecord | undefined): boolean {
     if (!call || call.direction !== "outbound") {
       return false;
@@ -202,6 +238,7 @@ export class VoiceCallWebhookServer {
       maxPendingConnections: streaming.maxPendingConnections,
       maxPendingConnectionsPerIp: streaming.maxPendingConnectionsPerIp,
       maxConnections: streaming.maxConnections,
+      resolveClientIp: (request) => this.resolveMediaStreamClientIp(request),
       shouldAcceptStream: ({ callId, token }) => {
         const call = this.manager.getCallByProviderCallId(callId);
         if (!call) {

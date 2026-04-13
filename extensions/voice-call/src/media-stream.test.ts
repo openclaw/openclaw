@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
@@ -257,6 +258,42 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("uses resolved client IPs for per-IP pending limits", async () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      preStartTimeoutMs: 5_000,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 1,
+      resolveClientIp: (request) => String(request.headers["x-forwarded-for"] ?? ""),
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const first = new WebSocket(server.url, {
+        headers: { "x-forwarded-for": "198.51.100.10" },
+      });
+      await withTimeout(new Promise((resolve) => first.once("open", resolve)));
+
+      const second = new WebSocket(server.url, {
+        headers: { "x-forwarded-for": "203.0.113.20" },
+      });
+      await withTimeout(new Promise((resolve) => second.once("open", resolve)));
+
+      expect(first.readyState).toBe(WebSocket.OPEN);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+
+      const firstClosed = waitForClose(first);
+      const secondClosed = waitForClose(second);
+      first.close();
+      second.close();
+      await firstClosed;
+      await secondClosed;
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects upgrades when max connection cap is reached", async () => {
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),
@@ -284,6 +321,70 @@ describe("MediaStreamHandler security hardening", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("counts in-flight upgrades against the max connection cap", () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      maxConnections: 2,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 10,
+    });
+
+    const fakeWss = {
+      clients: new Set([{}]),
+      handleUpgrade: vi.fn(),
+      emit: vi.fn(),
+      on: vi.fn(),
+    };
+    let upgradeCallback: ((ws: WebSocket) => void) | null = null;
+    fakeWss.handleUpgrade.mockImplementation(
+      (
+        _request: IncomingMessage,
+        _socket: unknown,
+        _head: Buffer,
+        callback: (ws: WebSocket) => void,
+      ) => {
+        upgradeCallback = callback;
+      },
+    );
+
+    (
+      handler as unknown as {
+        wss: typeof fakeWss;
+      }
+    ).wss = fakeWss;
+
+    const firstSocket = { write: vi.fn(), destroy: vi.fn() };
+    handler.handleUpgrade(
+      { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
+      firstSocket as never,
+      Buffer.alloc(0),
+    );
+
+    const secondSocket = { write: vi.fn(), destroy: vi.fn() };
+    handler.handleUpgrade(
+      { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
+      secondSocket as never,
+      Buffer.alloc(0),
+    );
+
+    expect(fakeWss.handleUpgrade).toHaveBeenCalledTimes(1);
+    expect(secondSocket.write).toHaveBeenCalledOnce();
+    expect(secondSocket.destroy).toHaveBeenCalledOnce();
+
+    expect(upgradeCallback).not.toBeNull();
+    const completeUpgrade = upgradeCallback;
+    if (typeof completeUpgrade !== "function") {
+      throw new Error("Expected upgrade callback to be registered");
+    }
+    completeUpgrade({} as WebSocket);
+    expect(fakeWss.emit).toHaveBeenCalledWith(
+      "connection",
+      expect.anything(),
+      expect.objectContaining({ socket: { remoteAddress: "127.0.0.1" } }),
+    );
   });
 
   it("clears pending state after valid start", async () => {
