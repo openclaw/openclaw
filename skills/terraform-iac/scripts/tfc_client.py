@@ -1736,7 +1736,10 @@ data "aws_ssoadmin_instances" "this" {{}}
     guardduty_block = ""
     if enable_gd:
         guardduty_block = f"""
-# GuardDuty: management account enables detector and delegates admin to Audit
+# GuardDuty: management account creates the detector and delegates admin to Audit.
+# IMPORTANT: GuardDuty organization configuration must be applied from the
+# delegated-admin (Audit) workspace, after that workspace has created its own
+# detector and designated itself as delegated admin.
 resource "aws_guardduty_detector" "this" {{
   enable = true
   tags   = local.tags
@@ -1747,13 +1750,9 @@ resource "aws_guardduty_organization_admin_account" "audit" {{
   depends_on       = [aws_guardduty_detector.this]
 }}
 
-# NOTE: GuardDuty org configuration is intentionally omitted here.
-# Apply aws_guardduty_organization_configuration from the delegated admin
-# (Audit) account workspace, using that workspace's detector.
-#
-# The management workspace only creates the detector and assigns delegated admin.
-# The delegated-admin workspace must create aws_guardduty_detector first and
-# then aws_guardduty_organization_configuration with auto-enable enabled.
+# NOTE: aws_guardduty_organization_configuration is intentionally omitted here.
+# The Audit workspace must create aws_guardduty_detector first and then manage
+# aws_guardduty_organization_configuration with auto-enable enabled.
 """
 
     # Security Hub
