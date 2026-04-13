@@ -106,6 +106,10 @@ vi.mock("./server-tailscale.js", () => ({
 }));
 
 const { startGatewayPostAttachRuntime } = await import("./server-startup-post-attach.js");
+const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } =
+  await import("./server-startup-unavailable-methods.js");
+
+type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
@@ -127,44 +131,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
 
     await startGatewayPostAttachRuntime({
-      minimalTestGateway: false,
-      cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
-      bindHost: "127.0.0.1",
-      bindHosts: ["127.0.0.1"],
-      port: 18789,
-      tlsEnabled: false,
-      log: { info: vi.fn(), warn: vi.fn() },
-      isNixMode: false,
-      broadcast: vi.fn(),
-      tailscaleMode: "off",
-      resetOnExit: false,
-      controlUiBasePath: "/",
-      logTailscale: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
-      gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
-      pluginRegistry: {
-        plugins: [
-          { id: "beta", status: "loaded" },
-          { id: "alpha", status: "loaded" },
-          { id: "cold", status: "disabled" },
-          { id: "broken", status: "error" },
-        ],
-      } as never,
-      defaultWorkspaceDir: "/tmp/openclaw-workspace",
-      deps: {} as never,
-      startChannels: vi.fn(async () => undefined),
-      logHooks: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
-      logChannels: {
-        info: vi.fn(),
-        error: vi.fn(),
-      },
+      ...createPostAttachParams(),
       unavailableGatewayMethods,
     });
 
@@ -175,4 +142,78 @@ describe("startGatewayPostAttachRuntime", () => {
       expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
     );
   });
+
+  it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
+    let resumeChannels!: () => void;
+    const channelsReady = new Promise<void>((resolve) => {
+      resumeChannels = resolve;
+    });
+    const startChannels = vi.fn(async () => {
+      await channelsReady;
+    });
+    const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+
+    const startup = startGatewayPostAttachRuntime({
+      ...createPostAttachParams({ startChannels }),
+      unavailableGatewayMethods,
+    });
+
+    await vi.waitFor(() => {
+      expect(startChannels).toHaveBeenCalledTimes(1);
+    });
+
+    expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
+    expect(hoisted.startPluginServices).not.toHaveBeenCalled();
+
+    resumeChannels();
+    await startup;
+
+    expect([...unavailableGatewayMethods]).toEqual([]);
+    expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
+  });
 });
+
+function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): PostAttachParams {
+  return {
+    minimalTestGateway: false,
+    cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
+    bindHost: "127.0.0.1",
+    bindHosts: ["127.0.0.1"],
+    port: 18789,
+    tlsEnabled: false,
+    log: { info: vi.fn(), warn: vi.fn() },
+    isNixMode: false,
+    broadcast: vi.fn(),
+    tailscaleMode: "off",
+    resetOnExit: false,
+    controlUiBasePath: "/",
+    logTailscale: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+    gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
+    pluginRegistry: {
+      plugins: [
+        { id: "beta", status: "loaded" },
+        { id: "alpha", status: "loaded" },
+        { id: "cold", status: "disabled" },
+        { id: "broken", status: "error" },
+      ],
+    } as never,
+    defaultWorkspaceDir: "/tmp/openclaw-workspace",
+    deps: {} as never,
+    startChannels: vi.fn(async () => undefined),
+    logHooks: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+    logChannels: {
+      info: vi.fn(),
+      error: vi.fn(),
+    },
+    unavailableGatewayMethods: new Set<string>(),
+    ...overrides,
+  };
+}
