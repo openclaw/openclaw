@@ -170,7 +170,18 @@ export const McpToolsCallResultSchema = Type.Object(
 
 export const McpResourcesListParamsSchema = Type.Object(
   {
-    sessionKey: Type.Optional(Type.String()),
+    /**
+     * Reserved for future session-scoped resource isolation.
+     * Currently accepted and validated but not used — resources remain
+     * process-global. Accepted now so clients can send it without breaking
+     * when per-session scoping is added.
+     */
+    sessionKey: Type.Optional(
+      Type.String({
+        description:
+          "Reserved for future session-scoped resource isolation. Currently accepted but not used — resources are process-global.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -189,7 +200,18 @@ export const McpResourcesListResultSchema = Type.Object(
 export const McpResourcesReadParamsSchema = Type.Object(
   {
     uri: NonEmptyString,
-    sessionKey: Type.Optional(Type.String()),
+    /**
+     * Reserved for future session-scoped resource isolation.
+     * Currently accepted and validated but not used — resources remain
+     * process-global. Accepted now so clients can send it without breaking
+     * when per-session scoping is added.
+     */
+    sessionKey: Type.Optional(
+      Type.String({
+        description:
+          "Reserved for future session-scoped resource isolation. Currently accepted but not used — resources are process-global.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
