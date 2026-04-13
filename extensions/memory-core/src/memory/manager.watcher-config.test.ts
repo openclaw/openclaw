@@ -190,4 +190,114 @@ describe("memory watcher config", () => {
     expect(ignored?.(path.join(extraDir, "nested", "voice.WAV"))).toBe(false);
     expect(ignored?.(path.join(extraDir, "nested", "metadata.json"))).toBe(true);
   });
+
+  it("interval sync marks dirty even when watcher has stopped firing", async () => {
+    vi.useFakeTimers();
+    try {
+      workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-int-"));
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "memory", "notes.md"), "hello");
+
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+              sync: {
+                watch: true,
+                watchDebounceMs: 25,
+                intervalMinutes: 1,
+                onSessionStart: false,
+                onSearch: false,
+              },
+              query: { minScore: 0, hybrid: { enabled: false } },
+            },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      expect(result.manager).not.toBeNull();
+      manager = result.manager as unknown as MemoryIndexManager;
+
+      const internal = manager as unknown as { dirty: boolean; sources: Set<string> };
+
+      // After init, dirty is true. Simulate a completed sync clearing it,
+      // as would happen in normal operation once the first sync finishes.
+      internal.dirty = false;
+
+      // Simulate watcher death: dirty stays false because no file events fire.
+      // Without our fix, the interval callback would call sync() but
+      // shouldSyncMemory would skip syncMemoryFiles because dirty is false.
+
+      // Advance past the 1-minute interval.
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      // The interval callback should have set dirty = true before calling sync.
+      // sync() then clears it back to false after syncMemoryFiles runs.
+      // Either way, the key assertion is that dirty was set to true by the callback.
+      // Since sync is async and may not complete within the fake timer tick,
+      // we check that sources includes "memory" (precondition) and that
+      // the dirty flag was toggled — if sync completed it's false again,
+      // if sync is still pending it's true. Both prove the mark happened.
+      expect(internal.sources.has("memory")).toBe(true);
+
+      // Stronger assertion: spy on sync to confirm it was actually called
+      // with the dirty flag set. We can't easily spy on the abstract method
+      // after construction, so instead verify the flag is set by checking
+      // a second interval tick with a spy.
+      const syncSpy = vi.spyOn(manager as unknown as { sync: () => Promise<void> }, "sync");
+      syncSpy.mockResolvedValue(undefined);
+      internal.dirty = false;
+
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      expect(syncSpy).toHaveBeenCalled();
+      // dirty must have been set to true before sync was called
+      // (sync mock doesn't clear it, so it stays true)
+      expect(internal.dirty).toBe(true);
+
+      syncSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("registers an error handler on the watcher", async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-err-"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager as unknown as MemoryIndexManager;
+
+    expect(watchMock).toHaveBeenCalledTimes(1);
+    const mockWatcher = watchMock.mock.results[0]?.value as { on: ReturnType<typeof vi.fn> };
+    const onCalls = mockWatcher.on.mock.calls as Array<[string, unknown]>;
+    const registeredEvents = onCalls.map(([event]) => event);
+    expect(registeredEvents).toContain("error");
+  });
 });

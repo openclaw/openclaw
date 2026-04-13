@@ -68,8 +68,9 @@ export function isMemoryReadonlyDbError(err: unknown): boolean {
 }
 
 export function extractMemoryErrorReason(err: unknown): string {
-  if (err instanceof Error && err.message.trim()) {
-    return err.message;
+  const formattedMessage = formatErrorMessage(err);
+  if (formattedMessage.trim()) {
+    return formattedMessage;
   }
   if (err && typeof err === "object") {
     const record = err as Record<string, unknown>;

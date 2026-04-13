@@ -411,6 +411,9 @@ export abstract class MemoryManagerSyncOps {
     this.watcher.on("add", markDirty);
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
+    this.watcher.on("error", (err: unknown) => {
+      log.warn(`memory file watcher error: ${String(err)}`);
+    });
   }
 
   protected ensureSessionListener() {
@@ -618,8 +621,19 @@ export abstract class MemoryManagerSyncOps {
     if (!minutes || minutes <= 0 || this.intervalTimer) {
       return;
     }
+    // Skip interval sync when memory files are not enabled - session-only configs
+    // don't need periodic fallback since sessions have their own sync triggers
+    if (!this.sources.has("memory")) {
+      return;
+    }
     const ms = minutes * 60 * 1000;
     this.intervalTimer = setInterval(() => {
+      // Mark dirty so runSync actually checks for file changes.
+      // Without this, interval sync is a no-op when the watcher has silently
+      // stopped firing events — dirty stays false and syncMemoryFiles is skipped.
+      if (this.sources.has("memory")) {
+        this.dirty = true;
+      }
       runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
     }, ms);
   }

@@ -158,7 +158,7 @@ describe("memory manager readonly recovery", () => {
   it("reopens sqlite and retries when readonly appears in error code", async () => {
     await expectReadonlyRetry({
       firstError: { message: "write failed", code: "SQLITE_READONLY" },
-      expectedLastError: "write failed",
+      expectedLastError: '{"message":"write failed","code":"SQLITE_READONLY"}',
     });
   });
 
