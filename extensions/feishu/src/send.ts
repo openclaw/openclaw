@@ -276,6 +276,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
+    rawContent,
     createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
     threadId: item.thread_id || undefined,
   };

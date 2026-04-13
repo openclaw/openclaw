@@ -71,6 +71,8 @@ export type FeishuMessageInfo = {
   senderType?: string;
   content: string;
   contentType: string;
+  /** Raw JSON content string from the Feishu API, used for media key extraction. */
+  rawContent?: string;
   createTime?: number;
   /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
   threadId?: string;

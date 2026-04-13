@@ -729,7 +729,6 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
 
     // Fetch quoted/replied message content if parentId exists
     let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
@@ -756,6 +755,27 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
           );
+
+          // Download media from quoted message if it is a media type
+          const quotedMediaTypes = ["image", "file", "audio", "media", "sticker", "post"];
+          if (quotedMediaTypes.includes(quotedMessageInfo.contentType)) {
+            try {
+              const quotedMedia = await resolveFeishuMediaList({
+                cfg,
+                messageId: quotedMessageInfo.messageId,
+                messageType: quotedMessageInfo.contentType,
+                content: quotedMessageInfo.rawContent ?? "",
+                maxBytes: mediaMaxBytes,
+                log,
+                accountId: account.accountId,
+              });
+              mediaList.push(...quotedMedia);
+            } catch (quotedMediaErr) {
+              log(
+                `feishu[${account.accountId}]: failed to download quoted media: ${String(quotedMediaErr)}`,
+              );
+            }
+          }
         } else if (quotedMessageInfo) {
           log(
             `feishu[${account.accountId}]: skipped quoted message from sender ${quotedMessageInfo.senderId ?? "unknown"} (mode=${contextVisibilityMode})`,
@@ -765,6 +785,8 @@ export async function handleFeishuMessage(params: {
         log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
       }
     }
+
+    const mediaPayload = buildAgentMediaPayload(mediaList);
 
     const isTopicSessionForThread =
       isGroup &&
