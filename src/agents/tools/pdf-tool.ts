@@ -12,8 +12,8 @@ import { type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
-  resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
+  resolveModelFromRegistryOrConfig,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
@@ -143,7 +143,12 @@ async function runPdfPrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      const model = resolveModelFromRegistryOrConfig({
+        modelRegistry,
+        provider,
+        modelId,
+        cfg: effectiveCfg,
+      });
       const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,
