@@ -93,10 +93,12 @@ describe("config clobber snapshot cap", () => {
       expect(clobbered.length).toBeLessThanOrEqual(32);
       expect(clobbered.length).toBeGreaterThan(0);
 
-      const capWarning = warn.mock.calls.find(
+      const capWarnings = warn.mock.calls.filter(
         ([msg]) => typeof msg === "string" && msg.includes("clobber snapshot cap reached"),
       );
-      expect(capWarning).toBeTruthy();
+      // Dedupe: after the cap is hit, every subsequent suspicious read would
+      // otherwise spam the log. We expect exactly one warning per path.
+      expect(capWarnings).toHaveLength(1);
     });
   });
 
@@ -115,10 +117,12 @@ describe("config clobber snapshot cap", () => {
       expect(clobbered.length).toBeLessThanOrEqual(32);
       expect(clobbered.length).toBeGreaterThan(0);
 
-      const capWarning = warn.mock.calls.find(
+      const capWarnings = warn.mock.calls.filter(
         ([msg]) => typeof msg === "string" && msg.includes("clobber snapshot cap reached"),
       );
-      expect(capWarning).toBeTruthy();
+      // Dedupe: after the cap is hit, every subsequent suspicious read would
+      // otherwise spam the log. We expect exactly one warning per path.
+      expect(capWarnings).toHaveLength(1);
     });
   });
 });

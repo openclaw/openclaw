@@ -465,6 +465,10 @@ function formatConfigArtifactTimestamp(ts: string): string {
 // itself and stop; the anomaly is still logged to the audit trail either way.
 const MAX_CLOBBER_FILES_PER_PATH = 32;
 const CLOBBER_SUFFIX = ".clobbered.";
+// Paths we have already warned about hitting the cap. Process-local; cleared
+// only on process restart. Prevents log-spam when a tight suspicious-read loop
+// keeps firing against a path whose snapshot directory is already full.
+const clobberCapWarnedPaths = new Set<string>();
 
 function isClobberSibling(filename: string, baseName: string): boolean {
   return filename.startsWith(`${baseName}${CLOBBER_SUFFIX}`);
@@ -513,6 +517,10 @@ function logClobberCapReached(
   configPath: string,
   existing: number,
 ): void {
+  if (clobberCapWarnedPaths.has(configPath)) {
+    return;
+  }
+  clobberCapWarnedPaths.add(configPath);
   deps.logger.warn(
     `Config clobber snapshot cap reached for ${configPath} (${existing} existing); skipping further snapshots. Review and prune .clobbered.* files.`,
   );
