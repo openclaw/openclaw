@@ -311,7 +311,7 @@ export type TelegramConfig = {
   accounts?: Record<string, TelegramAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
-} & TelegramAccountConfig;
+} & Omit<TelegramAccountConfig, "agentId">;
 
 declare module "./types.channels.js" {
   interface ChannelsConfig {
