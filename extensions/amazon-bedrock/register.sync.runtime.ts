@@ -165,7 +165,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       // Apply service tier wrapping (params.serviceTier from model config).
       const serviceTier = resolveBedrockServiceTier(extraParams);
       if (serviceTier) {
-        wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
+        wrapped = createBedrockServiceTierWrapper(wrapped ?? undefined, serviceTier);
       }
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
 
