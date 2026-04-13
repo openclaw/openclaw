@@ -1,198 +1,148 @@
 # OpenClaw — Codex Task Brief
 
-> **Paste this into a Codex session or point Codex at this file when starting work.**
-> Last updated: 2026-03-25
+> **Use this when starting a Codex session for OpenClaw.**
+> Last updated: 2026-04-13
 
 ---
 
-## 1. Before You Start — Read These Files
+## 1. Start Here
 
-```
-MANDATORY (read in order):
-1. STATUS.md                    → (repo root) STATUS.md
-2. MULTI_AGENT_PROTOCOL.md      → (repo root) MULTI_AGENT_PROTOCOL.md
-3. AGENTS.md (per repo)         → auto-loaded in each repo
+Work from `DevAgents` unless the user explicitly asks otherwise.
 
-OPTIONAL (read when relevant):
-4. GROUP_BEHAVIOR_POLICY_PLAN.md → ../openclaw-dashboard/GROUP_BEHAVIOR_POLICY_PLAN.md
+```text
+1. ssh DevAgents
+2. cd /root/projects/openclaw
+3. Read STATUS.md
+4. Read MULTI_AGENT_PROTOCOL.md
+5. Read AGENTS.md
+6. Read this file
+7. Check git status and current branch
+8. Confirm no overlap with Claude before editing
 ```
+
+Repo-root `STATUS.md` is the live source of truth. Do not use the older legacy copy at `/Users/liranperetz/Claw_01_on_Hetzner_server/STATUS.md` unless explicitly asked.
 
 ---
 
 ## 2. Repositories
 
-| Repo        | Local Path                                     | Remote                                            | Purpose                           |
-| ----------- | ---------------------------------------------- | ------------------------------------------------- | --------------------------------- |
-| Gateway     | `/Users/liranperetz/clawdbot-worker`           | `git@github.com:cryptolir/openclaw.git`           | Core runtime, CLI, gateway        |
-| Dashboard   | `/Users/liranperetz/openclaw-dashboard`        | `git@github.com:cryptolir/openclaw-dashboard.git` | Next.js admin UI (Cloud Run)      |
-| Server Docs | `/Users/liranperetz/Claw_01_on_Hetzner_server` | (not a git repo)                                  | STATUS.md, protocols, task briefs |
+| Repo      | DevAgents Path                      | Local Mirror Path                       | Purpose                    |
+| --------- | ----------------------------------- | --------------------------------------- | -------------------------- |
+| Gateway   | `/root/projects/openclaw`           | `/Users/liranperetz/clawdbot-worker`    | Core runtime, CLI, gateway |
+| Dashboard | `/root/projects/openclaw-dashboard` | `/Users/liranperetz/openclaw-dashboard` | Next.js admin UI           |
+
+Routine development, builds, git operations, and deploy orchestration should happen on DevAgents.
 
 ---
 
-## 3. Multi-Agent Rules (Claude Code is the other agent)
+## 3. Multi-Agent Rules
 
-**Core rule: one branch = one owner. Check STATUS.md before starting.**
+**One branch = one owner. Check `STATUS.md` before doing anything else.**
 
-| Rule             | Detail                                                                         |
-| ---------------- | ------------------------------------------------------------------------------ |
-| Branch ownership | If STATUS.md shows Claude owns a branch, do NOT touch it                       |
-| STATUS.md        | Read at start, update at end — always                                          |
-| Commits          | Conventional Commits: `feat(scope):`, `fix(scope):`, `chore(scope):`           |
-| PRs              | Branch from fresh `main`, squash-merge, delete branch after merge              |
-| No direct pushes | Always go through a PR — no exceptions                                         |
-| No stash         | Don't create/apply/drop git stash (Claude may have stashes)                    |
-| No force-push    | Never force-push to any branch                                                 |
-| Handoff          | If you stop mid-task, record state in STATUS.md with your branch + what's left |
+| Rule             | Detail                                                                      |
+| ---------------- | --------------------------------------------------------------------------- |
+| Branch ownership | Do not touch a branch or file area Claude is actively using                 |
+| STATUS.md        | Read at start, update at end, and re-check before claiming a branch         |
+| Commits          | Use Conventional Commits                                                    |
+| PRs              | Branch from fresh `main`, validate, push, open PR, squash-merge             |
+| No direct pushes | Never push directly to `main`                                               |
+| No stash         | Do not create, apply, or drop git stash entries                             |
+| No force-push    | Never force-push shared branches                                            |
+| Handoff          | If stopping mid-task, record branch, owner, done, and blockers in STATUS.md |
+
+If ownership is unclear, stop and ask before editing that area.
 
 ---
 
-## 4. Available Work Queues
+## 4. Current Repo State
 
-### Dashboard (`openclaw-dashboard`) — Next.js 15, Firestore, Cloud Run
+Use `STATUS.md` as canonical, but the current known state is:
 
-**Ready to pick up:**
+- Current next-up item: take control of the AgentGlob repo
+- Gateway blocker: Venice model discovery times out at startup and falls back to the static catalog
+- `chore/staging-deploy-gcp` is still listed as open and stale; treat it as active until ownership is verified
+- Dashboard CI/CD is live: merging `openclaw-dashboard` `main` auto-deploys to Cloud Run and auto-tags releases
+- Dashboard repo on DevAgents is up to date with `main`
 
-1. **Structured group behavior policies** (see `GROUP_BEHAVIOR_POLICY_PLAN.md`)
-   - Add `group_behavior_policies` Firestore collection
-   - Replace freeform-only group instructions with structured policy storage
-   - Files likely touched: `lib/agents-store.ts`, Community tab components, API routes
+---
 
-2. **Runtime enforcement hooks**
-   - Group-scoped file visibility, file creation, project update permissions
-   - Depends on #1 above
+## 5. Validation Commands
 
-3. **Project + group bindings model**
-   - Canonical `projects` and `project_group_bindings` Firestore collections
-   - Support Jojo's 3-file project workflow
-
-**Dashboard build/deploy:**
+### Gateway
 
 ```bash
-# Typecheck + build
-cd /Users/liranperetz/openclaw-dashboard
-npm run build
-
-# Deploy to Cloud Run
-gcloud run deploy openclaw-dashboard \
-  --source /Users/liranperetz/openclaw-dashboard \
-  --project=gold-verve-459312-e7 \
-  --region=europe-west1 \
-  --quiet
-
-# Tag after deploy
-git tag v{YYYY.MM.DD.sequence} -m "description"
-```
-
-### Gateway (`clawdbot-worker`) — TypeScript, Docker, Hetzner
-
-**Ready to pick up:**
-
-4. **Add HEALTHCHECK to Dockerfile** (see CODEX_HANDOFF.md §1)
-   - File: `/opt/openclaw/Dockerfile` (on server) or equivalent in repo
-   - May need a `/health` endpoint in the gateway
-
-5. **Main branch protection** (see CODEX_HANDOFF.md §4)
-   - Enable via GitHub repo settings or `gh api`
-   - Require PR reviews, require CI pass, no direct pushes
-
-**Gateway build/test:**
-
-```bash
-cd /Users/liranperetz/clawdbot-worker
+cd /root/projects/openclaw
 pnpm install
-pnpm build        # typecheck + build
-pnpm test         # vitest
-pnpm check        # lint/format
+pnpm build
+pnpm test
+pnpm check
 ```
 
----
-
-## 5. What Claude Code Is Currently Handling
-
-Check STATUS.md "Active Branches" for live status. As of last update:
-
-| Branch                     | Repo    | Status                                |
-| -------------------------- | ------- | ------------------------------------- |
-| `chore/staging-deploy-gcp` | Gateway | PR #1 open — GCP workflow replacement |
-
-**Do not touch these branches or their files.**
-
----
-
-## 6. Infrastructure Quick Reference
-
-### Servers
-
-| Server       | IP             | Role                           |
-| ------------ | -------------- | ------------------------------ |
-| EU (primary) | `89.167.70.46` | 2 agents: openclaw, mikyhelper |
-| US (standby) | `5.161.84.219` | Empty                          |
-
-### SSH (if needed)
+### Dashboard
 
 ```bash
-ssh -i /Users/liranperetz/.ssh/hetzner-openclaw \
-    -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
-    root@89.167.70.46
+cd /root/projects/openclaw-dashboard
+npm run build
 ```
 
-### Docker on server
+If dependencies are missing, run the repo install command and retry the exact command once.
+
+---
+
+## 6. Deploy Rules
+
+### Dashboard
+
+- Normal deploy path: merge to `main`
+- Do not do routine manual deploys unless explicitly requested
+- Production URL: `https://app.agentglob.com`
+
+### Gateway
+
+Run from DevAgents:
 
 ```bash
-docker ps | grep openclaw                                    # list containers
-docker logs openclaw-openclaw-gateway-1 -f                   # gateway logs
-docker exec -it openclaw-openclaw-gateway-1 sh               # enter container
+/opt/openclaw-ops/scripts/build-and-push.sh <tag>
+/opt/openclaw-ops/scripts/deploy.sh <tag>
 ```
 
-### Registry
+Tag format:
 
-```
-europe-west1-docker.pkg.dev/gold-verve-459312-e7/openclaw-gateway/gateway:{tag}
-```
-
-### Tag format
-
-```
-v{YYYY.MM.DD.sequence}          # e.g. v2026.03.25.5
-v{YYYY.MM.DD.sequence}-hotfix   # emergency only
+```text
+vYYYY.M.D.N
+vYYYY.M.D.N-hotfix
 ```
 
 ---
 
-## 7. Firestore Collections
+## 7. Infrastructure Quick Reference
 
-| Collection                            | Purpose           | Key fields                                                                 |
-| ------------------------------------- | ----------------- | -------------------------------------------------------------------------- |
-| `agents/{id}`                         | Agent registry    | name, displayName, workspaceId, server, status, gatewayPort, containerName |
-| `workspaces/{id}`                     | Org               | name, slug, plan, ownerId, agentCount                                      |
-| `workspace_members/{wid}_{email}`     | Org membership    | workspaceId, email, workspaceRole, status                                  |
-| `users/{email}`                       | User profile      | platformRole                                                               |
-| `agent_port_allocations/{sid}_{port}` | Port reservations | serverId, gatewayPort, agentId                                             |
+| Server     | IP                | Role                    |
+| ---------- | ----------------- | ----------------------- |
+| DevAgents  | `204.168.223.245` | Primary dev host        |
+| EU prod    | `89.167.70.46`    | Primary production host |
+| US standby | `5.161.84.219`    | Standby production host |
+
+Operational reminders:
+
+- Always resolve the agent server from Firestore before SSH or RPC
+- Never hardcode EU when routing to an Agent
+- Always use `getAllDashboardOrigins()` rather than `getDashboardOrigin()` for allowed origins
+
+Terminology:
+
+- Agent = one full Hetzner Docker Compose deployment
+- Bot = one channel inside an Agent
+- Org = dashboard-level unit in Firestore
+- Workspace = per-Agent local dir on Hetzner
 
 ---
 
-## 8. Terminology (use these everywhere)
+## 8. Session End Checklist
 
-| Term          | Meaning                                                                                     |
-| ------------- | ------------------------------------------------------------------------------------------- |
-| **Agent**     | A full OpenClaw Docker stack on Hetzner (gateway + bridge + workspace)                      |
-| **Bot**       | A specific channel (WhatsApp, Telegram, etc.) running inside an Agent                       |
-| **Org**       | Dashboard-level organizational unit (called `workspace` in code/Firestore — rename planned) |
-| **Workspace** | Per-Agent local directory on Hetzner (`/root/.openclaw/agents/{name}/workspace/`)           |
-
----
-
-## 9. Session End Checklist
-
-Before finishing your session:
-
-```
-[ ] All tests pass (pnpm test / npm run build)
-[ ] Changes committed with Conventional Commit format
-[ ] PR created (if work is complete enough)
-[ ] STATUS.md updated with:
-    - What you did
-    - Branch name + owner (Codex)
-    - Any new blockers
-    - Updated "Next Up" if priorities shifted
+```text
+[ ] Relevant validation passed
+[ ] Work committed with Conventional Commit format if requested
+[ ] PR opened if the work is ready
+[ ] STATUS.md updated with what changed, branch, owner, and blockers
 ```

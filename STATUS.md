@@ -1,75 +1,75 @@
 # OpenClaw — Dev Status
 
-> Claude reads this at session start, updates it at session end.
-> Keep it short. Max ~60 lines. One source of truth for "where we are."
+> Claude and Codex read this at session start and update it at session end.
+> Repo-root `STATUS.md` is the only live source of truth. Do not use the legacy copy at `/Users/liranperetz/Claw_01_on_Hetzner_server/STATUS.md` unless explicitly asked.
 
 ---
 
 ## Last Session
 
-- **Date**: 2026-04-02 (session 11)
-- **What happened**:
-  - Set up DevAgents server (204.168.223.245) as dedicated dev environment
-  - Installed Node 22, pnpm, gcloud CLI, gh CLI on DevAgents
-  - Configured gh auth + gcloud auth on server
-  - Added git sync discipline to dashboard CLAUDE.md
-  - Created MULTI_AGENT_PROTOCOL.md and CODEX_TASK_BRIEF.md (merged via PR #2)
-  - Created session protocol (STATUS.md, CLAUDE.md §0, §9 subagent patterns)
-  - Fixed agent deletion bug (PR #26: `down -v` for all services, legacy guard)
-  - Replaced docker-release.yml with staging-deploy.yml (PR #1: GCP Artifact Registry)
-  - Set GitHub secrets: GCP_SA_KEY, HETZNER_SSH_KEY on cryptolir/openclaw
-- **Sync state**: both repos pushed to main. DevAgents server repos need `git pull`
+- **Date**: 2026-04-13 (handover refresh)
+- **What changed**:
+  - Confirmed `DevAgents` (`root@204.168.223.245`) as the primary development host for routine gateway/dashboard work, builds, git operations, and deploy orchestration
+  - Confirmed canonical repo-root startup read order on DevAgents: `STATUS.md` → `MULTI_AGENT_PROTOCOL.md` → `AGENTS.md` → `CODEX_TASK_BRIEF.md`
+  - Verified dashboard CI/CD is live: merging `openclaw-dashboard` `main` auto-deploys to Cloud Run and auto-tags releases
+  - Verified the dashboard repo on DevAgents is up to date with `main`
+  - Reconfirmed the gateway blocker: Venice model discovery times out at startup and falls back to the static catalog
+- **Sync state**: re-check `STATUS.md` before creating a branch; one branch = one owner
 
 ---
 
 ## Currently In Progress
 
-DevAgents server (204.168.223.245) is fully set up. Ready to work from web/SSH sessions.
-Run `git pull` on both repos on DevAgents before starting next session.
+- Fresh-session coordination reset on DevAgents
+- No new Codex branch claimed yet in the gateway repo
 
 ---
 
 ## Next Up (priority order)
 
-1. ~~Migrate dev work to remote server~~ DONE
+1. Take control of the AgentGlob repo
 2. Clean signup/signin flow with email verification
-3. Subscription plan selection & enforcement
-4. Billing UI/reporting on top of stored monthly usage (reporting pages already scaffolded)
-5. Group behavior policies (see `GROUP_BEHAVIOR_POLICY_PLAN.md`)
+3. Subscription plan selection and enforcement
+4. Billing UI/reporting on top of stored monthly usage
+5. Group behavior policies (see `GROUP_BEHAVIOR_POLICY_PLAN.md` when working in dashboard)
 
 ---
 
 ## Blockers / Open Questions
 
-- Venice model discovery times out at gateway startup → falls back to static catalog. Gateway-side fix needed.
-- 1 untracked file in repo: `install-devtools.sh` (not committed, harmless)
+- Gateway: Venice model discovery still times out during startup and falls back to the static catalog
+- Coordination: confirm ownership before touching any branch or file area Claude is actively editing
+- Branch hygiene: `chore/staging-deploy-gcp` is still listed as open and appears stale; verify before reuse or cleanup
 
 ---
 
 ## Active Branches / PRs
 
-| Branch                   | PR  | Status | Notes                            |
-| ------------------------ | --- | ------ | -------------------------------- |
-| chore/staging-deploy-gcp | #1  | open   | GCP workflow replacement (stale) |
+| Branch                   | PR  | Status      | Owner   | Notes                                    |
+| ------------------------ | --- | ----------- | ------- | ---------------------------------------- |
+| chore/staging-deploy-gcp | #1  | open, stale | unknown | Treat as active until verified otherwise |
 
 ---
 
-## Recent Deploys
+## Validation Commands
 
-| Revision | Date       | Notes                                                                    |
-| -------- | ---------- | ------------------------------------------------------------------------ |
-| 00177    | 2026-03-31 | fix: always persist gateway token + origins to Firestore on every deploy |
-| 00176    | 2026-03-31 | Chat widget error logging — console.error instead of bare catch          |
-| 00172    | 2026-03-30 | Chat widget redesign + message queue + mobile sidebar + file attachments |
+- Gateway: `cd /root/projects/openclaw && pnpm install && pnpm build && pnpm test && pnpm check`
+- Dashboard: `cd /root/projects/openclaw-dashboard && npm run build`
+
+---
+
+## Deploy Rules
+
+- Dashboard: normal path is merge to `main`; no routine manual deploys
+- Gateway/runtime: run from DevAgents with `/opt/openclaw-ops/scripts/build-and-push.sh <tag>` then `/opt/openclaw-ops/scripts/deploy.sh <tag>`
 
 ---
 
 ## Quick Reminders
 
-- **DevAgents**: `204.168.223.245` — dev server (repos, Claude CLI, builds)
-- EU server (1stClaw): `89.167.70.46` — 12 agents
-- US server (2ndClaw): `5.161.84.219` — 4 agents (projectmanager, social-bob, bob-the-project-manager, productguy)
-- Dashboard: https://app.agentglob.com (also: https://openclaw-dashboard-296319693396.europe-west1.run.app)
-- Always use `getAllDashboardOrigins()` not `getDashboardOrigin()` for allowedOrigins
-- Always resolve agent server from Firestore before SSH/RPC — never hardcode EU
-- SA key deleted — recreate from `openclaw-firestore-admin` when needed
+- Gateway repo on DevAgents: `/root/projects/openclaw`
+- Dashboard repo on DevAgents: `/root/projects/openclaw-dashboard`
+- Dashboard prod URL: `https://app.agentglob.com`
+- Always resolve the agent server from Firestore before SSH/RPC; never hardcode EU
+- Always use `getAllDashboardOrigins()` rather than `getDashboardOrigin()` for allowed origins
+- Canonical terms: Agent = full deployment, Bot = channel inside Agent, Org = dashboard unit, Workspace = per-Agent local dir on Hetzner
