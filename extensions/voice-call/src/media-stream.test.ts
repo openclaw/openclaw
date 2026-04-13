@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import net from "node:net";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
@@ -356,14 +357,24 @@ describe("MediaStreamHandler security hardening", () => {
       }
     ).wss = fakeWss;
 
-    const firstSocket = { write: vi.fn(), destroy: vi.fn() };
+    const firstSocket = {
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      write: vi.fn(),
+      destroy: vi.fn(),
+    };
     handler.handleUpgrade(
       { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
       firstSocket as never,
       Buffer.alloc(0),
     );
 
-    const secondSocket = { write: vi.fn(), destroy: vi.fn() };
+    const secondSocket = {
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      write: vi.fn(),
+      destroy: vi.fn(),
+    };
     handler.handleUpgrade(
       { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
       secondSocket as never,
@@ -375,8 +386,8 @@ describe("MediaStreamHandler security hardening", () => {
     expect(secondSocket.destroy).toHaveBeenCalledOnce();
 
     expect(upgradeCallback).not.toBeNull();
-    const completeUpgrade = upgradeCallback;
-    if (typeof completeUpgrade !== "function") {
+    const completeUpgrade = upgradeCallback as ((ws: WebSocket) => void) | null;
+    if (!completeUpgrade) {
       throw new Error("Expected upgrade callback to be registered");
     }
     completeUpgrade({} as WebSocket);
@@ -385,6 +396,54 @@ describe("MediaStreamHandler security hardening", () => {
       expect.anything(),
       expect.objectContaining({ socket: { remoteAddress: "127.0.0.1" } }),
     );
+  });
+
+  it("releases in-flight reservations when ws rejects a malformed upgrade before the callback", async () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      preStartTimeoutMs: 5_000,
+      maxConnections: 1,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 10,
+    });
+    const server = await startWsServer(handler);
+    const serverUrl = new URL(server.url);
+
+    try {
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          const socket = net.createConnection(
+            { host: serverUrl.hostname, port: Number(serverUrl.port) },
+            () => {
+              socket.write(
+                [
+                  "GET /voice/stream HTTP/1.1",
+                  `Host: ${serverUrl.host}`,
+                  "Upgrade: websocket",
+                  "Connection: Upgrade",
+                  "Sec-WebSocket-Version: 13",
+                  "",
+                  "",
+                ].join("\r\n"),
+              );
+            },
+          );
+          socket.once("error", reject);
+          socket.once("data", () => {
+            socket.end();
+          });
+          socket.once("close", () => resolve());
+        }),
+      );
+
+      const ws = await connectWs(server.url);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
   });
 
   it("clears pending state after valid start", async () => {

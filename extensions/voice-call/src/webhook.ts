@@ -57,15 +57,27 @@ function buildRequestUrl(
   return new URL(requestUrl ?? "/", `http://${requestHost ?? fallbackHost}`);
 }
 
-function resolveForwardedClientIp(request: http.IncomingMessage): string | undefined {
+function resolveForwardedClientIp(
+  request: http.IncomingMessage,
+  trustedProxyIPs: readonly string[],
+): string | undefined {
   const forwardedFor = getHeader(request.headers, "x-forwarded-for");
   if (forwardedFor) {
-    const firstHop = forwardedFor
+    const forwardedIps = forwardedFor
       .split(",")
       .map((part) => part.trim())
-      .find(Boolean);
-    if (firstHop) {
-      return firstHop;
+      .filter(Boolean);
+    if (forwardedIps.length > 0) {
+      if (trustedProxyIPs.length === 0) {
+        return forwardedIps[0];
+      }
+      for (let index = forwardedIps.length - 1; index >= 0; index -= 1) {
+        const hop = forwardedIps[index];
+        if (!trustedProxyIPs.includes(hop)) {
+          return hop;
+        }
+      }
+      return forwardedIps[0];
     }
   }
 
@@ -154,12 +166,10 @@ export class VoiceCallWebhookServer {
     const fromTrustedProxy =
       trustedProxyIPs.length === 0 || (remoteIp ? trustedProxyIPs.includes(remoteIp) : false);
     const shouldTrustForwardingHeaders =
-      (this.config.webhookSecurity.trustForwardingHeaders ||
-        this.config.webhookSecurity.allowedHosts.length > 0) &&
-      fromTrustedProxy;
+      this.config.webhookSecurity.trustForwardingHeaders && fromTrustedProxy;
 
     if (shouldTrustForwardingHeaders) {
-      const forwardedIp = resolveForwardedClientIp(request);
+      const forwardedIp = resolveForwardedClientIp(request, trustedProxyIPs);
       if (forwardedIp) {
         return forwardedIp;
       }

@@ -166,13 +166,24 @@ export class MediaStreamHandler {
       released = true;
       this.inflightUpgrades = Math.max(0, this.inflightUpgrades - 1);
     };
+    const handleUpgradeAbort = () => {
+      socket.removeListener("error", handleUpgradeAbort);
+      socket.removeListener("close", handleUpgradeAbort);
+      releaseUpgradeReservation();
+    };
+    socket.once("error", handleUpgradeAbort);
+    socket.once("close", handleUpgradeAbort);
 
     try {
       this.wss.handleUpgrade(request, socket, head, (ws) => {
+        socket.removeListener("error", handleUpgradeAbort);
+        socket.removeListener("close", handleUpgradeAbort);
         releaseUpgradeReservation();
         this.wss?.emit("connection", ws, request);
       });
     } catch (error) {
+      socket.removeListener("error", handleUpgradeAbort);
+      socket.removeListener("close", handleUpgradeAbort);
       releaseUpgradeReservation();
       throw error;
     }
