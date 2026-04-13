@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
 import {
@@ -397,6 +397,89 @@ describe("discoverOpenClawPlugins", () => {
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
+  });
+
+  it("reuses one realpath lookup per package root within a discovery run", () => {
+    const stateDir = makeTempDir();
+    const packageDir = path.join(stateDir, "extensions", "pack");
+    mkdirSafe(path.join(packageDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir,
+      packageName: "pack",
+      extensions: ["./src/one.ts", "./src/two.ts"],
+    });
+    writePluginEntry(path.join(packageDir, "src", "one.ts"));
+    writePluginEntry(path.join(packageDir, "src", "two.ts"));
+
+    const originalRealpathSync = fs.realpathSync;
+    const safeRealpathPackageRootCalls: string[] = [];
+    const realpathSpy = vi.spyOn(fs, "realpathSync").mockImplementation(((candidate, options) => {
+      const resolvedCandidate = path.resolve(String(candidate));
+      if (
+        resolvedCandidate === path.resolve(packageDir) &&
+        new Error().stack?.includes("safeRealpathSync")
+      ) {
+        safeRealpathPackageRootCalls.push(resolvedCandidate);
+      }
+      return originalRealpathSync.call(fs, candidate, options as never);
+    }) as typeof fs.realpathSync);
+    try {
+      discoverOpenClawPlugins({
+        env: buildDiscoveryEnv(stateDir),
+        cache: false,
+      });
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(safeRealpathPackageRootCalls).toHaveLength(1);
+  });
+
+  it("reuses one realpath lookup when a symlinked package root resolves to its canonical path", () => {
+    const stateDir = makeTempDir();
+    const realPackageDir = path.join(stateDir, "real-pack");
+    mkdirSafe(path.join(realPackageDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir: realPackageDir,
+      packageName: "pack",
+      extensions: ["./src/index.ts"],
+    });
+    writePluginEntry(path.join(realPackageDir, "src", "index.ts"));
+
+    const linkedPackageDir = path.join(stateDir, "linked-pack");
+    try {
+      fs.symlinkSync(realPackageDir, linkedPackageDir, "dir");
+    } catch {
+      return;
+    }
+
+    const originalRealpathSync = fs.realpathSync;
+    const rootLookups: string[] = [];
+    const realpathSpy = vi.spyOn(fs, "realpathSync").mockImplementation(((candidate, options) => {
+      const resolvedCandidate = path.resolve(String(candidate));
+      if (
+        new Error().stack?.includes("safeRealpathSync") &&
+        (resolvedCandidate === path.resolve(linkedPackageDir) ||
+          resolvedCandidate === path.resolve(realPackageDir))
+      ) {
+        rootLookups.push(resolvedCandidate);
+      }
+      return originalRealpathSync.call(fs, candidate, options as never);
+    }) as typeof fs.realpathSync);
+    try {
+      const { candidates } = discoverOpenClawPlugins({
+        extraPaths: [linkedPackageDir],
+        env: buildDiscoveryEnv(stateDir),
+        cache: false,
+      });
+      expectCandidateIds(candidates, { includes: ["pack"] });
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(rootLookups).toHaveLength(1);
   });
 
   it("does not discover nested node_modules copies under installed plugins", async () => {

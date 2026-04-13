@@ -142,9 +142,10 @@ type CandidateBlockIssue = {
 function checkSourceEscapesRoot(params: {
   source: string;
   rootDir: string;
+  realpathCache: Map<string, string>;
 }): CandidateBlockIssue | null {
-  const sourceRealPath = safeRealpathSync(params.source);
-  const rootRealPath = safeRealpathSync(params.rootDir);
+  const sourceRealPath = safeRealpathSync(params.source, params.realpathCache);
+  const rootRealPath = safeRealpathSync(params.rootDir, params.realpathCache);
   if (!sourceRealPath || !rootRealPath) {
     return null;
   }
@@ -243,10 +244,12 @@ function findCandidateBlockIssue(params: {
   rootDir: string;
   origin: PluginOrigin;
   ownershipUid?: number | null;
+  realpathCache: Map<string, string>;
 }): CandidateBlockIssue | null {
   const escaped = checkSourceEscapesRoot({
     source: params.source,
     rootDir: params.rootDir,
+    realpathCache: params.realpathCache,
   });
   if (escaped) {
     return escaped;
@@ -278,12 +281,14 @@ function isUnsafePluginCandidate(params: {
   origin: PluginOrigin;
   diagnostics: PluginDiagnostic[];
   ownershipUid?: number | null;
+  realpathCache: Map<string, string>;
 }): boolean {
   const issue = findCandidateBlockIssue({
     source: params.source,
     rootDir: params.rootDir,
     origin: params.origin,
     ownershipUid: params.ownershipUid,
+    realpathCache: params.realpathCache,
   });
   if (!issue) {
     return false;
@@ -332,12 +337,16 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   return false;
 }
 
-function resolvesToSameDirectory(left?: string, right?: string): boolean {
+function resolvesToSameDirectory(
+  left: string | undefined,
+  right: string | undefined,
+  realpathCache: Map<string, string>,
+): boolean {
   if (!left || !right) {
     return false;
   }
-  const leftRealPath = safeRealpathSync(left);
-  const rightRealPath = safeRealpathSync(right);
+  const leftRealPath = safeRealpathSync(left, realpathCache);
+  const rightRealPath = safeRealpathSync(right, realpathCache);
   if (leftRealPath && rightRealPath) {
     return leftRealPath === rightRealPath;
   }
@@ -419,12 +428,14 @@ function addCandidate(params: {
   packageDir?: string;
   bundledManifest?: PluginManifest;
   bundledManifestPath?: string;
+  realpathCache: Map<string, string>;
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
     return;
   }
-  const resolvedRoot = safeRealpathSync(params.rootDir) ?? path.resolve(params.rootDir);
+  const resolvedRoot =
+    safeRealpathSync(params.rootDir, params.realpathCache) ?? path.resolve(params.rootDir);
   if (
     isUnsafePluginCandidate({
       source: resolved,
@@ -432,6 +443,7 @@ function addCandidate(params: {
       origin: params.origin,
       diagnostics: params.diagnostics,
       ownershipUid: params.ownershipUid,
+      realpathCache: params.realpathCache,
     })
   ) {
     return;
@@ -465,6 +477,7 @@ function discoverBundleInRoot(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  realpathCache: Map<string, string>;
 }): "added" | "invalid" | "none" {
   const bundleFormat = detectBundleManifestFormat(params.rootDir);
   if (!bundleFormat) {
@@ -495,6 +508,7 @@ function discoverBundleInRoot(params: {
     bundleFormat,
     ownershipUid: params.ownershipUid,
     workspaceDir: params.workspaceDir,
+    realpathCache: params.realpathCache,
   });
   return "added";
 }
@@ -566,6 +580,7 @@ function discoverInDirectory(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  realpathCache: Map<string, string>;
   recurseDirectories?: boolean;
   skipDirectories?: Set<string>;
   visitedDirectories?: Set<string>;
@@ -573,7 +588,8 @@ function discoverInDirectory(params: {
   if (!fs.existsSync(params.dir)) {
     return;
   }
-  const resolvedDir = safeRealpathSync(params.dir) ?? path.resolve(params.dir);
+  const resolvedDir =
+    safeRealpathSync(params.dir, params.realpathCache) ?? path.resolve(params.dir);
   if (params.recurseDirectories) {
     if (params.visitedDirectories?.has(resolvedDir)) {
       return;
@@ -608,6 +624,7 @@ function discoverInDirectory(params: {
         origin: params.origin,
         ownershipUid: params.ownershipUid,
         workspaceDir: params.workspaceDir,
+        realpathCache: params.realpathCache,
       });
     }
     if (!entry.isDirectory()) {
@@ -667,6 +684,7 @@ function discoverInDirectory(params: {
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: fullPath,
+          realpathCache: params.realpathCache,
         });
       }
       continue;
@@ -680,6 +698,7 @@ function discoverInDirectory(params: {
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      realpathCache: params.realpathCache,
     });
     if (bundleDiscovery === "added") {
       continue;
@@ -702,6 +721,7 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: fullPath,
+        realpathCache: params.realpathCache,
       });
       continue;
     }
@@ -724,6 +744,7 @@ function discoverFromPath(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  realpathCache: Map<string, string>;
 }) {
   const resolved = resolveUserPath(params.rawPath, params.env);
   if (!fs.existsSync(resolved)) {
@@ -755,6 +776,7 @@ function discoverFromPath(params: {
       origin: params.origin,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      realpathCache: params.realpathCache,
     });
     return;
   }
@@ -807,6 +829,7 @@ function discoverFromPath(params: {
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: resolved,
+          realpathCache: params.realpathCache,
         });
       }
       return;
@@ -820,6 +843,7 @@ function discoverFromPath(params: {
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      realpathCache: params.realpathCache,
     });
     if (bundleDiscovery === "added") {
       return;
@@ -843,6 +867,7 @@ function discoverFromPath(params: {
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: resolved,
+        realpathCache: params.realpathCache,
       });
       return;
     }
@@ -855,6 +880,7 @@ function discoverFromPath(params: {
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      realpathCache: params.realpathCache,
     });
     return;
   }
@@ -885,6 +911,7 @@ export function discoverOpenClawPlugins(params: {
   const candidates: PluginCandidate[] = [];
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
+  const realpathCache = new Map<string, string>();
   const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
@@ -907,9 +934,14 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
+      realpathCache,
     });
   }
-  const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
+  const workspaceMatchesBundledRoot = resolvesToSameDirectory(
+    workspaceRoot,
+    roots.stock,
+    realpathCache,
+  );
 
   if (roots.workspace && workspaceRoot && !workspaceMatchesBundledRoot) {
     // Keep workspace auto-discovery constrained to the OpenClaw extensions root.
@@ -923,6 +955,7 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
+      realpathCache,
     });
   }
 
@@ -934,6 +967,7 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
+      realpathCache,
     });
   }
 
@@ -946,6 +980,7 @@ export function discoverOpenClawPlugins(params: {
     candidates,
     diagnostics,
     seen,
+    realpathCache,
   });
 
   const result = { candidates, diagnostics };
