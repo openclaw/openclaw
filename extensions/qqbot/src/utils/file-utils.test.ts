@@ -53,6 +53,7 @@ describe("qqbot file-utils downloadFile", () => {
         "*.weiyun.com",
         "*.qq.com.cn",
         "*.ugcimg.cn",
+        "*.myqcloud.com",
         "*.tencentcos.cn",
         "*.tencentcos.com",
       ],
