@@ -1,10 +1,10 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
+import type { CronJob, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
   matchesMessagingToolDeliveryTarget,
@@ -18,6 +18,7 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveSessionTranscriptPath } from "./run-execution.runtime.js";
 import { executeCronRun, type CronExecutionResult } from "./run-executor.js";
 import {
   createPersistCronSessionEntry,
@@ -54,6 +55,7 @@ import {
   setSessionRuntimeModel,
   supportsXHighThinking,
 } from "./run.runtime.js";
+import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
@@ -71,24 +73,7 @@ function resolveNonNegativeNumber(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-export type RunCronAgentTurnResult = {
-  /** Last non-empty agent text output (not truncated). */
-  outputText?: string;
-  /**
-   * `true` when the isolated runner already handled the run's user-visible
-   * delivery outcome. Cron-owned callers use this for cron delivery or
-   * explicit suppression; shared callers may also use it for a matching
-   * message-tool send that already reached the target.
-   */
-  delivered?: boolean;
-  /**
-   * `true` when cron attempted announce/direct delivery for this run.
-   * This is tracked separately from `delivered` because some announce paths
-   * cannot guarantee a final delivery ack synchronously.
-   */
-  deliveryAttempted?: boolean;
-} & CronRunOutcome &
-  CronRunTelemetry;
+export type { RunCronAgentTurnResult } from "./run.types.js";
 
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
@@ -288,6 +273,9 @@ async function prepareCronRunContext(params: {
     forceNew: input.job.sessionTarget === "isolated",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
+  if (!cronSession.sessionEntry.sessionFile?.trim()) {
+    cronSession.sessionEntry.sessionFile = resolveSessionTranscriptPath(runSessionId, agentId);
+  }
   const runSessionKey = baseSessionKey.startsWith("cron:")
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
@@ -419,6 +407,12 @@ async function prepareCronRunContext(params: {
     persistSessionEntry,
   });
 
+  markCronSessionPreRun({ entry: cronSession.sessionEntry, provider, model });
+  try {
+    await persistSessionEntry();
+  } catch (err) {
+    logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+  }
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: cfgWithAgentDefaults,
     provider,
@@ -427,7 +421,7 @@ async function prepareCronRunContext(params: {
     sessionStore: cronSession.store,
     sessionKey: agentSessionKey,
     storePath: cronSession.storePath,
-    isNewSession: cronSession.isNewSession,
+    isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
   });
   const liveSelection: CronLiveSelection = {
     provider,
@@ -437,13 +431,6 @@ async function prepareCronRunContext(params: {
       ? cronSession.sessionEntry.authProfileOverrideSource
       : undefined,
   };
-
-  markCronSessionPreRun({ entry: cronSession.sessionEntry, provider, model });
-  try {
-    await persistSessionEntry();
-  } catch (err) {
-    logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
-  }
 
   return {
     ok: true,
@@ -563,16 +550,9 @@ async function finalizeCronRun(params: {
   } else {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
-
   if (params.isAborted()) {
     prepared.cronSession.sessionEntry.status = "timeout";
-    try {
-      await prepared.persistSessionEntry();
-    } catch (err) {
-      logWarn(
-        `[cron:${prepared.input.job.id}] Failed to persist terminal timeout session entry: ${String(err)}`,
-      );
-    }
+    await prepared.persistSessionEntry();
     return prepared.withRunSession({ status: "error", error: params.abortReason(), ...telemetry });
   }
   let {
@@ -586,15 +566,11 @@ async function finalizeCronRun(params: {
   } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
+    finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
+    preferFinalAssistantVisibleText: prepared.resolvedDelivery.channel === "telegram",
   });
   prepared.cronSession.sessionEntry.status = hasFatalErrorPayload ? "failed" : "done";
-  try {
-    await prepared.persistSessionEntry();
-  } catch (err) {
-    logWarn(
-      `[cron:${prepared.input.job.id}] Failed to persist terminal session entry: ${String(err)}`,
-    );
-  }
+  await prepared.persistSessionEntry();
   const resolveRunOutcome = (result?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
@@ -727,9 +703,7 @@ export async function runCronIsolatedAgentTurn(params: {
     });
     if (isAborted()) {
       prepared.context.cronSession.sessionEntry.status = "timeout";
-      try {
-        await prepared.context.persistSessionEntry();
-      } catch {}
+      await prepared.context.persistSessionEntry();
       return prepared.context.withRunSession({ status: "error", error: abortReason() });
     }
     return await finalizeCronRun({
@@ -740,9 +714,7 @@ export async function runCronIsolatedAgentTurn(params: {
     });
   } catch (err) {
     prepared.context.cronSession.sessionEntry.status = isAborted() ? "timeout" : "failed";
-    try {
-      await prepared.context.persistSessionEntry();
-    } catch {}
+    await prepared.context.persistSessionEntry();
     return prepared.context.withRunSession({ status: "error", error: String(err) });
   }
 }

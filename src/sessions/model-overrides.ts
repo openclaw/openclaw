@@ -12,10 +12,12 @@ export function applyModelOverrideToSessionEntry(params: {
   selection: ModelOverrideSelection;
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
+  selectionSource?: "auto" | "user";
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
   const profileOverrideSource = params.profileOverrideSource ?? "user";
+  const selectionSource = params.selectionSource ?? "user";
   let updated = false;
   let selectionUpdated = false;
 
@@ -30,6 +32,10 @@ export function applyModelOverrideToSessionEntry(params: {
       updated = true;
       selectionUpdated = true;
     }
+    if (entry.modelOverrideSource) {
+      delete entry.modelOverrideSource;
+      updated = true;
+    }
   } else {
     if (entry.providerOverride !== selection.provider) {
       entry.providerOverride = selection.provider;
@@ -40,6 +46,10 @@ export function applyModelOverrideToSessionEntry(params: {
       entry.modelOverride = selection.model;
       updated = true;
       selectionUpdated = true;
+    }
+    if (entry.modelOverrideSource !== selectionSource) {
+      entry.modelOverrideSource = selectionSource;
+      updated = true;
     }
   }
 

@@ -1,7 +1,12 @@
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import { getAgentRuntimeCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import {
   normalizeOptionalLowercaseString,
@@ -23,6 +28,18 @@ export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenCla
   return (
     (typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null) ?? config
   );
+}
+
+export async function resolveQueuedReplyExecutionConfig(
+  config: OpenClawConfig,
+): Promise<OpenClawConfig> {
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
+  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
+    config: runtimeConfig,
+    commandName: "reply",
+    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+  });
+  return resolvedConfig ?? runtimeConfig;
 }
 
 /**
@@ -90,7 +107,7 @@ export function buildThreadingToolContext(params: {
 }
 
 export const isBunFetchSocketError = (message?: string) =>
-  Boolean(message && BUN_FETCH_SOCKET_ERROR_RE.test(message));
+  message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
 export const formatBunFetchSocketError = (message: string) => {
   const trimmed = message.trim();
@@ -107,18 +124,16 @@ export const resolveEnforceFinalTag = (
   provider: string,
   model = run.model,
 ) =>
-  Boolean(
-    (run.skipProviderRuntimeHints ? false : undefined) ??
-    (run.enforceFinalTag ||
-      isReasoningTagProvider(provider, {
-        config: resolveQueuedReplyRuntimeConfig(run.config),
-        workspaceDir: run.workspaceDir,
-        modelId: model,
-      })),
-  );
+  (run.skipProviderRuntimeHints ? false : undefined) ??
+  (run.enforceFinalTag ||
+    isReasoningTagProvider(provider, {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: model,
+    }));
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
-  const config = resolveQueuedReplyRuntimeConfig(run.config);
+  const config = run.config;
   return {
     cfg: config,
     provider: run.provider,
@@ -140,7 +155,7 @@ export function buildEmbeddedRunBaseParams(params: {
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
 }) {
-  const config = resolveQueuedReplyRuntimeConfig(params.run.config);
+  const config = params.run.config;
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
@@ -171,7 +186,7 @@ export function buildEmbeddedContextFromTemplate(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
-  const config = resolveQueuedReplyRuntimeConfig(params.run.config);
+  const config = params.run.config;
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,

@@ -38,7 +38,7 @@ const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
-type BundledCapabilityManifest = Pick<
+export type BundledCapabilityManifest = Pick<
   PluginManifest,
   | "id"
   | "autoEnableWhenConfiguredProviders"
@@ -96,8 +96,10 @@ function listBundledCapabilityManifests(): readonly BundledCapabilityManifest[] 
 
 const BUNDLED_CAPABILITY_MANIFESTS = listBundledCapabilityManifests();
 
-export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
-  BUNDLED_CAPABILITY_MANIFESTS.map((manifest) => ({
+export function buildBundledPluginContractSnapshot(
+  manifest: BundledCapabilityManifest,
+): BundledPluginContractSnapshot {
+  return {
     pluginId: manifest.id,
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
@@ -132,22 +134,31 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
       value.trim(),
     ),
     toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
-  }))
-    .filter(
-      (entry) =>
-        entry.cliBackendIds.length > 0 ||
-        entry.providerIds.length > 0 ||
-        entry.speechProviderIds.length > 0 ||
-        entry.realtimeTranscriptionProviderIds.length > 0 ||
-        entry.realtimeVoiceProviderIds.length > 0 ||
-        entry.mediaUnderstandingProviderIds.length > 0 ||
-        entry.imageGenerationProviderIds.length > 0 ||
-        entry.videoGenerationProviderIds.length > 0 ||
-        entry.musicGenerationProviderIds.length > 0 ||
-        entry.webFetchProviderIds.length > 0 ||
-        entry.webSearchProviderIds.length > 0 ||
-        entry.toolNames.length > 0,
-    )
+  };
+}
+
+export function hasBundledPluginContractSnapshotCapabilities(
+  entry: BundledPluginContractSnapshot,
+): boolean {
+  return (
+    entry.cliBackendIds.length > 0 ||
+    entry.providerIds.length > 0 ||
+    entry.speechProviderIds.length > 0 ||
+    entry.realtimeTranscriptionProviderIds.length > 0 ||
+    entry.realtimeVoiceProviderIds.length > 0 ||
+    entry.mediaUnderstandingProviderIds.length > 0 ||
+    entry.imageGenerationProviderIds.length > 0 ||
+    entry.videoGenerationProviderIds.length > 0 ||
+    entry.musicGenerationProviderIds.length > 0 ||
+    entry.webFetchProviderIds.length > 0 ||
+    entry.webSearchProviderIds.length > 0 ||
+    entry.toolNames.length > 0
+  );
+}
+
+export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
+  BUNDLED_CAPABILITY_MANIFESTS.map(buildBundledPluginContractSnapshot)
+    .filter(hasBundledPluginContractSnapshotCapabilities)
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 
 export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(

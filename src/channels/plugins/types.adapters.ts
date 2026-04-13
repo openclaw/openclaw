@@ -1,22 +1,29 @@
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ConfiguredBindingRule } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
+import type { AgentBinding } from "../../config/types.agents.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
-import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime.js";
+import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
-import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
-import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
+import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
+import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
+export type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+  ChannelOutboundFormattedContext,
+  ChannelOutboundPayloadContext,
+  ChannelOutboundPayloadHint,
+  ChannelOutboundTargetRef,
+} from "./outbound.types.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -25,14 +32,15 @@ import type {
   ChannelHeartbeatDeps,
   ChannelLegacyStateMigrationPlan,
   ChannelLogSink,
-  ChannelOutboundTargetMode,
-  ChannelPollContext,
-  ChannelPollResult,
   ChannelSecurityContext,
   ChannelSecurityDmPolicy,
   ChannelSetupInput,
   ChannelStatusIssue,
 } from "./types.core.js";
+export type { ChannelPairingAdapter } from "./pairing.types.js";
+
+type ConfiguredBindingRule = AgentBinding;
+export type { ChannelApprovalKind } from "../../infra/approval-types.js";
 
 export type ChannelActionAvailabilityState =
   | { kind: "enabled" }
@@ -160,107 +168,6 @@ export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
   resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
   resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
-};
-
-export type ChannelOutboundContext = {
-  cfg: OpenClawConfig;
-  to: string;
-  text: string;
-  mediaUrl?: string;
-  audioAsVoice?: boolean;
-  mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  gifPlayback?: boolean;
-  /** Send image as document to avoid Telegram compression. */
-  forceDocument?: boolean;
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  accountId?: string | null;
-  identity?: OutboundIdentity;
-  deps?: OutboundSendDeps;
-  silent?: boolean;
-  gatewayClientScopes?: readonly string[];
-};
-
-export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
-  payload: ReplyPayload;
-};
-
-export type ChannelOutboundPayloadHint =
-  | { kind: "approval-pending"; approvalKind: "exec" | "plugin" }
-  | { kind: "approval-resolved"; approvalKind: "exec" | "plugin" };
-
-export type ChannelOutboundTargetRef = {
-  channel: string;
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
-};
-
-export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
-  abortSignal?: AbortSignal;
-};
-
-export type ChannelOutboundAdapter = {
-  deliveryMode: "direct" | "gateway" | "hybrid";
-  chunker?: ((text: string, limit: number) => string[]) | null;
-  chunkerMode?: "text" | "markdown";
-  textChunkLimit?: number;
-  sanitizeText?: (params: { text: string; payload: ReplyPayload }) => string;
-  pollMaxOptions?: number;
-  supportsPollDurationSeconds?: boolean;
-  supportsAnonymousPolls?: boolean;
-  normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
-  shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
-  resolveEffectiveTextChunkLimit?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    fallbackLimit?: number;
-  }) => number | undefined;
-  shouldSuppressLocalPayloadPrompt?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    payload: ReplyPayload;
-    hint?: ChannelOutboundPayloadHint;
-  }) => boolean;
-  beforeDeliverPayload?: (params: {
-    cfg: OpenClawConfig;
-    target: ChannelOutboundTargetRef;
-    payload: ReplyPayload;
-    hint?: ChannelOutboundPayloadHint;
-  }) => Promise<void> | void;
-  /**
-   * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
-   */
-  shouldTreatRoutedTextAsVisible?: (params: {
-    kind: "tool" | "block" | "final";
-    text?: string;
-  }) => boolean;
-  shouldTreatDeliveredTextAsVisible?: (params: {
-    kind: "tool" | "block" | "final";
-    text?: string;
-  }) => boolean;
-  targetsMatchForReplySuppression?: (params: {
-    originTarget: string;
-    targetKey: string;
-    targetThreadId?: string;
-  }) => boolean;
-  resolveTarget?: (params: {
-    cfg?: OpenClawConfig;
-    to?: string;
-    allowFrom?: string[];
-    accountId?: string | null;
-    mode?: ChannelOutboundTargetMode;
-  }) => { ok: true; to: string } | { ok: false; error: Error };
-  sendPayload?: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
-  sendFormattedText?: (ctx: ChannelOutboundFormattedContext) => Promise<OutboundDeliveryResult[]>;
-  sendFormattedMedia?: (
-    ctx: ChannelOutboundFormattedContext & { mediaUrl: string },
-  ) => Promise<OutboundDeliveryResult>;
-  sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
-  sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
-  sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
 };
 
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
@@ -396,9 +303,9 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    *   partial stubs are not supported
    *
    * @since Plugin SDK 2026.2.19
-   * @see {@link https://docs.openclaw.ai/plugins/developing-plugins | Plugin SDK documentation}
+   * @see {@link https://docs.openclaw.ai/plugins/building-plugins | Plugin SDK documentation}
    */
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
 };
 
 export type ChannelLogoutResult = {
@@ -423,17 +330,6 @@ export type ChannelLogoutContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
   runtime: RuntimeEnv;
   log?: ChannelLogSink;
-};
-
-export type ChannelPairingAdapter = {
-  idLabel: string;
-  normalizeAllowEntry?: (entry: string) => string;
-  notifyApproval?: (params: {
-    cfg: OpenClawConfig;
-    id: string;
-    accountId?: string;
-    runtime?: RuntimeEnv;
-  }) => Promise<void>;
 };
 
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
@@ -663,53 +559,19 @@ export type ChannelApprovalDeliveryAdapter = {
     request: ExecApprovalRequest;
   }) => boolean;
 };
-
-export type ChannelApprovalKind = "exec" | "plugin";
-
 export type ChannelApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }
   | { kind: "reply"; text: string };
 
-export type ChannelApprovalNativeSurface = "origin" | "approver-dm";
-
-export type ChannelApprovalNativeTarget = {
-  to: string;
-  threadId?: string | number | null;
-};
-
-export type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "both";
-
-export type ChannelApprovalNativeRequest = ExecApprovalRequest | PluginApprovalRequest;
-
-export type ChannelApprovalNativeDeliveryCapabilities = {
-  enabled: boolean;
-  preferredSurface: ChannelApprovalNativeDeliveryPreference;
-  supportsOriginSurface: boolean;
-  supportsApproverDmSurface: boolean;
-  notifyOriginWhenDmOnly?: boolean;
-};
-
-export type ChannelApprovalNativeAdapter = {
-  describeDeliveryCapabilities: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeDeliveryCapabilities;
-  resolveOriginTarget?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeTarget | null | Promise<ChannelApprovalNativeTarget | null>;
-  resolveApproverDmTargets?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeTarget[] | Promise<ChannelApprovalNativeTarget[]>;
-};
+export type {
+  ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeDeliveryCapabilities,
+  ChannelApprovalNativeDeliveryPreference,
+  ChannelApprovalNativeRequest,
+  ChannelApprovalNativeSurface,
+  ChannelApprovalNativeTarget,
+} from "./approval-native.types.js";
 
 export type ChannelApprovalRenderAdapter = {
   exec?: {

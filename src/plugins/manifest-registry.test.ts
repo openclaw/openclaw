@@ -382,6 +382,9 @@ describe("loadPluginManifestRegistry", () => {
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
+      providerAuthAliases: {
+        "openai-codex": "openai",
+      },
       providerAuthChoices: [
         {
           provider: "openai",
@@ -404,6 +407,9 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
     });
+    expect(registry.plugins[0]?.providerAuthAliases).toEqual({
+      "openai-codex": "openai",
+    });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
     expect(registry.plugins[0]?.providerAuthChoices).toEqual([
       {
@@ -415,6 +421,60 @@ describe("loadPluginManifestRegistry", () => {
         assistantVisibility: "visible",
       },
     ]);
+  });
+
+  it("preserves activation and setup descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai"],
+      activation: {
+        onProviders: ["openai"],
+        onCommands: ["models"],
+        onChannels: ["web"],
+        onRoutes: ["gateway-webhook"],
+        onCapabilities: ["provider", "tool"],
+      },
+      setup: {
+        providers: [
+          {
+            id: "openai",
+            authMethods: ["api-key"],
+            envVars: ["OPENAI_API_KEY"],
+          },
+        ],
+        cliBackends: ["openai-cli"],
+        configMigrations: ["legacy-openai-auth"],
+        requiresRuntime: false,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.activation).toEqual({
+      onProviders: ["openai"],
+      onCommands: ["models"],
+      onChannels: ["web"],
+      onRoutes: ["gateway-webhook"],
+      onCapabilities: ["provider", "tool"],
+    });
+    expect(registry.plugins[0]?.setup).toEqual({
+      providers: [
+        {
+          id: "openai",
+          authMethods: ["api-key"],
+          envVars: ["OPENAI_API_KEY"],
+        },
+      ],
+      cliBackends: ["openai-cli"],
+      configMigrations: ["legacy-openai-auth"],
+      requiresRuntime: false,
+    });
   });
 
   it("preserves channel env metadata from plugin manifests", () => {

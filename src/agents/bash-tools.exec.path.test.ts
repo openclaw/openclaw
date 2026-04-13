@@ -7,6 +7,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
+const FOREGROUND_TEST_YIELD_MS = 120_000;
 type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
 const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
@@ -111,7 +112,10 @@ describe("exec PATH login shell merge", () => {
     shellPathMock.mockReturnValue("/custom/bin:/opt/bin");
 
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-    const result = await tool.execute("call1", { command: "echo $PATH" });
+    const result = await tool.execute("call1", {
+      command: "echo $PATH",
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
     const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
     expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
@@ -126,6 +130,7 @@ describe("exec PATH login shell merge", () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
     const result = await tool.execute("call-openclaw-shell", {
       command: 'printf "%s" "${OPENCLAW_SHELL:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
     });
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
@@ -190,7 +195,10 @@ describe("exec PATH login shell merge", () => {
       );
 
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      const result = await tool.execute("call1", { command: "echo $PATH" });
+      const result = await tool.execute("call1", {
+        command: "echo $PATH",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      });
       const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
       expect(entries).toEqual(["/usr/bin"]);
@@ -245,6 +253,7 @@ describe("exec host env validation", () => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
       const result = await tool.execute("call1", {
         command: "printf '%s' \"${SSLKEYLOGFILE:-}\"",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
       });
       const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
       expect(output).not.toContain("/tmp/openclaw-ssl-keys.log");
@@ -262,6 +271,7 @@ describe("exec host env validation", () => {
 
     const result = await tool.execute("call1", {
       command: "echo ok",
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
     });
     expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe("ok");
   });
