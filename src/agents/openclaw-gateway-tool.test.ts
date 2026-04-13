@@ -706,6 +706,84 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.patch when empty allowlist is present and manifests are unavailable", async () => {
+    // Regression: empty plugins.allow should be treated as unrestricted (matching
+    // resolvePluginActivationState which checks allow.length > 0), not as "deny all".
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              allow: [],
+              entries: {
+                acpx: {
+                  enabled: true,
+                  config: {
+                    permissionMode: "approve-all",
+                  },
+                },
+              },
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    // The dangerous flag is already active (empty allowlist = unrestricted, plugin enabled),
+    // so a no-op patch that doesn't change anything should be allowed through.
+    // But a patch that newly enables the dangerous flag should be rejected.
+    await expect(
+      tool.execute("call-empty-allowlist-no-manifests", {
+        action: "config.patch",
+        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "approve-all" } } } } }',
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects config.patch when empty allowlist and dangerous flag is newly enabled without manifests", async () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              allow: [],
+              entries: {
+                acpx: {
+                  enabled: false,
+                },
+              },
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-empty-allowlist-newly-dangerous", {
+        action: "config.patch",
+        raw: '{ plugins: { entries: { acpx: { enabled: true, config: { permissionMode: "approve-all" } } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
+    );
+  });
+
   it("rejects config.patch when provider config auto-enables dangerous plugin config", async () => {
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [

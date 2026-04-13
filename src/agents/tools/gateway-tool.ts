@@ -179,7 +179,7 @@ function isPluginDangerousFlagActive(
       return false;
     }
     const allowList = (rootConfig.plugins as { allow?: unknown } | undefined)?.allow;
-    if (Array.isArray(allowList) && !allowList.includes(pluginId)) {
+    if (Array.isArray(allowList) && allowList.length > 0 && !allowList.includes(pluginId)) {
       return false;
     }
     return (pluginEntry as { enabled?: unknown }).enabled !== false;
