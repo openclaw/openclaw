@@ -6,6 +6,7 @@ import { prepareSimpleCompletionModel } from "../../simple-completion-runtime.js
 import { prepareModelForSimpleCompletion } from "../../simple-completion-transport.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_SOUL_FILENAME } from "../../workspace.js";
+import { resolveBootstrapMaxChars } from "../../pi-embedded-helpers/bootstrap.js";
 import { isLikelyExecutionAckPrompt } from "./incomplete-turn.js";
 
 // ---------------------------------------------------------------------------
@@ -194,14 +195,17 @@ export type PersonalityCloseoutResult = {
 
 /**
  * Load SOUL.md content from the workspace directory, if it exists.
+ * Truncates to `maxChars` so large SOUL files don't exceed the
+ * personality model's context budget during closeout.
  * Returns empty string if the file is missing or unreadable.
  */
-async function loadSoulContent(workspaceDir?: string): Promise<string> {
+async function loadSoulContent(workspaceDir: string | undefined, maxChars: number): Promise<string> {
   if (!workspaceDir) {
     return "";
   }
   try {
-    return await fs.readFile(path.join(workspaceDir, DEFAULT_SOUL_FILENAME), "utf8");
+    const raw = await fs.readFile(path.join(workspaceDir, DEFAULT_SOUL_FILENAME), "utf8");
+    return raw.length > maxChars ? raw.slice(0, maxChars) : raw;
   } catch {
     return "";
   }
@@ -250,7 +254,7 @@ export async function runPersonalityCloseout(params: {
     // Load SOUL.md from the workspace so the personality model has the
     // agent's configured personality context — not just the closeout
     // instruction. Without this, the closeout rewrites are generic.
-    const soulContent = await loadSoulContent(params.workspaceDir);
+    const soulContent = await loadSoulContent(params.workspaceDir, resolveBootstrapMaxChars(params.cfg));
     const systemPrompt = soulContent
       ? `${soulContent}\n\n---\n\n${PERSONALITY_CLOSEOUT_INSTRUCTION}`
       : PERSONALITY_CLOSEOUT_INSTRUCTION;
