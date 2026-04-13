@@ -10,7 +10,7 @@ const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const writeConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
-  vi.fn((): { ref: unknown } => ({ ref: undefined })),
+  vi.fn((_value?: unknown): { ref: unknown } => ({ ref: undefined })),
 );
 const hasConfiguredSecretInputMock = vi.hoisted(() =>
   vi.fn((value: unknown): boolean => {

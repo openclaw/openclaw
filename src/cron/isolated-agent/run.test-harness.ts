@@ -143,7 +143,7 @@ vi.mock("./skills-snapshot.runtime.js", () => ({
 }));
 
 vi.mock("./run-model-selection.runtime.js", () => ({
-  DEFAULT_MODEL: "gpt-4",
+  DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
   loadModelCatalog: loadModelCatalogMock,
   getModelRefStatus: getModelRefStatusMock,
@@ -252,7 +252,7 @@ function makeDefaultModelFallbackResult() {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     },
     provider: "openai",
-    model: "gpt-4",
+    model: "gpt-5.4",
   };
 }
 
@@ -292,8 +292,8 @@ function resetRunConfigMocks(): void {
   );
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
-  resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
-  resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
+  resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
+  resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
@@ -315,7 +315,7 @@ function resetRunConfigMocks(): void {
   isExternalHookSessionMock.mockReturnValue(false);
   resolveHookExternalContentSourceMock.mockReturnValue(undefined);
   getSkillsSnapshotVersionMock.mockReturnValue(42);
-  loadModelCatalogMock.mockResolvedValue({ models: [] });
+  loadModelCatalogMock.mockResolvedValue([]);
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
 }
 

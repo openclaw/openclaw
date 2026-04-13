@@ -112,6 +112,9 @@ importers:
       '@slack/web-api':
         specifier: ^7.15.0
         version: 7.15.0
+      '@whiskeysockets/baileys':
+        specifier: 7.0.0-rc.9
+        version: 7.0.0-rc.9
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -1222,6 +1225,9 @@ importers:
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
+      qrcode-terminal:
+        specifier: ^0.12.0
+        version: 0.12.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
