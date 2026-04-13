@@ -7,18 +7,20 @@ export function stripRoamTargetPrefix(raw: string): string | undefined {
 
   let normalized = trimmed;
 
-  if (normalized.startsWith("roam:")) {
+  const lower = normalized.toLowerCase();
+  if (lower.startsWith("roam:")) {
     normalized = normalized.slice("roam:".length).trim();
-  } else if (normalized.startsWith("roam-hq:")) {
+  } else if (lower.startsWith("roam-hq:")) {
     normalized = normalized.slice("roam-hq:".length).trim();
   }
 
-  // Strip sub-prefixes for target kind
-  if (normalized.startsWith("group:")) {
+  // Strip sub-prefixes for target kind (case-insensitive)
+  const subLower = normalized.toLowerCase();
+  if (subLower.startsWith("group:")) {
     normalized = normalized.slice("group:".length).trim();
-  } else if (normalized.startsWith("dm:")) {
+  } else if (subLower.startsWith("dm:")) {
     normalized = normalized.slice("dm:".length).trim();
-  } else if (normalized.startsWith("user:")) {
+  } else if (subLower.startsWith("user:")) {
     normalized = normalized.slice("user:".length).trim();
   }
 

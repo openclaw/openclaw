@@ -100,6 +100,10 @@ function parseRoamWebhookEvent(raw: unknown): RoamWebhookEvent | null {
   if (typeof obj.timestamp !== "number" || !Number.isFinite(obj.timestamp)) {
     return null;
   }
+  // Normalize text to string — media-only events may omit it.
+  if (obj.text !== undefined && typeof obj.text !== "string") {
+    return null;
+  }
   return obj as unknown as RoamWebhookEvent;
 }
 

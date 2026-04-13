@@ -46,6 +46,14 @@ describe("stripRoamTargetPrefix", () => {
   it("trims whitespace", () => {
     expect(stripRoamTargetPrefix("  roam:abc  ")).toBe("abc");
   });
+
+  it("strips mixed-case ROAM: prefix", () => {
+    expect(stripRoamTargetPrefix("ROAM:abc-123")).toBe("abc-123");
+  });
+
+  it("strips mixed-case Roam-HQ:Group: compound prefix", () => {
+    expect(stripRoamTargetPrefix("Roam-HQ:Group:abc")).toBe("abc");
+  });
 });
 
 describe("normalizeRoamMessagingTarget", () => {
