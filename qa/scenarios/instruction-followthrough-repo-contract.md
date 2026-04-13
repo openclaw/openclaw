@@ -97,7 +97,7 @@ steps:
         args:
           - lambda:
               async: true
-              expr: "((await fs.readFile(artifactPath, 'utf8').catch(() => null))?.trim() ? await fs.readFile(artifactPath, 'utf8').catch(() => null) : undefined)"
+              expr: "(() => { const normalize = (value) => normalizeLowercaseStringOrEmpty(value); const matches = (value) => { const normalized = normalize(value); return normalized && config.expectedArtifactAll.every((needle) => normalized.includes(normalize(needle))) && config.expectedArtifactAny.some((needle) => normalized.includes(normalize(needle))); }; return fs.readFile(artifactPath, 'utf8').then((value) => matches(value) ? value : undefined).catch(() => undefined); })()"
           - expr: liveTurnTimeoutMs(env, 30000)
           - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
       - set: normalizedArtifact
