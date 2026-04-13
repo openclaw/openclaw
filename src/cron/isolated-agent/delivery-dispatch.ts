@@ -638,12 +638,14 @@ export async function dispatchCronDelivery(
       !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
     ) {
       // Descendants existed but no post-orchestration synthesis arrived AND
-      // no descendant fallback reply was available. Suppress stale parent
-      // text like "on it, pulling everything together". Mark deliveryAttempted
-      // so the timer does not fire a redundant enqueueSystemEvent fallback.
+      // no descendant fallback reply was available. The subagent(s) died or
+      // timed out without producing a final output — report as error.
+      // Mark deliveryAttempted so the timer does not fire a redundant
+      // enqueueSystemEvent fallback.
       deliveryAttempted = true;
       return params.withRunSession({
-        status: "ok",
+        status: "error",
+        error: "cron: subagent(s) completed without producing a final output",
         summary,
         outputText,
         deliveryAttempted,

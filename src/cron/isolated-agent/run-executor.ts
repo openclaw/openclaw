@@ -338,6 +338,30 @@ export async function executeCronRun(params: {
       ].join(" ");
       await executor.runPrompt(continuationPrompt);
       ({ runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState());
+
+      // Check if agent still produced only interim output after continuation prompt
+      const postContinuationPayloads = runResult?.payloads ?? [];
+      const postContinuationText =
+        postContinuationPayloads
+          .filter((p): p is { text: string } => typeof (p as any).text === "string")
+          .map((p) => p.text)
+          .filter(Boolean)
+          .at(-1)
+          ?.trim() ?? "";
+      if (isLikelyInterimCronMessage(postContinuationText)) {
+        // Inject an error payload so resolveCronPayloadOutcome correctly sets
+        // hasFatalErrorPayload = true. Setting meta.error alone is insufficient
+        // because hasFatalErrorPayload requires hasErrorPayload (isError:true in
+        // payloads) to be true — meta.error is only checked when hasErrorPayload
+        // is already true. Pushing an error payload makes the full chain work:
+        // hasErrorPayload=true → hasFatalErrorPayload=true → status:"error".
+        if (runResult?.payloads) {
+          (runResult.payloads as Array<Record<string, unknown>>).push({
+            isError: true,
+            text: "cron: agent failed to produce substantive output after continuation prompt",
+          });
+        }
+      }
     }
   }
 

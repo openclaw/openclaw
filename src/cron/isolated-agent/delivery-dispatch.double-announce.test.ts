@@ -198,7 +198,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("early return (stale interim suppression) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
+  it("early return (subagents died, no output) sets deliveryAttempted=true and status=error", async () => {
     // First countActiveDescendantRuns call returns >0 (had descendants), second returns 0
     vi.mocked(countActiveDescendantRuns)
       .mockReturnValueOnce(2) // initial check → hadDescendants=true, enters wait block
@@ -214,6 +214,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     // deliveryAttempted must be true so timer does NOT fire enqueueSystemEvent
     expect(state.deliveryAttempted).toBe(true);
 
+    // Subagents died without output → must be status:"error", not "ok"
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "error",
+        error: "cron: subagent(s) completed without producing a final output",
+        deliveryAttempted: true,
+      }),
+    );
+
     // Verify timer guard agrees
     expect(
       shouldEnqueueCronMainSummary({
@@ -226,7 +235,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     ).toBe(false);
 
-    // No direct delivery should have been sent (stale interim suppressed)
+    // No direct delivery should have been sent (subagents died)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
