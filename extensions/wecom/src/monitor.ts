@@ -122,9 +122,14 @@ async function getExtendedMediaLocalRoots(config?: WeComConfig): Promise<string[
   const defaults = await getDefaultMediaLocalRoots();
   const roots: string[] = [...defaults];
 
+  // Only add safe subdirectories of stateDir (not the entire state tree,
+  // which would expose sensitive files like credentials/sessions)
   const stateDir = path.resolve(resolveStateDir());
-  if (!roots.includes(stateDir)) {
-    roots.push(stateDir);
+  for (const sub of ["media", "workspace", "sandboxes"]) {
+    const dir = path.join(stateDir, sub);
+    if (!roots.includes(dir)) {
+      roots.push(dir);
+    }
   }
   // Merge custom paths configured by the user in WeComConfig
   if (config?.mediaLocalRoots) {

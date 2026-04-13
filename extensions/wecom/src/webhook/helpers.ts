@@ -334,7 +334,7 @@ export async function processInboundMessage(
   // Image message processing
   if (msgtype === "image") {
     const url = toStr(subRec(msg, "image").url).trim();
-    const aesKey = globalAesKey || toStr(subRec(msg, "image").aeskey) || "";
+    const aesKey = toStr(subRec(msg, "image").aeskey) || globalAesKey || "";
     if (url && aesKey) {
       try {
         const decrypted = await decryptWecomMediaWithMeta(url, aesKey, {
@@ -371,7 +371,7 @@ export async function processInboundMessage(
   // File message processing
   if (msgtype === "file") {
     const url = toStr(subRec(msg, "file").url).trim();
-    const aesKey = globalAesKey || toStr(subRec(msg, "file").aeskey) || "";
+    const aesKey = toStr(subRec(msg, "file").aeskey) || globalAesKey || "";
     if (url && aesKey) {
       try {
         const decrypted = await decryptWecomMediaWithMeta(url, aesKey, {
@@ -455,7 +455,7 @@ export async function processInboundMessage(
             bodyParts.push(content);
           }
         } else if ((t === "image" || t === "file") && !foundMedia) {
-          const itemAesKey = globalAesKey || item[t]?.aeskey || "";
+          const itemAesKey = item[t]?.aeskey || globalAesKey || "";
           const url = String(item[t]?.url ?? "").trim();
           if (!itemAesKey) {
             bodyParts.push(`[${t}]`);
