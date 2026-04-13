@@ -621,9 +621,8 @@ export abstract class MemoryManagerSyncOps {
     if (!minutes || minutes <= 0 || this.intervalTimer) {
       return;
     }
-    // Skip interval sync when memory files are not enabled - session-only configs
-    // don't need periodic fallback since sessions have their own sync triggers
-    if (!this.sources.has("memory")) {
+    // Skip interval sync when neither memory files nor sessions are enabled
+    if (!this.sources.has("memory") && !this.sources.has("sessions")) {
       return;
     }
     const ms = minutes * 60 * 1000;
