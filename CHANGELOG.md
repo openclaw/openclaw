@@ -121,6 +121,7 @@ Docs: https://docs.openclaw.ai
 - Agents/CLI: keep unrelated config, session, transcript, and MCP bootstrap runtime off common `openclaw agent` cold paths so provider selection and agent startup stop stalling on heavyweight imports. Thanks @vincentkoc.
 - Setup/config/install: stop setup, config dry-runs, and daemon install from eagerly booting auth-profile and plugin repair runtime when those paths are not needed, so onboarding and local service setup avoid long cold-start stalls. Thanks @vincentkoc.
 - Cron/direct delivery: slim isolated-agent delivery cold paths so direct channel delivery and related cron execution spend less time loading unrelated auth, plugin, and channel runtime. Thanks @vincentkoc.
+- Channels/replay dedupe: standardize replay claims, retryable-failure release, and post-success commit behavior across Telegram, Discord, Slack, Mattermost, WhatsApp, Matrix, LINE, Feishu, Zalo, Nextcloud Talk, TLON, Nostr, Voice Call, and shared plugin interactive callbacks so duplicate deliveries stay reply-once after success but retry cleanly after pre-delivery failures. Thanks @vincentkoc.
 
 ## 2026.4.11
 
