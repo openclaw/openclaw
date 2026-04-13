@@ -127,8 +127,14 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
   }
 
   try {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const apiKey = process.env.KILOCODE_API_KEY;
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    }
+
     const response = await fetch(KILOCODE_MODELS_URL, {
-      headers: { Accept: "application/json" },
+      headers,
       signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
     });
 
