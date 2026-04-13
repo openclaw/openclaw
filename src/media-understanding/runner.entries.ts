@@ -36,7 +36,6 @@ import { extractGeminiResponse } from "./output-extract.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
 import type {
-  MediaUnderstandingAttemptOutcome,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingModelDecision,
@@ -445,10 +444,7 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
   const provider = typeof chosen?.provider === "string" ? chosen.provider.trim() : undefined;
   const model = typeof chosen?.model === "string" ? chosen.model.trim() : undefined;
   const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
-  const reason = findDecisionReason(
-    decision,
-    decision.outcome === "failed" ? "failed" : undefined,
-  );
+  const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
   const shortReason = summarizeDecisionReason(reason);
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
   const viaLabel = modelLabel ? ` via ${modelLabel}` : "";
@@ -458,7 +454,7 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
 
 export function findDecisionReason(
   decision: MediaUnderstandingDecision,
-  outcome?: MediaUnderstandingAttemptOutcome,
+  outcome?: MediaUnderstandingModelDecision["outcome"],
 ): string | undefined {
   const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
   for (const attachment of attachments) {

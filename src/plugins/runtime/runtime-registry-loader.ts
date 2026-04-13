@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withActivatedPluginIds } from "../activation-context.js";
 import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
@@ -10,7 +11,10 @@ import {
   normalizePluginIdScope,
 } from "../plugin-scope.js";
 import { getActivePluginRegistry } from "../runtime.js";
-import { buildPluginRuntimeLoadOptions, resolvePluginRuntimeLoadContext } from "./load-context.js";
+import {
+  buildPluginRuntimeLoadOptionsFromValues,
+  resolvePluginRuntimeLoadContext,
+} from "./load-context.js";
 
 let pluginRegistryLoaded: "none" | "configured-channels" | "channels" | "all" = "none";
 
@@ -62,6 +66,13 @@ function activeRegistrySatisfiesScope(
   throw new Error("Unsupported plugin registry scope");
 }
 
+function shouldForwardChannelScope(params: {
+  scope: PluginRegistryScope;
+  scopedLoad: boolean;
+}): boolean {
+  return !params.scopedLoad && params.scope === "configured-channels";
+}
+
 export function ensurePluginRegistryLoaded(options?: {
   scope?: PluginRegistryScope;
   config?: OpenClawConfig;
@@ -78,6 +89,7 @@ export function ensurePluginRegistryLoaded(options?: {
     : scope === "configured-channels"
       ? resolveConfiguredChannelPluginIds({
           config: context.config,
+          activationSourceConfig: context.activationSourceConfig,
           workspaceDir: context.workspaceDir,
           env: context.env,
         })
@@ -105,14 +117,36 @@ export function ensurePluginRegistryLoaded(options?: {
     }
     return;
   }
+  const scopedConfig =
+    !scopedLoad && scope === "configured-channels" && expectedChannelPluginIds.length > 0
+      ? (withActivatedPluginIds({
+          config: context.config,
+          pluginIds: expectedChannelPluginIds,
+        }) ?? context.config)
+      : context.config;
+  const scopedActivationSourceConfig =
+    !scopedLoad && scope === "configured-channels" && expectedChannelPluginIds.length > 0
+      ? (withActivatedPluginIds({
+          config: context.activationSourceConfig,
+          pluginIds: expectedChannelPluginIds,
+        }) ?? context.activationSourceConfig)
+      : context.activationSourceConfig;
   loadOpenClawPlugins(
-    buildPluginRuntimeLoadOptions(context, {
-      throwOnLoadError: true,
-      ...(hasExplicitPluginIdScope(requestedPluginIds) ||
-      hasNonEmptyPluginIdScope(expectedChannelPluginIds)
-        ? { onlyPluginIds: expectedChannelPluginIds }
-        : {}),
-    }),
+    buildPluginRuntimeLoadOptionsFromValues(
+      {
+        ...context,
+        config: scopedConfig,
+        activationSourceConfig: scopedActivationSourceConfig,
+      },
+      {
+        throwOnLoadError: true,
+        ...(hasExplicitPluginIdScope(requestedPluginIds) ||
+        shouldForwardChannelScope({ scope, scopedLoad }) ||
+        hasNonEmptyPluginIdScope(expectedChannelPluginIds)
+          ? { onlyPluginIds: expectedChannelPluginIds }
+          : {}),
+      },
+    ),
   );
   if (!scopedLoad) {
     pluginRegistryLoaded = scope;
