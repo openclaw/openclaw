@@ -124,6 +124,11 @@ type AgentEventState = {
 };
 
 const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
+const AGENT_EVENT_TOOL_RAW_RESULT = Symbol.for("openclaw.agentEvents.toolRawResult");
+
+type AgentEventWithToolRawResult = Omit<AgentEventPayload, "seq" | "ts"> & {
+  [AGENT_EVENT_TOOL_RAW_RESULT]?: unknown;
+};
 
 function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
@@ -162,6 +167,24 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
 
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
+}
+
+export function withAgentEventToolRawResult<T extends Omit<AgentEventPayload, "seq" | "ts">>(
+  event: T,
+  rawResult: unknown,
+): T {
+  Object.defineProperty(event, AGENT_EVENT_TOOL_RAW_RESULT, {
+    value: rawResult,
+    enumerable: false,
+    configurable: true,
+  });
+  return event;
+}
+
+export function getAgentEventToolRawResult(event: AgentEventPayload): unknown {
+  return (event as AgentEventPayload & { [AGENT_EVENT_TOOL_RAW_RESULT]?: unknown })[
+    AGENT_EVENT_TOOL_RAW_RESULT
+  ];
 }
 
 export function clearAgentRunContext(runId: string) {
@@ -215,6 +238,13 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
     seq: nextSeq,
     ts: Date.now(),
   };
+  if (Object.prototype.hasOwnProperty.call(event, AGENT_EVENT_TOOL_RAW_RESULT)) {
+    Object.defineProperty(enriched, AGENT_EVENT_TOOL_RAW_RESULT, {
+      value: (event as AgentEventWithToolRawResult)[AGENT_EVENT_TOOL_RAW_RESULT],
+      enumerable: false,
+      configurable: true,
+    });
+  }
   notifyListeners(state.listeners, enriched);
 }
 

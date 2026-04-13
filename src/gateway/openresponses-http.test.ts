@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, withAgentEventToolRawResult } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
@@ -645,6 +645,51 @@ describe("OpenResponses HTTP API (e2e)", () => {
         "invalid_request_error",
       );
       await ensureResponseConsumed(resNoUser);
+
+      mockAgentOnce([{ text: "ok" }]);
+      const resTypedExtraFields = await postResponses(port, {
+        model: "openclaw",
+        input: [
+          {
+            type: "message",
+            id: "item_abc",
+            role: "user",
+            phase: "commentary",
+            content: "typed item with AI SDK extras",
+          },
+        ],
+      });
+      expect(resTypedExtraFields.status).toBe(200);
+      await ensureResponseConsumed(resTypedExtraFields);
+
+      mockAgentOnce([{ text: "ok" }]);
+      const resFunctionCallExtraFields = await postResponses(port, {
+        model: "openclaw",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: "continue from tool output",
+          },
+          {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "email_search",
+            arguments: "{}",
+            status: "completed",
+          },
+          {
+            type: "function_call_output",
+            id: "fco_1",
+            call_id: "call_1",
+            output: "[]",
+            status: "completed",
+          },
+        ],
+      });
+      expect(resFunctionCallExtraFields.status).toBe(200);
+      await ensureResponseConsumed(resFunctionCallExtraFields);
     } finally {
       // shared server
     }
@@ -737,6 +782,109 @@ describe("OpenResponses HTTP API (e2e)", () => {
         const parsed = JSON.parse(event.data) as { type?: string };
         expect(event.event).toBe(parsed.type);
       }
+
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId ?? "";
+        const rawToolResult: Record<string, unknown> = {
+          hits: [{ subject: "Quarterly planning" }],
+          count: 1n,
+        };
+        rawToolResult.self = rawToolResult;
+        const toolArgs: Record<string, unknown> = {
+          query: "quarterly planning",
+          count: 1n,
+        };
+        toolArgs.self = toolArgs;
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "email_search",
+            toolCallId: "tool_call_1",
+            args: toolArgs,
+          },
+        });
+        emitAgentEvent(
+          withAgentEventToolRawResult(
+            {
+              runId,
+              stream: "tool",
+              data: {
+                phase: "result",
+                name: "email_search",
+                toolCallId: "tool_call_1",
+                result: "[sanitized]",
+              },
+            },
+            rawToolResult,
+          ),
+        );
+        return { payloads: [{ text: "Found one email." }] };
+      }) as never);
+
+      const resToolEvents = await postResponses(port, {
+        stream: true,
+        model: "openclaw",
+        input: "search email",
+      });
+      expect(resToolEvents.status).toBe(200);
+      const toolEvents = parseSseEvents(await resToolEvents.text());
+      const parsedToolEvents = toolEvents
+        .filter((event) => event.data !== "[DONE]")
+        .map((event) => JSON.parse(event.data) as Record<string, unknown>);
+      const itemEvents = parsedToolEvents.filter(
+        (event) =>
+          event.type === "response.output_item.added" || event.type === "response.output_item.done",
+      );
+      const functionCallAdded = itemEvents.find(
+        (event) =>
+          event.type === "response.output_item.added" &&
+          (event.item as Record<string, unknown> | undefined)?.type === "function_call",
+      );
+      const functionCallDone = itemEvents.find(
+        (event) =>
+          event.type === "response.output_item.done" &&
+          (event.item as Record<string, unknown> | undefined)?.type === "function_call",
+      );
+      const functionCallOutputAdded = itemEvents.find(
+        (event) =>
+          event.type === "response.output_item.added" &&
+          (event.item as Record<string, unknown> | undefined)?.type === "function_call_output",
+      );
+      const functionCallOutputDone = itemEvents.find(
+        (event) =>
+          event.type === "response.output_item.done" &&
+          (event.item as Record<string, unknown> | undefined)?.type === "function_call_output",
+      );
+
+      expect(functionCallAdded?.output_index).toBe(1);
+      expect(functionCallDone?.output_index).toBe(functionCallAdded?.output_index);
+      expect((functionCallDone?.item as Record<string, unknown> | undefined)?.arguments).toBe(
+        JSON.stringify({
+          query: "quarterly planning",
+          count: "1",
+          self: "[Circular]",
+        }),
+      );
+      expect(functionCallOutputAdded?.output_index).toBe(2);
+      expect(functionCallOutputDone?.output_index).toBe(functionCallOutputAdded?.output_index);
+      expect((functionCallOutputDone?.item as Record<string, unknown> | undefined)?.output).toBe(
+        JSON.stringify({
+          hits: [{ subject: "Quarterly planning" }],
+          count: "1",
+          self: "[Circular]",
+        }),
+      );
+      const completed = parsedToolEvents.find((event) => event.type === "response.completed") as
+        | { response?: { output?: Array<Record<string, unknown>> } }
+        | undefined;
+      expect(completed?.response?.output?.map((item) => item.type)).toEqual([
+        "message",
+        "function_call",
+        "function_call_output",
+      ]);
     } finally {
       // shared server
     }
@@ -872,19 +1020,42 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it("falls back to payload text for streamed function_call responses", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
-    agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "Let me check that." }],
-      meta: {
-        stopReason: "tool_calls",
-        pendingToolCalls: [
-          {
-            id: "call_1",
-            name: "get_weather",
-            arguments: '{"city":"Taipei"}',
-          },
-        ],
-      },
-    } as never);
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "email_search",
+          toolCallId: "tool_call_1",
+          args: { query: "weather" },
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: "email_search",
+          toolCallId: "tool_call_1",
+          result: "No matching email.",
+        },
+      });
+      return {
+        payloads: [{ text: "Let me check that." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Taipei"}',
+            },
+          ],
+        },
+      };
+    }) as never);
 
     const res = await postResponses(port, {
       stream: true,
@@ -910,13 +1081,30 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }
     ).response;
     expect(response?.status).toBe("incomplete");
-    expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(response?.output?.map((item) => item.type)).toEqual([
+      "message",
+      "function_call",
+      "function_call_output",
+      "function_call",
+    ]);
     expect(response?.output?.[0]?.phase).toBe("commentary");
     expect(
       (((response?.output?.[0]?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
         ?.text as string | undefined) ?? "",
     ).toBe("Let me check that.");
-    expect(response?.output?.[1]?.name).toBe("get_weather");
+    expect(response?.output?.[1]?.name).toBe("email_search");
+    expect(response?.output?.[2]?.output).toBe("No matching email.");
+    expect(response?.output?.[3]?.name).toBe("get_weather");
+    const clientToolAdded = events
+      .filter((event) => event.data !== "[DONE]")
+      .map((event) => JSON.parse(event.data) as Record<string, unknown>)
+      .find(
+        (event) =>
+          event.type === "response.output_item.added" &&
+          (event.item as Record<string, unknown> | undefined)?.type === "function_call" &&
+          (event.item as Record<string, unknown> | undefined)?.name === "get_weather",
+      );
+    expect(clientToolAdded?.output_index).toBe(3);
     expect(events.some((event) => event.data === "[DONE]")).toBe(true);
   });
 
