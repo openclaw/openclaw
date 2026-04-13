@@ -1487,7 +1487,7 @@ function renderGroupedMessage(
                   : markdown
                     ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                         ${markdown.trim().startsWith("<audio")
-                          ? unsafeHTML(markdown)
+                          ? unsafeHTML(toSanitizedMarkdownHtml(markdown))
                           : markdown.includes("youtube.com/watch") ||
                               markdown.includes("youtube.com/embed") ||
                               markdown.includes("player.vimeo.com")
@@ -1554,7 +1554,7 @@ function renderGroupedMessage(
               : markdown
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                     ${markdown.trim().startsWith("<audio")
-                      ? unsafeHTML(markdown)
+                      ? unsafeHTML(toSanitizedMarkdownHtml(markdown))
                       : markdown.includes("youtube.com/watch") ||
                           markdown.includes("youtube.com/embed") ||
                           markdown.includes("player.vimeo.com")
