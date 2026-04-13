@@ -285,6 +285,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionEntry,
     }).enabled;
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
+  const agentStatusLabel = agentConfig?.statusLabel;
   const { buildStatusMessage } = await loadStatusMessageRuntime();
   return buildStatusMessage({
     config: cfg,
@@ -292,7 +293,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       ...agentDefaults,
       model: {
         ...toAgentModelListLike(agentDefaults.model),
-        primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
+        primary: params.primaryModelLabelOverride ?? agentStatusLabel ?? `${provider}/${model}`,
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),

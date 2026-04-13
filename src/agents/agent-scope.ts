@@ -58,6 +58,7 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   embeddedPi?: AgentEntry["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
+  statusLabel?: AgentEntry["statusLabel"];
   tools?: AgentEntry["tools"];
 };
 
@@ -167,6 +168,7 @@ export function resolveAgentConfig(
     embeddedPi:
       typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
     sandbox: entry.sandbox,
+    statusLabel: readStringValue(entry.statusLabel),
     tools: entry.tools,
   };
 }
