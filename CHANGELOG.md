@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/macOS: keep explicit `gateway.bind=loopback` pinned to `127.0.0.1` even when a preflight loopback bind probe fails, so foreground gateway startup no longer falls back to `0.0.0.0` and aborts with a non-loopback bind error. (#65619)
+
 ## 2026.4.12-beta.1
 
 ### Changes

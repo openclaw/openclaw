@@ -298,23 +298,24 @@ export function __resetContainerCacheForTest(): void {
 export async function resolveGatewayBindHost(
   bind: GatewayBindMode | undefined,
   customHost?: string,
+  opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string> {
   const mode = bind ?? "loopback";
+  const canBind = opts?.canBindToHost ?? canBindToHost;
 
   if (mode === "loopback") {
-    // 127.0.0.1 rarely fails, but handle gracefully
-    if (await canBindToHost("127.0.0.1")) {
-      return "127.0.0.1";
-    }
-    return "0.0.0.0"; // extreme fallback
+    // Keep explicit loopback requests pinned to loopback. A best-effort
+    // preflight probe can fail transiently on some hosts, and falling back to
+    // 0.0.0.0 turns a local-only bind into a startup rejection.
+    return "127.0.0.1";
   }
 
   if (mode === "tailnet") {
     const tailnetIP = pickPrimaryTailnetIPv4();
-    if (tailnetIP && (await canBindToHost(tailnetIP))) {
+    if (tailnetIP && (await canBind(tailnetIP))) {
       return tailnetIP;
     }
-    if (await canBindToHost("127.0.0.1")) {
+    if (await canBind("127.0.0.1")) {
       return "127.0.0.1";
     }
     return "0.0.0.0";
@@ -330,7 +331,7 @@ export async function resolveGatewayBindHost(
       return "0.0.0.0";
     } // invalid config → fall back to all
 
-    if (isValidIPv4(host) && (await canBindToHost(host))) {
+    if (isValidIPv4(host) && (await canBind(host))) {
       return host;
     }
     // Custom IP failed → fall back to LAN
@@ -343,7 +344,7 @@ export async function resolveGatewayBindHost(
     if (isContainerEnvironment()) {
       return "0.0.0.0";
     }
-    if (await canBindToHost("127.0.0.1")) {
+    if (await canBind("127.0.0.1")) {
       return "127.0.0.1";
     }
     return "0.0.0.0";

@@ -574,6 +574,14 @@ describe("resolveGatewayBindHost", () => {
     expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
   });
 
+  it("keeps explicit loopback mode on loopback when the probe fails", async () => {
+    expect(
+      await resolveGatewayBindHost("loopback", undefined, {
+        canBindToHost: async () => false,
+      }),
+    ).toBe("127.0.0.1");
+  });
+
   it("returns 0.0.0.0 for lan mode", async () => {
     expect(await resolveGatewayBindHost("lan")).toBe("0.0.0.0");
   });
