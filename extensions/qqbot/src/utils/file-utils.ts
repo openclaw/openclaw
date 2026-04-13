@@ -28,7 +28,6 @@ const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
   // 腾讯云COS
   "*.myqcloud.com",
   "*.tencentcos.cn",
-  "*.myqcloud.com",
   "*.tencentcos.com",
 ];
 
