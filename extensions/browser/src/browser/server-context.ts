@@ -1,3 +1,4 @@
+import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
@@ -189,7 +190,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
           const reachable = await isChromeReachable(
             profile.cdpUrl,
             200,
-            current.resolved.ssrfPolicy,
+            resolveCdpReachabilityPolicy(profile, current.resolved.ssrfPolicy),
           );
           if (reachable) {
             running = true;
