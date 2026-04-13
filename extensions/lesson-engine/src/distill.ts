@@ -46,16 +46,39 @@ export class NativeProvider implements DistillLLMProvider {
 
   async complete(prompt: string): Promise<string> {
     const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
-    const { prepareSimpleCompletionModelForAgent, completeWithPreparedSimpleCompletionModel } =
-      await import("openclaw/plugin-sdk/agent-runtime");
+    const {
+      prepareSimpleCompletionModelForAgent,
+      completeWithPreparedSimpleCompletionModel,
+      resolveNonCliModelRef,
+      resolveSimpleCompletionSelectionForAgent,
+    } = await import("openclaw/plugin-sdk/agent-runtime");
 
     const cfg = loadConfig();
-    const prepared = await prepareSimpleCompletionModelForAgent({
+    let prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId: this.agentId,
     });
     if ("error" in prepared) {
-      throw new Error(`NativeProvider: ${prepared.error}`);
+      // Agent may be configured with a CLI-only model (e.g. claude-cli/opus[1m])
+      // which cannot be used for simple completions. Fall back to the non-CLI equivalent.
+      const selection = resolveSimpleCompletionSelectionForAgent({ cfg, agentId: this.agentId });
+      if (selection) {
+        const nonCliRef = resolveNonCliModelRef(
+          { provider: selection.provider, model: selection.modelId },
+          cfg,
+        );
+        if (nonCliRef.provider !== selection.provider) {
+          const fallback = await prepareSimpleCompletionModelForAgent({
+            cfg,
+            agentId: this.agentId,
+            modelRef: nonCliRef.provider + "/" + nonCliRef.model,
+          });
+          if (!("error" in fallback)) prepared = fallback;
+        }
+      }
+      if ("error" in prepared) {
+        throw new Error("NativeProvider: " + prepared.error);
+      }
     }
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
