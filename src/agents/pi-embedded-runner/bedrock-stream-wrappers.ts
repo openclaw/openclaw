@@ -39,16 +39,9 @@ export function createBedrockServiceTierWrapper(
     if (model.api !== "bedrock-converse-stream") {
       return underlying(model, context, options);
     }
-    console.error(
-      `[bedrock-service-tier] Applying service_tier=${serviceTier} to model=${model.id}`,
-    );
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       if (payloadObj.serviceTier === undefined) {
         payloadObj.serviceTier = { type: serviceTier };
-        console.error(
-          `[bedrock-service-tier] Injected serviceTier into payload:`,
-          JSON.stringify(payloadObj.serviceTier),
-        );
       }
     });
   };
