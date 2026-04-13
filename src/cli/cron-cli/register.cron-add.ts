@@ -66,6 +66,7 @@ export function registerCronAddCommand(cron: Command) {
       .command("add")
       .alias("create")
       .description("Add a cron job")
+      .option("--id <id>", "Custom job ID (slug-like string, e.g. daily-brief)")
       .requiredOption("--name <name>", "Job name")
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
@@ -219,7 +220,24 @@ export function registerCronAddCommand(cron: Command) {
 
           const sessionKey = normalizeOptionalString(opts.sessionKey);
 
+          // Validate custom ID if provided
+          const customId = normalizeOptionalString(opts.id);
+          if (customId) {
+            // Validate ID format: slug-like string (lowercase alphanumeric, hyphens, underscores)
+            const idRegex = /^[a-z0-9][a-z0-9_-]*[a-z0-9]$/;
+            if (!idRegex.test(customId)) {
+              throw new Error(
+                "--id must be a slug-like string (lowercase alphanumeric, hyphens, underscores, 2+ chars)",
+              );
+            }
+            // Check for reasonable length
+            if (customId.length < 2 || customId.length > 100) {
+              throw new Error("--id must be between 2 and 100 characters");
+            }
+          }
+
           const params = {
+            id: customId,
             name,
             description,
             enabled: !opts.disabled,

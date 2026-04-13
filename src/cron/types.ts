@@ -155,6 +155,8 @@ export type CronStoreFile = {
 
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
   state?: Partial<CronJobState>;
+  /** Optional custom job ID. If omitted, a UUID will be generated. */
+  id?: string;
 };
 
 export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {

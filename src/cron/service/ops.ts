@@ -264,6 +264,16 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
+
+    // Check for ID collision if custom ID is provided
+    if (input.id) {
+      const existingJob = state.store?.jobs.find((job) => job.id === input.id,
+      );
+      if (existingJob) {
+        throw new Error(`Job with id "${input.id}" already exists`);
+      }
+    }
+
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
