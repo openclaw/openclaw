@@ -10,6 +10,7 @@ import {
   prepareArchiveOutputPath,
   withStagedArchiveDestination,
 } from "./archive-staging.js";
+import { sameFileIdentity } from "./file-identity.js";
 
 const directorySymlinkType = process.platform === "win32" ? "junction" : undefined;
 
@@ -159,6 +160,46 @@ describe("archive-staging helpers", () => {
         ).rejects.toMatchObject({
           code: "destination-symlink-traversal",
         } satisfies Partial<ArchiveSecurityError>);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "re-validates destination identity during merge writes",
+    async () => {
+      await withTempDir({ prefix: "openclaw-archive-staging-" }, async (rootDir) => {
+        const sourceDir = path.join(rootDir, "source");
+        const sourceNestedDir = path.join(sourceDir, "package");
+        const destDir = path.join(rootDir, "dest");
+        await fs.mkdir(sourceNestedDir, { recursive: true });
+        await fs.mkdir(destDir, { recursive: true });
+        await fs.writeFile(path.join(sourceNestedDir, "payload.txt"), "hi", "utf8");
+
+        const destinationRealDir = await prepareArchiveDestinationDir(destDir);
+        const pinnedDest = await fs.lstat(destDir);
+        let callbackCalls = 0;
+
+        await expect(
+          mergeExtractedTreeIntoDestination({
+            sourceDir,
+            destinationDir: destDir,
+            destinationRealDir,
+            beforeEachDestinationWrite: async () => {
+              callbackCalls += 1;
+              if (callbackCalls === 2) {
+                const reboundDir = `${destDir}-rebound`;
+                await fs.rename(destDir, reboundDir);
+                await fs.mkdir(destDir, { recursive: true });
+              }
+              const currentDest = await fs.lstat(destDir);
+              if (!sameFileIdentity(currentDest, pinnedDest)) {
+                throw new Error("destination directory changed during merge");
+              }
+            },
+          }),
+        ).rejects.toThrow("destination directory changed during merge");
+
+        expect(callbackCalls).toBeGreaterThanOrEqual(2);
       });
     },
   );

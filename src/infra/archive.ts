@@ -634,13 +634,11 @@ export async function extractArchive(params: {
                 }
               },
             });
-            if (params.beforeWriteToDestination) {
-              await params.beforeWriteToDestination();
-            }
             await mergeExtractedTreeIntoDestination({
               sourceDir: stagingDir,
               destinationDir: destinationRealDir,
               destinationRealDir,
+              beforeEachDestinationWrite: params.beforeWriteToDestination,
             });
           },
         });

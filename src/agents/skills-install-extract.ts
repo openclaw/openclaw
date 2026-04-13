@@ -136,6 +136,7 @@ async function extractTarBz2WithStaging(params: {
         sourceDir: stagingDir,
         destinationDir: params.destinationRealDir,
         destinationRealDir: params.destinationRealDir,
+        beforeEachDestinationWrite: params.beforeMerge,
       });
       return extractResult;
     },

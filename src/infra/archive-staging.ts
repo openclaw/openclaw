@@ -150,7 +150,14 @@ export async function mergeExtractedTreeIntoDestination(params: {
   sourceDir: string;
   destinationDir: string;
   destinationRealDir: string;
+  beforeEachDestinationWrite?: () => Promise<void>;
 }): Promise<void> {
+  const runBeforeEachDestinationWrite = async (): Promise<void> => {
+    if (params.beforeEachDestinationWrite) {
+      await params.beforeEachDestinationWrite();
+    }
+  };
+
   const walk = async (currentSourceDir: string): Promise<void> => {
     const entries = await fs.readdir(currentSourceDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -165,6 +172,7 @@ export async function mergeExtractedTreeIntoDestination(params: {
       }
 
       if (sourceStat.isDirectory()) {
+        await runBeforeEachDestinationWrite();
         await prepareArchiveOutputPath({
           destinationDir: params.destinationDir,
           destinationRealDir: params.destinationRealDir,
@@ -174,6 +182,7 @@ export async function mergeExtractedTreeIntoDestination(params: {
           isDirectory: true,
         });
         await walk(sourcePath);
+        await runBeforeEachDestinationWrite();
         await applyStagedEntryMode({
           destinationRealDir: params.destinationRealDir,
           relPath,
@@ -187,6 +196,7 @@ export async function mergeExtractedTreeIntoDestination(params: {
         throw new Error(`archive staging contains unsupported entry: ${originalPath}`);
       }
 
+      await runBeforeEachDestinationWrite();
       await prepareArchiveOutputPath({
         destinationDir: params.destinationDir,
         destinationRealDir: params.destinationRealDir,
@@ -195,12 +205,14 @@ export async function mergeExtractedTreeIntoDestination(params: {
         originalPath,
         isDirectory: false,
       });
+      await runBeforeEachDestinationWrite();
       await copyFileWithinRoot({
         sourcePath,
         rootDir: params.destinationRealDir,
         relativePath: relPath,
         mkdir: true,
       });
+      await runBeforeEachDestinationWrite();
       await applyStagedEntryMode({
         destinationRealDir: params.destinationRealDir,
         relPath,

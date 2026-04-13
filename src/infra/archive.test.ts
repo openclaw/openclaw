@@ -420,9 +420,11 @@ describe("archive utils", () => {
           timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
           beforeWriteToDestination: async () => {
             callbackCalls += 1;
-            const reboundDir = `${extractDir}-rebound`;
-            await fs.rename(extractDir, reboundDir);
-            await fs.mkdir(extractDir, { recursive: true });
+            if (callbackCalls === 2) {
+              const reboundDir = `${extractDir}-rebound`;
+              await fs.rename(extractDir, reboundDir);
+              await fs.mkdir(extractDir, { recursive: true });
+            }
             const current = await fs.lstat(extractDir);
             if (!sameFileIdentity(current, pinned)) {
               throw new Error("destination directory changed during extract");
@@ -431,7 +433,7 @@ describe("archive utils", () => {
         }),
       ).rejects.toThrow("destination directory changed during extract");
 
-      expect(callbackCalls).toBe(1);
+      expect(callbackCalls).toBeGreaterThanOrEqual(2);
       await expectPathMissing(path.join(extractDir, "package", "hello.txt"));
     });
   });
