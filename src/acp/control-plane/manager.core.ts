@@ -1779,6 +1779,7 @@ export class AcpSessionManager {
     const updated = await this.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      failOnError: true,
       mutate: (current, entry) => {
         if (!entry) {
           return null;
