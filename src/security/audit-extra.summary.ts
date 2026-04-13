@@ -225,7 +225,8 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
     pluginConfig?.webSearch !== undefined &&
     pluginConfig.webSearch !== null &&
     typeof pluginConfig.webSearch === "object";
-  if (youPlugin?.enabled !== true && !webSearchConfigExists) {
+  const inAllowList = Array.isArray(allow) && allow.some((id) => normalizePluginId(id) === "you");
+  if (youPlugin?.enabled !== true && !webSearchConfigExists && !inAllowList) {
     return false;
   }
   const envValue = env.YDC_API_KEY;

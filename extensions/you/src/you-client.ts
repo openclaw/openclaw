@@ -202,8 +202,8 @@ export async function runYouSearch(params: YouSearchParams): Promise<Record<stri
     type: "news",
   }));
 
-  // Combine web and news results
-  const results = [...webResults, ...newsResults];
+  // Combine web and news results, truncate to requested count
+  const results = [...webResults, ...newsResults].slice(0, count);
 
   const result: Record<string, unknown> = {
     query: params.query,
