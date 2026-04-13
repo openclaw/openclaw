@@ -83,7 +83,7 @@ describe("collectChannelLegacyConfigRules", () => {
         path: ["channels", "custom-chat", "legacy"],
         message: "legacy custom rule",
       },
-    ]);
+    ] satisfies LegacyConfigRule[]);
 
     const rules = collectChannelLegacyConfigRules({
       channels: {
