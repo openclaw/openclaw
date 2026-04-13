@@ -496,7 +496,23 @@ function imgUrl(id,animated){
 }
 function langClass(lang){return{ja:'b-ja',en:'b-en','zh-tw':'b-zh',zh:'b-zh',th:'b-th'}[lang]||'b-uni';}
 function langLabel(lang){return lang==='universal'?'uni':lang;}
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function esc(s,mode='html'){
+  const str=String(s||'');
+  if(mode==='js'){
+    // Return a JS string literal that is also safe to embed in HTML attributes.
+    return JSON.stringify(str)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+  return str
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
 
 /* ── desc parse / build ── */
 function parseDesc(raw){
@@ -571,12 +587,12 @@ function renderPkgs(){
     const url=firstId?imgUrl(firstId,p.animated):'';
     const edited=editedPkgs.has(k);
     return`<div class="pkg-card ${edited?'has-edit':''}">
-      <div class="pkg-thumb" onclick="goTo('stickers','${esc(k)}')">
+      <div class="pkg-thumb" onclick="goTo('stickers',${esc(k,'js')})">
         ${url?`<img src="${esc(url)}" onerror="this.style.display='none'" loading="lazy" alt="">`:'<span style="font-size:36px">📦</span>'}
         ${p.animated?'<div class="anim-badge">anim</div>':''}
       </div>
       <div class="pkg-body">
-        <div class="pkg-name" onclick="goTo('stickers','${esc(k)}')">${esc(p.name||k)}</div>
+        <div class="pkg-name" onclick="goTo('stickers',${esc(k,'js')})">${esc(p.name||k)}</div>
         <div class="pkg-sub">#${esc(String(p.packageId||k))} · ${stickers.length} stickers${edited?' · <strong style="color:var(--info-text)">edited</strong>':''}</div>
         <div class="pkg-meta">
           ${p.lang?`<span class="badge ${langClass(p.lang)}">${langLabel(p.lang)}</span>`:''}
@@ -584,8 +600,8 @@ function renderPkgs(){
           ${p.register?`<span class="badge b-uni">${esc(p.register)}</span>`:''}
         </div>
         <div class="pkg-actions">
-          <button onclick="goTo('stickers','${esc(k)}')">Open</button>
-          <button onclick="openPkgEdit('${esc(k)}')">Edit info</button>
+          <button onclick="goTo('stickers',${esc(k,'js')})">Open</button>
+          <button onclick="openPkgEdit(${esc(k,'js')})">Edit info</button>
         </div>
       </div>
     </div>`;

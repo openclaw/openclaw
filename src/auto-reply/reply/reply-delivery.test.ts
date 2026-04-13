@@ -34,11 +34,13 @@ describe("createBlockReplyDeliveryHandler", () => {
       directlySentBlockKeys,
     });
 
-    await handler({
+    const originalPayload = {
       text: "here's the vibe",
       mediaUrls: ["/tmp/generated.png"],
       replyToCurrent: true,
-    });
+    };
+
+    await handler(originalPayload);
 
     const strippedPayload = {
       text: undefined,
@@ -51,7 +53,7 @@ describe("createBlockReplyDeliveryHandler", () => {
     };
 
     expect(onBlockReply).toHaveBeenCalledWith(strippedPayload);
-    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(strippedPayload)]));
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(originalPayload)]));
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
   });
 
