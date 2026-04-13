@@ -27,6 +27,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
+patchedDependencies:
+  '@whiskeysockets/baileys@7.0.0-rc.9':
+    hash: c79c66180c377cf57f4dd1657c85b572fafb3cf9667ea36af5d4a991eb6bb709
+    path: patches/@whiskeysockets__baileys@7.0.0-rc.9.patch
+
 importers:
 
   .:
@@ -1218,7 +1223,7 @@ importers:
     dependencies:
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
-        version: 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
+        version: 7.0.0-rc.9(patch_hash=c79c66180c377cf57f4dd1657c85b572fafb3cf9667ea36af5d4a991eb6bb709)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
@@ -11405,7 +11410,7 @@ snapshots:
       '@wasm-audio-decoders/common': 9.0.7
     optional: true
 
-  '@whiskeysockets/baileys@7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)':
+  '@whiskeysockets/baileys@7.0.0-rc.9(patch_hash=c79c66180c377cf57f4dd1657c85b572fafb3cf9667ea36af5d4a991eb6bb709)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)':
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4
