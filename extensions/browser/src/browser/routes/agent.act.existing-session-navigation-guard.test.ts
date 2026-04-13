@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createExistingSessionAgentSharedModule } from "./existing-session.test-support.js";
+import {
+  createExistingSessionAgentSharedModule,
+  existingSessionRouteState,
+} from "./existing-session.test-support.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const chromeMcpMocks = vi.hoisted(() => ({
@@ -37,6 +40,7 @@ vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 const DEFAULT_SSRF_POLICY = { allowPrivateNetwork: false } as const;
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
+const routeState = existingSessionRouteState;
 
 function getActPostHandler(
   ssrfPolicy: { allowPrivateNetwork: false } | null = DEFAULT_SSRF_POLICY,
@@ -65,6 +69,13 @@ describe("existing-session interaction navigation guard", () => {
       fn.mockClear();
     }
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue("https://example.com");
+    routeState.profileCtx.listTabs.mockReset();
+    routeState.profileCtx.listTabs.mockResolvedValue([
+      {
+        targetId: "7",
+        url: "https://example.com",
+      },
+    ]);
   });
 
   afterEach(() => {
@@ -140,6 +151,37 @@ describe("existing-session interaction navigation guard", () => {
     expectNavigationProbeUrls([
       "https://example.com",
       "http://169.254.169.254/latest/meta-data/",
+      "http://169.254.169.254/latest/meta-data/",
+    ]);
+  });
+
+  it("checks URLs for tabs opened during the interaction window", async () => {
+    routeState.profileCtx.listTabs
+      .mockResolvedValueOnce([
+        {
+          targetId: "7",
+          url: "https://example.com",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          targetId: "7",
+          url: "https://example.com",
+        },
+        {
+          targetId: "9",
+          url: "http://169.254.169.254/latest/meta-data/",
+        },
+      ]);
+
+    const response = await runAction({ kind: "click", ref: "btn-1" });
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledOnce();
+    expectNavigationProbeUrls([
+      "https://example.com",
+      "https://example.com",
+      "https://example.com",
       "http://169.254.169.254/latest/meta-data/",
     ]);
   });
@@ -243,6 +285,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledOnce();
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
+    expect(routeState.profileCtx.listTabs).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 

@@ -21,6 +21,12 @@ const chromeMcpMocks = vi.hoisted(() => ({
   })),
 }));
 
+const navigationGuardMocks = vi.hoisted(() => ({
+  assertBrowserNavigationAllowed: vi.fn(async () => {}),
+  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  withBrowserNavigationPolicy: vi.fn(() => ({})),
+}));
+
 vi.mock("../chrome-mcp.js", () => ({
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpTab: vi.fn(async () => {}),
@@ -42,9 +48,9 @@ vi.mock("../cdp.js", () => ({
 }));
 
 vi.mock("../navigation-guard.js", () => ({
-  assertBrowserNavigationAllowed: vi.fn(async () => {}),
-  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
-  withBrowserNavigationPolicy: vi.fn(() => ({})),
+  assertBrowserNavigationAllowed: navigationGuardMocks.assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed: navigationGuardMocks.assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy: navigationGuardMocks.withBrowserNavigationPolicy,
 }));
 
 vi.mock("../screenshot.js", () => ({
@@ -99,10 +105,14 @@ function getActPostHandler() {
 describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
+    routeState.profileCtx.listTabs.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
+    navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
+    navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript
       .mockResolvedValueOnce({ labels: 1, skipped: 0 } as never)
       .mockResolvedValueOnce(true);
@@ -124,6 +134,9 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledWith({
       profileName: "chrome-live",
       targetId: "7",
+    });
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+      url: "https://example.com",
     });
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
@@ -152,6 +165,9 @@ describe("existing-session browser routes", () => {
       uid: "btn-1",
       fullPage: false,
       format: "jpeg",
+    });
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+      url: "https://example.com",
     });
   });
 
