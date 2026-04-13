@@ -372,11 +372,11 @@ export async function runSearchSetupFlow(
     if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
       return existingProvider;
     }
-    const detected = providerOptions.find((entry) => providerIsReady(config, entry));
-    if (detected) {
-      return detected.id;
+    const readyProviders = providerOptions.filter((entry) => providerIsReady(config, entry));
+    if (readyProviders.length > 0) {
+      return readyProviders[Math.floor(Math.random() * readyProviders.length)].id;
     }
-    return providerOptions[0].id;
+    return providerOptions[Math.floor(Math.random() * providerOptions.length)].id;
   })();
 
   const choice = await prompter.select({
