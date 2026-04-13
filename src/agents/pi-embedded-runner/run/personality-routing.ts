@@ -166,11 +166,6 @@ export function buildPersonalityHybridModelName(executionModelId: string): strin
 }
 
 /**
- * The instruction appended to execution payloads when they're sent to
- * the personality model for emotional closeout. The personality model
- * rewrites the visible text while keeping all factual content intact.
- */
-/**
  * The closeout instruction for the pre-send personality sanitizer. The
  * personality model already has SOUL.md in its system prompt (loaded from
  * workspace bootstrap files during attempt setup), so it naturally adopts
@@ -242,8 +237,14 @@ export async function runPersonalityCloseout(params: {
         ],
       },
       {
-        maxTokens: 2048,
-        signal: params.signal,
+        // Scale maxTokens to the input size so the personality model has
+        // enough room to rewrite the text. For 16k chars of input (roughly
+        // 4k tokens), 8192 output tokens is generous.
+        maxTokens: Math.min(8192, Math.max(2048, Math.ceil(proseOnly.length / 2))),
+        // Bound the closeout to 15 seconds so a stalled personality model
+        // doesn't block reply delivery. The catch block falls back to the
+        // original text if this fires.
+        signal: params.signal ?? AbortSignal.timeout(15_000),
       },
     );
     // AssistantMessage has .content (array of content blocks)

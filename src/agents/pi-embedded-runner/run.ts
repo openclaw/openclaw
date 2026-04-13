@@ -287,10 +287,14 @@ export async function runEmbeddedPiAgent(
       });
       const personalityMode =
         resolveAgentPersonalityMode(params.config, earlySessionAgentId) ?? "off";
-      const personalityModelRef =
-        personalityMode === "hybrid"
-          ? resolveAgentPersonalityModel(params.config, earlySessionAgentId)
-          : undefined;
+      // Resolve the personality model ref when EITHER hybrid mode or sanitizer
+      // is active. The sanitizer can run independently of hybrid routing.
+      const sanitizerMayRun =
+        resolveAgentPersonalitySanitizer(params.config, earlySessionAgentId) === true ||
+        personalityMode === "hybrid";
+      const personalityModelRef = sanitizerMayRun
+        ? resolveAgentPersonalityModel(params.config, earlySessionAgentId)
+        : undefined;
       const turnIntent =
         personalityMode === "hybrid"
           ? classifyTurnIntent({
