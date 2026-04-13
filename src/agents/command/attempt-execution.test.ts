@@ -27,7 +27,9 @@ describe("resolveFallbackRetryPrompt", () => {
         isFallbackRetry: true,
         sessionHasHistory: true,
       }),
-    ).toBe("Continue where you left off. The previous model attempt failed or timed out.");
+    ).toBe(
+      "[System: Previous model attempt failed. Continuing from where you left off.]\n\nSummarize the quarterly earnings report and highlight key trends.",
+    );
   });
 
   it("preserves original body for fallback retry when session has no history (subagent spawn)", () => {
