@@ -280,6 +280,8 @@ def load_sumo_network_edges(workspace: Path, receipt: dict[str, Any]) -> list[di
             minutes = parse_float(row.get("minutes"), 0)
             if from_zone and to_zone and minutes > 0:
                 rows.append({"from": from_zone, "to": to_zone, "minutes": minutes})
+                if str(row.get("directed", "")).lower() not in {"1", "true", "yes"}:
+                    rows.append({"from": to_zone, "to": from_zone, "minutes": minutes})
     return rows
 
 

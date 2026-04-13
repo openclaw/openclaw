@@ -11,7 +11,7 @@ from pathlib import Path
 
 from clawmodeler_engine.contracts import validate_artifact_file, validate_contract
 from clawmodeler_engine.demo import write_demo_inputs
-from clawmodeler_engine.model import graphml_edge_minutes
+from clawmodeler_engine.model import graphml_edge_minutes, load_graphml_zone_graph
 from clawmodeler_engine.toolbox import assess_model_inventory, load_toolbox
 from clawmodeler_engine.workspace import InputValidationError
 
@@ -974,6 +974,92 @@ class ClawModelerEngineTest(unittest.TestCase):
     def test_graphml_edge_minutes_accepts_osmnx_seconds_and_length_speed(self) -> None:
         self.assertEqual(graphml_edge_minutes({"travel_time": "600"}), 10)
         self.assertEqual(graphml_edge_minutes({"length": "1000", "speed_kph": "60"}), 1)
+
+    def test_graphml_loader_handles_missing_namespace_or_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            graphml = Path(temp_dir) / "bare.graphml"
+            graphml.write_text(
+                """<graphml>
+  <key id="d0" for="edge" attr.name="travel_time" attr.type="double"/>
+  <edge source="n1" target="n2"><data key="d0">300</data></edge>
+</graphml>
+""",
+                encoding="utf-8",
+            )
+
+            graph = load_graphml_zone_graph(graphml)
+
+            self.assertEqual(graph["n1"], [("n2", 5)])
+
+    def test_graphml_cache_without_zone_node_map_uses_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            workspace = temp / "workspace"
+            zones = temp / "zones.geojson"
+            socio = temp / "socio.csv"
+            question = temp / "question.json"
+            zones.write_text(
+                json.dumps(
+                    {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {
+                                "type": "Feature",
+                                "properties": {"zone_id": "a"},
+                                "geometry": {"type": "Point", "coordinates": [-121.75, 38.55]},
+                            },
+                            {
+                                "type": "Feature",
+                                "properties": {"zone_id": "b"},
+                                "geometry": {"type": "Point", "coordinates": [-121.73, 38.56]},
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            socio.write_text("zone_id,population,jobs\na,10,5\nb,20,80\n", encoding="utf-8")
+            question.write_text(json.dumps({"question_type": "accessibility"}), encoding="utf-8")
+
+            self.run_engine(
+                "intake",
+                "--workspace",
+                str(workspace),
+                "--inputs",
+                str(zones),
+                str(socio),
+            )
+            graph_dir = workspace / "cache" / "graphs"
+            graph_dir.mkdir(parents=True, exist_ok=True)
+            (graph_dir / "osmnx.graphml").write_text(
+                """<graphml xmlns="http://graphml.graphdrawing.org/xmlns">
+  <graph id="G" edgedefault="directed">
+    <edge source="n1" target="n2"/>
+  </graph>
+</graphml>
+""",
+                encoding="utf-8",
+            )
+
+            self.run_engine("plan", "--workspace", str(workspace), "--question", str(question))
+            self.run_engine(
+                "run",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                "unmapped-graphml",
+                "--scenarios",
+                "baseline",
+            )
+            accessibility = (
+                workspace
+                / "runs"
+                / "unmapped-graphml"
+                / "outputs"
+                / "tables"
+                / "accessibility_by_zone.csv"
+            ).read_text(encoding="utf-8")
+            self.assertIn("euclidean_proxy", accessibility)
 
     def test_osmnx_graph_command_reports_missing_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

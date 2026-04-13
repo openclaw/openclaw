@@ -142,12 +142,7 @@ def nearest_node(lat: float, lon: float, nodes: list[dict[str, Any]]) -> dict[st
 def register_zone_node_map(receipt: dict[str, Any], path: Path) -> None:
     artifact = describe_input(path, path).to_json()
     receipt["inputs"] = [
-        item
-        for item in receipt.get("inputs", [])
-        if not (
-            item.get("kind") == "zone_node_map_csv"
-            and Path(str(item.get("staged_path", ""))) == path
-        )
+        item for item in receipt.get("inputs", []) if item.get("kind") != "zone_node_map_csv"
     ]
     receipt.setdefault("inputs", []).append(artifact)
 

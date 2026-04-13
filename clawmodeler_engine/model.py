@@ -277,9 +277,8 @@ def load_travel_time_graph(
     paths = artifact_paths(workspace, receipt, "network_edges_csv")
     if paths:
         return load_network_edges_csv(paths[0]), "network_edges_dijkstra", zone_node_map
-    workspace_root = Path(str(receipt.get("workspace", {}).get("root", "")))
-    graphml_paths = sorted((workspace_root / "cache" / "graphs").glob("*.graphml"))
-    if graphml_paths:
+    graphml_paths = sorted((workspace / "cache" / "graphs").glob("*.graphml"))
+    if graphml_paths and zone_node_map:
         return load_graphml_zone_graph(graphml_paths[0]), "graphml_dijkstra", zone_node_map
     return {}, "", zone_node_map
 
@@ -315,9 +314,10 @@ def load_network_edges_csv(path: Path) -> dict[str, list[tuple[str, float]]]:
 
 def load_graphml_zone_graph(path: Path) -> dict[str, list[tuple[str, float]]]:
     root = ElementTree.parse(path).getroot()
-    namespace = {"g": "http://graphml.graphdrawing.org/xmlns"}
+    elements = list(root.iter())
+    graph_elem = next((element for element in elements if local_name(element.tag) == "graph"), None)
     key_names: dict[str, str] = {}
-    for key in root.findall("g:key", namespace):
+    for key in (element for element in elements if local_name(element.tag) == "key"):
         key_id = key.attrib.get("id")
         attr_name = key.attrib.get("attr.name")
         if key_id and attr_name:
@@ -325,14 +325,15 @@ def load_graphml_zone_graph(path: Path) -> dict[str, list[tuple[str, float]]]:
 
     graph: dict[str, list[tuple[str, float]]] = {}
     directed_default = (
-        root.find(".//g:graph", namespace).attrib.get("edgedefault", "directed").lower()
-        == "directed"
+        graph_elem.attrib.get("edgedefault", "directed").lower() == "directed"
+        if graph_elem is not None
+        else True
     )
-    for edge in root.findall(".//g:edge", namespace):
+    for edge in (element for element in elements if local_name(element.tag) == "edge"):
         source = edge.attrib.get("source", "")
         target = edge.attrib.get("target", "")
         values: dict[str, str] = {}
-        for data in edge.findall("g:data", namespace):
+        for data in (child for child in edge if local_name(child.tag) == "data"):
             key_name = key_names.get(data.attrib.get("key", ""), "")
             if key_name:
                 values[key_name] = data.text or ""
@@ -819,7 +820,10 @@ def parse_gtfs_time(value: str | None) -> int | None:
     parts = value.split(":")
     if len(parts) != 3:
         return None
-    hours, minutes, seconds = (int(part) for part in parts)
+    try:
+        hours, minutes, seconds = (int(part) for part in parts)
+    except ValueError:
+        return None
     return hours * 3600 + minutes * 60 + seconds
 
 
@@ -880,6 +884,10 @@ def parse_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
 
 
 def normalized_score(value: float) -> float:
