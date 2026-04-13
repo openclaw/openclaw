@@ -392,6 +392,7 @@ export function pruneContextMessages(params: {
   }
 
   const prunableToolIndexes: number[] = [];
+  let hasPrunableImageToolResult = false;
   let next: AgentMessage[] | null = null;
 
   for (let i = pruneStartIndex; i < cutoffIndex; i++) {
@@ -403,6 +404,9 @@ export function pruneContextMessages(params: {
       continue;
     }
     prunableToolIndexes.push(i);
+    if (hasImageBlocks((msg as unknown as ToolResultMessage).content)) {
+      hasPrunableImageToolResult = true;
+    }
 
     const microCompressed = maybeMicroCompressToolResultMessage({
       msg: msg as unknown as ToolResultMessage,
@@ -422,7 +426,7 @@ export function pruneContextMessages(params: {
   }
 
   ratio = totalChars / charWindow;
-  if (ratio < settings.softTrimRatio) {
+  if (ratio < settings.softTrimRatio && !hasPrunableImageToolResult) {
     return next ?? messages;
   }
   for (const i of prunableToolIndexes) {
