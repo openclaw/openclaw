@@ -291,7 +291,11 @@ export class MediaAttachmentCache {
         entry.resolvedPath = undefined;
         return undefined;
       }
-      const canonicalPath = await fs.realpath(currentPath).catch(() => currentPath);
+      const canonicalPath = await this.resolveCanonicalLocalPath(currentPath);
+      if (!canonicalPath) {
+        entry.resolvedPath = undefined;
+        return undefined;
+      }
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
       if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
         entry.resolvedPath = undefined;
@@ -349,7 +353,13 @@ export class MediaAttachmentCache {
           `Attachment ${params.attachmentIndex + 1} has no path or URL.`,
         );
       }
-      const canonicalPath = await fs.realpath(params.filePath).catch(() => params.filePath);
+      const canonicalPath = await this.resolveCanonicalLocalPath(params.filePath);
+      if (!canonicalPath) {
+        throw new MediaUnderstandingSkipError(
+          "empty",
+          `Attachment ${params.attachmentIndex + 1} has no path or URL.`,
+        );
+      }
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
       if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
         throw new MediaUnderstandingSkipError(
@@ -367,6 +377,19 @@ export class MediaAttachmentCache {
       return { buffer, filePath: canonicalPath };
     } finally {
       await handle.close().catch(() => {});
+    }
+  }
+
+  private async resolveCanonicalLocalPath(filePath: string): Promise<string | undefined> {
+    try {
+      return await fs.realpath(filePath);
+    } catch (err) {
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `Blocked attachment path when canonicalization failed: ${filePath} (${String(err)})`,
+        );
+      }
+      return undefined;
     }
   }
 }

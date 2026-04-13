@@ -169,4 +169,29 @@ describe("media understanding attachments SSRF", () => {
       expect(openedFlags).toBe(fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     });
   });
+
+  it("rejects local attachments when canonicalization fails", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-realpath-failure-" }, async (base) => {
+      const allowedRoot = path.join(base, "allowed");
+      const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
+      await fs.mkdir(allowedRoot, { recursive: true });
+      await fs.writeFile(attachmentPath, "ok");
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
+        localPathRoots: [allowedRoot],
+      });
+      const originalRealpath = fs.realpath.bind(fs);
+
+      vi.spyOn(fs, "realpath").mockImplementation(async (candidatePath) => {
+        if (String(candidatePath) === attachmentPath) {
+          throw new Error("EACCES");
+        }
+        return await originalRealpath(candidatePath);
+      });
+
+      await expect(
+        cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+      ).rejects.toThrow(/has no path or URL/i);
+    });
+  });
 });
