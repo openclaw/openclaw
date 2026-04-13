@@ -475,13 +475,13 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
-          // When suppressTextBlockDelivery is enabled, skip all model response
-          // deliveries. Messages sent via the message() tool or gateway send RPC
-          // bypass this callback entirely, so only model output blocks are affected.
-          if (telegramCfg.suppressTextBlockDelivery) {
+          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          // When suppressTextBlockDelivery is enabled, skip text-only deliveries.
+          // Media payloads (images, TTS audio) must still go through so that
+          // voice sending and VOICE_MESSAGES_FORBIDDEN fallback work correctly.
+          if (telegramCfg.suppressTextBlockDelivery && !hasMedia) {
             return;
           }
-          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
