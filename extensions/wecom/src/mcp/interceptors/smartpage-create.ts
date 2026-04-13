@@ -29,6 +29,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { wecomMcpLog } from "../../loggers.js";
 import type { CallInterceptor, CallContext, BeforeCallOptions } from "./types.js";
 
 // ============================================================================
@@ -54,15 +55,41 @@ const MAX_TOTAL_FILE_SIZE = 20 * 1024 * 1024;
 async function validateFileSize(pages: Record<string, unknown>[]): Promise<void> {
   let totalSize = 0;
 
+  // Resolve trusted roots once for path validation (aligned with readFile phase)
+  const trustedRoots = [process.cwd(), "/tmp"];
+  const realTrustedRoots = await Promise.all(
+    trustedRoots.map(async (root) => {
+      try {
+        return await fs.realpath(path.resolve(root));
+      } catch {
+        return path.resolve(root);
+      }
+    }),
+  );
+
   for (let i = 0; i < pages.length; i++) {
     const filePath = pages[i].page_filepath;
     if (typeof filePath !== "string" || !filePath) {
       continue;
     }
 
+    // Validate path against trusted roots before stat (prevent arbitrary path probing)
+    let resolved: string;
+    try {
+      resolved = await fs.realpath(path.resolve(filePath));
+    } catch {
+      resolved = path.resolve(filePath);
+    }
+    const inTrustedRoot = realTrustedRoots.some((r) => {
+      return resolved === r || resolved.startsWith(r + path.sep);
+    });
+    if (!inTrustedRoot) {
+      throw new Error(`路径 "${filePath}" 不在允许的目录范围内（仅允许工作目录和 /tmp）`);
+    }
+
     let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {
-      stat = await fs.stat(filePath);
+      stat = await fs.stat(resolved);
     } catch {
       // stat failure not handled here; left for the subsequent readFile phase to throw a more detailed error
       continue;
@@ -87,8 +114,8 @@ async function validateFileSize(pages: Record<string, unknown>[]): Promise<void>
   }
 
   if (totalSize > 0) {
-    console.log(
-      `[mcp] smartpage_create: 文件大小校验通过，总计 ${(totalSize / 1024 / 1024).toFixed(2)}MB`,
+    wecomMcpLog.debug(
+      `smartpage_create: 文件大小校验通过，总计 ${(totalSize / 1024 / 1024).toFixed(2)}MB`,
     );
   }
 }
@@ -98,7 +125,7 @@ async function resolvePages(
   ctx: CallContext,
   pages: Record<string, unknown>[],
 ): Promise<BeforeCallOptions> {
-  console.log(`[mcp] smartpage_create: 开始解析 ${pages.length} 个 page 的 page_filepath`);
+  wecomMcpLog.debug(`smartpage_create: 开始解析 ${pages.length} 个 page 的 page_filepath`);
 
   // Phase 1: File size validation (stat phase, no content reading)
   await validateFileSize(pages);
@@ -146,8 +173,8 @@ async function resolvePages(
         );
       }
 
-      console.log(
-        `[mcp] smartpage_create: pages[${index}] 读取成功 "${filePath}" (${fileContent.length} chars)`,
+      wecomMcpLog.debug(
+        `smartpage_create: pages[${index}] 读取成功 "${filePath}" (${fileContent.length} chars)`,
       );
 
       // Build new page object: fill in page_content, remove page_filepath
@@ -156,7 +183,7 @@ async function resolvePages(
     }),
   );
 
-  console.log(`[mcp] smartpage_create: 所有 page_filepath 解析完成`);
+  wecomMcpLog.debug(`smartpage_create: 所有 page_filepath 解析完成`);
 
   // Return modified complete args
   return {

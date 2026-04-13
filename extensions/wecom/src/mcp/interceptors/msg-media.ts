@@ -10,6 +10,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { wecomMcpLog } from "../../loggers.js";
 import { detectMime } from "../../openclaw-compat.js";
 import { getWeComRuntime } from "../../runtime.js";
 import { MEDIA_DOWNLOAD_TIMEOUT_MS } from "../transport.js";
@@ -150,8 +151,8 @@ async function interceptMediaResponse(result: unknown): Promise<unknown> {
   const tEnd = performance.now();
 
   // Timing log: per-stage durations (ms)
-  console.log(
-    `[mcp] get_msg_media 拦截成功: media_id=${mediaId ?? "unknown"}, ` +
+  wecomMcpLog.debug(
+    `get_msg_media 拦截成功: media_id=${mediaId ?? "unknown"}, ` +
       `type=${mediaType ?? "unknown"}, size=${buffer.length}, saved=${saved.path}\n` +
       `  ⏱ 耗时明细 (总 ${(tEnd - t0).toFixed(1)}ms):\n` +
       `    解析响应 JSON:   ${(tParsed - t0).toFixed(1)}ms\n` +

@@ -10,8 +10,8 @@ const WecomAgentConfigSchema = z
     corpId: z.string().optional(),
     corpSecret: buildSecretInputSchema().optional(),
     agentId: z.union([z.string(), z.number()]).optional(),
-    token: z.string().optional(),
-    encodingAESKey: z.string().optional(),
+    token: buildSecretInputSchema().optional(),
+    encodingAESKey: buildSecretInputSchema().optional(),
     configured: z.boolean().optional(),
   })
   .strict()
@@ -64,8 +64,8 @@ const WecomAccountSchema = z
     dynamicAgents: WecomDynamicAgentsConfigSchema,
     // Webhook mode fields
     connectionMode: z.enum(["webhook", "websocket"]).optional(),
-    token: z.string().optional(),
-    encodingAESKey: z.string().optional(),
+    token: buildSecretInputSchema().optional(),
+    encodingAESKey: buildSecretInputSchema().optional(),
     receiveId: z.string().optional(),
     welcomeText: z.string().optional(),
     streamPlaceholderContent: z.string().optional(),

@@ -8,6 +8,7 @@
  * This interceptor applies to all call invocations.
  */
 
+import { wecomMcpLog } from "../../loggers.js";
 import { clearCategoryCache } from "../transport.js";
 import type { CallInterceptor, CallContext } from "./types.js";
 
@@ -67,7 +68,7 @@ function checkBizErrorAndClearCache(result: unknown, accountId: string, category
     try {
       const parsed = JSON.parse(item.text) as Record<string, unknown>;
       if (typeof parsed.errcode === "number" && BIZ_CACHE_CLEAR_ERROR_CODES.has(parsed.errcode)) {
-        console.log(`[mcp] 检测到业务错误码 ${parsed.errcode} (category="${category}")，清理缓存`);
+        wecomMcpLog.debug(`检测到业务错误码 ${parsed.errcode} (category="${category}")，清理缓存`);
         clearCategoryCache(accountId, category);
         return;
       }

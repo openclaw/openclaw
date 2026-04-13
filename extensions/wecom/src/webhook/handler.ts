@@ -12,6 +12,7 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { WecomCrypto } from "@wecom/aibot-node-sdk";
+import { wecomWebhookLog } from "../loggers.js";
 import { toStr } from "../shared/to-str.js";
 import { resolveWecomEgressProxyUrl } from "../utils.js";
 import { resolveWecomSenderUserId } from "./helpers.js";
@@ -338,12 +339,12 @@ export async function handleWecomWebhookRequest(
   const hasEchostr = Boolean(query.echostr);
   const signature = resolveSignatureParam(query);
   const hasSig = Boolean(signature);
-  console.log(
-    `[wecom] inbound(http): reqId=${reqId} path=${url.split("?")[0]} method=${method} remote=${remote} ua=${ua ? `"${ua}"` : "N/A"} contentLength=${cl || "N/A"} query={timestamp:${hasTimestamp},nonce:${hasNonce},echostr:${hasEchostr},signature:${hasSig}}`,
+  wecomWebhookLog.debug(
+    `inbound(http): reqId=${reqId} path=${url.split("?")[0]} method=${method} remote=${remote} ua=${ua ? `"${ua}"` : "N/A"} contentLength=${cl || "N/A"} query={timestamp:${hasTimestamp},nonce:${hasNonce},echostr:${hasEchostr},signature:${hasSig}}`,
   );
 
   if (!hasActiveTargets()) {
-    console.log(`[wecom] inbound(http): reqId=${reqId} skipped — no active targets`);
+    wecomWebhookLog.debug(`inbound(http): reqId=${reqId} skipped — no active targets`);
     return false; // No registered Targets, skip
   }
 
@@ -367,8 +368,8 @@ export async function handleWecomWebhookRequest(
       pathAccountId,
     );
     if (matchResult.status !== "matched") {
-      console.log(
-        `[wecom] inbound(http): reqId=${reqId} GET route_failure reason=${matchResult.status} candidates=[${matchResult.candidateAccountIds.join(",")}]`,
+      wecomWebhookLog.debug(
+        `inbound(http): reqId=${reqId} GET route_failure reason=${matchResult.status} candidates=[${matchResult.candidateAccountIds.join(",")}]`,
       );
       sendText(res, 403, "signature verification failed");
       return true;
@@ -422,8 +423,8 @@ export async function handleWecomWebhookRequest(
     const encrypt = toStr(body.encrypt ?? body.Encrypt);
 
     // POST body diagnostic logging (does not output encrypt content)
-    console.log(
-      `[wecom] inbound(bot): reqId=${reqId} rawJsonBytes=${Buffer.byteLength(bodyStr, "utf8")} hasEncrypt=${Boolean(encrypt)} encryptLen=${encrypt.length}`,
+    wecomWebhookLog.debug(
+      `inbound(bot): reqId=${reqId} rawJsonBytes=${Buffer.byteLength(bodyStr, "utf8")} hasEncrypt=${Boolean(encrypt)} encryptLen=${encrypt.length}`,
     );
 
     if (!encrypt) {
@@ -447,8 +448,8 @@ export async function handleWecomWebhookRequest(
         matchResult.status === "conflict"
           ? "Bot callback account conflict: multiple accounts matched signature."
           : "Bot callback account not found: signature verification failed.";
-      console.log(
-        `[wecom] inbound(bot): reqId=${reqId} route_failure reason=${reason} path=${url.split("?")[0]} candidates=[${matchResult.candidateAccountIds.join(",")}]`,
+      wecomWebhookLog.debug(
+        `inbound(bot): reqId=${reqId} route_failure reason=${reason} path=${url.split("?")[0]} candidates=[${matchResult.candidateAccountIds.join(",")}]`,
       );
       sendText(res, 403, detail);
       return true;

@@ -14,6 +14,7 @@
  * This way, the LLM only sees lightweight file path information, and the Skill can read the full content from the file path.
  */
 
+import { wecomMcpLog } from "../../loggers.js";
 import { getWeComRuntime } from "../../runtime.js";
 import type { CallInterceptor, CallContext } from "./types.js";
 
@@ -82,8 +83,8 @@ async function interceptExportResponse(result: unknown): Promise<unknown> {
 
   const markdownContent = bizData.content;
 
-  console.log(
-    `[mcp] smartpage_get_export_result: 拦截 content (${markdownContent.length} chars)，保存到本地文件`,
+  wecomMcpLog.debug(
+    `smartpage_get_export_result: 拦截 content (${markdownContent.length} chars)，保存到本地文件`,
   );
 
   // 4. 将 markdown 内容通过 saveMediaBuffer 保存到本地媒体目录
@@ -98,7 +99,7 @@ async function interceptExportResponse(result: unknown): Promise<unknown> {
     "smartpage_export.md", // originalFilename
   );
 
-  console.log(`[mcp] smartpage_get_export_result: 已保存到 ${saved.path}`);
+  wecomMcpLog.debug(`smartpage_get_export_result: 已保存到 ${saved.path}`);
 
   // 5. 构造新响应：移除 content，添加 content_path
   const newBizData = {

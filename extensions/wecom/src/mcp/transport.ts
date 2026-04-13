@@ -13,6 +13,7 @@
 import { generateReqId } from "@wecom/aibot-node-sdk";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { MCP_GET_CONFIG_CMD, MCP_CONFIG_FETCH_TIMEOUT_MS } from "../const.js";
+import { wecomMcpLog } from "../loggers.js";
 import { getWeComWebSocket } from "../state-manager.js";
 import { withTimeout } from "../timeout.js";
 import { PLUGIN_VERSION } from "../version.js";
@@ -65,7 +66,7 @@ const HTTP_REQUEST_TIMEOUT_MS = 30_000;
 /** Media download request timeout (milliseconds); base64-encoded media files can be up to ~27MB */
 export const MEDIA_DOWNLOAD_TIMEOUT_MS = 120_000;
 
-/** Log prefix */
+/** Log prefix (kept for error messages that need the tag) */
 const LOG_TAG = "[mcp]";
 
 /**
@@ -174,7 +175,7 @@ async function fetchMcpConfig(
     throw new Error(`MCP 配置响应缺少 url 字段 (category="${category}")`);
   }
 
-  console.log(`${LOG_TAG} 配置拉取成功 (category="${category}")`);
+  wecomMcpLog.debug(`配置拉取成功 (category="${category}")`);
   return body as Record<string, unknown>;
 }
 
@@ -202,7 +203,7 @@ async function getMcpUrl(accountId: string, category: string): Promise<string> {
   // Write to cache
   mcpConfigCache.set(key, body);
 
-  console.log(`${LOG_TAG} getMcpUrl ${category}: ${String(body.url)}`);
+  wecomMcpLog.debug(`getMcpUrl ${category}: ${String(body.url)}`);
 
   return body.url as string;
 }
@@ -323,7 +324,7 @@ async function sendRawJsonRpc(
 async function initializeSession(url: string, category: string, key: string): Promise<McpSession> {
   const session: McpSession = { sessionId: null, initialized: false, stateless: false };
 
-  console.log(`${LOG_TAG} 开始 initialize 握手 (category="${category}")`);
+  wecomMcpLog.debug(`开始 initialize 握手 (category="${category}")`);
 
   // 1. Send initialize request
   const initBody: JsonRpcRequest = {
@@ -351,7 +352,7 @@ async function initializeSession(url: string, category: string, key: string): Pr
     session.initialized = true;
     statelessCategories.add(key);
     mcpSessionCache.set(key, session);
-    console.log(`${LOG_TAG} 无状态 Server 确认 (category="${category}")`);
+    wecomMcpLog.debug(`无状态 Server 确认 (category="${category}")`);
     return session;
   }
 
@@ -370,8 +371,8 @@ async function initializeSession(url: string, category: string, key: string): Pr
 
   session.initialized = true;
   mcpSessionCache.set(key, session);
-  console.log(
-    `${LOG_TAG} 有状态 Session 建立成功 (category="${category}", sessionId="${session.sessionId}")`,
+  wecomMcpLog.debug(
+    `有状态 Session 建立成功 (category="${category}", sessionId="${session.sessionId}")`,
   );
   return session;
 }
@@ -484,7 +485,7 @@ async function parseSseResponse(response: Response): Promise<unknown> {
  */
 export function clearCategoryCache(accountId: string, category: string): void {
   const key = cacheKey(accountId, category);
-  console.log(`${LOG_TAG} clearing cache (account="${accountId}", category="${category}")`);
+  wecomMcpLog.debug(`clearing cache (account="${accountId}", category="${category}")`);
   mcpConfigCache.delete(key);
   mcpSessionCache.delete(key);
   statelessCategories.delete(key);
@@ -556,7 +557,7 @@ export async function sendJsonRpc(
 
     // Stateful Server: session invalidation returns 404; re-initialize and retry once
     if (err instanceof McpHttpError && err.statusCode === 404) {
-      console.log(`${LOG_TAG} Session invalidated (category="${category}"), rebuilding...`);
+      wecomMcpLog.debug(`Session invalidated (category="${category}"), rebuilding...`);
       mcpSessionCache.delete(key);
 
       session = await rebuildSession(url, category, key);

@@ -5,6 +5,7 @@
 
 import crypto from "node:crypto";
 import { readResponseBodyAsBuffer, wecomFetch } from "../http.js";
+import { wecomUploadLog } from "../loggers.js";
 import { API_ENDPOINTS, LIMITS } from "../types/constants.js";
 import type { ResolvedAgentAccount } from "../types/index.js";
 
@@ -261,9 +262,8 @@ export async function uploadMedia(params: {
   // Add debug=1 parameter for more detailed error info
   const url = `${API_ENDPOINTS.UPLOAD_MEDIA}?access_token=${encodeURIComponent(token)}&type=${encodeURIComponent(type)}&debug=1`;
 
-  // DEBUG: Log upload info
-  console.log(
-    `[wecom-upload] Uploading media: type=${type}, filename=${safeFilename}, size=${buffer.length} bytes`,
+  wecomUploadLog.debug(
+    `Uploading media: type=${type}, filename=${safeFilename}, size=${buffer.length} bytes`,
   );
 
   const uploadOnce = async (fileContentType: string) => {
@@ -279,8 +279,8 @@ export async function uploadMedia(params: {
     const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
     const body = Buffer.concat([header, buffer, footer]);
 
-    console.log(
-      `[wecom-upload] Multipart body size=${body.length}, boundary=${boundary}, fileContentType=${fileContentType}`,
+    wecomUploadLog.debug(
+      `Multipart body size=${body.length}, boundary=${boundary}, fileContentType=${fileContentType}`,
     );
 
     const res = await wecomFetch(
@@ -296,7 +296,7 @@ export async function uploadMedia(params: {
       { proxyUrl, timeoutMs: LIMITS.REQUEST_TIMEOUT_MS },
     );
     const json = (await res.json()) as { media_id?: string; errcode?: number; errmsg?: string };
-    console.log(`[wecom-upload] Response:`, JSON.stringify(json));
+    wecomUploadLog.debug(`Response: ${JSON.stringify(json)}`);
     return json;
   };
 
@@ -305,8 +305,8 @@ export async function uploadMedia(params: {
 
   // Some file types may fail under strict gateway/WeCom validation; fall back to generic type and retry.
   if (!json?.media_id && preferredContentType !== "application/octet-stream") {
-    console.warn(
-      `[wecom-upload] Upload failed with ${preferredContentType}, retrying as application/octet-stream: ${json?.errcode} ${json?.errmsg}`,
+    wecomUploadLog.debug(
+      `Upload failed with ${preferredContentType}, retrying as application/octet-stream: ${json?.errcode} ${json?.errmsg}`,
     );
     json = await uploadOnce("application/octet-stream");
   }

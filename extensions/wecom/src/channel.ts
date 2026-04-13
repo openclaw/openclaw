@@ -16,6 +16,7 @@ import {
 import { registerAgentWebhookTarget, deregisterAgentWebhookTarget } from "./agent/webhook.js";
 import { wecomChannelConfigSchema } from "./config-schema.js";
 import { CHANNEL_ID, TEXT_CHUNK_LIMIT, WEBHOOK_PATHS } from "./const.js";
+import { wecomOutboundLog } from "./loggers.js";
 import { uploadAndSendMedia } from "./media-uploader.js";
 import { monitorWeComProvider } from "./monitor.js";
 import { wecomSetupWizard, wecomSetupAdapter } from "./onboarding.js";
@@ -84,8 +85,8 @@ async function sendWeComMessage({
     throw new Error(`Cannot resolve outbound target from "${to}"`);
   }
 
-  console.log(
-    `[wecom-outbound] Bot WS unavailable, sending via Agent HTTP API to ${JSON.stringify(target)} (accountId=${resolvedAccountId})`,
+  wecomOutboundLog.debug(
+    `Bot WS unavailable, sending via Agent HTTP API to ${JSON.stringify(target)} (accountId=${resolvedAccountId})`,
   );
   await sendAgentText({
     agent,
@@ -417,8 +418,8 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         throw new Error(`Cannot resolve outbound target from "${to}"`);
       }
 
-      console.log(
-        `[wecom-outbound] Bot WS unavailable, sending media via Agent HTTP API to ${JSON.stringify(target)}`,
+      wecomOutboundLog.debug(
+        `Bot WS unavailable, sending media via Agent HTTP API to ${JSON.stringify(target)}`,
       );
 
       // Try loading and uploading media to WeCom
@@ -493,7 +494,9 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           return { channel: CHANNEL_ID, messageId: `agent-media-${Date.now()}`, chatId };
         }
       } catch (err) {
-        console.warn(`[wecom-outbound] Agent media upload failed, falling back to text:`, err);
+        wecomOutboundLog.warn(
+          `Agent media upload failed, falling back to text: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
 
       // Media upload failed, downgrade to text + URL
@@ -711,12 +714,20 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           changed = true;
         }
 
-        // Clear Agent credentials
+        // Clear Agent credentials (including callback secrets token/encodingAESKey)
         const agentCfg = nextWecom.agent as Record<string, unknown> | undefined;
-        if (agentCfg?.corpId || agentCfg?.corpSecret || agentCfg?.agentId) {
+        if (
+          agentCfg?.corpId ||
+          agentCfg?.corpSecret ||
+          agentCfg?.agentId ||
+          agentCfg?.token ||
+          agentCfg?.encodingAESKey
+        ) {
           delete agentCfg?.corpId;
           delete agentCfg?.corpSecret;
           delete agentCfg?.agentId;
+          delete agentCfg?.token;
+          delete agentCfg?.encodingAESKey;
           cleared = true;
           changed = true;
         }

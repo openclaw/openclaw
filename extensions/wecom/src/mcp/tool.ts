@@ -13,6 +13,7 @@
  *   wecom_mcp call contact getContact '{}'
  */
 
+import { wecomMcpLog } from "../loggers.js";
 import { resolveBeforeCall, runAfterCall } from "./interceptors/index.js";
 import { cleanSchemaForGemini } from "./schema.js";
 import { sendJsonRpc, type McpToolInfo } from "./transport.js";
@@ -96,20 +97,20 @@ const handleCall = async (
   const ctx = { accountId, category, method, args };
   const callStart = performance.now();
 
-  console.log(`[mcp] handleCall ${category}/${method} 入参: ${JSON.stringify(args)}`);
+  wecomMcpLog.debug(`handleCall ${category}/${method} 入参: ${JSON.stringify(args)}`);
 
   // 1. 收集拦截器的 beforeCall 配置（如超时时间、替换 args）
   const { options, args: resolvedArgs } = await resolveBeforeCall(ctx);
   const finalArgs = resolvedArgs ?? args;
 
   if (resolvedArgs) {
-    console.log(
-      `[mcp] handleCall ${category}/${method} 拦截器替换 args: ${JSON.stringify(resolvedArgs).slice(0, 500)}` +
+    wecomMcpLog.debug(
+      `handleCall ${category}/${method} 拦截器替换 args: ${JSON.stringify(resolvedArgs).slice(0, 500)}` +
         (JSON.stringify(resolvedArgs).length > 500 ? "...(truncated)" : ""),
     );
   }
   if (options) {
-    console.log(`[mcp] handleCall ${category}/${method} 拦截器选项: ${JSON.stringify(options)}`);
+    wecomMcpLog.debug(`handleCall ${category}/${method} 拦截器选项: ${JSON.stringify(options)}`);
   }
 
   // 2. Execute MCP call
@@ -128,8 +129,8 @@ const handleCall = async (
   const rpcMs = (rpcDone - callStart).toFixed(1);
 
   const resultStr = JSON.stringify(result);
-  console.log(
-    `[mcp] handleCall ${category}/${method} MCP response (${rpcMs}ms): ${resultStr.slice(0, 800)}` +
+  wecomMcpLog.debug(
+    `handleCall ${category}/${method} MCP response (${rpcMs}ms): ${resultStr.slice(0, 800)}` +
       (resultStr.length > 800 ? "...(truncated)" : ""),
   );
 
@@ -142,16 +143,16 @@ const handleCall = async (
   // 有拦截器处理时打印详细耗时，否则只打印 RPC 耗时
   if (finalResult !== result) {
     const finalStr = JSON.stringify(finalResult);
-    console.log(
-      `[mcp] handleCall ${category}/${method} afterCall 变换后 (${interceptMs}ms): ${finalStr.slice(0, 500)}` +
+    wecomMcpLog.debug(
+      `handleCall ${category}/${method} afterCall 变换后 (${interceptMs}ms): ${finalStr.slice(0, 500)}` +
         (finalStr.length > 500 ? "...(truncated)" : ""),
     );
-    console.log(
-      `[mcp] handleCall ${category}/${method} total: ${totalMs}ms` +
+    wecomMcpLog.debug(
+      `handleCall ${category}/${method} total: ${totalMs}ms` +
         ` (MCP request: ${rpcMs}ms, intercept: ${interceptMs}ms)`,
     );
   } else {
-    console.log(`[mcp] handleCall ${category}/${method} 耗时: ${rpcMs}ms`);
+    wecomMcpLog.debug(`handleCall ${category}/${method} 耗时: ${rpcMs}ms`);
   }
 
   return finalResult;
@@ -245,8 +246,8 @@ export function createWeComMcpTool(accountId = "default") {
           resolvedAccountId = accountId; // factory fallback
         }
       }
-      console.log(
-        `[mcp] execute: action=${p.action}, category=${p.category}` +
+      wecomMcpLog.debug(
+        `execute: action=${p.action}, category=${p.category}` +
           (p.method ? `, method=${p.method}` : "") +
           (p.args ? `, args=${typeof p.args === "string" ? p.args : JSON.stringify(p.args)}` : ""),
       );
@@ -268,8 +269,8 @@ export function createWeComMcpTool(accountId = "default") {
           default:
             result = textResult({ error: `未知操作类型: ${String(p.action)}，支持 list 和 call` });
         }
-        console.log(
-          `[mcp] execute: action=${p.action}, category=${p.category}` +
+        wecomMcpLog.debug(
+          `execute: action=${p.action}, category=${p.category}` +
             (p.method ? `, method=${p.method}` : "") +
             ` → 响应长度=${result.content[0].text.length} chars`,
         );
