@@ -48,7 +48,7 @@ function parsePositiveInteger(value: unknown): number | undefined {
 function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
   const contextWindow = parsePositiveInteger(model.contextWindow);
   if (contextWindow) {
-    return Math.max(1_000, Math.floor(contextWindow * 0.7));
+    return Math.max(1_000, Math.floor(contextWindow * 0.9));
   }
   return 80_000;
 }
