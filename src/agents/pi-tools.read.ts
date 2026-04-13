@@ -303,6 +303,29 @@ function getImageMimeType(ext: string): string {
   return `image/${ext}`;
 }
 
+function getAudioMimeType(ext: string): string {
+  switch (ext) {
+    case 'mp3': return 'audio/mpeg';
+    case 'wav': return 'audio/wav';
+    case 'ogg': return 'audio/ogg';
+    case 'm4a': return 'audio/mp4';
+    case 'flac': return 'audio/flac';
+    case 'aac': return 'audio/aac';
+    default: return 'audio/ogg';
+  }
+}
+
+function getVideoMimeType(ext: string): string {
+  switch (ext) {
+    case 'mp4': return 'video/mp4';
+    case 'webm': return 'video/webm';
+    case 'mov': return 'video/quicktime';
+    case 'avi': return 'video/x-msvideo';
+    case 'mkv': return 'video/x-matroska';
+    default: return 'video/mp4';
+  }
+}
+
 type SandboxToolParams = {
   root: string;
   bridge: SandboxFsBridge;
@@ -374,6 +397,10 @@ export function createOpenClawReadTool(
       let rawPath = typeof record?.path === "string" ? record.path : ".";
       rawPath = rawPath.match(/[\x20-\x7E]/g)?.join('') || '';
 
+      // Get paging parameters for text files
+      const offset = typeof record?.offset === 'number' ? record.offset : 0;
+      const limit = typeof record?.limit === 'number' ? record.limit : undefined;
+
       const rootDir = options?.root ? path.resolve(options.root) : process.cwd();
       
       let inputPath: string;
@@ -434,14 +461,16 @@ export function createOpenClawReadTool(
         const fileName = path.basename(inputPath);
         const mediaUrl = `http://localhost:18791${inputPath}`;
         
+        // Handle images
         if (IMAGE_EXTENSIONS.has(ext)) {
           const fileBuffer = await fs.readFile(inputPath);
-          if (fileBuffer.length > 5242880) {
+          const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
+          if (fileBuffer.length > MAX_IMAGE_SIZE) {
             return {
               toolCallId,
               content: [{ 
                 type: "text", 
-                text: `Image too large to display inline (${formatBytes(fileBuffer.length)} > ${formatBytes(5242880)} limit). Access via media URL: ${mediaUrl}` 
+                text: `Image too large to display inline (${formatBytes(fileBuffer.length)} > ${formatBytes(MAX_IMAGE_SIZE)} limit). Access via media URL: ${mediaUrl}` 
               }],
               details: { path: inputPath, size: fileBuffer.length, truncated: true },
             };
@@ -458,18 +487,31 @@ export function createOpenClawReadTool(
                   data: fileBuffer.toString("base64"),
                 },
               },
-              {
-                type: "text",
-                text: `📷 [${fileName}](${mediaUrl})`,
-              },
             ],
             details: { path: inputPath, size: fileBuffer.length },
-          } as AgentToolResult<unknown>;
+          } as unknown as AgentToolResult<unknown>;
         }
 
+        // Handle audio files
         if (AUDIO_EXTENSIONS.has(ext)) {
+          const audioStats = await fs.stat(inputPath);
+          const MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10MB threshold for embedding
+          
+          // For large files, just return the URL without loading into memory
+          if (audioStats.size > MAX_AUDIO_SIZE) {
+            return {
+              toolCallId,
+              content: [{ 
+                type: "text", 
+                text: `🎵 ${fileName} - Audio file (${formatBytes(audioStats.size)}) available for streaming at: ${mediaUrl}` 
+              }],
+              details: { path: inputPath, size: audioStats.size, streamed: true },
+            };
+          }
+          
+          // For smaller files, load and embed
           const fileBuffer = await fs.readFile(inputPath);
-          const mimeType = ext === "mp3" ? "audio/mpeg" : ext === "wav" ? "audio/wav" : "audio/ogg";
+          const mimeType = getAudioMimeType(ext);
           return {
             toolCallId,
             content: [
@@ -478,18 +520,31 @@ export function createOpenClawReadTool(
                 data: fileBuffer.toString("base64"),
                 mimeType: mimeType,
               },
-              {
-                type: "text",
-                text: `🎵 [${fileName}](${mediaUrl})`,
-              },
             ],
             details: { path: inputPath, size: fileBuffer.length },
-          } as AgentToolResult<unknown>;
+          } as unknown as AgentToolResult<unknown>;
         }
 
+        // Handle video files
         if (VIDEO_EXTENSIONS.has(ext)) {
+          const videoStats = await fs.stat(inputPath);
+          const MAX_VIDEO_SIZE = 10 * 1024 * 1024; // 10MB threshold for embedding
+          
+          // For large files, just return the URL without loading into memory
+          if (videoStats.size > MAX_VIDEO_SIZE) {
+            return {
+              toolCallId,
+              content: [{ 
+                type: "text", 
+                text: `🎬 ${fileName} - Video file (${formatBytes(videoStats.size)}) available for streaming at: ${mediaUrl}` 
+              }],
+              details: { path: inputPath, size: videoStats.size, streamed: true },
+            };
+          }
+          
+          // For smaller files, load and embed
           const fileBuffer = await fs.readFile(inputPath);
-          const mimeType = ext === "mp4" ? "video/mp4" : ext === "webm" ? "video/webm" : "video/quicktime";
+          const mimeType = getVideoMimeType(ext);
           return {
             toolCallId,
             content: [
@@ -498,21 +553,25 @@ export function createOpenClawReadTool(
                 data: fileBuffer.toString("base64"),
                 mimeType: mimeType,
               },
-              {
-                type: "text",
-                text: `🎬 [${fileName}](${mediaUrl})`,
-              },
             ],
             details: { path: inputPath, size: fileBuffer.length },
-          } as AgentToolResult<unknown>;
+          } as unknown as AgentToolResult<unknown>;
         }
 
+        // Handle text files with paging support
         const fileBuffer = await fs.readFile(inputPath, "utf-8");
         const maxChars = (options?.modelContextWindowTokens || 100000) * 4;
         let text = fileBuffer;
         let truncated = false;
 
-        if (text.length > maxChars) {
+        // Apply offset and limit if provided (for paging)
+        if (offset > 0 || limit !== undefined) {
+          const lines = text.split('\n');
+          const start = Math.min(offset, lines.length);
+          const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
+          text = lines.slice(start, end).join('\n');
+          truncated = true;
+        } else if (text.length > maxChars) {
           text = text.slice(0, maxChars) + `\n\n[Truncated: File is ${formatBytes(fileBuffer.length)}]`;
           truncated = true;
         }
@@ -520,7 +579,7 @@ export function createOpenClawReadTool(
         return {
           toolCallId,
           content: [{ type: "text", text }],
-          details: { path: inputPath, size: fileBuffer.length, truncated },
+          details: { path: inputPath, size: fileBuffer.length, truncated, offset, limit },
         };
         
       } catch (err) {
