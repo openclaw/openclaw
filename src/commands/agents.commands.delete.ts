@@ -2,6 +2,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
+  loadSessionStore,
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
   updateSessionStore,
@@ -92,13 +93,19 @@ export async function agentsDeleteCommand(
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
   try {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    await updateSessionStore(storePath, (store) => {
-      for (const key of Object.keys(store)) {
-        if (resolveAgentIdFromSessionKey(key) === agentId) {
-          delete store[key];
+    const store = loadSessionStore(storePath);
+    const hasEntries = Object.keys(store).some(
+      (key) => resolveAgentIdFromSessionKey(key) === agentId,
+    );
+    if (hasEntries) {
+      await updateSessionStore(storePath, (s) => {
+        for (const key of Object.keys(s)) {
+          if (resolveAgentIdFromSessionKey(key) === agentId) {
+            delete s[key];
+          }
         }
-      }
-    });
+      });
+    }
   } catch (err) {
     getLogger().debug("session store purge skipped during agent delete", err);
   }
