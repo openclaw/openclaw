@@ -1,10 +1,12 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasGenerationToolAvailability,
   resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
+  resolveModelFromRegistryOrConfig,
 } from "./media-tool-shared.js";
 
 function normalizeHostPath(value: string): string {
@@ -101,6 +103,95 @@ describe("resolveModelFromRegistry", () => {
     ]);
     expect(result).toBe(foundModel);
   }, 180_000);
+});
+
+describe("resolveModelFromRegistryOrConfig", () => {
+  it("falls back to config-defined provider models after registry lookup misses", () => {
+    const { calls, registry } = createModelRegistryStub(() => null);
+    const cfg = {
+      models: {
+        providers: {
+          "local-openai": {
+            baseUrl: "http://127.0.0.1:8317/v1",
+            api: "openai-responses",
+            authHeader: true,
+            models: [
+              {
+                id: "gpt-5.4-mini",
+                name: "GPT-5.4 Mini (Local PDF Route)",
+                api: "openai-responses",
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+                contextWindow: 272000,
+                maxTokens: 128000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelFromRegistryOrConfig({
+      modelRegistry: registry,
+      provider: " local-openai ",
+      modelId: " gpt-5.4-mini ",
+      cfg,
+    });
+
+    expect(calls).toEqual([
+      ["local-openai", "gpt-5.4-mini"],
+      ["local-openai", "local-openai/gpt-5.4-mini"],
+    ]);
+    expect(result).toMatchObject({
+      provider: "local-openai",
+      id: "gpt-5.4-mini",
+      api: "openai-responses",
+      input: ["text", "image"],
+    });
+  });
+
+  it("matches config-defined providers by normalized provider id and scoped model id", () => {
+    const { calls, registry } = createModelRegistryStub(() => null);
+    const cfg = {
+      models: {
+        providers: {
+          "aws-bedrock": {
+            api: "openai-responses",
+            authHeader: true,
+            models: [
+              {
+                id: "aws-bedrock/claude-custom",
+                name: "Claude Custom",
+                api: "openai-responses",
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+                contextWindow: 200000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelFromRegistryOrConfig({
+      modelRegistry: registry,
+      provider: "amazon-bedrock",
+      modelId: "claude-custom",
+      cfg,
+    });
+
+    expect(calls).toEqual([
+      ["amazon-bedrock", "claude-custom"],
+      ["amazon-bedrock", "amazon-bedrock/claude-custom"],
+    ]);
+    expect(result).toMatchObject({
+      provider: "aws-bedrock",
+      id: "aws-bedrock/claude-custom",
+    });
+  });
 });
 
 describe("hasGenerationToolAvailability", () => {

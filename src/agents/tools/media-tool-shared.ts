@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { buildInlineProviderModels } from "../pi-embedded-runner/model.inline-provider.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
@@ -588,6 +589,79 @@ export function resolveModelFromRegistry(params: {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
   return model;
+}
+
+function matchesProviderScopedModelId(params: {
+  candidateId?: string;
+  provider: string;
+  modelId: string;
+}): boolean {
+  const { candidateId, provider, modelId } = params;
+  if (candidateId === modelId) {
+    return true;
+  }
+  const slashIndex = candidateId?.indexOf("/") ?? -1;
+  if (!candidateId || slashIndex <= 0) {
+    return false;
+  }
+  const candidateProvider = candidateId.slice(0, slashIndex);
+  const candidateModelId = candidateId.slice(slashIndex + 1);
+  return (
+    candidateModelId === modelId &&
+    normalizeProviderId(candidateProvider) === normalizeProviderId(provider)
+  );
+}
+
+function findConfiguredInlineModel(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}): Model<Api> | undefined {
+  const inlineModels = buildInlineProviderModels(params.cfg?.models?.providers ?? {});
+  const matchesModelId = (entry: { provider: string; id?: string }) =>
+    matchesProviderScopedModelId({
+      candidateId: entry.id,
+      provider: entry.provider,
+      modelId: params.modelId,
+    });
+  const exact = inlineModels.find(
+    (entry) => entry.provider === params.provider && matchesModelId(entry),
+  );
+  if (exact) {
+    return exact as Model<Api>;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  return inlineModels.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
+  ) as Model<Api> | undefined;
+}
+
+export function resolveModelFromRegistryOrConfig(params: {
+  modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+}): Model<Api> {
+  const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
+    allowPluginNormalization: false,
+  });
+  try {
+    return resolveModelFromRegistry(params);
+  } catch (error) {
+    const normalizedUnknownMessage = `Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`;
+    if (!(error instanceof Error) || error.message !== normalizedUnknownMessage) {
+      throw error;
+    }
+    const configuredModel = findConfiguredInlineModel({
+      cfg: params.cfg,
+      provider: resolvedRef.provider,
+      modelId: resolvedRef.model,
+    });
+    if (configuredModel) {
+      return configuredModel;
+    }
+    throw error;
+  }
 }
 
 export async function resolveModelRuntimeApiKey(params: {
