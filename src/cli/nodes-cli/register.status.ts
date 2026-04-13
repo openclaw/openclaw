@@ -111,6 +111,19 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
   }
 }
 
+function canFallbackToPairingList(err: unknown): boolean {
+  const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
+  return (
+    message.includes("unauthorized") ||
+    message.includes("missing scope") ||
+    (message.includes("node.list") &&
+      (message.includes("unknown method") ||
+        message.includes("method not found") ||
+        message.includes("not implemented") ||
+        message.includes("unsupported")))
+  );
+}
+
 export function registerNodesStatusCommands(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -327,13 +340,40 @@ export function registerNodesStatusCommands(nodes: Command) {
           const pairedById = new Map<string, PairedNode>(
             paired.map((entry) => [entry.nodeId, entry]),
           );
-          const knownNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
-          const pairedNodes = knownNodes.filter((node) => Boolean(node.paired));
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
+
+          let knownNodes: NodeListNode[] | null = null;
+          if (hasFilters) {
+            knownNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+          } else {
+            try {
+              knownNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+            } catch (err) {
+              if (!canFallbackToPairingList(err)) {
+                throw err;
+              }
+            }
+          }
+
+          const pairedNodes = knownNodes
+            ? knownNodes.filter((node) => Boolean(node.paired))
+            : paired.map((entry) => ({
+                nodeId: entry.nodeId,
+                displayName: entry.displayName,
+                platform: entry.platform,
+                version: entry.version,
+                coreVersion: entry.coreVersion,
+                uiVersion: entry.uiVersion,
+                remoteIp: entry.remoteIp,
+                permissions: entry.permissions,
+                approvedAtMs: entry.approvedAtMs,
+                paired: true,
+                connected: false,
+              }));
 
           const resolveLastConnectedAtMs = (node: NodeListNode) => {
             const pairingNode = pairedById.get(node.nodeId);
@@ -383,6 +423,25 @@ export function registerNodesStatusCommands(nodes: Command) {
             } satisfies PairedNode;
           });
 
+          const filteredPairedJson = filteredPaired.map((node) => {
+            const pairingNode = pairedById.get(node.nodeId);
+            if (pairingNode) {
+              return pairingNode;
+            }
+            return {
+              nodeId: node.nodeId,
+              displayName: node.displayName,
+              platform: node.platform,
+              version: node.version,
+              coreVersion: node.coreVersion,
+              uiVersion: node.uiVersion,
+              remoteIp: node.remoteIp,
+              permissions: node.permissions,
+              approvedAtMs: node.approvedAtMs,
+              lastConnectedAtMs: resolveLastConnectedAtMs(node),
+            } satisfies PairedNode;
+          });
+
           const filteredLabel =
             hasFilters && filteredPaired.length !== pairedNodes.length
               ? ` (of ${pairedNodes.length})`
@@ -392,7 +451,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
 
           if (opts.json) {
-            defaultRuntime.writeJson({ pending: pendingRows, paired: filteredPairedRows });
+            defaultRuntime.writeJson({ pending: pendingRows, paired: filteredPairedJson });
             return;
           }
 

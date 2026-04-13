@@ -131,6 +131,83 @@ describe("cli program (nodes basics)", () => {
     expect(output).toContain("One");
   });
 
+  it("runs nodes list with pairing fallback when node.list is unavailable", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            {
+              nodeId: "n1",
+              displayName: "One",
+              remoteIp: "10.0.0.1",
+              lastConnectedAtMs: now - 1_000,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        throw new Error("missing scope: operator.read");
+      }
+      return { ok: true };
+    });
+    await runProgram(["nodes", "list"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain("Pending: 0 · Paired: 1");
+    expect(output).toContain("One");
+  });
+
+  it("runs nodes list --json and preserves pairing metadata fields", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            {
+              nodeId: "n1",
+              token: "token-1",
+              bins: ["desktop"],
+              createdAtMs: now - 5_000,
+              approvedAtMs: now - 4_000,
+              lastConnectedAtMs: now - 3_000,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [{ nodeId: "n1", paired: true, connected: true }],
+        };
+      }
+      return { ok: true };
+    });
+    await runProgram(["nodes", "list", "--json"]);
+
+    expect(runtime.writeJson).toHaveBeenCalledTimes(1);
+    const payload = runtime.writeJson.mock.calls[0]?.[0] as {
+      pending: unknown[];
+      paired: Array<{
+        nodeId: string;
+        token?: string;
+        bins?: string[];
+        createdAtMs?: number;
+      }>;
+    };
+    expect(payload.pending).toEqual([]);
+    expect(payload.paired).toHaveLength(1);
+    expect(payload.paired[0]).toMatchObject({
+      nodeId: "n1",
+      token: "token-1",
+      bins: ["desktop"],
+      createdAtMs: now - 5_000,
+    });
+  });
+
   it("runs nodes status --last-connected and filters by age", async () => {
     const now = Date.now();
     callGateway.mockImplementation(async (...args: unknown[]) => {
