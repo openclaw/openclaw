@@ -432,16 +432,30 @@ export function isToolResultMessage(message: unknown): boolean {
   return role === "toolresult" || role === "tool_result";
 }
 
-// Pattern matching exec notification lines produced by session-system-events.
+// Pattern matching exec notification header lines produced by session-system-events.
 // Format: "System: [timestamp] Exec completed ..." or
 //         "System (untrusted): [timestamp] Exec failed ..."
+// The timestamp bracket is required so that only actual timestamped event headers
+// match — not arbitrary "System:" lines that happen to contain "Exec" keywords.
 const EXEC_NOTIFICATION_RE =
-  /^System(?:\s*\(untrusted\))?\s*:.*\bExec\s+(?:completed|failed|denied|timed\s+out|finished)\b/i;
+  /^System(?:\s*\(untrusted\))?\s*:\s*\[.+?\]\s*Exec\s+(?:completed|failed|denied|timed\s+out|finished)\b/i;
+
+// Continuation lines for exec events: they carry the System prefix but no
+// timestamp bracket (session-system-events only stamps the first sub-line).
+const SYSTEM_CONTINUATION_RE = /^System(?:\s*\(untrusted\))?\s*:/i;
 
 /**
- * Check if a system message consists entirely of internal exec notifications.
- * These are gateway-internal events formatted by session-system-events and
- * should not be displayed in user-facing chat surfaces like WebChat.
+ * Check if a system message consists entirely of internal exec notifications
+ * (including their continuation/output lines).
+ *
+ * session-system-events formats multi-line exec results as:
+ *   System (untrusted): [ts] Exec finished (id, code 0) :: cmd
+ *   System (untrusted): <output line>
+ *
+ * The first sub-line carries the timestamp; continuation lines carry the
+ * System prefix but no timestamp. A message is considered an internal exec
+ * notification if every "block" starts with a timestamped exec header and
+ * is optionally followed by continuation lines.
  */
 export function isInternalExecNotification(message: unknown): boolean {
   const m = message as Record<string, unknown>;
@@ -454,5 +468,21 @@ export function isInternalExecNotification(message: unknown): boolean {
   if (lines.length === 0) {
     return false;
   }
-  return lines.every((line) => EXEC_NOTIFICATION_RE.test(line.trim()));
+  // Walk line by line: each block must start with an exec header; subsequent
+  // continuation lines (System prefix, no timestamp) belong to the same block.
+  let inExecBlock = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (EXEC_NOTIFICATION_RE.test(line)) {
+      inExecBlock = true;
+      continue;
+    }
+    if (inExecBlock && SYSTEM_CONTINUATION_RE.test(line)) {
+      // Continuation line within an exec block — allowed.
+      continue;
+    }
+    // Line is neither an exec header nor a valid continuation — not an exec notification.
+    return false;
+  }
+  return inExecBlock;
 }

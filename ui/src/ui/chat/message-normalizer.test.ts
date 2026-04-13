@@ -507,6 +507,21 @@ describe("message-normalizer", () => {
       ).toBe(true);
     });
 
+    it("detects exec notification with output continuation lines", () => {
+      // session-system-events splits multi-line exec results: the first sub-line
+      // carries the timestamp, continuation lines carry the System prefix only.
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content: [
+            "System (untrusted): [2026-04-07 10:30:00] Exec finished (gateway id=req-1, session=sess_1, code 0) :: ls",
+            "System (untrusted): file1.txt",
+            "System (untrusted): file2.txt",
+          ].join("\n"),
+        }),
+      ).toBe(true);
+    });
+
     it("returns false for non-system role", () => {
       expect(
         isInternalExecNotification({
@@ -527,6 +542,17 @@ describe("message-normalizer", () => {
         isInternalExecNotification({
           role: "system",
           content: "System: Connected channels: telegram, discord",
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false for system message mentioning exec keywords without timestamp", () => {
+      // Unrelated system events should not match just because they contain
+      // "Exec completed" — the timestamp bracket is required.
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content: "System: Notification posted: Exec completed successfully",
         }),
       ).toBe(false);
     });
