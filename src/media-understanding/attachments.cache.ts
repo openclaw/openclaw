@@ -279,7 +279,10 @@ export class MediaAttachmentCache {
           `Blocked attachment path outside allowed roots: ${entry.attachment.path ?? entry.attachment.url ?? "(unknown)"}`,
         );
       }
-      return undefined;
+      throw new MediaUnderstandingSkipError(
+        "blocked",
+        `Attachment ${entry.attachment.index + 1} path is outside allowed roots.`,
+      );
     }
     if (entry.statSize !== undefined) {
       return entry.statSize;
@@ -289,12 +292,18 @@ export class MediaAttachmentCache {
       const stat = await fs.stat(currentPath);
       if (!stat.isFile()) {
         entry.resolvedPath = undefined;
-        return undefined;
+        throw new MediaUnderstandingSkipError(
+          "empty",
+          `Attachment ${entry.attachment.index + 1} path is not a regular file.`,
+        );
       }
       const canonicalPath = await this.resolveCanonicalLocalPath(currentPath);
       if (!canonicalPath) {
         entry.resolvedPath = undefined;
-        return undefined;
+        throw new MediaUnderstandingSkipError(
+          "blocked",
+          `Attachment ${entry.attachment.index + 1} could not be canonicalized.`,
+        );
       }
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
       if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
@@ -304,12 +313,18 @@ export class MediaAttachmentCache {
             `Blocked canonicalized attachment path outside allowed roots: ${canonicalPath}`,
           );
         }
-        return undefined;
+        throw new MediaUnderstandingSkipError(
+          "blocked",
+          `Attachment ${entry.attachment.index + 1} path is outside allowed roots.`,
+        );
       }
       entry.resolvedPath = canonicalPath;
       entry.statSize = stat.size;
       return stat.size;
     } catch (err) {
+      if (err instanceof MediaUnderstandingSkipError) {
+        throw err;
+      }
       entry.resolvedPath = undefined;
       if (shouldLogVerbose()) {
         logVerbose(`Failed to read attachment ${entry.attachment.index + 1}: ${String(err)}`);
@@ -350,21 +365,21 @@ export class MediaAttachmentCache {
       if (!stat.isFile()) {
         throw new MediaUnderstandingSkipError(
           "empty",
-          `Attachment ${params.attachmentIndex + 1} has no path or URL.`,
+          `Attachment ${params.attachmentIndex + 1} path is not a regular file.`,
         );
       }
       const canonicalPath = await this.resolveCanonicalLocalPath(params.filePath);
       if (!canonicalPath) {
         throw new MediaUnderstandingSkipError(
-          "empty",
-          `Attachment ${params.attachmentIndex + 1} has no path or URL.`,
+          "blocked",
+          `Attachment ${params.attachmentIndex + 1} could not be canonicalized.`,
         );
       }
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
       if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
         throw new MediaUnderstandingSkipError(
-          "empty",
-          `Attachment ${params.attachmentIndex + 1} has no path or URL.`,
+          "blocked",
+          `Attachment ${params.attachmentIndex + 1} path is outside allowed roots.`,
         );
       }
       const buffer = await handle.readFile();

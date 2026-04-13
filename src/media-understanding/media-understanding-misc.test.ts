@@ -70,7 +70,7 @@ describe("media understanding attachments SSRF", () => {
 
     await expect(
       cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).rejects.toThrow(/has no path or URL/i);
+    ).rejects.toThrow(/outside allowed roots/i);
   });
 
   it("blocks directory attachments even inside configured roots", async () => {
@@ -85,7 +85,7 @@ describe("media understanding attachments SSRF", () => {
 
       await expect(
         cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-      ).rejects.toThrow(/has no path or URL/i);
+      ).rejects.toThrow(/not a regular file/i);
     });
   });
 
@@ -106,7 +106,7 @@ describe("media understanding attachments SSRF", () => {
 
       await expect(
         cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-      ).rejects.toThrow(/has no path or URL/i);
+      ).rejects.toThrow(/outside allowed roots/i);
     });
   });
 
@@ -191,7 +191,7 @@ describe("media understanding attachments SSRF", () => {
 
       await expect(
         cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-      ).rejects.toThrow(/has no path or URL/i);
+      ).rejects.toThrow(/could not be canonicalized/i);
     });
   });
 });
