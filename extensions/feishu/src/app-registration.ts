@@ -6,6 +6,7 @@
  * the openclaw WizardPrompter surface.
  */
 
+import { renderQrAscii } from "openclaw/plugin-sdk/media-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { FeishuDomain } from "./types.js";
 
@@ -252,9 +253,8 @@ export async function pollAppRegistration(params: {
  * otherwise the pattern is corrupted and cannot be scanned.
  */
 export async function printQrCode(url: string): Promise<void> {
-  const mod = await import("qrcode-terminal");
-  const qrcode = mod.default ?? mod;
-  qrcode.generate(url, { small: true });
+  const output = await renderQrAscii(url);
+  process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
 /**

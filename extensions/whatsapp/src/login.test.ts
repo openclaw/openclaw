@@ -89,12 +89,11 @@ describe("renderQrPngBase64", () => {
     expect(buf.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   });
 
-  it("avoids dynamic require of qrcode-terminal vendor modules", async () => {
-    const sourcePath = resolve(process.cwd(), "src/media/qr-image.ts");
-    const source = await readFile(sourcePath, "utf-8");
-    expect(source).not.toContain("createRequire(");
-    expect(source).not.toContain('require("qrcode-terminal/vendor/QRCode")');
-    expect(source).toContain("qrcode-terminal/vendor/QRCode/index.js");
-    expect(source).toContain("qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js");
+  it("uses the shared qrcode-tui runtime helper instead of qrcode-terminal vendor internals", async () => {
+    const imageSource = await readFile(resolve(process.cwd(), "src/media/qr-image.ts"), "utf-8");
+    const runtimeSource = await readFile(resolve(process.cwd(), "src/media/qr-runtime.ts"), "utf-8");
+    expect(imageSource).not.toContain("qrcode-terminal");
+    expect(imageSource).toContain("./qr-runtime.ts");
+    expect(runtimeSource).toContain("@vincentkoc/qrcode-tui");
   });
 });

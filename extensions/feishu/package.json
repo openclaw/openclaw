@@ -5,7 +5,6 @@
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.61.1",
-    "qrcode-terminal": "^0.12.0",
     "typebox": "1.1.28"
   },
   "devDependencies": {

@@ -4,6 +4,7 @@ import type { Agent } from "node:https";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
+import { renderQrAscii } from "openclaw/plugin-sdk/media-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
@@ -60,11 +61,6 @@ const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
 
-async function loadQrTerminal() {
-  const mod = await import("qrcode-terminal");
-  return mod.default ?? mod;
-}
-
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -111,6 +107,11 @@ async function safeSaveCreds(
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
   }
+}
+
+async function printTerminalQr(qr: string): Promise<void> {
+  const output = await renderQrAscii(qr);
+  process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
 /**
@@ -172,8 +173,9 @@ export async function createWaSocket(
           opts.onQr?.(qr);
           if (printQr) {
             console.log("Scan this QR in WhatsApp (Linked Devices):");
-            const qrcode = await loadQrTerminal();
-            qrcode.generate(qr, { small: true });
+            void printTerminalQr(qr).catch((err) => {
+              sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
+            });
           }
         }
         if (connection === "close") {
