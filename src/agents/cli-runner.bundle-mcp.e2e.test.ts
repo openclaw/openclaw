@@ -41,10 +41,11 @@ describe("runCliAgent bundle MCP e2e", () => {
       const sessionFile = path.join(tempHome, "session.jsonl");
       const binDir = path.join(tempHome, "bin");
       const serverScriptPath = path.join(tempHome, "mcp", "bundle-probe.mjs");
+      const exclusiveLockPath = path.join(tempHome, "mcp", "bundle-probe.lock");
       const fakeClaudePath = path.join(binDir, "fake-claude.mjs");
       const pluginRoot = path.join(tempHome, ".openclaw", "extensions", "bundle-probe");
       await fs.mkdir(workspaceDir, { recursive: true });
-      await writeBundleProbeMcpServer(serverScriptPath);
+      await writeBundleProbeMcpServer(serverScriptPath, { exclusiveLockPath });
       await writeFakeClaudeCli(fakeClaudePath);
       await writeClaudeBundle({ pluginRoot, serverScriptPath });
 

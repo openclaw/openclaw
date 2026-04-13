@@ -172,13 +172,22 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionAgentId,
   });
-  const reportToolRuntime = backendResolved.bundleMcp
-    ? await createBundleMcpToolRuntime({
-        workspaceDir,
-        cfg: params.config,
-      })
-    : undefined;
-  const reportTools = reportToolRuntime?.tools ?? [];
+  let reportTools: import("../pi-bundle-mcp-types.js").BundleMcpToolRuntime["tools"] = [];
+  if (backendResolved.bundleMcp && preparedBackend.reportMcpConfig) {
+    const reportToolRuntime = await createBundleMcpToolRuntime({
+      workspaceDir,
+      cfg: {
+        mcp: {
+          servers: preparedBackend.reportMcpConfig.mcpServers,
+        },
+      },
+    });
+    try {
+      reportTools = reportToolRuntime.tools;
+    } finally {
+      await reportToolRuntime.dispose();
+    }
+  }
   const builtSystemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
@@ -234,30 +243,12 @@ export async function prepareCliRunContext(
     skillsPrompt,
     tools: reportTools,
   });
-  const preparedBackendWithReportCleanup = reportToolRuntime
-    ? {
-        ...preparedBackend,
-        cleanup: async () => {
-          const cleanupResults = await Promise.allSettled([
-            preparedBackend.cleanup?.(),
-            reportToolRuntime.dispose(),
-          ]);
-          const firstRejected = cleanupResults.find(
-            (result): result is PromiseRejectedResult => result.status === "rejected",
-          );
-          if (firstRejected) {
-            throw firstRejected.reason;
-          }
-        },
-      }
-    : preparedBackend;
-
   return {
     params,
     started,
     workspaceDir,
     backendResolved,
-    preparedBackend: preparedBackendWithReportCleanup,
+    preparedBackend,
     reusableCliSession,
     modelId,
     normalizedModel,

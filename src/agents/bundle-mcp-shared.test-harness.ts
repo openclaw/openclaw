@@ -18,6 +18,7 @@ export async function writeBundleProbeMcpServer(
     startupDelayMs?: number;
     pidPath?: string;
     exitMarkerPath?: string;
+    exclusiveLockPath?: string;
   } = {},
 ): Promise<void> {
   await writeExecutable(
@@ -46,6 +47,27 @@ if (exitMarkerPath) {
   process.once("exit", () => {
     try {
       fs.writeFileSync(exitMarkerPath, "exited", "utf8");
+    } catch {}
+  });
+}
+const exclusiveLockPath = ${JSON.stringify(params.exclusiveLockPath ?? "")};
+if (exclusiveLockPath) {
+  try {
+    const existing = await fsp.readFile(exclusiveLockPath, "utf8");
+    if (existing.trim()) {
+      throw new Error(
+        "exclusive bundle-probe lock already held by pid " + existing.trim(),
+      );
+    }
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
+  await fsp.writeFile(exclusiveLockPath, String(process.pid), "utf8");
+  process.once("exit", () => {
+    try {
+      fs.unlinkSync(exclusiveLockPath);
     } catch {}
   });
 }

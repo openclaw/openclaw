@@ -23,6 +23,8 @@ type PreparedCliBundleMcpConfig = {
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   env?: Record<string, string>;
+  mergedConfig?: BundleMcpConfig;
+  reportMcpConfig?: BundleMcpConfig;
 };
 
 function resolveBundleMcpMode(mode: CliBundleMcpMode | undefined): CliBundleMcpMode {
@@ -179,6 +181,46 @@ function resolveEnvPlaceholder(
   }
   const resolved = inheritedEnv?.[decoded.envVar] ?? process.env[decoded.envVar] ?? "";
   return decoded.bearer ? `Bearer ${resolved}` : resolved;
+}
+
+function resolveReportServerConfig(
+  server: BundleMcpServerConfig,
+  inheritedEnv: Record<string, string> | undefined,
+): BundleMcpServerConfig {
+  const next: BundleMcpServerConfig = { ...server };
+  const headers = normalizeStringRecord(next.headers);
+  if (headers) {
+    next.headers = Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name,
+        resolveEnvPlaceholder(value, inheritedEnv),
+      ]),
+    );
+  }
+  const env = normalizeStringRecord(next.env);
+  if (env) {
+    next.env = Object.fromEntries(
+      Object.entries(env).map(([name, value]) => [
+        name,
+        resolveEnvPlaceholder(value, inheritedEnv),
+      ]),
+    );
+  }
+  return next;
+}
+
+function resolveReportMcpConfig(
+  mergedConfig: BundleMcpConfig,
+  inheritedEnv: Record<string, string> | undefined,
+): BundleMcpConfig {
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(mergedConfig.mcpServers).map(([name, server]) => [
+        name,
+        resolveReportServerConfig(server, inheritedEnv),
+      ]),
+    ),
+  };
 }
 
 function normalizeGeminiServerConfig(
@@ -352,10 +394,16 @@ export async function prepareCliBundleMcpConfig(params: {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
 
-  return await prepareModeSpecificBundleMcpConfig({
+  const prepared = await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
     mergedConfig,
     env: params.env,
   });
+
+  return {
+    ...prepared,
+    mergedConfig,
+    reportMcpConfig: resolveReportMcpConfig(mergedConfig, params.env),
+  };
 }
