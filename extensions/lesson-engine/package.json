@@ -20,6 +20,9 @@
   },
   "openclaw": {
     "kind": "tool",
-    "cli": "./cli/lesson-engine.ts"
+    "cli": "./cli/lesson-engine.ts",
+    "extensions": [
+      "./src/index.ts"
+    ]
   }
 }

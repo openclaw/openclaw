@@ -442,6 +442,8 @@ importers:
 
   extensions/kimi-coding: {}
 
+  extensions/lesson-engine: {}
+
   extensions/line:
     devDependencies:
       openclaw:
