@@ -6,6 +6,7 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
+type ResolveCompatibleRuntimePluginRegistry = typeof import("./loader.js").resolveCompatibleRuntimePluginRegistry;
 type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
@@ -14,6 +15,7 @@ type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").ap
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
 const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
+const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
@@ -277,6 +279,8 @@ describe("resolvePluginProviders", () => {
         isPluginRegistryLoadInFlightMock(...args),
       resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
         resolveRuntimePluginRegistryMock(...args),
+      resolveCompatibleRuntimePluginRegistry: (...args: Parameters<ResolveCompatibleRuntimePluginRegistry>) =>
+        resolveCompatibleRuntimePluginRegistryMock(...args),
     }));
     vi.doMock("../config/plugin-auto-enable.js", () => ({
       applyPluginAutoEnable: (...args: Parameters<ApplyPluginAutoEnable>) =>
@@ -308,6 +312,7 @@ describe("resolvePluginProviders", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resolveRuntimePluginRegistryMock.mockReset();
+    resolveCompatibleRuntimePluginRegistryMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
@@ -712,7 +717,7 @@ describe("resolvePluginProviders", () => {
       }),
     );
   });
-  it("skips plugin loading when the active registry already covers all requested provider plugins", () => {
+  it("skips plugin loading when compatible active registry covers requested providers (#62051)", () => {
     const provider: ProviderPlugin = {
       id: "demo-provider",
       label: "Demo Provider",
@@ -720,7 +725,9 @@ describe("resolvePluginProviders", () => {
     };
     const activeRegistry = createEmptyPluginRegistry();
     activeRegistry.providers.push({ pluginId: "google", provider, source: "bundled" });
-    setActivePluginRegistry(activeRegistry, "gateway-cache-key", "gateway-bindable");
+    // Mock resolveCompatibleRuntimePluginRegistry to return the active registry,
+    // simulating a cache-key match (compatible load options).
+    resolveCompatibleRuntimePluginRegistryMock.mockReturnValueOnce(activeRegistry);
 
     const result = resolvePluginProviders({
       config: {
@@ -729,30 +736,25 @@ describe("resolvePluginProviders", () => {
       onlyPluginIds: ["google"],
     });
 
-    // Fast path should have returned providers from the active registry without
-    // calling resolveRuntimePluginRegistry for a separate load.
+    // Fast path should have returned providers from the compatible registry
+    // without calling resolveRuntimePluginRegistry for a separate load.
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(result).toHaveLength(1);
     expect(result[0]?.id).toBe("demo-provider");
     expect(result[0]?.pluginId).toBe("google");
   });
 
-  it("falls back to plugin loading when active registry does not cover all requested provider plugins", () => {
-    // Active registry has only "google" but we also need "moonshot" (which
-    // IS in the manifest and enabled by default).  The fast-path in
-    // tryResolveProvidersFromActiveRegistry should detect the gap and let
-    // resolveRuntimePluginRegistry handle the full load.
-    const provider: ProviderPlugin = { id: "demo", label: "Demo", auth: [] };
-    const partial = createEmptyPluginRegistry();
-    partial.providers.push({ pluginId: "google", provider, source: "bundled" });
-    setActivePluginRegistry(partial, "partial-key", "default");
+  it("falls back to plugin loading when no compatible active registry exists (#62051)", () => {
+    // resolveCompatibleRuntimePluginRegistry returns undefined (cache-key mismatch),
+    // so the full load path via resolveRuntimePluginRegistry should be used.
+    resolveCompatibleRuntimePluginRegistryMock.mockReturnValueOnce(undefined);
 
     resolvePluginProviders({
       config: { plugins: { allow: ["google", "moonshot"] } },
       onlyPluginIds: ["google", "moonshot"],
     });
 
-    // Should fall through because active registry doesn't have "moonshot" providers.
+    // Should fall through to resolveRuntimePluginRegistry.
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalled();
   });
 

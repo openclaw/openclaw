@@ -4,6 +4,7 @@ import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
+  resolveCompatibleRuntimePluginRegistry,
   resolveRuntimePluginRegistry,
   type PluginLoadOptions,
 } from "./loader.js";
@@ -18,7 +19,7 @@ import {
   resolveOwningPluginIdsForModelRefs,
   withBundledProviderVitestCompat,
 } from "./providers.js";
-import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
   createPluginRuntimeLoaderLogger,
@@ -252,42 +253,6 @@ export function isPluginProvidersLoadInFlight(
   return isPluginRegistryLoadInFlight(loadState.loadOptions);
 }
 
-/**
- * Check whether the active gateway plugin registry already satisfies a runtime
- * provider request. When the gateway loaded provider plugins at startup (or in
- * a prior lazy load that was activated), subsequent calls from agent sessions
- * and cron jobs with different workspace dirs should reuse those providers
- * instead of triggering an expensive full plugin load for each unique context.
- *
- * Returns the matching provider list when the active registry covers the
- * requested provider plugin IDs, or `undefined` when a fresh load is needed.
- */
-function tryResolveProvidersFromActiveRegistry(
-  providerPluginIds: readonly string[],
-): ProviderPlugin[] | undefined {
-  if (providerPluginIds.length === 0) {
-    return undefined;
-  }
-  const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry || activeRegistry.providers.length === 0) {
-    return undefined;
-  }
-  const activeProviderPluginIds = new Set(activeRegistry.providers.map((entry) => entry.pluginId));
-  const allCovered = providerPluginIds.every((id) => activeProviderPluginIds.has(id));
-  if (!allCovered) {
-    return undefined;
-  }
-  // Filter to only the requested provider plugin IDs so the caller sees the
-  // same set it would get from a dedicated scoped load.
-  const requestedSet = new Set(providerPluginIds);
-  return activeRegistry.providers
-    .filter((entry) => requestedSet.has(entry.pluginId))
-    .map((entry) => ({
-      ...entry.provider,
-      pluginId: entry.pluginId,
-    }));
-}
-
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -318,15 +283,27 @@ export function resolvePluginProviders(params: {
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base);
 
-  // Fast path: if the active gateway registry already loaded the needed
-  // provider plugins, reuse them instead of triggering a separate load.
-  // Provider plugins are workspace-independent — their registration output
-  // does not vary with the caller's workspace dir or agent context.
-  const activeProviders = tryResolveProvidersFromActiveRegistry(
-    loadState.loadOptions.onlyPluginIds ?? [],
-  );
-  if (activeProviders) {
-    return activeProviders;
+  // Fast path: check if the active gateway registry is compatible with these
+  // load options (full cache-key check including config/env/workspace inputs).
+  // When compatible, reuse the already-loaded providers instead of triggering
+  // an expensive full loadOpenClawPlugins() call for each unique workspace dir.
+  // This eliminates per-turn plugin reloads in multi-agent setups (#62051).
+  const compatibleRegistry = resolveCompatibleRuntimePluginRegistry(loadState.loadOptions);
+  if (compatibleRegistry) {
+    const requestedIds = loadState.loadOptions.onlyPluginIds;
+    if (requestedIds && requestedIds.length > 0) {
+      const requestedSet = new Set(requestedIds);
+      return compatibleRegistry.providers
+        .filter((entry) => requestedSet.has(entry.pluginId))
+        .map((entry) => ({
+          ...entry.provider,
+          pluginId: entry.pluginId,
+        }));
+    }
+    return compatibleRegistry.providers.map((entry) => ({
+      ...entry.provider,
+      pluginId: entry.pluginId,
+    }));
   }
 
   const registry = resolveRuntimePluginRegistry(loadState.loadOptions);
