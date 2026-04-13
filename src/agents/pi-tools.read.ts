@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { URL } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
   appendFileWithinRoot,
   SafeOpenError,
@@ -373,10 +375,33 @@ function mapContainerPathToWorkspaceRoot(params: {
   let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
-    if (!localFilePath) {
-      return params.filePath;
+    if (localFilePath) {
+      candidate = localFilePath;
+    } else {
+      // Windows rejects posix-style file:///workspace/... in fileURLToPath; map via URL pathname
+      // when it clearly refers to the container workdir (same idea as sandbox-paths).
+      let parsed: URL;
+      try {
+        parsed = new URL(candidate);
+      } catch {
+        return params.filePath;
+      }
+      if (parsed.protocol !== "file:") {
+        return params.filePath;
+      }
+      const host = parsed.hostname.trim().toLowerCase();
+      if (host && host !== "localhost") {
+        return params.filePath;
+      }
+      const normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      if (
+        normalizedPathname !== normalizedWorkdir &&
+        !normalizedPathname.startsWith(`${normalizedWorkdir}/`)
+      ) {
+        return params.filePath;
+      }
+      candidate = normalizedPathname;
     }
-    candidate = localFilePath;
   }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
@@ -401,9 +426,13 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
 }): string {
   const mapped = mapContainerPathToWorkspaceRoot(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
-  return path.isAbsolute(candidate)
-    ? path.resolve(candidate)
-    : path.resolve(params.root, candidate || ".");
+  if (isWindowsDrivePath(candidate)) {
+    return path.win32.normalize(candidate);
+  }
+  if (path.isAbsolute(candidate)) {
+    return path.resolve(candidate);
+  }
+  return path.resolve(params.root, candidate || ".");
 }
 
 type MemoryFlushAppendOnlyWriteOptions = {
