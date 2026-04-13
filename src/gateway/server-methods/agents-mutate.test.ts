@@ -1013,6 +1013,22 @@ describe("agents.files.get/set symlink safety", () => {
     mocks.writeFileWithinRoot.mockRejectedValue(safeOpenError);
   }
 
+  function mockInWorkspaceSymlinkAlias() {
+    const safeOpenError = new SafeOpenError(
+      "invalid-path",
+      "path is not a regular file under root",
+    );
+    agentsTesting.setDepsForTests({
+      openFileWithinRoot: async () => {
+        throw safeOpenError;
+      },
+      readFileWithinRoot: async () => {
+        throw safeOpenError;
+      },
+    });
+    mocks.writeFileWithinRoot.mockRejectedValue(safeOpenError);
+  }
+
   it.each([
     { method: "agents.files.get" as const, expectNoOpen: false },
     { method: "agents.files.set" as const, expectNoOpen: true },
@@ -1030,7 +1046,7 @@ describe("agents.files.get/set symlink safety", () => {
   it.each(["agents.files.get", "agents.files.set"] as const)(
     "rejects %s when allowlisted file is an in-workspace symlink alias",
     async (method) => {
-      mockWorkspaceEscapeSymlink();
+      mockInWorkspaceSymlinkAlias();
       await expectUnsafeWorkspaceFile(method);
     },
   );
