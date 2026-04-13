@@ -395,18 +395,6 @@ export function buildTextToolResult(
   };
 }
 
-export function resolveModelFromRegistry(params: {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  provider: string;
-  modelId: string;
-}): Model<Api> {
-  const model = params.modelRegistry.find(params.provider, params.modelId) as Model<Api> | null;
-  if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
-  }
-  return model;
-}
-
 export async function resolveModelRuntimeApiKey(params: {
   model: Model<Api>;
   cfg: OpenClawConfig | undefined;
