@@ -416,6 +416,62 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.run.model).toBe("sonnet-4.6");
   });
 
+  it("delivers and clears summary-only collect drains after cross-channel items", async () => {
+    const key = `test-collect-summary-only-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 3;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        originatingChannel: "slack",
+        originatingTo: "channel:B",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "third",
+        originatingChannel: "slack",
+        originatingTo: "channel:C",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.prompt).toBe("second");
+    expect(calls[1]?.prompt).toBe("third");
+    expect(calls[2]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[2]?.prompt).toContain("- first");
+  });
+
   it("preserves collect order when authorization changes more than once", async () => {
     const key = `test-collect-auth-order-${Date.now()}`;
     const calls: FollowupRun[] = [];

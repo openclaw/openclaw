@@ -165,6 +165,17 @@ export function scheduleFollowupDrain(
             run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
+            const summaryOnlyPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+            const run = queue.lastRun;
+            if (summaryOnlyPrompt && run) {
+              await effectiveRunFollowup({
+                prompt: summaryOnlyPrompt,
+                run,
+                enqueuedAt: Date.now(),
+              });
+              clearQueueSummaryState(queue);
+              continue;
+            }
             break;
           }
           if (collectDrainResult === "drained") {
@@ -174,6 +185,19 @@ export function scheduleFollowupDrain(
           const items = queue.items.slice();
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
           const authGroups = splitCollectItemsByAuthorization(items);
+          if (authGroups.length === 0) {
+            const run = queue.lastRun;
+            if (!summary || !run) {
+              break;
+            }
+            await effectiveRunFollowup({
+              prompt: summary,
+              run,
+              enqueuedAt: Date.now(),
+            });
+            clearQueueSummaryState(queue);
+            continue;
+          }
 
           let pendingSummary = summary;
           for (const groupItems of authGroups) {
