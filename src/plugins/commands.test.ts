@@ -5,6 +5,7 @@ import {
   clearPluginCommands,
   executePluginCommand,
   getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
   listPluginCommands,
   matchPluginCommand,
   registerPluginCommand,
@@ -307,7 +308,26 @@ describe("registerPluginCommand", () => {
       { provider: undefined, expectedNames: ["talkvoice"] },
       { provider: "discord", expectedNames: ["discordvoice"] },
       { provider: "telegram", expectedNames: ["talkvoice"] },
-      { provider: "slack", expectedNames: ["talkvoice"] },
+      { provider: "slack", expectedNames: [] },
+    ]);
+  });
+
+  it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
+    const result = registerVoiceCommandForTest({
+      nativeNames: {
+        default: "talkvoice",
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(listProviderPluginCommandSpecs("slack")).toEqual([
+      {
+        name: "talkvoice",
+        description: "Demo command",
+        acceptsArgs: false,
+      },
     ]);
   });
 

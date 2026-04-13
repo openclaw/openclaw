@@ -3,7 +3,7 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
-  getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
 } from "openclaw/plugin-sdk/command-auth";
 import { type ChatCommandDefinition, type CommandArgs } from "openclaw/plugin-sdk/command-auth";
 import {
@@ -674,7 +674,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     const existingNativeNames = new Set(
       nativeCommands.map((c) => normalizeLowercaseStringOrEmpty(c.name)).filter(Boolean),
     );
-    for (const pluginCommand of getPluginCommandSpecs("slack")) {
+    for (const pluginCommand of listProviderPluginCommandSpecs("slack")) {
       const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
       if (!normalizedName || existingNativeNames.has(normalizedName)) {
         continue;

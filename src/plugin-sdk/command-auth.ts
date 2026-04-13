@@ -76,7 +76,10 @@ export {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
-export { getPluginCommandSpecs } from "../plugins/command-registration.js";
+export {
+  getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
+} from "../plugins/command-registration.js";
 export type { SkillCommandSpec } from "../agents/skills.js";
 export {
   buildModelsProviderData,

@@ -73,16 +73,21 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   acceptsArgs: boolean;
 }> {
   const providerName = normalizeOptionalLowercaseString(provider);
-  if (providerName) {
-    const channelPlugin = getChannelPlugin(providerName);
-    if (
-      !channelPlugin ||
-      (!channelPlugin.capabilities?.nativeCommands &&
-        !channelPlugin.commands?.nativeCommandsAutoEnabled)
-    ) {
-      return [];
-    }
+  if (
+    providerName &&
+    getChannelPlugin(providerName)?.commands?.nativeCommandsAutoEnabled !== true
+  ) {
+    return [];
   }
+  return listProviderPluginCommandSpecs(provider);
+}
+
+/** Resolve plugin command specs for a provider's native naming surface without support gating. */
+export function listProviderPluginCommandSpecs(provider?: string): Array<{
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+}> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: resolvePluginNativeName(cmd, provider),
     description: cmd.description,

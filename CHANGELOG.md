@@ -271,6 +271,7 @@ Docs: https://docs.openclaw.ai
 - Daemon/launchd: keep `openclaw gateway stop` persistent without uninstalling the macOS LaunchAgent, re-enable it on explicit restart or repair, and harden launchd label handling. (#64447) Thanks @ngutman.
 - Plugins/context engines: preserve `plugins.slots.contextEngine` through normalization and keep explicitly selected workspace context-engine plugins enabled, so loader diagnostics and plugin activation stop dropping that slot selection. (#64192) Thanks @hclsys.
 - Heartbeat: stop top-level `interval:` and `prompt:` fields outside the `tasks:` block from bleeding into the last parsed heartbeat task. (#64488) Thanks @Rahulkumar070.
+- Slack/plugin commands: include plugin-registered slash commands in Slack native command registration when Slack native commands are enabled. (#64578) Thanks @rafaelreis-r.
 - Agents/OpenAI replay: preserve malformed function-call arguments in stored assistant history, avoid double-encoding preserved raw strings on replay, and coerce replayed string args back to objects at Anthropic and Google provider boundaries. (#61956) Thanks @100yenadmin.
 - Heartbeat/config: accept and honor `agents.defaults.heartbeat.timeoutSeconds` and per-agent heartbeat timeout overrides for heartbeat agent turns. (#64491) Thanks @cedillarack.
 - CLI/devices: make implicit `openclaw devices approve` selection preview-only and require approving the exact request ID, preventing latest-request races during device pairing. (#64160) Thanks @coygeek.
