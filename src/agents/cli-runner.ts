@@ -26,7 +26,33 @@ export async function runPreparedCliAgent(
       payloads,
       meta: {
         durationMs: Date.now() - context.started,
+        ...(resultParams.output.finalPromptText
+          ? { finalPromptText: resultParams.output.finalPromptText }
+          : {}),
+        ...(text ? { finalAssistantVisibleText: text, finalAssistantRawText: text } : {}),
         systemPromptReport: context.systemPromptReport,
+        executionTrace: {
+          winnerProvider: params.provider,
+          winnerModel: context.modelId,
+          attempts: [
+            {
+              provider: params.provider,
+              model: context.modelId,
+              result: "success",
+            },
+          ],
+          fallbackUsed: false,
+          runner: "cli",
+        },
+        requestShaping: {
+          ...(params.thinkLevel ? { thinking: params.thinkLevel } : {}),
+          ...(params.authProfileId ? { authMode: "auth-profile" } : {}),
+        },
+        completion: {
+          finishReason: "stop",
+          stopReason: "completed",
+          refusal: false,
+        },
         agentMeta: {
           sessionId: resultParams.effectiveCliSessionId ?? params.sessionId ?? "",
           provider: params.provider,

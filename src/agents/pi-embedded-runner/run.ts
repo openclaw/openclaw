@@ -116,6 +116,8 @@ import {
 import type {
   EmbeddedPiAgentMeta,
   EmbeddedPiRunResult,
+  TraceAttempt,
+  ToolSummaryTrace,
   EmbeddedRunLivenessState,
 } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
@@ -123,6 +125,30 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+
+function buildTraceToolSummary(params: {
+  toolMetas: Array<{ toolName: string; meta?: string }>;
+  hadFailure: boolean;
+}): ToolSummaryTrace | undefined {
+  if (params.toolMetas.length === 0) {
+    return undefined;
+  }
+  const tools: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of params.toolMetas) {
+    const toolName = normalizeOptionalString(entry.toolName);
+    if (!toolName || seen.has(toolName)) {
+      continue;
+    }
+    seen.add(toolName);
+    tools.push(toolName);
+  }
+  return {
+    calls: params.toolMetas.length,
+    tools,
+    failures: params.hadFailure ? 1 : 0,
+  };
+}
 
 /**
  * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
@@ -337,6 +363,7 @@ export async function runEmbeddedPiAgent(
           ? profileOrder
           : [undefined];
       let profileIndex = 0;
+      const traceAttempts: TraceAttempt[] = [];
 
       const initialThinkLevel = params.thinkLevel ?? "off";
       let thinkLevel = initialThinkLevel;
@@ -1149,6 +1176,7 @@ export async function runEmbeddedPiAgent(
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
                 error: { kind, message: errorText },
@@ -1203,6 +1231,7 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
+                  finalPromptText: attempt.finalPromptText,
                   replayInvalid: resolveReplayInvalidForAttempt(),
                   livenessState: "blocked",
                   error: { kind: "role_ordering", message: errorText },
@@ -1241,6 +1270,7 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
+                  finalPromptText: attempt.finalPromptText,
                   replayInvalid: resolveReplayInvalidForAttempt(),
                   livenessState: "blocked",
                   error: { kind: "image_size", message: errorText },
@@ -1294,6 +1324,13 @@ export async function runEmbeddedPiAgent(
               promptFailoverDecision.action === "rotate_profile" &&
               (await advanceAuthProfile())
             ) {
+              traceAttempts.push({
+                provider,
+                model: modelId,
+                result: promptFailoverReason === "timeout" ? "timeout" : "rotate_profile",
+                ...(promptFailoverReason ? { reason: promptFailoverReason } : {}),
+                stage: "prompt",
+              });
               lastRetryFailoverReason = mergeRetryFailoverReason({
                 previous: lastRetryFailoverReason,
                 failoverReason: promptFailoverReason,
@@ -1330,6 +1367,14 @@ export async function runEmbeddedPiAgent(
             if (promptFailoverDecision.action === "fallback_model") {
               const fallbackReason = promptFailoverDecision.reason ?? "unknown";
               const status = resolveFailoverStatus(fallbackReason);
+              traceAttempts.push({
+                provider,
+                model: modelId,
+                result: promptFailoverReason === "timeout" ? "timeout" : "fallback_model",
+                reason: fallbackReason,
+                stage: "prompt",
+                ...(typeof status === "number" ? { status } : {}),
+              });
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               throw (
@@ -1344,6 +1389,13 @@ export async function runEmbeddedPiAgent(
               );
             }
             if (promptFailoverDecision.action === "surface_error") {
+              traceAttempts.push({
+                provider,
+                model: modelId,
+                result: promptFailoverReason === "timeout" ? "timeout" : "surface_error",
+                ...(promptFailoverReason ? { reason: promptFailoverReason } : {}),
+                stage: "prompt",
+              });
               logPromptFailoverDecision("surface_error");
             }
             throw promptError;
@@ -1478,6 +1530,17 @@ export async function runEmbeddedPiAgent(
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {
+            traceAttempts.push({
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              result:
+                assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
+                assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : "rotate_profile",
+              ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
+              stage: "assistant",
+            });
             if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
               sameModelIdleTimeoutRetries += 1;
             }
@@ -1485,6 +1548,21 @@ export async function runEmbeddedPiAgent(
             continue;
           }
           if (assistantFailoverOutcome.action === "throw") {
+            traceAttempts.push({
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              result:
+                assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : assistantFailoverDecision.action === "fallback_model"
+                    ? "fallback_model"
+                    : "error",
+              ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
+              stage: "assistant",
+              ...(typeof assistantFailoverOutcome.error.status === "number"
+                ? { status: assistantFailoverOutcome.error.status }
+                : {}),
+            });
             throw assistantFailoverOutcome.error;
           }
           const usageMeta = buildUsageAgentMetaFields({
@@ -1562,6 +1640,7 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
                 finalAssistantVisibleText,
                 finalAssistantRawText,
                 replayInvalid,
@@ -1666,6 +1745,7 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
                 finalAssistantVisibleText,
                 finalAssistantRawText,
                 replayInvalid,
@@ -1719,6 +1799,7 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
                 finalAssistantVisibleText,
                 finalAssistantRawText,
                 replayInvalid,
@@ -1757,6 +1838,11 @@ export async function runEmbeddedPiAgent(
             attempt,
             incompleteTurnText: null,
           });
+          const stopReason = attempt.clientToolCall
+            ? "tool_calls"
+            : attempt.yieldDetected
+              ? "end_turn"
+              : (sessionLastAssistant?.stopReason as string | undefined);
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
             livenessState,
@@ -1768,6 +1854,7 @@ export async function runEmbeddedPiAgent(
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
+              finalPromptText: attempt.finalPromptText,
               finalAssistantVisibleText,
               finalAssistantRawText,
               replayInvalid,
@@ -1775,11 +1862,7 @@ export async function runEmbeddedPiAgent(
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.
-              stopReason: attempt.clientToolCall
-                ? "tool_calls"
-                : attempt.yieldDetected
-                  ? "end_turn"
-                  : (sessionLastAssistant?.stopReason as string | undefined),
+              stopReason,
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {
@@ -1789,6 +1872,44 @@ export async function runEmbeddedPiAgent(
                     },
                   ]
                 : undefined,
+              executionTrace: {
+                winnerProvider: sessionLastAssistant?.provider ?? provider,
+                winnerModel: sessionLastAssistant?.model ?? model.id,
+                attempts:
+                  traceAttempts.length > 0 ||
+                  sessionLastAssistant?.provider ||
+                  sessionLastAssistant?.model
+                    ? [
+                        ...traceAttempts,
+                        {
+                          provider: sessionLastAssistant?.provider ?? provider,
+                          model: sessionLastAssistant?.model ?? model.id,
+                          result: "success",
+                          stage: "assistant",
+                        },
+                      ]
+                    : undefined,
+                fallbackUsed: traceAttempts.length > 0,
+                runner: "embedded",
+              },
+              requestShaping: {
+                ...(lastProfileId ? { authMode: "auth-profile" } : {}),
+                ...(thinkLevel ? { thinking: thinkLevel } : {}),
+                ...(params.reasoningLevel ? { reasoning: params.reasoningLevel } : {}),
+                ...(params.verboseLevel ? { verbose: params.verboseLevel } : {}),
+                ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
+              },
+              toolSummary: buildTraceToolSummary({
+                toolMetas: attempt.toolMetas,
+                hadFailure: Boolean(attempt.lastToolError),
+              }),
+              completion: {
+                ...(stopReason ? { stopReason } : {}),
+                ...(stopReason ? { finishReason: stopReason } : {}),
+                ...(stopReason?.toLowerCase().includes("refusal") ? { refusal: true } : {}),
+              },
+              contextManagement:
+                autoCompactionCount > 0 ? { lastTurnCompactions: autoCompactionCount } : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,

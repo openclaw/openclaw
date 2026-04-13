@@ -464,6 +464,7 @@ export async function executePreparedCliRun(
         });
         return {
           ...parsed,
+          finalPromptText: prompt,
           text: applyPluginTextReplacements(
             parsed.text,
             context.backendResolved.textTransforms?.output,
