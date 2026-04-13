@@ -95,4 +95,32 @@ describe("createFailoverDecisionLogger", () => {
       (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
     ).toContain("to=openai/gpt-5.4");
   });
+
+  it("omits to model refs when the source matches the selected target", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const logDecision = createFailoverDecisionLogger({
+      stage: "assistant",
+      runId: "run:same-model",
+      rawError: "timeout",
+      failoverReason: "timeout",
+      profileFailureReason: "timeout",
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceProvider: "openai",
+      sourceModel: "gpt-5.4",
+      profileId: "openai:p1",
+      fallbackConfigured: true,
+      timedOut: true,
+      aborted: false,
+    });
+
+    logDecision("surface_error");
+
+    expect(
+      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
+    ).toContain("from=openai/gpt-5.4");
+    expect(
+      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
+    ).not.toContain("to=openai/gpt-5.4");
+  });
 });
