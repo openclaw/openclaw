@@ -1612,14 +1612,22 @@ export async function runEmbeddedPiAgent(
             const SANITIZER_MIN_CHARS = 60;
             if (visibleText.length >= SANITIZER_MIN_CHARS) {
               // Trailing-portion logic: if the message exceeds maxChars,
-              // only rewrite the last maxChars characters. The factual head
-              // stays intact; the personality tail gets warmth from SOUL.md.
-              // If maxChars === 0, no length limit is applied.
+              // only rewrite the last portion. Split at a paragraph boundary
+              // (\n\n) near the maxChars position so we don't cut through a
+              // code block — code-block extraction inside runPersonalityCloseout
+              // needs to see complete fences.
               let textToRewrite: string;
               let preservedHead: string;
               if (sanitizerMaxChars > 0 && visibleText.length > sanitizerMaxChars) {
-                preservedHead = visibleText.slice(0, visibleText.length - sanitizerMaxChars);
-                textToRewrite = visibleText.slice(visibleText.length - sanitizerMaxChars);
+                const targetSplit = visibleText.length - sanitizerMaxChars;
+                // Find the nearest paragraph break after the target point
+                const breakIndex = visibleText.indexOf("\n\n", targetSplit);
+                const splitAt =
+                  breakIndex > 0 && breakIndex < targetSplit + 500
+                    ? breakIndex + 2 // Split after the \n\n
+                    : targetSplit; // Fall back to exact position
+                preservedHead = visibleText.slice(0, splitAt);
+                textToRewrite = visibleText.slice(splitAt);
               } else {
                 preservedHead = "";
                 textToRewrite = visibleText;

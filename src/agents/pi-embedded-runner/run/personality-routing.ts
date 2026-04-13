@@ -46,7 +46,8 @@ export function restoreCodeBlocks(rewrittenProse: string, blocks: string[]): str
   for (let i = 0; i < blocks.length; i++) {
     const placeholder = `${CODE_BLOCK_PLACEHOLDER_PREFIX}${i}${CODE_BLOCK_PLACEHOLDER_SUFFIX}`;
     if (result.includes(placeholder)) {
-      result = result.replace(placeholder, blocks[i]);
+      // Replace ALL occurrences (the model might duplicate a placeholder)
+      result = result.split(placeholder).join(blocks[i]);
       restored.add(i);
     }
   }
@@ -241,10 +242,12 @@ export async function runPersonalityCloseout(params: {
         // enough room to rewrite the text. For 16k chars of input (roughly
         // 4k tokens), 8192 output tokens is generous.
         maxTokens: Math.min(8192, Math.max(2048, Math.ceil(proseOnly.length / 2))),
-        // Bound the closeout to 15 seconds so a stalled personality model
-        // doesn't block reply delivery. The catch block falls back to the
-        // original text if this fires.
-        signal: params.signal ?? AbortSignal.timeout(15_000),
+        // Always bound the closeout to 15s regardless of whether the caller
+        // provided a signal. If the caller's signal fires first, that wins;
+        // if neither fires, the 15s timeout is the backstop.
+        signal: params.signal
+          ? AbortSignal.any([params.signal, AbortSignal.timeout(15_000)])
+          : AbortSignal.timeout(15_000),
       },
     );
     // AssistantMessage has .content (array of content blocks)

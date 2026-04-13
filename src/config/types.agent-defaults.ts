@@ -259,10 +259,11 @@ export type AgentDefaultsConfig = {
      */
     personalityMode?: "off" | "hybrid";
     /**
-     * Model used for personality turns and the sanitizer when
-     * `personalityMode` is `"hybrid"`. Should be a GPT-5 family model
-     * that shares KV cache with the primary model for near-zero
-     * switching latency. Default: `"openai/gpt-5.2"`.
+     * Model used for personality turns (when `personalityMode` is `"hybrid"`)
+     * and the sanitizer (when `personalitySanitizer` is `true` — works with
+     * either personality mode). Should be a GPT-5 family model that shares
+     * KV cache with the primary model for near-zero switching latency.
+     * Default: `"openai/gpt-5.2"`.
      */
     personalityModel?: string;
     /**
