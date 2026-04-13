@@ -2520,6 +2520,89 @@ describe("initSessionState dmScope delivery migration", () => {
 });
 
 describe("initSessionState internal channel routing preservation", () => {
+  it("does not synthesize heartbeat routing on a session with no external route", async () => {
+    const storePath = await createStorePath("system-event-no-route-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-system-event-no-route",
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "HEARTBEAT_OK",
+        SessionKey: sessionKey,
+        Provider: "heartbeat",
+        From: "heartbeat",
+        To: "heartbeat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBeUndefined();
+    expect(result.sessionEntry.lastTo).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext).toBeUndefined();
+    expect(result.sessionEntry.origin).toBeUndefined();
+  });
+
+  it("preserves the existing user route when a heartbeat targets a different chat on the shared session", async () => {
+    const storePath = await createStorePath("system-event-preserve-user-route-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-system-event-shared",
+        updatedAt: Date.now(),
+        lastChannel: "feishu",
+        lastTo: "user:ou_sender_1",
+        deliveryContext: {
+          channel: "feishu",
+          to: "user:ou_sender_1",
+          accountId: "default",
+        },
+        origin: {
+          provider: "feishu",
+          from: "user:ou_sender_1",
+          to: "user:ou_sender_1",
+          accountId: "default",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "heartbeat tick",
+        SessionKey: sessionKey,
+        Provider: "heartbeat",
+        From: "chat:oc_group_chat",
+        To: "chat:oc_group_chat",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "chat:oc_group_chat",
+        AccountId: "default",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("feishu");
+    expect(result.sessionEntry.lastTo).toBe("user:ou_sender_1");
+    expect(result.sessionEntry.deliveryContext).toEqual({
+      channel: "feishu",
+      to: "user:ou_sender_1",
+      accountId: "default",
+    });
+    expect(result.sessionEntry.origin).toEqual({
+      provider: "feishu",
+      from: "user:ou_sender_1",
+      to: "user:ou_sender_1",
+      accountId: "default",
+    });
+  });
+
   it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", async () => {
     const storePath = await createStorePath("preserve-external-channel-");
     const sessionKey = "agent:main:telegram:group:12345";
