@@ -22,7 +22,7 @@ jobs:
   # PUT THE SLOWER, EXTERNAL, OR SOMETIMES-FLAKY RELEASE CHECKS HERE INSTEAD OF
   # RECOUPLING THEM TO openclaw-npm-release.yml.
   validate_release_live_cache:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read

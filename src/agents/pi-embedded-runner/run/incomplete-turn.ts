@@ -1,5 +1,6 @@
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -194,11 +195,10 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
 }): boolean {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  if (provider !== "openai" && provider !== "openai-codex") {
-    return false;
-  }
-  return /^gpt-5(?:[.-]|$)/i.test(params.modelId ?? "");
+  return isStrictAgenticSupportedProviderModel({
+    provider: params.provider,
+    modelId: params.modelId,
+  });
 }
 
 function normalizeAckPrompt(text: string): string {
