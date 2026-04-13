@@ -32,6 +32,12 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
 });
 
 describe("resolveDaemonNodeBinDir", () => {
+  it("includes the vite-plus companion bin for vite-plus managed runtimes", () => {
+    expect(
+      resolveDaemonNodeBinDir("/Users/test/.vite-plus/js_runtime/node/24.14.1/bin/node"),
+    ).toEqual(["/Users/test/.vite-plus/js_runtime/node/24.14.1/bin", "/Users/test/.vite-plus/bin"]);
+  });
+
   it("returns the absolute node bin directory", () => {
     expect(resolveDaemonNodeBinDir("/custom/node/bin/node")).toEqual(["/custom/node/bin"]);
   });
