@@ -28,6 +28,7 @@ import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import { createStatusLine, type StatusLineHandle } from "./tui-statusline.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
@@ -434,11 +435,36 @@ export async function runTui(opts: TuiOptions) {
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const editor = new CustomEditor(tui, editorTheme);
+  // StatusLine: external command-driven status area
+  const statusLineContainer = new Container();
+  let statusLineText: Text | null = null;
+  let statusLineHandle: StatusLineHandle | null = null;
+
+  const statusLineCommand = config.ui?.statusLine?.command;
+  if (statusLineCommand) {
+    statusLineText = new Text("", 1, 0);
+    statusLineContainer.addChild(statusLineText);
+
+    statusLineHandle = createStatusLine({
+      command: statusLineCommand,
+      refreshInterval: config.ui?.statusLine?.refreshInterval,
+      timeout: config.ui?.statusLine?.timeout,
+      onOutput: (output) => {
+        const trimmed = output.replace(/\n$/, "");
+        if (statusLineText) {
+          statusLineText.setText(trimmed);
+          tui.requestRender();
+        }
+      },
+    });
+  }
+
   const root = new Container();
   root.addChild(header);
   root.addChild(chatLog);
   root.addChild(statusContainer);
   root.addChild(footer);
+  root.addChild(statusLineContainer);
   root.addChild(editor);
 
   const updateAutocompleteProvider = () => {
@@ -456,6 +482,9 @@ export async function runTui(opts: TuiOptions) {
 
   tui.addChild(root);
   tui.setFocus(editor);
+
+  // Start statusLine timer if configured
+  statusLineHandle?.start();
 
   const formatSessionKey = (key: string) => {
     if (key === "global" || key === "unknown") {
@@ -752,6 +781,7 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
     exitRequested = true;
+    statusLineHandle?.stop();
     client.stop();
     void drainAndStopTuiSafely(tui).then(() => {
       process.exit(0);

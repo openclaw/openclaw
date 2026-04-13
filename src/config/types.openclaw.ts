@@ -91,6 +91,15 @@ export type OpenClawConfig = {
       /** Assistant avatar (emoji, short text, or image URL/data URI). */
       avatar?: string;
     };
+    /** External command-driven status area in the TUI. */
+    statusLine?: {
+      /** Shell command to execute periodically. Output (stdout) is rendered as ANSI text. */
+      command?: string;
+      /** Refresh interval in milliseconds. Default: 1000. Minimum: 500. */
+      refreshInterval?: number;
+      /** Execution timeout in milliseconds. Default: 500. */
+      timeout?: number;
+    };
   };
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
