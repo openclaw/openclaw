@@ -11,6 +11,7 @@ type Rgba = {
   r: number;
   g: number;
   b: number;
+  /** Alpha channel in normalized range [0, 1]. */
   a?: number;
 };
 
@@ -159,7 +160,8 @@ function createImage(width: number, height: number): Uint8Array {
 }
 
 function setPixel(image: Uint8Array, width: number, x: number, y: number, color: Rgba) {
-  if (x < 0 || y < 0) {
+  const height = Math.floor(image.length / (width * 4));
+  if (x < 0 || y < 0 || x >= width || y >= height) {
     return;
   }
   const offset = (y * width + x) * 4;
@@ -170,6 +172,13 @@ function setPixel(image: Uint8Array, width: number, x: number, y: number, color:
   image[offset + 1] = clampColor(color.g);
   image[offset + 2] = clampColor(color.b);
   image[offset + 3] = clampColor((color.a ?? 1) * 255);
+}
+
+function ensurePositiveInt(name: string, value: number): number {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }
 
 function fillRect(image: Uint8Array, width: number, x: number, y: number, rectWidth: number, rectHeight: number, color: Rgba) {
@@ -388,9 +397,9 @@ export async function generatePixelArtPlaceholder(
     throw new Error("Pixel placeholder prompt is required");
   }
 
-  const width = params.width ?? DEFAULT_WIDTH;
-  const height = params.height ?? DEFAULT_HEIGHT;
-  const pixelScale = params.pixelScale ?? DEFAULT_PIXEL_SCALE;
+  const width = ensurePositiveInt("width", params.width ?? DEFAULT_WIDTH);
+  const height = ensurePositiveInt("height", params.height ?? DEFAULT_HEIGHT);
+  const pixelScale = ensurePositiveInt("pixelScale", params.pixelScale ?? DEFAULT_PIXEL_SCALE);
   const style = params.style ?? DEFAULT_STYLE;
   const seed = String(params.seed ?? prompt);
   const normalizedPrompt = prompt.toLowerCase();
