@@ -2681,6 +2681,7 @@ Best practice:
             for e in bucket_errors:
                 print(f"   - {e}")
             sys.exit(1)
+        print("  ⚠️  Existing buckets are not modified; ensure the CloudTrail bucket policy already permits CloudTrail writes.")
         bucket_block = ""
         bucket_policy_block = ""
         bucket_ref = f'"{bucket_name}"'
