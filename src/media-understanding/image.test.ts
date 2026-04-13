@@ -324,4 +324,50 @@ describe("describeImageWithModel", () => {
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
+
+  it("falls back to available registry entries for custom providers", async () => {
+    const findMock = vi.fn(() => null);
+    const getAvailableMock = vi.fn(() => [
+      {
+        provider: "custom-proxy",
+        id: "glm-5v-turbo",
+        input: ["text", "image"],
+        baseUrl: "https://custom-proxy.example.com",
+      },
+    ]);
+    discoverModelsMock.mockReturnValue({
+      find: findMock,
+      getAvailable: getAvailableMock,
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "custom-proxy",
+      model: "glm-5v-turbo",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "custom provider ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "custom-proxy",
+      model: "glm-5v-turbo",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "custom provider ok",
+      model: "glm-5v-turbo",
+    });
+    expect(findMock).toHaveBeenCalledOnce();
+    expect(getAvailableMock).toHaveBeenCalledOnce();
+    expect(getApiKeyForModelMock).toHaveBeenCalled();
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("custom-proxy", "oauth-test");
+  });
 });

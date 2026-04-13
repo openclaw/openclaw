@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { normalizeProviderId } from "../provider-id.js";
+import { isRecord } from "../../utils.js";
 import { ToolInputError, readStringArrayParam, readStringParam } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -396,15 +397,40 @@ export function buildTextToolResult(
 }
 
 export function resolveModelFromRegistry(params: {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  modelRegistry: {
+    find: (provider: string, modelId: string) => unknown;
+    getAvailable?: () => unknown[];
+    getAll?: () => unknown[];
+  };
   provider: string;
   modelId: string;
 }): Model<Api> {
   const model = params.modelRegistry.find(params.provider, params.modelId) as Model<Api> | null;
-  if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
+  if (model) {
+    return model;
   }
-  return model;
+
+  const registry = params.modelRegistry as {
+    getAvailable?: () => unknown[];
+    getAll?: () => unknown[];
+  };
+  const candidates =
+    typeof registry.getAvailable === "function"
+      ? registry.getAvailable()
+      : typeof registry.getAll === "function"
+      ? registry.getAll()
+      : [];
+
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) {
+      continue;
+    }
+    if (candidate.provider === params.provider && candidate.id === params.modelId) {
+      return candidate as Model<Api>;
+    }
+  }
+
+  throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
 }
 
 export async function resolveModelRuntimeApiKey(params: {
