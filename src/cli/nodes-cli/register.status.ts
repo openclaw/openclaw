@@ -14,7 +14,7 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
+import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -324,34 +324,36 @@ export function registerNodesStatusCommands(nodes: Command) {
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
+          const pairedById = new Map<string, PairedNode>(
+            paired.map((entry) => [entry.nodeId, entry]),
+          );
+          const knownNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+          const pairedNodes = knownNodes.filter((node) => Boolean(node.paired));
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
-          const connectedById = hasFilters
-            ? new Map(
-                parseNodeList(await callGatewayCli("node.list", opts, {})).map((node) => [
-                  node.nodeId,
-                  node,
-                ]),
-              )
-            : null;
-          const filteredPaired = paired.filter((node) => {
+
+          const resolveLastConnectedAtMs = (node: NodeListNode) => {
+            const pairingNode = pairedById.get(node.nodeId);
+            if (typeof pairingNode?.lastConnectedAtMs === "number") {
+              return pairingNode.lastConnectedAtMs;
+            }
+            if (typeof node.connectedAtMs === "number") {
+              return node.connectedAtMs;
+            }
+            return undefined;
+          };
+
+          const filteredPaired = pairedNodes.filter((node) => {
             if (connectedOnly) {
-              const live = connectedById?.get(node.nodeId);
-              if (!live?.connected) {
+              if (!node.connected) {
                 return false;
               }
             }
             if (sinceMs !== undefined) {
-              const live = connectedById?.get(node.nodeId);
-              const lastConnectedAtMs =
-                typeof node.lastConnectedAtMs === "number"
-                  ? node.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
-                    : undefined;
+              const lastConnectedAtMs = resolveLastConnectedAtMs(node);
               if (typeof lastConnectedAtMs !== "number") {
                 return false;
               }
@@ -361,14 +363,36 @@ export function registerNodesStatusCommands(nodes: Command) {
             }
             return true;
           });
+
+          const filteredPairedRows = filteredPaired.map((node) => {
+            const pairingNode = pairedById.get(node.nodeId);
+            return {
+              nodeId: node.nodeId,
+              displayName: node.displayName ?? pairingNode?.displayName,
+              platform: node.platform ?? pairingNode?.platform,
+              version: node.version ?? pairingNode?.version,
+              coreVersion: node.coreVersion ?? pairingNode?.coreVersion,
+              uiVersion: node.uiVersion ?? pairingNode?.uiVersion,
+              remoteIp: node.remoteIp ?? pairingNode?.remoteIp,
+              permissions: node.permissions ?? pairingNode?.permissions,
+              approvedAtMs:
+                typeof node.approvedAtMs === "number"
+                  ? node.approvedAtMs
+                  : pairingNode?.approvedAtMs,
+              lastConnectedAtMs: resolveLastConnectedAtMs(node),
+            } satisfies PairedNode;
+          });
+
           const filteredLabel =
-            hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
+            hasFilters && filteredPaired.length !== pairedNodes.length
+              ? ` (of ${pairedNodes.length})`
+              : "";
           defaultRuntime.log(
-            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
+            `Pending: ${pendingRows.length} · Paired: ${filteredPairedRows.length}${filteredLabel}`,
           );
 
           if (opts.json) {
-            defaultRuntime.writeJson({ pending: pendingRows, paired: filteredPaired });
+            defaultRuntime.writeJson({ pending: pendingRows, paired: filteredPairedRows });
             return;
           }
 
@@ -384,22 +408,15 @@ export function registerNodesStatusCommands(nodes: Command) {
             defaultRuntime.log(rendered.table);
           }
 
-          if (filteredPaired.length > 0) {
-            const pairedRows = filteredPaired.map((n) => {
-              const live = connectedById?.get(n.nodeId);
-              const lastConnectedAtMs =
-                typeof n.lastConnectedAtMs === "number"
-                  ? n.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
-                    : undefined;
+          if (filteredPairedRows.length > 0) {
+            const pairedRows = filteredPairedRows.map((n) => {
               return {
                 Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,
                 Id: n.nodeId,
                 IP: n.remoteIp ?? "",
                 LastConnect:
-                  typeof lastConnectedAtMs === "number"
-                    ? formatTimeAgo(Math.max(0, now - lastConnectedAtMs))
+                  typeof n.lastConnectedAtMs === "number"
+                    ? formatTimeAgo(Math.max(0, now - n.lastConnectedAtMs))
                     : muted("unknown"),
               };
             });
