@@ -5,6 +5,17 @@ export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
+  /**
+   * When hybrid personality mode is active, records the provider/model
+   * pair that actually handled this turn. For execution turns this
+   * matches `provider`/`model`; for personality turns it reflects the
+   * personality model. Absent when personalityMode is "off".
+   */
+  routedTo?: {
+    provider: string;
+    model: string;
+    intent: "execution" | "personality";
+  };
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
   promptTokens?: number;

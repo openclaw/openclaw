@@ -1554,6 +1554,16 @@ export async function runEmbeddedPiAgent(
               personalityMode === "hybrid"
                 ? executionModelId
                 : (sessionLastAssistant?.model ?? model.id),
+            // Record the actual model that handled this turn so downstream
+            // usage/cost attribution uses the correct model identity.
+            routedTo:
+              personalityMode === "hybrid"
+                ? {
+                    provider,
+                    model: model.id,
+                    intent: turnIntent,
+                  }
+                : undefined,
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
             promptTokens: usageMeta.promptTokens,
@@ -1647,16 +1657,32 @@ export async function runEmbeddedPiAgent(
                   `total=${visibleText.length} rewriting=${textToRewrite.length} ` +
                   `preserved=${preservedHead.length}`,
               );
-              const rewritten = await runPersonalityCloseout({
+              const closeoutResult = await runPersonalityCloseout({
                 cfg: params.config,
                 personalityProvider: pProvider,
                 personalityModelId: pModelId,
                 agentDir,
+                workspaceDir: resolvedWorkspace,
                 executionText: textToRewrite,
                 signal: params.abortSignal,
               });
-              if (rewritten) {
-                const finalText = preservedHead ? `${preservedHead}${rewritten}` : rewritten;
+              if (closeoutResult) {
+                // Accumulate the closeout's token usage into the run total
+                // so it appears in agentMeta.usage and downstream cost reporting.
+                if (closeoutResult.usage) {
+                  mergeUsageIntoAccumulator(usageAccumulator, closeoutResult.usage);
+                  // Rebuild usage meta to include the closeout tokens
+                  const updatedUsage = buildUsageAgentMetaFields({
+                    usageAccumulator,
+                    lastAssistantUsage: sessionLastAssistant?.usage as UsageLike | undefined,
+                    lastRunPromptUsage,
+                    lastTurnTotal,
+                  });
+                  agentMeta.usage = updatedUsage.usage;
+                }
+                const finalText = preservedHead
+                  ? `${preservedHead}${closeoutResult.text}`
+                  : closeoutResult.text;
                 let rewrittenUsed = false;
                 payloads = payloads.map((p) => {
                   if (
