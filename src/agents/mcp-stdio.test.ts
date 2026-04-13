@@ -164,6 +164,15 @@ describe("getProxyEnvDefaults", () => {
 
     expect(getProxyEnvDefaults()).toEqual({});
   });
+
+  it("does not mangle --inspect substrings inside other argument values", () => {
+    // The path contains "--inspect" as a directory name — it must survive.
+    process.env.NODE_OPTIONS = "--require /tmp/--inspect-hook.js --inspect-brk";
+
+    expect(getProxyEnvDefaults()).toEqual({
+      NODE_OPTIONS: "--require /tmp/--inspect-hook.js",
+    });
+  });
 });
 
 describe("resolveStdioMcpServerLaunchConfig — proxy env propagation", () => {

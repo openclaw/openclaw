@@ -44,13 +44,17 @@ const PROXY_CASE_PAIRS: ReadonlyArray<[uppercase: string, lowercase: string]> = 
 ];
 
 /**
- * Regex that matches ALL `--inspect*` flags inside a NODE_OPTIONS string.
- * This covers `--inspect`, `--inspect-brk`, `--inspect-port=…`,
- * `--inspect-publish-uid=…`, and any future `--inspect-*` variants.
- * If the gateway process is running under a debugger these flags would cause
- * every MCP child to hang waiting for its own debugger connection.
+ * Remove all `--inspect*` tokens from a NODE_OPTIONS string.
+ *
+ * Instead of a global regex replace (which could mangle `--inspect` substrings
+ * inside unrelated argument values like `--require /tmp/--inspect-hook.js`),
+ * we split on whitespace, filter out tokens that _start_ with `--inspect`, and
+ * rejoin.  This correctly respects argument boundaries.
  */
-const INSPECT_FLAG_RE = /--inspect[-\w]*(=\S+)?/g;
+function stripInspectFlags(nodeOptions: string): string {
+  const tokens = nodeOptions.split(/\s+/).filter((t) => !t.startsWith("--inspect"));
+  return tokens.join(" ").trim();
+}
 
 /**
  * Collect proxy-related env vars from the current process so they can be
@@ -86,9 +90,7 @@ export function getProxyEnvDefaults(): Record<string, string> {
 
   // Strip --inspect* flags from NODE_OPTIONS so child processes don't hang.
   if (defaults.NODE_OPTIONS !== undefined) {
-    const sanitized = defaults.NODE_OPTIONS.replace(INSPECT_FLAG_RE, "")
-      .trim()
-      .replace(/\s{2,}/g, " ");
+    const sanitized = stripInspectFlags(defaults.NODE_OPTIONS);
     if (sanitized.length === 0) {
       delete defaults.NODE_OPTIONS;
     } else {
