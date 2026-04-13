@@ -1,6 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createSanitizeSessionHistoryHelpersMock,
+  createSanitizeSessionHistoryProviderRuntimeMock,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeInMemorySessionManager,
   makeModelSnapshotEntry,
@@ -8,22 +10,12 @@ import {
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
-vi.mock("./pi-embedded-helpers.js", async () => ({
-  ...(await vi.importActual("./pi-embedded-helpers.js")),
-  sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
-}));
+vi.mock("./pi-embedded-helpers.js", async () => await createSanitizeSessionHistoryHelpersMock());
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    resolveProviderRuntimePlugin: vi.fn(() => undefined),
-    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
-    validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
-  };
-});
+vi.mock(
+  "../plugins/provider-runtime.js",
+  async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
+);
 
 describe("sanitizeSessionHistory openai tool id preservation", () => {
   let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];
@@ -71,12 +63,12 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     {
       name: "strips fc ids when replayable reasoning metadata is missing",
       withReasoning: false,
-      expectedToolId: "call_123",
+      expectedToolId: "call123",
     },
     {
       name: "keeps canonical call_id|fc_id pairings when replayable reasoning is present",
       withReasoning: true,
-      expectedToolId: "call_123|fc_123",
+      expectedToolId: "call123fc123",
     },
   ])("$name", async ({ withReasoning, expectedToolId }) => {
     const result = await sanitizeSessionHistory({
@@ -94,5 +86,46 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
 
     const toolResult = result[1] as { toolCallId?: string };
     expect(toolResult.toolCallId).toBe(expectedToolId);
+  });
+
+  it("repairs displaced tool results before downgrading openai pairing ids", async () => {
+    const result = await sanitizeSessionHistory({
+      messages: [
+        castAgentMessage({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} }],
+        }),
+        castAgentMessage({
+          role: "user",
+          content: [{ type: "text", text: "still waiting" }],
+        }),
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: "call_123|fc_123",
+          toolName: "noop",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        }),
+      ],
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      sessionManager: makeSessionManager(),
+      sessionId: "test-session",
+    });
+
+    const toolResult = result[1] as {
+      role?: string;
+      toolCallId?: string;
+      content?: Array<{ type?: string; text?: string }>;
+      isError?: boolean;
+    };
+    expect(toolResult.role).toBe("toolResult");
+    expect(toolResult.toolCallId).toBe("call123");
+    expect(toolResult.content?.[0]?.text).toBe("ok");
+    expect(toolResult.isError).toBe(false);
+
+    const userMessage = result[2] as { role?: string };
+    expect(userMessage.role).toBe("user");
   });
 });

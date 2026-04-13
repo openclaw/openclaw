@@ -6,14 +6,11 @@ import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  normalizeMessageChannel,
-} from "../utils/message-channel.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { agentCommand } from "./agent.js";
 import { resolveSessionKeyForRequest } from "./agent/session.js";
 

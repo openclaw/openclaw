@@ -35,6 +35,7 @@ type AssistantFailoverOutcome =
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   aborted: boolean;
+  externalAbort: boolean;
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
@@ -169,6 +170,7 @@ export async function handleAssistantFailover(params: {
     decision = resolveRunFailoverDecision({
       stage: "assistant",
       aborted: params.aborted,
+      externalAbort: params.externalAbort,
       fallbackConfigured: params.fallbackConfigured,
       failoverFailure: params.failoverFailure,
       failoverReason: params.failoverReason,
@@ -219,7 +221,7 @@ export async function handleAssistantFailover(params: {
   }
 
   if (decision.action === "surface_error") {
-    if (params.idleTimedOut && params.allowSameModelIdleTimeoutRetry) {
+    if (!params.externalAbort && params.idleTimedOut && params.allowSameModelIdleTimeoutRetry) {
       return sameModelIdleTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");

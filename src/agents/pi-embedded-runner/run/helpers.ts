@@ -78,13 +78,18 @@ export function resolveMaxRunRetryIterations(profileCandidateCount: number): num
 }
 
 export function resolveActiveErrorContext(params: {
-  lastAssistant: { provider?: string; model?: string } | undefined;
   provider: string;
   model: string;
-}): { provider: string; model: string } {
+  assistant?: { provider?: string; model?: string };
+}): {
+  provider: string;
+  model: string;
+} {
+  const assistantProvider = params.assistant?.provider?.trim();
+  const assistantModel = params.assistant?.model?.trim();
   return {
-    provider: params.lastAssistant?.provider ?? params.provider,
-    model: params.lastAssistant?.model ?? params.model,
+    provider: assistantProvider || params.provider,
+    model: assistantModel || params.model,
   };
 }
 

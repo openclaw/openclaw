@@ -1,6 +1,8 @@
 [
   "index",
   "core",
+  "lmstudio",
+  "lmstudio-runtime",
   "provider-setup",
   "sandbox",
   "self-hosted-provider-setup",
@@ -8,6 +10,7 @@
   "runtime",
   "runtime-doctor",
   "runtime-env",
+  "proxy-capture",
   "runtime-secret-resolution",
   "setup",
   "setup-adapter-runtime",
