@@ -498,6 +498,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
           [sessionKey]: {
             sessionId: "sid",
             updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "-100155462274",
             deliveryContext: {
               channel: "telegram",
               to: "-100155462274",
@@ -519,6 +521,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         agentId: "main",
         reason: "timer",
         deps: {
+          getReplyFromConfig: replySpy,
           telegram: sendTelegram,
         },
       });

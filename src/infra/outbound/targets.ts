@@ -49,7 +49,7 @@ export type HeartbeatSenderContext = {
 
 export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
-import { resolveSessionDeliveryTarget } from "./targets-session.js";
+import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
