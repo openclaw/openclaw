@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { normalizeOptionalCronJobId } from "../../cron/job-id.js";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -66,6 +67,10 @@ export function registerCronAddCommand(cron: Command) {
       .command("add")
       .alias("create")
       .description("Add a cron job")
+      .option(
+        "--id <id>",
+        "Optional custom job id (letters, numbers, dots, underscores, hyphens)",
+      )
       .requiredOption("--name <name>", "Job name")
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
@@ -220,6 +225,7 @@ export function registerCronAddCommand(cron: Command) {
           const sessionKey = normalizeOptionalString(opts.sessionKey);
 
           const params = {
+            id: normalizeOptionalCronJobId(opts.id),
             name,
             description,
             enabled: !opts.disabled,

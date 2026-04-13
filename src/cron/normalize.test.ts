@@ -150,6 +150,30 @@ describe("normalizeCronJobCreate", () => {
     expect("sessionKey" in cleared).toBe(false);
   });
 
+  it("trims custom ids and drops blanks", () => {
+    const normalized = normalizeCronJobCreate({
+      id: "  daily-brief  ",
+      name: "daily brief",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hi" },
+    }) as unknown as Record<string, unknown>;
+    expect(normalized.id).toBe("daily-brief");
+
+    const cleared = normalizeCronJobCreate({
+      id: "   ",
+      name: "blank id",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hi" },
+    }) as unknown as Record<string, unknown>;
+    expect("id" in cleared).toBe(false);
+  });
+
   it("strips top-level legacy delivery hints from live input", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "legacy top-level delivery",

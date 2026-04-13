@@ -67,4 +67,39 @@ describe("CronService.getJob", () => {
       cron.stop();
     }
   });
+
+  it("preserves custom ids and rejects duplicate ids on create", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    await cron.start();
+
+    try {
+      const added = await cron.add({
+        id: "daily-brief",
+        name: "lookup-test",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "ping" },
+      });
+
+      expect(added.id).toBe("daily-brief");
+      expect(cron.getJob("daily-brief")?.id).toBe("daily-brief");
+
+      await expect(
+        cron.add({
+          id: "daily-brief",
+          name: "duplicate",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "ping" },
+        }),
+      ).rejects.toThrow(/cron job id already exists: daily-brief/i);
+    } finally {
+      cron.stop();
+    }
+  });
 });
