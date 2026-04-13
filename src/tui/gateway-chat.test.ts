@@ -441,6 +441,6 @@ describe("GatewayChatClient", () => {
     expect(
       (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
         .deviceIdentity,
-    ).toBeUndefined();
+    ).toBeNull();
   });
 });
