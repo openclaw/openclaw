@@ -23,9 +23,12 @@ export function renderUsageTab(state: AppViewState) {
       loading: state.usageLoading,
       error: state.usageError,
       sessions: state.usageResult?.sessions ?? [],
-      sessionsLimitReached: (state.usageResult?.sessions?.length ?? 0) >= 1000,
+      sessionsLimitReached:
+        (state.usageResult?.overview?.matchedSessions ?? state.usageResult?.sessions?.length ?? 0) >
+        (state.usageResult?.sessions?.length ?? 0),
       totals: state.usageResult?.totals ?? null,
       aggregates: state.usageResult?.aggregates ?? null,
+      overview: state.usageResult?.overview ?? null,
       costDaily: state.usageCostSummary?.daily ?? [],
     },
     filters: {

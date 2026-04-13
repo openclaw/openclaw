@@ -521,9 +521,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    // Apply limit only to the returned session list; aggregates should cover all entries.
+    // Apply limit only to the returned session list; overview aggregates cover all matched entries.
     const limitedEntries = mergedEntries.slice(0, limit);
-    const limitedEntryKeys = new Set(limitedEntries.map((entry) => `${entry.key}::${entry.sessionId}`));
+    const limitedEntrySet = new Set(limitedEntries);
 
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];
@@ -570,6 +570,12 @@ export const usageHandlers: GatewayRequestHandlers = {
       min: Number.POSITIVE_INFINITY,
       max: 0,
       p95Max: 0,
+    };
+    const overview = {
+      matchedSessions: mergedEntries.length,
+      returnedSessions: limitedEntries.length,
+      durationCount: 0,
+      durationSumMs: 0,
     };
     const dailyLatencyMap = new Map<
       string,
@@ -635,6 +641,11 @@ export const usageHandlers: GatewayRequestHandlers = {
 
       const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
       const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+
+      if (usage?.durationMs && usage.durationMs > 0) {
+        overview.durationCount += 1;
+        overview.durationSumMs += usage.durationMs;
+      }
 
       if (usage) {
         if (usage.messageCounts) {
@@ -751,7 +762,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      if (limitedEntryKeys.has(`${merged.key}::${merged.sessionId}`)) {
+      if (limitedEntrySet.has(merged)) {
         sessions.push({
           key: merged.key,
           label: merged.label,
@@ -823,6 +834,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       sessions,
       totals: aggregateTotals,
       aggregates,
+      overview,
     };
 
     respond(true, result, undefined);

@@ -288,11 +288,16 @@ export function renderUsage(props: UsageProps) {
     displayTotals = computeSessionTotals(filteredSessions);
     displaySessionCount = filteredSessions.length;
   } else {
-    // No filters - show all
+    // No filters - show the full overview returned by the gateway.
     displayTotals = data.totals;
-    displaySessionCount = totalSessions;
+    displaySessionCount = data.overview?.matchedSessions ?? totalSessions;
   }
 
+  const useGatewayOverview =
+    filters.selectedSessions.length === 0 &&
+    filters.selectedDays.length === 0 &&
+    filters.selectedHours.length === 0 &&
+    !hasQuery;
   const aggregateSessions =
     filters.selectedSessions.length > 0
       ? filteredSessions.filter((s) => filters.selectedSessions.includes(s.key))
@@ -301,7 +306,11 @@ export function renderUsage(props: UsageProps) {
         : filters.selectedDays.length > 0
           ? dayFilteredSessions
           : sortedSessions;
-  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, data.aggregates);
+  const activeAggregates =
+    useGatewayOverview && data.aggregates
+      ? data.aggregates
+      : buildAggregatesFromSessions(aggregateSessions, data.aggregates);
+  const insightScope = useGatewayOverview ? data.overview : null;
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
@@ -322,7 +331,12 @@ export function renderUsage(props: UsageProps) {
         })()
       : data.costDaily;
 
-  const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
+  const insightStats = buildUsageInsightStats(
+    insightScope ? [] : aggregateSessions,
+    displayTotals,
+    activeAggregates,
+    insightScope ?? undefined,
+  );
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||

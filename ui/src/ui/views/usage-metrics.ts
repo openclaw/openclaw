@@ -3,9 +3,10 @@ import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
   mergeUsageLatency,
+  sortUsageRankingEntries,
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
-import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
+import { UsageSessionEntry, UsageTotals, UsageAggregates, UsageOverview } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
 
@@ -534,9 +535,9 @@ const buildAggregatesFromSessions = (
     byProvider: Array.from(providerMap.values()).toSorted(
       (a, b) => b.totals.totalCost - a.totals.totalCost,
     ),
-    byAgent: Array.from(agentMap.entries())
-      .map(([agentId, totals]) => ({ agentId, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+    byAgent: sortUsageRankingEntries(
+      Array.from(agentMap.entries()).map(([agentId, totals]) => ({ agentId, totals })),
+    ),
     ...tail,
   };
 };
@@ -551,18 +552,23 @@ type UsageInsightStats = {
   peakErrorDay?: { date: string; errors: number; messages: number; rate: number };
 };
 
+type UsageInsightScope = Pick<UsageOverview, "durationCount" | "durationSumMs">;
+
 const buildUsageInsightStats = (
   sessions: UsageSessionEntry[],
   totals: UsageTotals | null,
   aggregates: UsageAggregates,
+  scope?: UsageInsightScope,
 ): UsageInsightStats => {
-  let durationSumMs = 0;
-  let durationCount = 0;
-  for (const session of sessions) {
-    const duration = session.usage?.durationMs ?? 0;
-    if (duration > 0) {
-      durationSumMs += duration;
-      durationCount += 1;
+  let durationSumMs = scope?.durationSumMs ?? 0;
+  let durationCount = scope?.durationCount ?? 0;
+  if (!scope) {
+    for (const session of sessions) {
+      const duration = session.usage?.durationMs ?? 0;
+      if (duration > 0) {
+        durationSumMs += duration;
+        durationCount += 1;
+      }
     }
   }
 

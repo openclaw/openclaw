@@ -243,9 +243,16 @@ describe("sessions.usage", () => {
     const result = respond.mock.calls[0]?.[1] as {
       sessions: Array<{ channel?: string }>;
       aggregates: { byChannel: Array<{ channel: string; totals: { totalTokens: number } }> };
+      overview: { matchedSessions: number; returnedSessions: number };
     };
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0]?.channel).toBe("feishu");
+    expect(result.overview).toEqual({
+      matchedSessions: 2,
+      returnedSessions: 1,
+      durationCount: 0,
+      durationSumMs: 0,
+    });
     expect(result.aggregates.byChannel).toEqual([
       expect.objectContaining({
         channel: "feishu",
@@ -257,6 +264,57 @@ describe("sessions.usage", () => {
       }),
     ]);
   });
+  it("keeps the returned session list capped by the selected slice when duplicate entries collapse", async () => {
+    vi.mocked(discoverAllSessions).mockImplementation(async (params?: { agentId?: string }) => {
+      if (params?.agentId === "main") {
+        return [
+          {
+            sessionId: "s-dup",
+            sessionFile: "/tmp/agents/main/sessions/s-dup-a.jsonl",
+            mtime: 300,
+            firstUserMessage: "first",
+          },
+          {
+            sessionId: "s-dup",
+            sessionFile: "/tmp/agents/main/sessions/s-dup-b.jsonl",
+            mtime: 200,
+            firstUserMessage: "second",
+          },
+        ];
+      }
+      return [];
+    });
+    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      storePath: "(multiple)",
+      store: {},
+    });
+
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      limit: 1,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const result = respond.mock.calls[0]?.[1] as {
+      sessions: Array<{ key: string; sessionId?: string }>;
+      overview: { matchedSessions: number; returnedSessions: number };
+    };
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]).toEqual(
+      expect.objectContaining({
+        key: "agent:main:s-dup",
+        sessionId: "s-dup",
+      }),
+    );
+    expect(result.overview).toEqual({
+      matchedSessions: 2,
+      returnedSessions: 1,
+      durationCount: 0,
+      durationSumMs: 0,
+    });
+  });
+
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));

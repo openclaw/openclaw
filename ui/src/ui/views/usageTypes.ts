@@ -1,6 +1,7 @@
 import type {
   CostUsageDailyEntry,
   SessionsUsageEntry,
+  SessionsUsageOverview,
   SessionsUsageResult,
   SessionsUsageTotals,
   SessionUsageTimePoint,
@@ -10,6 +11,7 @@ export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
 export type CostDailyEntry = CostUsageDailyEntry;
 export type UsageAggregates = SessionsUsageResult["aggregates"];
+export type UsageOverview = SessionsUsageOverview;
 
 export type UsageColumnId =
   | "channel"
@@ -30,6 +32,7 @@ export type UsageDataState = {
   sessionsLimitReached: boolean; // True if 1000 session cap was hit
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
+  overview: UsageOverview | null;
   costDaily: CostDailyEntry[];
 };
 

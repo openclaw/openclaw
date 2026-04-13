@@ -56,6 +56,13 @@ export type SessionsUsageAggregates = {
   }>;
 };
 
+export type SessionsUsageOverview = {
+  matchedSessions: number;
+  returnedSessions: number;
+  durationCount: number;
+  durationSumMs: number;
+};
+
 export type SessionsUsageResult = {
   updatedAt: number;
   startDate: string;
@@ -63,4 +70,5 @@ export type SessionsUsageResult = {
   sessions: SessionUsageEntry[];
   totals: CostUsageSummary["totals"];
   aggregates: SessionsUsageAggregates;
+  overview: SessionsUsageOverview;
 };
