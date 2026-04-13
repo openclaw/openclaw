@@ -105,6 +105,8 @@ export type AgentConfig = {
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
+  /** Optional public-facing label shown in /status instead of the real model name. */
+  statusLabel?: string;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
   tools?: AgentToolsConfig;
