@@ -14,6 +14,7 @@ type ReplayMetadataAttempt = Pick<
 
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
+  | "assistantTexts"
   | "clientToolCall"
   | "currentAttemptAssistant"
   | "yieldDetected"
@@ -79,6 +80,7 @@ const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
 // surfacing the existing incomplete-turn error path.
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
+export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "ok",
   "okay",
@@ -129,6 +131,8 @@ export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
 export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
+  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
@@ -177,7 +181,16 @@ export function resolveIncompleteTurnPayloadText(params: {
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
     params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
   );
-  if (!incompleteTerminalAssistant && !reasoningOnlyAssistant && stopReason !== "error") {
+  const emptyResponseAssistant = isEmptyResponseAssistantTurn({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
+  if (
+    !incompleteTerminalAssistant &&
+    !reasoningOnlyAssistant &&
+    !emptyResponseAssistant &&
+    stopReason !== "error"
+  ) {
     return null;
   }
 
@@ -230,6 +243,38 @@ export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
+function isEmptyResponseAssistantTurn(params: {
+  payloadCount: number;
+  attempt: Pick<
+    IncompleteTurnAttempt,
+    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+  >;
+}): boolean {
+  if (params.payloadCount !== 0) {
+    return false;
+  }
+  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+    return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!assistant) {
+    return true;
+  }
+  if (assistant.stopReason === "error") {
+    return false;
+  }
+  if (
+    isIncompleteTerminalAssistantTurn({
+      hasAssistantVisibleText: false,
+      lastAssistant: assistant,
+    }) ||
+    isReasoningOnlyAssistantTurn(assistant)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -267,6 +312,47 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   return REASONING_ONLY_RETRY_INSTRUCTION;
+}
+
+export function resolveEmptyResponseRetryInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    params.attempt.replayMetadata.hadPotentialSideEffects
+  ) {
+    return null;
+  }
+
+  if (
+    !shouldApplyPlanningOnlyRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    return null;
+  }
+
+  if (
+    !isEmptyResponseAssistantTurn({
+      payloadCount: params.payloadCount,
+      attempt: params.attempt,
+    })
+  ) {
+    return null;
+  }
+
+  return EMPTY_RESPONSE_RETRY_INSTRUCTION;
 }
 
 function shouldApplyPlanningOnlyRetryGuard(params: {
