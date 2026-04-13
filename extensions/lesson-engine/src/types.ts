@@ -81,3 +81,74 @@ export interface MaintenanceState {
   updatedAt: string;
   agents: Record<string, MaintenanceStatePerAgent>;
 }
+
+// ── P1: Error Seed Scanner ──
+
+export interface ErrorSeed {
+  sessionKey: string;
+  agent: string;
+  tool: string;
+  errorClass: string;
+  errorMessage: string;
+  fingerprint: string;
+  domainTags: string[];
+  timestamp: string;
+  sessionTimestamp: string;
+}
+
+export interface ScannerState {
+  version: 1;
+  lastScanAt: string;
+  scannedSessions: Record<string, string[]>;
+}
+
+// ── P1: LLM Distiller ──
+
+export interface EvidenceRef {
+  sessionKey: string;
+  agent: string;
+  tool: string;
+  errorFingerprint: string;
+  timestamp: string;
+}
+
+export interface LessonCandidate {
+  id: string;
+  distillKey: string;
+  agent: string;
+  title: string;
+  category: string;
+  tags: string[];
+  context: string;
+  mistake: string;
+  lesson: string;
+  fix: string;
+  severity: Severity;
+  confidence: number;
+  evidenceRefs: EvidenceRef[];
+  status: "pending" | "promoted" | "rejected";
+  createdAt: string;
+  promotedAt?: string;
+}
+
+export interface CandidatesFile {
+  version: 1;
+  promptVersion: string;
+  updatedAt: string;
+  candidates: LessonCandidate[];
+}
+
+// ── P1: Candidate Gating ──
+
+export interface GateDecision {
+  candidateId: string;
+  action: "promoted" | "rejected";
+  reason: string;
+  matchingLessonId?: string;
+}
+
+export interface GateResult {
+  promoted: number;
+  rejected: number;
+  decisions: GateDecision[];
+}

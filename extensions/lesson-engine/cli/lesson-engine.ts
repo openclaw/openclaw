@@ -2,9 +2,9 @@
 // Lesson-engine CLI entry point.
 //
 // Usage:
-//   lesson-engine <subcommand> [--agent <name>] [--all] [--dry-run] [--apply] [--max-active N]
+//   lesson-engine <subcommand> [--agent <name>] [--all] [--dry-run] [--apply] [...]
 //
-// Subcommands: migrate | dedupe | forget | status | maintenance
+// Subcommands: migrate | dedupe | forget | status | maintenance | scan | distill | gate
 //
 // Stdout: single machine-readable JSON document (pretty-printed).
 // Stderr: human-readable summary.
@@ -13,9 +13,24 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { dedupeFile, type DedupeResult } from "../src/dedupe.js";
+import {
+  ClaudeCliProvider,
+  DEFAULT_MIN_CLUSTER_SIZE,
+  type DistillLLMProvider,
+  distillAll,
+  readCandidatesFile,
+  writeCandidatesFile,
+} from "../src/distill.js";
+import {
+  readScannerState,
+  scanAll,
+  writeScannerState,
+  writeSeedsAppend,
+} from "../src/error-scanner.js";
 import { forgetFile, type ForgetResult, DEFAULT_MAX_ACTIVE } from "../src/forget.js";
+import { DEFAULT_CONFIDENCE_THRESHOLD, gateCandidates } from "../src/gate.js";
 import { migrateFile, type MigrateResult } from "../src/migrate.js";
-import type { MaintenanceState } from "../src/types.js";
+import type { LessonCandidate, MaintenanceState } from "../src/types.js";
 import {
   VALID_AGENTS,
   atomicWriteJson,
@@ -26,7 +41,16 @@ import {
   readJson,
 } from "../src/utils.js";
 
-type Subcommand = "migrate" | "dedupe" | "forget" | "status" | "maintenance" | "help";
+type Subcommand =
+  | "migrate"
+  | "dedupe"
+  | "forget"
+  | "status"
+  | "maintenance"
+  | "scan"
+  | "distill"
+  | "gate"
+  | "help";
 
 interface ParsedArgs {
   command: Subcommand;
@@ -35,6 +59,8 @@ interface ParsedArgs {
   dryRun: boolean;
   apply: boolean;
   maxActive?: number;
+  minCluster?: number;
+  confidence?: number;
   root?: string;
   help: boolean;
 }
@@ -50,6 +76,9 @@ Commands:
   forget        Score lessons, demote tail active → stale, expire stale → archive.
   maintenance   Run dedupe then forget; persist maintenance-state.json.
   status        Report current counts per lifecycle.
+  scan          Scan session JSONL logs for tool failure error seeds.
+  distill       Cluster error seeds and distill into lesson candidates via LLM.
+  gate          Promote or reject lesson candidates based on confidence + dedup.
 
 Options:
   --agent <name>      One of: ${VALID_AGENTS.join(", ")}
@@ -57,6 +86,8 @@ Options:
   --dry-run           Default. Compute & report without writing.
   --apply             Actually write to disk (atomic + .bak).
   --max-active <N>    Active cap for forget (default ${DEFAULT_MAX_ACTIVE}).
+  --min-cluster <N>   Minimum cluster size for distill (default ${DEFAULT_MIN_CLUSTER_SIZE}).
+  --confidence <N>    Confidence threshold for gate (default ${DEFAULT_CONFIDENCE_THRESHOLD}).
   --root <path>       Override AGENT_DATA_ROOT for this invocation.
   -h, --help          Print this help.
 `;
@@ -88,6 +119,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--max-active":
         out.maxActive = Number(rest[++i]);
+        break;
+      case "--min-cluster":
+        out.minCluster = Number(rest[++i]);
+        break;
+      case "--confidence":
+        out.confidence = Number(rest[++i]);
         break;
       case "--root":
         out.root = rest[++i];
@@ -212,7 +249,18 @@ function updateMaintenanceState(params: {
   return statePath;
 }
 
-function run(argv: string[]): { stdout: unknown; stderr: string[]; exitCode: number } {
+export interface CliResult {
+  stdout: unknown;
+  stderr: string[];
+  exitCode: number;
+}
+
+export interface MainOptions {
+  /** Inject an LLM provider for `distill`. Defaults to ClaudeCliProvider. */
+  llm?: DistillLLMProvider;
+}
+
+async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
   const args = parseArgs(argv);
   const stderr: string[] = [];
 
@@ -220,36 +268,28 @@ function run(argv: string[]): { stdout: unknown; stderr: string[]; exitCode: num
     return { stdout: { help: HELP }, stderr: [HELP], exitCode: 0 };
   }
 
-  const agents = resolveAgents(args);
   const dryRun = !args.apply;
   const now = new Date();
 
   switch (args.command) {
     case "migrate": {
+      const agents = resolveAgents(args);
       const results = agents.map((agent) =>
-        migrateFile({
-          filePath: lessonsFilePath(agent, args.root),
-          agent,
-          dryRun,
-          now,
-        }),
+        migrateFile({ filePath: lessonsFilePath(agent, args.root), agent, dryRun, now }),
       );
       results.forEach((r) => stderr.push(summarizeMigrate(r)));
       return { stdout: { command: "migrate", dryRun, results }, stderr, exitCode: 0 };
     }
     case "dedupe": {
+      const agents = resolveAgents(args);
       const results = agents.map((agent) =>
-        dedupeFile({
-          filePath: lessonsFilePath(agent, args.root),
-          agent,
-          dryRun,
-          now,
-        }),
+        dedupeFile({ filePath: lessonsFilePath(agent, args.root), agent, dryRun, now }),
       );
       results.forEach((r) => stderr.push(summarizeDedupe(r)));
       return { stdout: { command: "dedupe", dryRun, results }, stderr, exitCode: 0 };
     }
     case "forget": {
+      const agents = resolveAgents(args);
       const results = agents.map((agent) =>
         forgetFile({
           filePath: lessonsFilePath(agent, args.root),
@@ -263,6 +303,7 @@ function run(argv: string[]): { stdout: unknown; stderr: string[]; exitCode: num
       return { stdout: { command: "forget", dryRun, results }, stderr, exitCode: 0 };
     }
     case "status": {
+      const agents = resolveAgents(args);
       const results = agents.map((agent) => statusReport(agent, args.root));
       for (const r of results) {
         stderr.push(
@@ -272,9 +313,9 @@ function run(argv: string[]): { stdout: unknown; stderr: string[]; exitCode: num
       return { stdout: { command: "status", results }, stderr, exitCode: 0 };
     }
     case "maintenance": {
+      const agents = resolveAgents(args);
       const results = agents.map((agent) => {
         const filePath = lessonsFilePath(agent, args.root);
-        // Migrate first so `lifecycle` / severity fields exist before dedupe/forget run.
         const migrate = migrateFile({ filePath, agent, dryRun, now });
         const dedupe = dedupeFile({ filePath, agent, dryRun, now });
         const forget = forgetFile({
@@ -303,19 +344,105 @@ function run(argv: string[]): { stdout: unknown; stderr: string[]; exitCode: num
       });
       return { stdout: { command: "maintenance", dryRun, results }, stderr, exitCode: 0 };
     }
+    case "scan": {
+      const agents = args.all ? [...VALID_AGENTS] : resolveAgents(args);
+      const { seeds, updatedState } = scanAll({
+        agents,
+        root: args.root,
+        state: readScannerState(args.root),
+        now,
+      });
+      let seedsPath: string | undefined;
+      if (!dryRun) {
+        if (seeds.length > 0) seedsPath = writeSeedsAppend(seeds, args.root, now);
+        writeScannerState(updatedState, args.root);
+      }
+      stderr.push(
+        `[scan] ${seeds.length} error seeds across ${agents.length} agent(s) (${dryRun ? "dry-run" : "applied"})`,
+      );
+      return {
+        stdout: {
+          command: "scan",
+          dryRun,
+          seedCount: seeds.length,
+          seedsPath,
+          agents,
+        },
+        stderr,
+        exitCode: 0,
+      };
+    }
+    case "distill": {
+      // First gather seeds (in-memory; do not modify scanner state here).
+      const agents = args.all ? [...VALID_AGENTS] : resolveAgents(args);
+      const { seeds } = scanAll({
+        agents,
+        root: args.root,
+        state: readScannerState(args.root),
+        now,
+      });
+      const llm = opts.llm ?? new ClaudeCliProvider();
+      const existing = readCandidatesFile(args.root);
+      const { candidates, skipped } = await distillAll({
+        seeds,
+        llm,
+        root: args.root,
+        minClusterSize: args.minCluster,
+        existing,
+        now,
+      });
+      let candidatesPath: string | undefined;
+      if (!dryRun && candidates.length > 0) {
+        const next = {
+          ...existing,
+          updatedAt: nowIso(now),
+          candidates: [...existing.candidates, ...candidates],
+        };
+        candidatesPath = writeCandidatesFile(next, args.root);
+      }
+      stderr.push(
+        `[distill] ${candidates.length} new candidate(s), ${skipped} skipped (${dryRun ? "dry-run" : "applied"})`,
+      );
+      const candidateIds = candidates.map((c: LessonCandidate) => c.id);
+      return {
+        stdout: {
+          command: "distill",
+          dryRun,
+          newCandidates: candidates.length,
+          skipped,
+          candidateIds,
+          candidatesPath,
+        },
+        stderr,
+        exitCode: 0,
+      };
+    }
+    case "gate": {
+      const agents = args.all ? [...VALID_AGENTS] : resolveAgents(args);
+      const result = gateCandidates({
+        agents,
+        root: args.root,
+        confidenceThreshold: args.confidence,
+        dryRun,
+        now,
+      });
+      stderr.push(
+        `[gate] promoted=${result.promoted} rejected=${result.rejected} (${dryRun ? "dry-run" : "applied"})`,
+      );
+      return { stdout: { command: "gate", dryRun, ...result }, stderr, exitCode: 0 };
+    }
     default:
       throw new UserError(`Unknown subcommand: ${String(args.command)}`);
   }
 }
 
 /** Entry point used by both the CLI and tests. */
-export function main(argv: string[] = process.argv.slice(2)): {
-  stdout: unknown;
-  stderr: string[];
-  exitCode: number;
-} {
+export async function main(
+  argv: string[] = process.argv.slice(2),
+  opts: MainOptions = {},
+): Promise<CliResult> {
   try {
-    return run(argv);
+    return await run(argv, opts);
   } catch (err) {
     if (err instanceof UserError) {
       return {
@@ -346,8 +473,9 @@ const invokedDirectly = (() => {
 })();
 
 if (invokedDirectly) {
-  const { stdout, stderr, exitCode } = main();
-  for (const line of stderr) process.stderr.write(`${line}\n`);
-  process.stdout.write(`${JSON.stringify(stdout, null, 2)}\n`);
-  process.exit(exitCode);
+  void main().then(({ stdout, stderr, exitCode }) => {
+    for (const line of stderr) process.stderr.write(`${line}\n`);
+    process.stdout.write(`${JSON.stringify(stdout, null, 2)}\n`);
+    process.exit(exitCode);
+  });
 }

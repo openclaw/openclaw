@@ -4,3 +4,6 @@ export * from "./tfidf.js";
 export * from "./migrate.js";
 export * from "./dedupe.js";
 export * from "./forget.js";
+export * from "./error-scanner.js";
+export * from "./distill.js";
+export * from "./gate.js";

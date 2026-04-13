@@ -9,13 +9,13 @@ import type { MaintenanceState } from "../src/types.js";
 import { makeFixture, writeLessons } from "./helpers.js";
 
 describe("CLI", () => {
-  test("rejects unknown agent with exit code 1", () => {
-    const { stdout, exitCode } = main(["migrate", "--agent", "nope"]);
+  test("rejects unknown agent with exit code 1", async () => {
+    const { stdout, exitCode } = await main(["migrate", "--agent", "nope"]);
     expect(exitCode).toBe(1);
     expect((stdout as { error: string }).error).toMatch(/Unknown agent/);
   });
 
-  test("migrate --dry-run reports diff without writing", () => {
+  test("migrate --dry-run reports diff without writing", async () => {
     const fx = makeFixture();
     try {
       const filePath = writeLessons(fx, "builder", {
@@ -23,7 +23,7 @@ describe("CLI", () => {
         lessons: [{ id: "l1", title: "t" }],
       });
       const before = fs.readFileSync(filePath, "utf8");
-      const { stdout, exitCode } = main([
+      const { stdout, exitCode } = await main([
         "migrate",
         "--agent",
         "builder",
@@ -41,14 +41,14 @@ describe("CLI", () => {
     }
   });
 
-  test("migrate --apply writes migrated file + backup", () => {
+  test("migrate --apply writes migrated file + backup", async () => {
     const fx = makeFixture();
     try {
       const filePath = writeLessons(fx, "builder", {
         version: 1,
         lessons: [{ id: "l1", severity: "critical", title: "t" }],
       });
-      const { stdout, exitCode } = main([
+      const { stdout, exitCode } = await main([
         "migrate",
         "--agent",
         "builder",
@@ -67,7 +67,7 @@ describe("CLI", () => {
     }
   });
 
-  test("maintenance --apply updates shared maintenance-state.json", () => {
+  test("maintenance --apply updates shared maintenance-state.json", async () => {
     const fx = makeFixture();
     try {
       const lessons = [];
@@ -88,7 +88,7 @@ describe("CLI", () => {
         });
       }
       writeLessons(fx, "builder", { version: 1, lessons });
-      const { stdout, exitCode } = main([
+      const { stdout, exitCode } = await main([
         "maintenance",
         "--agent",
         "builder",
@@ -121,7 +121,7 @@ describe("CLI", () => {
     }
   });
 
-  test("maintenance migrates unmigrated data before dedupe/forget", () => {
+  test("maintenance migrates unmigrated data before dedupe/forget", async () => {
     const fx = makeFixture();
     try {
       // Unmigrated input: no lifecycle, no severity on any lesson.
@@ -132,7 +132,7 @@ describe("CLI", () => {
           { id: "b", title: "pnpm install hooks", tags: ["pnpm"], category: "infra" },
         ],
       });
-      const { stdout, exitCode } = main([
+      const { stdout, exitCode } = await main([
         "maintenance",
         "--agent",
         "builder",
@@ -164,7 +164,7 @@ describe("CLI", () => {
     }
   });
 
-  test("status reports per-lifecycle counts", () => {
+  test("status reports per-lifecycle counts", async () => {
     const fx = makeFixture();
     try {
       writeLessons(fx, "builder", {
@@ -175,7 +175,7 @@ describe("CLI", () => {
           { id: "c", lifecycle: "archive" },
         ],
       });
-      const { stdout, exitCode } = main(["status", "--agent", "builder", "--root", fx.root]);
+      const { stdout, exitCode } = await main(["status", "--agent", "builder", "--root", fx.root]);
       expect(exitCode).toBe(0);
       const r = (stdout as { results: { active: number; stale: number; archive: number }[] })
         .results[0];
