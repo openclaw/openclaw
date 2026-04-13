@@ -1838,6 +1838,12 @@ export async function runEmbeddedPiAgent(
               replayInvalid,
               livenessState,
             });
+            if (lastProfileId) {
+              await maybeMarkAuthProfileFailure({
+                profileId: lastProfileId,
+                reason: resolveAuthProfileFailureReason(assistantFailoverReason),
+              });
+            }
             return {
               payloads: [
                 {
