@@ -145,6 +145,21 @@ def prompt(question, default=None, choices=None):
         print("    ⚠️  Value required")
 
 
+def terraform_label(value):
+    """Normalize arbitrary user text into a Terraform-safe identifier."""
+    import re
+    if not isinstance(value, str):
+        value = str(value)
+    label = value.strip().lower()
+    label = re.sub(r'[^a-z0-9_]', '_', label)
+    label = re.sub(r'_+', '_', label).strip('_')
+    if not label:
+        label = 'item'
+    if label[0].isdigit():
+        label = f'_{label}'
+    return label
+
+
 def prompt_num(question, default=None, min_val=None, max_val=None):
     """Interactive prompt that validates and returns a numeric string."""
     while True:
@@ -406,7 +421,10 @@ resource "aws_iam_access_key" "this" {{
 """
         keys_output = f"""
 output "access_key_id"     {{ value = aws_iam_access_key.this.id }}
-output "secret_access_key" {{ value = aws_iam_access_key.this.secret, sensitive = true }}
+output "secret_access_key" {{
+  value     = aws_iam_access_key.this.secret
+  sensitive = true
+}}
 """
 
     main_tf = f"""terraform {{
@@ -448,7 +466,10 @@ resource "aws_iam_user_login_profile" "this" {{
 {mfa_block}
 {keys_block}
 output "username"    {{ value = aws_iam_user.this.name }}
-output "password"    {{ value = aws_iam_user_login_profile.this.password, sensitive = true }}
+output "password" {{
+  value     = aws_iam_user_login_profile.this.password
+  sensitive = true
+}}
 output "console_url" {{ value = "https://${{data.aws_caller_identity.current.account_id}}.signin.aws.amazon.com/console" }}
 {keys_output}
 data "aws_caller_identity" "current" {{}}
@@ -1209,9 +1230,9 @@ Best practice:
     else:
         extra_ous = [o.strip() for o in extra.split(",") if o.strip()]
         ous = default_ous[:]
-        seen_safe = {ou.lower().replace(" ", "_").replace("-", "_") for ou in ous}
+        seen_safe = {terraform_label(ou) for ou in ous}
         for ou in extra_ous:
-            safe = ou.lower().replace(" ", "_").replace("-", "_")
+            safe = terraform_label(ou)
             if safe in seen_safe:
                 print(f"    ⚠️  Skipping duplicate OU: '{ou}'")
                 continue
@@ -1263,12 +1284,12 @@ Best practice:
         extra_sso = prompt("Add custom SSO groups? (comma-separated, or 'none')", default="none")
         sso_groups = ["Admins", "Developers", "ReadOnly", "SecurityAudit"]
         if extra_sso.lower() != "none":
-            seen_safe = {g.lower().replace(" ", "_").replace("-", "_") for g in sso_groups}
+            seen_safe = {terraform_label(g) for g in sso_groups}
             for g in extra_sso.split(","):
                 g = g.strip()
                 if not g:
                     continue
-                safe = g.lower().replace(" ", "_").replace("-", "_")
+                safe = terraform_label(g)
                 if safe in seen_safe:
                     print(f"      ⚠️  Skipping duplicate SSO group: '{g}'")
                     continue
@@ -1352,7 +1373,7 @@ Best practice:
     # Build OU blocks
     ou_blocks = ""
     for ou in ous:
-        ou_safe = ou.lower().replace(" ", "_").replace("-", "_")
+        ou_safe = terraform_label(ou)
         ou_blocks += f"""
 resource "aws_organizations_organizational_unit" "{ou_safe}" {{
   name      = "{ou}"
@@ -1691,7 +1712,7 @@ resource "aws_iam_role_policy_attachment" "config_aggregator" {{
             "SecurityAudit": "all",
         }
         for grp in sso_groups:
-            grp_safe = grp.lower().replace(" ", "_").replace("-", "_")
+            grp_safe = terraform_label(grp)
             policy_arn = perm_set_map.get(grp, "arn:aws:iam::aws:policy/ViewOnlyAccess")
             scope = grp_account_scope.get(grp, "all")
             sso_perm_sets += f"""
@@ -1928,7 +1949,7 @@ output "workload_account_ids" {{
         # Add SSO assignments for workload accounts if SSO is enabled
         if enable_sso:
             for grp in sso_groups:
-                grp_safe = grp.lower().replace(" ", "_").replace("-", "_")
+                grp_safe = terraform_label(grp)
                 scope = grp_account_scope.get(grp, "all")
                 if scope in ("all", "workloads"):
                     vending_block += f"""
