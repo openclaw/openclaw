@@ -7,6 +7,7 @@ import {
   resolveSlackUserAllowed,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
+import { inferSlackChannelType } from "./channel-type.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
 
 type ResolvedAllowFromLists = {
@@ -154,8 +155,10 @@ export type SlackSystemEventAuthResult = {
   allowed: boolean;
   reason?:
     | "missing-sender"
+    | "missing-expected-sender"
     | "sender-mismatch"
     | "channel-not-allowed"
+    | "ambiguous-channel-type"
     | "dm-disabled"
     | "sender-not-allowlisted"
     | "sender-not-channel-allowed"
@@ -170,6 +173,10 @@ export async function authorizeSlackSystemEventSender(params: {
   channelId?: string;
   channelType?: string | null;
   expectedSenderId?: string;
+  /** When true, applies stricter default-deny rules for interactive controls:
+   *  requires expectedSenderId, rejects ambiguous channel types, and denies
+   *  senders when no allowlists are configured instead of allowing by default. */
+  interactiveEvent?: boolean;
 }): Promise<SlackSystemEventAuthResult> {
   const senderId = params.senderId?.trim();
   if (!senderId) {
@@ -181,6 +188,11 @@ export async function authorizeSlackSystemEventSender(params: {
     return { allowed: false, reason: "sender-mismatch" };
   }
 
+  // Interactive events require an expected sender to cross-verify the actor.
+  if (params.interactiveEvent && !expectedSenderId) {
+    return { allowed: false, reason: "missing-expected-sender" };
+  }
+
   const channelId = params.channelId?.trim();
   let channelType = normalizeSlackChannelType(params.channelType, channelId);
   let channelName: string | undefined;
@@ -190,7 +202,8 @@ export async function authorizeSlackSystemEventSender(params: {
       type?: "im" | "mpim" | "channel" | "group";
     } = await params.ctx.resolveChannelName(channelId).catch(() => ({}));
     channelName = info.name;
-    channelType = normalizeSlackChannelType(params.channelType ?? info.type, channelId);
+    const resolvedTypeSource = params.channelType ?? info.type;
+    channelType = normalizeSlackChannelType(resolvedTypeSource, channelId);
     if (
       !params.ctx.isChannelAllowed({
         channelId,
@@ -204,6 +217,31 @@ export async function authorizeSlackSystemEventSender(params: {
         channelType,
         channelName,
       };
+    }
+
+    // For interactive events, reject when channel type could not be positively
+    // determined from either the explicit type or the channel ID prefix. This
+    // prevents a DM from being misclassified as "channel" and skipping
+    // DM-specific authorization.
+    if (params.interactiveEvent) {
+      const inferredFromId = inferSlackChannelType(channelId);
+      const sourceNormalized =
+        typeof resolvedTypeSource === "string"
+          ? resolvedTypeSource.toLowerCase().trim()
+          : undefined;
+      const sourceIsKnownType =
+        sourceNormalized === "im" ||
+        sourceNormalized === "mpim" ||
+        sourceNormalized === "channel" ||
+        sourceNormalized === "group";
+      if (inferredFromId === undefined && !sourceIsKnownType) {
+        return {
+          allowed: false,
+          reason: "ambiguous-channel-type",
+          channelType,
+          channelName,
+        };
+      }
     }
   }
 
@@ -237,10 +275,14 @@ export async function authorizeSlackSystemEventSender(params: {
       }
     }
   } else if (!channelId) {
-    // No channel context. Apply allowFrom if configured so we fail closed
-    // for privileged interactive events when owner allowlist is present.
+    // No channel context. Interactive events always require explicit
+    // authorization; non-interactive events only check when allowFrom is
+    // configured.
     const allowFromLower = await resolveAllowFromLower(false);
-    if (allowFromLower.length > 0) {
+    if (params.interactiveEvent || allowFromLower.length > 0) {
+      if (allowFromLower.length === 0) {
+        return { allowed: false, reason: "sender-not-allowlisted" };
+      }
       const senderAllowListed = isSlackSenderAllowListed({
         allowListLower: allowFromLower,
         senderId,
@@ -311,6 +353,16 @@ export async function authorizeSlackSystemEventSender(params: {
       };
     }
     if (ownerAllowlistConfigured) {
+      return {
+        allowed: false,
+        reason: "sender-not-allowlisted",
+        channelType,
+        channelName,
+      };
+    }
+    // Interactive events require explicit authorization even when no
+    // allowlists are configured — default-deny for interactive controls.
+    if (params.interactiveEvent) {
       return {
         allowed: false,
         reason: "sender-not-allowlisted",

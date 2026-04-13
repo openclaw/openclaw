@@ -303,3 +303,176 @@ describe("authorizeSlackSystemEventSender", () => {
     });
   });
 });
+
+describe("authorizeSlackSystemEventSender interactiveEvent", () => {
+  beforeAll(async () => {
+    ({ authorizeSlackSystemEventSender, clearSlackAllowFromCacheForTest } =
+      await import("./auth.js"));
+  });
+
+  beforeEach(() => {
+    clearSlackAllowFromCacheForTest();
+  });
+
+  it("rejects interactive events when expectedSenderId is not provided", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "missing-expected-sender",
+    });
+  });
+
+  it("allows interactive events when expectedSenderId matches senderId", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("denies interactive channel events when no allowlists are configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+      channelId: "C1",
+      expectedSenderId: "U_ANYONE",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("denies interactive no-channel events when no allowFrom is configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+      expectedSenderId: "U_ANYONE",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+    });
+  });
+
+  it("denies interactive no-channel events when sender is not in allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_ATTACKER",
+      expectedSenderId: "U_ATTACKER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+    });
+  });
+
+  it("allows interactive no-channel events when sender is in allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_OWNER",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: undefined,
+    });
+  });
+
+  it("rejects interactive events with ambiguous channel type", async () => {
+    // Channel ID "X1" has no recognized prefix (D, C, G) so the type is ambiguous
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        resolveChannelName: () => Promise.resolve({ name: "mystery" }),
+      }),
+      senderId: "U_OWNER",
+      channelId: "X1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "ambiguous-channel-type",
+      channelType: "channel",
+      channelName: "mystery",
+    });
+  });
+
+  it("allows interactive events when channel type is known from ID prefix", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("allows interactive events when channel type is known from explicit type", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        resolveChannelName: () => Promise.resolve({ name: "mystery", type: "group" }),
+      }),
+      senderId: "U_OWNER",
+      channelId: "X1",
+      channelType: "group",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "group",
+      channelName: "mystery",
+    });
+  });
+
+  it("does not apply interactiveEvent restrictions to non-interactive events", async () => {
+    // Same scenario as the denying test above, but without interactiveEvent flag
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+});
