@@ -101,6 +101,54 @@ async function isFeedbackInvokeAuthorized(
   return true;
 }
 
+async function isSigninInvokeAuthorized(
+  context: MSTeamsTurnContext,
+  deps: MSTeamsMessageHandlerDeps,
+): Promise<boolean> {
+  const resolved = await resolveMSTeamsSenderAccess({
+    cfg: deps.cfg,
+    activity: context.activity,
+  });
+  const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;
+  if (!msteamsCfg) {
+    return true;
+  }
+
+  if (isDirectMessage && resolved.access.decision !== "allow") {
+    deps.log.debug?.("dropping signin invoke (dm sender not allowlisted)", {
+      sender: senderId,
+      conversationId,
+      name: context.activity.name,
+    });
+    return false;
+  }
+
+  if (
+    !isDirectMessage &&
+    resolved.channelGate.allowlistConfigured &&
+    !resolved.channelGate.allowed
+  ) {
+    deps.log.debug?.("dropping signin invoke (not in team/channel allowlist)", {
+      conversationId,
+      teamKey: resolved.channelGate.teamKey ?? "none",
+      channelKey: resolved.channelGate.channelKey ?? "none",
+      name: context.activity.name,
+    });
+    return false;
+  }
+
+  if (!isDirectMessage && !resolved.senderGroupAccess.allowed) {
+    deps.log.debug?.("dropping signin invoke (group sender not allowlisted)", {
+      sender: senderId,
+      conversationId,
+      name: context.activity.name,
+    });
+    return false;
+  }
+
+  return true;
+}
+
 /**
  * Handle fileConsent/invoke activities for large file uploads.
  */
@@ -480,6 +528,10 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         // Always ack immediately — silently dropping the invoke causes
         // the Teams card UI to report "Something went wrong".
         await ctx.sendActivity({ type: "invokeResponse", value: { status: 200, body: {} } });
+
+        if (!(await isSigninInvokeAuthorized(ctx, deps))) {
+          return;
+        }
 
         if (!deps.sso) {
           deps.log.debug?.("signin invoke received but msteams.sso is not configured", {
