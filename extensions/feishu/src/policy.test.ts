@@ -151,6 +151,15 @@ describe("resolveFeishuAllowlistMatch", () => {
     ).toEqual({ allowed: true, matchKey: "*", matchSource: "wildcard" });
   });
 
+  it("allows provider-prefixed wildcard entries", () => {
+    expect(
+      resolveFeishuAllowlistMatch({
+        allowFrom: ["feishu:*", "lark:*"],
+        senderId: "ou_anyone",
+      }),
+    ).toEqual({ allowed: true, matchKey: "*", matchSource: "wildcard" });
+  });
+
   it("matches normalized ID entries", () => {
     expect(
       resolveFeishuAllowlistMatch({
@@ -195,6 +204,24 @@ describe("resolveFeishuAllowlistMatch", () => {
         senderIds: ["on_user_123"],
       }),
     ).toEqual({ allowed: true, matchKey: "user:on_user_123", matchSource: "id" });
+  });
+
+  it("auto-detects bare open_id entries as user allowlist matches", () => {
+    expect(
+      resolveFeishuAllowlistMatch({
+        allowFrom: ["ou_BARE"],
+        senderId: "ou_BARE",
+      }),
+    ).toEqual({ allowed: true, matchKey: "user:ou_BARE", matchSource: "id" });
+  });
+
+  it("auto-detects bare chat_id entries as chat allowlist matches", () => {
+    expect(
+      resolveFeishuAllowlistMatch({
+        allowFrom: ["oc_group_123"],
+        senderId: "oc_group_123",
+      }),
+    ).toEqual({ allowed: true, matchKey: "chat:oc_group_123", matchSource: "id" });
   });
 
   it("does not authorize based on display-name collision", () => {

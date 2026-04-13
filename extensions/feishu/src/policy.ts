@@ -36,10 +36,16 @@ function normalizeFeishuAllowEntry(raw: string): string {
   }
 
   const withoutProviderPrefix = stripRepeatedFeishuProviderPrefixes(trimmed);
+  if (withoutProviderPrefix === "*") {
+    return "*";
+  }
   const lowered = normalizeOptionalLowercaseString(withoutProviderPrefix) ?? "";
   if (!lowered) {
     return "";
   }
+  // Lowercase for prefix detection only; preserve the original ID casing in the
+  // canonicalized key. Sender candidates pass through this same path so allowlist
+  // entries and runtime IDs stay normalized symmetrically.
   if (
     lowered.startsWith("chat:") ||
     lowered.startsWith("group:") ||
@@ -59,7 +65,7 @@ function normalizeFeishuAllowEntry(raw: string): string {
   if (lowered.startsWith("open_id:")) {
     return canonicalizeFeishuAllowlistKey({
       kind: "user",
-      value: withoutProviderPrefix.slice("open_id:".length),
+      value: withoutProviderPrefix.slice(withoutProviderPrefix.indexOf(":") + 1),
     });
   }
 
