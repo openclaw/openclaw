@@ -1,0 +1,122 @@
+name: Verify macOS Release Assets
+
+# Runs after a GitHub release is published to verify that macOS assets
+# were uploaded and appcast.xml was updated. Catches the gap between
+# the public validation workflow (macos-release.yml) and the private
+# signing/upload pipeline (releases-private).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to verify (e.g. v2026.4.12)"
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  EXPECTED_ASSET_COUNT: 3 # .dmg, .zip, .dSYM.zip
+
+jobs:
+  verify_assets:
+    # Only verify stable releases (skip betas, RCs)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.release.prerelease && !github.event.release.draft)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for private pipeline
+        # The private signing/notarization pipeline needs time to complete.
+        # This avoids false positives from checking too early.
+        run: sleep 1800 # 30 minutes
+
+      - name: Check release assets
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          ASSET_COUNT=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            --jq '.assets | length')
+
+          echo "asset_count=$ASSET_COUNT" >> "$GITHUB_OUTPUT"
+          echo "Release $RELEASE_TAG has $ASSET_COUNT assets (expected >= $EXPECTED_ASSET_COUNT)"
+
+          if [ "$ASSET_COUNT" -lt "$EXPECTED_ASSET_COUNT" ]; then
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check appcast.xml
+        id: appcast
+        if: steps.check.outputs.missing == 'false'
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Strip leading 'v' for version comparison
+          VERSION="${RELEASE_TAG#v}"
+          if curl -sf "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/appcast.xml" \
+            | grep -q "$VERSION"; then
+            echo "appcast_updated=true" >> "$GITHUB_OUTPUT"
+            echo "appcast.xml contains $VERSION"
+          else
+            echo "appcast_updated=false" >> "$GITHUB_OUTPUT"
+            echo "appcast.xml does NOT contain $VERSION"
+          fi
+
+      - name: Open issue if assets or appcast missing
+        if: steps.check.outputs.missing == 'true' || steps.appcast.outputs.appcast_updated == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          ASSET_COUNT: ${{ steps.check.outputs.asset_count }}
+          APPCAST_UPDATED: ${{ steps.appcast.outputs.appcast_updated }}
+        run: |
+          BODY="## Release integrity check failed for $RELEASE_TAG
+
+          | Check | Status |
+          |-------|--------|
+          | Assets uploaded | ${ASSET_COUNT}/${EXPECTED_ASSET_COUNT} |
+          | appcast.xml updated | ${APPCAST_UPDATED:-not checked} |
+
+          ### Required actions
+          1. Run \`openclaw/releases-private\` macOS publish workflow for \`$RELEASE_TAG\`
+          2. Download \`macos-appcast-$RELEASE_TAG\` artifact and commit \`appcast.xml\` to main
+          3. Verify: \`gh api repos/\$REPO/releases/tags/$RELEASE_TAG --jq '.assets | length'\`
+
+          ### Context
+          The public \`macos-release.yml\` validation passed, but the private signing/upload
+          pipeline either was not triggered or did not complete for this stable release.
+          Mac app users on the stable Sparkle channel will not receive this update.
+
+          *Opened automatically by verify-release-assets.yml*"
+
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "[Release] $RELEASE_TAG: macOS assets missing or appcast not updated" \
+            --label "bug,release,macOS" \
+            --body "$BODY"
+
+      - name: Fail if incomplete
+        if: steps.check.outputs.missing == 'true' || steps.appcast.outputs.appcast_updated == 'false'
+        run: |
+          echo "::error::Release ${{ steps.tag.outputs.tag }} is incomplete. See opened issue."
+          exit 1
