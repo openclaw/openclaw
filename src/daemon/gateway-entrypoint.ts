@@ -7,6 +7,7 @@ const GATEWAY_DIST_ENTRYPOINT_BASENAMES = [
   "entry.js",
   "entry.mjs",
 ] as const;
+const GATEWAY_DIST_ENTRYPOINT_BASENAME_SET = new Set<string>(GATEWAY_DIST_ENTRYPOINT_BASENAMES);
 
 export function isGatewayDistEntrypointPath(inputPath: string): boolean {
   return /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(inputPath);
@@ -42,6 +43,32 @@ export function buildGatewayDistEntrypointCandidates(...inputs: string[]): strin
     }
   }
   return candidates;
+}
+
+export function areEquivalentGatewayDistEntrypoints(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  if (left === right) {
+    return true;
+  }
+  if (!isGatewayDistEntrypointPath(left) || !isGatewayDistEntrypointPath(right)) {
+    return false;
+  }
+
+  const leftBasename = path.basename(left);
+  const rightBasename = path.basename(right);
+  if (
+    !GATEWAY_DIST_ENTRYPOINT_BASENAME_SET.has(leftBasename) ||
+    !GATEWAY_DIST_ENTRYPOINT_BASENAME_SET.has(rightBasename)
+  ) {
+    return false;
+  }
+
+  return path.dirname(left) === path.dirname(right);
 }
 
 export async function findFirstAccessibleGatewayEntrypoint(

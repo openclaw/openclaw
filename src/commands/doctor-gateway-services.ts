@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { areEquivalentGatewayDistEntrypoints } from "../daemon/gateway-entrypoint.js";
 import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
@@ -285,11 +286,15 @@ export async function maybeRepairGatewayServiceConfig(
   const normalizedCurrentEntrypoint = currentEntrypoint
     ? await normalizeExecutablePath(currentEntrypoint)
     : null;
-  if (
+  const entrypointsMatch =
     normalizedExpectedEntrypoint &&
     normalizedCurrentEntrypoint &&
-    normalizedExpectedEntrypoint !== normalizedCurrentEntrypoint
-  ) {
+    (normalizedExpectedEntrypoint === normalizedCurrentEntrypoint ||
+      areEquivalentGatewayDistEntrypoints(
+        normalizedCurrentEntrypoint,
+        normalizedExpectedEntrypoint,
+      ));
+  if (normalizedExpectedEntrypoint && normalizedCurrentEntrypoint && !entrypointsMatch) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
       message: "Gateway service entrypoint does not match the current install.",
