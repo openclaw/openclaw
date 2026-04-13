@@ -43,6 +43,49 @@ Match the level of specificity to the task's fragility and variability:
 
 Think of Codex as exploring a path: a narrow bridge with cliffs needs specific guardrails (low freedom), while an open field allows many routes (high freedom).
 
+### Document Gotchas
+
+The highest signal-density content in a skill is a **Gotchas** or **Common Pitfalls** section — lessons learned from repeated agent mistakes. These are more valuable than general instructions because they capture non-obvious failure modes that the agent will hit again without explicit guidance.
+
+When authoring or reviewing a skill, actively collect pitfalls from real usage and add a dedicated section. Examples:
+
+- "Always use `--no-cache` when building Docker images in CI — stale layers cause silent test failures"
+- "The API returns `200` with an error body on rate limit; check `response.error` before proceeding"
+- "PDF page indices are 0-based in pdfplumber but 1-based in the user-facing API"
+
+### On-demand Hooks
+
+Skills can register session-level hooks that activate only when explicitly invoked by the user. This is useful for highly opinionated rules that shouldn't be globally active.
+
+Examples:
+- `/careful` — intercept dangerous commands (rm -rf, DROP TABLE) and require confirmation
+- `/freeze` — lock the editing scope to a specific set of files, rejecting edits outside that set
+
+Use hooks when a behavior is valuable in specific contexts but would be disruptive if always on. Document available hooks clearly in SKILL.md so users know they exist.
+
+### Stateful Skills with config.json
+
+Skills that require user-specific configuration (e.g., a Slack channel name, a database connection, a preferred output format) should store settings in a `config.json` file within the skill directory.
+
+**Pattern**: On first run, the agent detects that `config.json` is missing, prompts the user for required values, writes `config.json`, and reads it automatically on subsequent runs.
+
+```
+my-skill/
+├── SKILL.md
+├── config.json      ← created on first run
+└── scripts/
+```
+
+Example `config.json`:
+```json
+{
+  "slack_channel": "#deployments",
+  "notify_on_failure": true
+}
+```
+
+In SKILL.md, document both the config fields and the first-run setup flow so the agent knows to prompt for missing values.
+
 ### Anatomy of a Skill
 
 Every skill consists of a required SKILL.md file and optional bundled resources:
@@ -370,3 +413,37 @@ After testing the skill, users may request improvements. Often this happens righ
 2. Notice struggles or inefficiencies
 3. Identify how SKILL.md or bundled resources should be updated
 4. Implement changes and test again
+
+### Step 7: Measure and Refine
+
+Track how skills perform in practice to identify issues:
+
+- **Under-triggering**: The skill exists but Codex doesn't activate it when it should. Fix: improve the `description` in frontmatter with more trigger phrases and contexts.
+- **Over-triggering**: The skill activates for unrelated tasks, wasting context. Fix: narrow the description, add negative examples ("Do NOT use for...").
+- **Partial usage**: The skill triggers but Codex ignores key instructions. Fix: restructure for clarity, move critical steps earlier, add to the Gotchas section.
+
+Use `PreToolUse` hooks or session logs to measure trigger frequency and success rate. A skill that never triggers is dead weight; a skill that always triggers is probably too broad.
+
+## Distribution Guidelines
+
+### Small Teams
+
+Check skills directly into the repo (e.g., `.claude/skills/` or `.openclaw/skills/`). Version control provides history, code review provides quality control.
+
+### Scaling Up
+
+For organizations with many skills:
+
+1. **Sandbox first** — new skills start as personal or team experiments
+2. **Prove traction** — track usage and success before promoting
+3. **Curate actively** — avoid redundant or low-quality skills that pollute the namespace
+4. **Retire aggressively** — skills that aren't used or maintained should be archived, not left to rot
+
+### Marketplace Considerations
+
+When publishing skills to a shared marketplace (e.g., [ClawHub](https://clawhub.com)):
+
+- Include clear examples in the description so users know what to expect
+- Test against multiple models — skill instructions that work for one model may confuse another
+- Keep dependencies minimal — skills that require complex setup have lower adoption
+- Version your skills — breaking changes to SKILL.md can break workflows downstream
