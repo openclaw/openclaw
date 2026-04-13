@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/active-memory: move recalled memory onto the hidden untrusted prompt-prefix path instead of system prompt injection, label the visible Active Memory status line fields, and include the resolved recall provider/model in gateway debug logs so trace/debug output matches what the model actually saw.
 - fix(heartbeat): force owner downgrade for untrusted hook:wake system events [AI-assisted]. (#66031) Thanks @pgondhi987.
 - fix(browser): enforce SSRF policy on snapshot, screenshot, and tab routes [AI]. (#66040) Thanks @pgondhi987.
 - fix(msteams): enforce sender allowlist checks on SSO signin invokes [AI]. (#66033) Thanks @pgondhi987.
