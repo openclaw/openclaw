@@ -208,6 +208,7 @@ const CRON_TIMEZONE_SUGGESTIONS = [
   "Europe/London",
   "Europe/Berlin",
   "Asia/Tokyo",
+  "Asia/Shanghai",
 ];
 
 function isHttpUrl(value: string): boolean {
