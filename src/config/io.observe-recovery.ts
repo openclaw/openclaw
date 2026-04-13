@@ -34,6 +34,7 @@ export type ObserveRecoveryDeps = {
         data: string,
         options?: { encoding?: BufferEncoding; mode?: number },
       ): Promise<unknown>;
+      readdir(path: string): Promise<string[]>;
     };
     statSync(
       path: string,
@@ -61,6 +62,7 @@ export type ObserveRecoveryDeps = {
       data: string,
       options?: { encoding?: BufferEncoding; mode?: number },
     ): unknown;
+    readdirSync(path: string): string[];
   };
   json5: { parse(value: string): unknown };
   env: NodeJS.ProcessEnv;
@@ -457,12 +459,76 @@ function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
 
+// Defensive cap on forensic snapshots: if anomaly detection misfires in a tight
+// loop, we don't want to fill the PVC with hundreds of thousands of .clobbered.*
+// files. At 32 snapshots per path we assume something is wrong with detection
+// itself and stop; the anomaly is still logged to the audit trail either way.
+const MAX_CLOBBER_FILES_PER_PATH = 32;
+const CLOBBER_SUFFIX = ".clobbered.";
+
+function isClobberSibling(filename: string, baseName: string): boolean {
+  return filename.startsWith(`${baseName}${CLOBBER_SUFFIX}`);
+}
+
+async function countClobberedSiblings(
+  deps: ObserveRecoveryDeps,
+  configPath: string,
+): Promise<number> {
+  const dir = path.dirname(configPath);
+  const baseName = path.basename(configPath);
+  try {
+    const entries = await deps.fs.promises.readdir(dir);
+    let count = 0;
+    for (const entry of entries) {
+      if (isClobberSibling(entry, baseName)) {
+        count += 1;
+      }
+    }
+    return count;
+  } catch {
+    // Fail open: if we can't read the directory, don't block snapshot creation.
+    return 0;
+  }
+}
+
+function countClobberedSiblingsSync(deps: ObserveRecoveryDeps, configPath: string): number {
+  const dir = path.dirname(configPath);
+  const baseName = path.basename(configPath);
+  try {
+    const entries = deps.fs.readdirSync(dir);
+    let count = 0;
+    for (const entry of entries) {
+      if (isClobberSibling(entry, baseName)) {
+        count += 1;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+function logClobberCapReached(
+  deps: ObserveRecoveryDeps,
+  configPath: string,
+  existing: number,
+): void {
+  deps.logger.warn(
+    `Config clobber snapshot cap reached for ${configPath} (${existing} existing); skipping further snapshots. Review and prune .clobbered.* files.`,
+  );
+}
+
 async function persistClobberedConfigSnapshot(params: {
   deps: ObserveRecoveryDeps;
   configPath: string;
   raw: string;
   observedAt: string;
 }): Promise<string | null> {
+  const existing = await countClobberedSiblings(params.deps, params.configPath);
+  if (existing >= MAX_CLOBBER_FILES_PER_PATH) {
+    logClobberCapReached(params.deps, params.configPath, existing);
+    return null;
+  }
   const targetPath = `${params.configPath}.clobbered.${formatConfigArtifactTimestamp(params.observedAt)}`;
   try {
     await params.deps.fs.promises.writeFile(targetPath, params.raw, {
@@ -482,6 +548,11 @@ function persistClobberedConfigSnapshotSync(params: {
   raw: string;
   observedAt: string;
 }): string | null {
+  const existing = countClobberedSiblingsSync(params.deps, params.configPath);
+  if (existing >= MAX_CLOBBER_FILES_PER_PATH) {
+    logClobberCapReached(params.deps, params.configPath, existing);
+    return null;
+  }
   const targetPath = `${params.configPath}.clobbered.${formatConfigArtifactTimestamp(params.observedAt)}`;
   try {
     params.deps.fs.writeFileSync(targetPath, params.raw, {
