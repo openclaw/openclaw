@@ -201,3 +201,10 @@ Stop bot safely and confirm there are no remaining open orders.
 ```text
 Prepare live-trading checklist for this bot and ask for explicit confirmation before enabling live mode.
 ```
+
+## Compatible Implementations
+
+This skill is designed to work with compatible self-hosted crypto bot APIs that expose the documented control endpoints.
+
+A public reference implementation and demo environment is available at:
+https://selfhostbot.com
