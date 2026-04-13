@@ -511,6 +511,7 @@ export function applyJobResult(
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
+      let scheduleComputeFailed = false;
       try {
         normalNext =
           opts?.preserveSchedule && job.schedule.kind === "every"
@@ -521,32 +522,51 @@ export function applyJobResult(
         // record the schedule error (auto-disables after repeated failures)
         // and fall back to backoff-only schedule so the state update is not lost.
         recordScheduleComputeError({ state, job, err });
+        scheduleComputeFailed = true;
       }
-      const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
-      job.state.nextRunAtMs =
-        job.schedule.kind === "cron"
-          ? resolveCronNextRunWithLowerBound({
-              state,
-              job,
-              naturalNext: normalNext,
-              lowerBoundMs: backoffNext,
-              context: "error_backoff",
-            })
-          : normalNext !== undefined
-            ? Math.max(normalNext, backoffNext)
-            : backoffNext;
-      state.deps.log.info(
-        {
-          jobId: job.id,
-          consecutiveErrors: job.state.consecutiveErrors,
-          backoffMs: backoff,
-          nextRunAtMs: job.state.nextRunAtMs,
-        },
-        "cron: applying error backoff",
-      );
+      // Silent undefined returns (croner nextRun null on tz/ICU edge cases,
+      // staggered cron fall-through) are a schedule failure too — promote
+      // them so we hit the auto-disable path instead of spin-looping on
+      // the backoff delay. (#66019)
+      if (!scheduleComputeFailed && normalNext === undefined) {
+        recordScheduleComputeError({
+          state,
+          job,
+          err: new Error("schedule computation returned undefined"),
+        });
+        scheduleComputeFailed = true;
+      }
+      if (!scheduleComputeFailed) {
+        const backoffNext = result.endedAt + backoff;
+        // Use whichever is later: the natural next run or the backoff delay.
+        job.state.nextRunAtMs =
+          job.schedule.kind === "cron"
+            ? resolveCronNextRunWithLowerBound({
+                state,
+                job,
+                naturalNext: normalNext,
+                lowerBoundMs: backoffNext,
+                context: "error_backoff",
+              })
+            : normalNext !== undefined
+              ? Math.max(normalNext, backoffNext)
+              : backoffNext;
+        state.deps.log.info(
+          {
+            jobId: job.id,
+            consecutiveErrors: job.state.consecutiveErrors,
+            backoffMs: backoff,
+            nextRunAtMs: job.state.nextRunAtMs,
+          },
+          "cron: applying error backoff",
+        );
+      }
+      // When scheduleComputeFailed, recordScheduleComputeError has already
+      // set nextRunAtMs = undefined; leave it alone so the failing job can
+      // be auto-disabled rather than retried.
     } else if (isJobEnabled(job)) {
       let naturalNext: number | undefined;
+      let scheduleComputeFailed = false;
       try {
         naturalNext =
           opts?.preserveSchedule && job.schedule.kind === "every"
@@ -557,8 +577,26 @@ export function applyJobResult(
         // record the schedule error (auto-disables after repeated failures)
         // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
         recordScheduleComputeError({ state, job, err });
+        scheduleComputeFailed = true;
       }
-      if (job.schedule.kind === "cron") {
+      // Silent undefined returns (croner nextRun null on tz/ICU edge cases,
+      // staggered cron fall-through) are a schedule failure too. Previously
+      // we fell back to MIN_REFIRE_GAP_MS (endedAt + 2s) which re-fired the
+      // job 2s later, succeeded, failed to compute next run, re-fired again,
+      // etc. — a tight spin loop. Promote silent undefined to a schedule
+      // error so we hit the auto-disable path instead. (#66019)
+      if (!scheduleComputeFailed && naturalNext === undefined) {
+        recordScheduleComputeError({
+          state,
+          job,
+          err: new Error("schedule computation returned undefined"),
+        });
+        scheduleComputeFailed = true;
+      }
+      if (scheduleComputeFailed) {
+        // recordScheduleComputeError already set nextRunAtMs = undefined;
+        // leave it alone so the spin loop is broken.
+      } else if (job.schedule.kind === "cron") {
         // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
         // after the current run ended.  Prevents spin-loops when the
         // schedule computation lands in the same second due to
