@@ -1,18 +1,3 @@
-/**
- * Bounded in-memory cache mapping Telegram forum topics to their
- * human-readable names.
- *
- * Topic names are extracted from:
- *   1. `reply_to_message.forum_topic_created.name` on regular messages
- *      (yields the *creation-time* name — still useful as a seed).
- *   2. `forum_topic_created` / `forum_topic_edited` service messages
- *      (authoritative, captures renames immediately).
- *   3. `forum_topic_closed` / `forum_topic_reopened` lifecycle events.
- *
- * Entries are keyed by `${chatId}:${threadId}` and capped at
- * `MAX_ENTRIES` to prevent unbounded growth on long-running gateways.
- */
-
 const MAX_ENTRIES = 2_048;
 
 export type TopicEntry = {
@@ -30,7 +15,9 @@ function cacheKey(chatId: number | string, threadId: number | string): string {
 }
 
 function evictOldest(): void {
-  if (cache.size <= MAX_ENTRIES) {return;}
+  if (cache.size <= MAX_ENTRIES) {
+    return;
+  }
   let oldestKey: string | undefined;
   let oldestTime = Infinity;
   for (const [key, entry] of cache) {
@@ -39,7 +26,9 @@ function evictOldest(): void {
       oldestKey = key;
     }
   }
-  if (oldestKey) {cache.delete(oldestKey);}
+  if (oldestKey) {
+    cache.delete(oldestKey);
+  }
 }
 
 export function updateTopicName(
@@ -56,7 +45,9 @@ export function updateTopicName(
     closed: patch.closed ?? existing?.closed,
     updatedAt: Date.now(),
   };
-  if (!merged.name) {return;}
+  if (!merged.name) {
+    return;
+  }
   cache.set(key, merged);
   evictOldest();
 }
@@ -79,7 +70,6 @@ export function getTopicEntry(
   return cache.get(cacheKey(chatId, threadId));
 }
 
-/** Visible for testing. */
 export function clearTopicNameCache(): void {
   cache.clear();
 }
