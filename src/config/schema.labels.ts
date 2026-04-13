@@ -546,6 +546,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
+  "agents.defaults.slugGenerator.timeoutSeconds": "Slug Generator Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.truncateAfterCompaction": "Truncate After Compaction",
   "agents.defaults.compaction.notifyUser": "Compaction Notify User",

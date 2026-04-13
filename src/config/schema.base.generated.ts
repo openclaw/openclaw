@@ -4575,6 +4575,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
               },
+              slugGenerator: {
+                type: "object",
+                properties: {
+                  timeoutSeconds: {
+                    description:
+                      "Timeout in seconds for the LLM slug generator. Local models may need a higher value (e.g. 120) to process the prompt. Default: 15 seconds.",
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Slug Generator Timeout (Seconds)",
+                  },
+                },
+                additionalProperties: false,
+              },
               thinkingDefault: {
                 anyOf: [
                   {
@@ -25508,6 +25522,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.compaction.timeoutSeconds": {
       label: "Compaction Timeout (Seconds)",
       help: "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
+      tags: ["performance"],
+    },
+    "agents.defaults.slugGenerator.timeoutSeconds": {
+      label: "Slug Generator Timeout (Seconds)",
+      help: "Timeout in seconds for the LLM slug generator embedded agent run (default: 15). Local models may need a higher value (e.g. 120) to process the system prompt before generating a response.",
       tags: ["performance"],
     },
     "agents.defaults.compaction.model": {
