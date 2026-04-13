@@ -290,6 +290,67 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.run.execOverrides?.ask).toBe("always");
   });
 
+  it("uses the newest run within a matching authorization batch", async () => {
+    const key = `test-collect-latest-run-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = createRun({ prompt: "first", originatingChannel: "slack", originatingTo: "A" });
+    const second = createRun({
+      prompt: "second",
+      originatingChannel: "slack",
+      originatingTo: "A",
+    });
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...first,
+        run: {
+          ...first.run,
+          provider: "openai",
+          model: "gpt-5.4",
+          senderId: "user-1",
+          senderName: "Guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...second,
+        run: {
+          ...second.run,
+          provider: "anthropic",
+          model: "sonnet-4.6",
+          senderId: "user-1",
+          senderName: "Guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.run.provider).toBe("anthropic");
+    expect(calls[0]?.run.model).toBe("sonnet-4.6");
+  });
+
   it("preserves collect order when authorization changes more than once", async () => {
     const key = `test-collect-auth-order-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -463,6 +524,83 @@ describe("followup queue collect routing", () => {
     await done.promise;
     expect(calls[0]?.prompt).toContain("Queued #1\none");
     expect(calls[0]?.prompt).toContain("Queued #2\ntwo");
+  });
+
+  it("retries only the remaining collect auth groups after a partial failure", async () => {
+    const key = `test-collect-partial-retry-${Date.now()}`;
+    const attempts: FollowupRun[] = [];
+    const successfulCalls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    let attempt = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      attempt += 1;
+      attempts.push(run);
+      if (attempt === 2) {
+        throw new Error("transient failure");
+      }
+      successfulCalls.push(run);
+      if (attempt >= 3) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const guest = createRun({
+      prompt: "guest message",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    const owner = createRun({
+      prompt: "owner message",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...guest,
+        run: {
+          ...guest.run,
+          senderId: "user-1",
+          senderName: "Guest",
+          senderIsOwner: false,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...owner,
+        run: {
+          ...owner.run,
+          senderId: "owner-1",
+          senderName: "Owner",
+          senderIsOwner: true,
+        },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const guestAttempts = attempts.filter((call) => call.prompt.includes("guest message"));
+    const ownerAttempts = attempts.filter((call) => call.prompt.includes("owner message"));
+
+    expect(attempts).toHaveLength(3);
+    expect(guestAttempts).toHaveLength(1);
+    expect(ownerAttempts).toHaveLength(2);
+    expect(successfulCalls.map((call) => call.prompt)).toEqual([
+      expect.stringContaining("guest message"),
+      expect.stringContaining("owner message"),
+    ]);
   });
 
   it("retries overflow summary delivery without losing dropped previews", async () => {

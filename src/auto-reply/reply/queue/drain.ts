@@ -59,6 +59,10 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
   };
 }
 
+// Keep this key aligned with the fields that affect per-message authorization or
+// exec-context propagation in collect-mode batching. Fields like authProfileId,
+// elevatedLevel, ownerNumbers, and config are intentionally excluded because
+// they are session-level or not consulted in per-message authorization checks.
 export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
@@ -172,7 +176,7 @@ export function scheduleFollowupDrain(
           const authGroups = splitCollectItemsByAuthorization(items);
 
           for (const groupItems of authGroups) {
-            const run = groupItems[0]?.run ?? queue.lastRun;
+            const run = groupItems.at(-1)?.run ?? queue.lastRun;
             if (!run) {
               break;
             }
@@ -190,8 +194,8 @@ export function scheduleFollowupDrain(
               enqueuedAt: Date.now(),
               ...routing,
             });
+            queue.items.splice(0, groupItems.length);
           }
-          queue.items.splice(0, items.length);
           if (summary) {
             clearQueueSummaryState(queue);
           }
