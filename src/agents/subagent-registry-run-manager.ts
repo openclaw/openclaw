@@ -83,6 +83,9 @@ export function createSubagentRunManager(params: {
       if (!entry) {
         return;
       }
+      if (wait.status === "pending") {
+        return;
+      }
       let mutated = false;
       if (typeof wait.startedAt === "number") {
         entry.startedAt = wait.startedAt;
