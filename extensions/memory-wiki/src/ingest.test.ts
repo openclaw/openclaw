@@ -34,8 +34,14 @@ describe("ingestMemoryWikiSource", () => {
 
   it("reuses an existing legacy source page identity when reingesting an old vault", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-legacy-");
-    const inputPath = path.join(rootDir, "meeting-notes.txt");
-    await fs.writeFile(inputPath, "updated source content\n", "utf8");
+    const actualDir = path.join(rootDir, "actual");
+    const aliasDir = path.join(rootDir, "alias");
+    await fs.mkdir(actualDir, { recursive: true });
+    await fs.mkdir(aliasDir, { recursive: true });
+    const actualPath = path.join(actualDir, "meeting-notes.txt");
+    const aliasPath = path.join(aliasDir, "meeting-notes.txt");
+    await fs.writeFile(actualPath, "updated source content\n", "utf8");
+    await fs.symlink(actualPath, aliasPath);
     const { config } = await createVault({
       rootDir: path.join(rootDir, "vault"),
     });
@@ -49,7 +55,7 @@ describe("ingestMemoryWikiSource", () => {
         "id: source.meeting-notes",
         "title: meeting notes",
         "sourceType: local-file",
-        `sourcePath: ${inputPath}`,
+        `sourcePath: ${aliasPath}`,
         "status: active",
         "---",
         "",
@@ -63,7 +69,7 @@ describe("ingestMemoryWikiSource", () => {
 
     const result = await ingestMemoryWikiSource({
       config,
-      inputPath,
+      inputPath: actualPath,
       nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
     });
 

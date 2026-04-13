@@ -45,6 +45,10 @@ function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
   return buffer.toString("utf8");
 }
 
+async function resolveCanonicalSourcePath(sourcePath: string): Promise<string> {
+  return await fs.realpath(sourcePath).catch(() => path.resolve(sourcePath));
+}
+
 async function resolveIngestSourcePageIdentity(params: {
   vaultPath: string;
   sourcePath: string;
@@ -53,12 +57,22 @@ async function resolveIngestSourcePageIdentity(params: {
   pageId: string;
   pageRelativePath: string;
 }> {
-  const existingPage = (await readQueryableWikiPages(params.vaultPath)).find(
-    (page) =>
-      page.kind === "source" &&
-      page.sourceType === "local-file" &&
-      page.sourcePath === params.sourcePath,
+  const canonicalSourcePath = await resolveCanonicalSourcePath(params.sourcePath);
+  const pages = await readQueryableWikiPages(params.vaultPath);
+  const existingSourcePaths = await Promise.all(
+    pages.map(async (page) => {
+      if (page.kind !== "source" || page.sourceType !== "local-file" || !page.sourcePath) {
+        return null;
+      }
+      return {
+        page,
+        canonicalSourcePath: await resolveCanonicalSourcePath(page.sourcePath),
+      };
+    }),
   );
+  const existingPage = existingSourcePaths.find(
+    (entry) => entry?.canonicalSourcePath === canonicalSourcePath,
+  )?.page;
   if (existingPage?.id) {
     return {
       pageId: existingPage.id,
@@ -69,7 +83,7 @@ async function resolveIngestSourcePageIdentity(params: {
   const titleSlug = slugifyWikiSegment(params.title);
   // Bind identity to the resolved file path so same-source reingest stays stable.
   // Moving the file intentionally creates a new source identity.
-  const sourceHash = createHash("sha1").update(params.sourcePath).digest("hex").slice(0, 8);
+  const sourceHash = createHash("sha1").update(canonicalSourcePath).digest("hex").slice(0, 8);
   const pageSlug = `${titleSlug}-${sourceHash}`;
   return {
     pageId: `source.${pageSlug}`,
