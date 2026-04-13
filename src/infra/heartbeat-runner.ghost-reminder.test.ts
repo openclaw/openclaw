@@ -320,7 +320,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
-  it("does not force owner downgrade for uninspected interval events", async () => {
+  it("forces owner downgrade for untrusted interval events", async () => {
     const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
       tmpPrefix: "openclaw-interval-untrusted-",
       replyText: "Handled internally",
@@ -336,7 +336,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("heartbeat");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 

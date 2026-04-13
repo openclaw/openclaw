@@ -805,9 +805,6 @@ export async function runHeartbeatOnce(opts: {
     startedAt,
     heartbeatFileContent: preflight.heartbeatFileContent,
   });
-  const hasUntrustedPendingEvents =
-    preflight.shouldInspectPendingEvents &&
-    preflight.pendingEventEntries.some((event) => event.trusted === false);
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -874,6 +871,13 @@ export async function runHeartbeatOnce(opts: {
     }
     runSessionKey = isolatedSessionKey;
   }
+  const activePendingEventEntries =
+    runSessionKey === sessionKey
+      ? preflight.pendingEventEntries
+      : peekSystemEventEntries(runSessionKey);
+  const hasUntrustedPendingEvents = activePendingEventEntries.some(
+    (event) => event.trusted === false,
+  );
 
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
