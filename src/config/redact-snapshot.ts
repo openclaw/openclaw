@@ -429,6 +429,7 @@ export function redactConfigSnapshot(
       raw: null,
       parsed: null,
       resolved: {},
+      sourceConfig: {} as ConfigFileSnapshot["sourceConfig"],
     };
   }
   // else: snapshot.config must be valid and populated, as that is what
@@ -452,6 +453,7 @@ export function redactConfigSnapshot(
   }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
+  const redactedSourceConfig = redactObject(snapshot.sourceConfig, uiHints);
 
   return {
     ...snapshot,
@@ -459,6 +461,7 @@ export function redactConfigSnapshot(
     raw: redactedRaw,
     parsed: redactedParsed,
     resolved: redactedResolved,
+    sourceConfig: redactedSourceConfig,
   };
 }
 

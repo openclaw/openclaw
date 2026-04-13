@@ -570,6 +570,18 @@ describe("redactConfigSnapshot", () => {
     expect(resolved.gateway.auth.token).toBe(REDACTED_SENTINEL);
   });
 
+  it("redacts sourceConfig in valid snapshots", () => {
+    const snapshot = makeSnapshot({
+      channels: { telegram: { botToken: "123456:ABCDEFGHIJKLMNOP" } },
+      gateway: { auth: { token: "super-secret-gateway-token" } },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    // sourceConfig must also be redacted, not just resolved
+    const sourceConfig = result.sourceConfig as Record<string, Record<string, unknown>>;
+    expect(sourceConfig.channels?.telegram?.botToken).toBe(REDACTED_SENTINEL);
+    expect(sourceConfig.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+  });
+
   it("handles null raw gracefully", () => {
     const snapshot: ConfigFileSnapshot = {
       path: "/test",
@@ -611,6 +623,7 @@ describe("redactConfigSnapshot", () => {
     expect(result.raw).toBeNull();
     expect(result.parsed).toBeNull();
     expect(result.resolved).toEqual({});
+    expect(result.sourceConfig).toEqual({});
   });
 
   it("handles deeply nested tokens in accounts", () => {
