@@ -21,8 +21,70 @@ import {
 const log = createSubsystemLogger("bedrock-discovery");
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
-const DEFAULT_CONTEXT_WINDOW = 32000;
+const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 4096;
+
+// ---------------------------------------------------------------------------
+// Known model context windows (Bedrock API does not expose token limits)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bedrock's ListFoundationModels API returns no token limit information.
+ * This map provides correct context window values for known models.
+ * Inference profile prefixes (us., eu., ap., global.) are stripped before lookup.
+ *
+ * Sources: https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html
+ *          https://docs.anthropic.com/en/docs/about-claude/models
+ */
+const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
+  // Anthropic Claude
+  "anthropic.claude-opus-4-6-v1": 1_000_000,
+  "anthropic.claude-sonnet-4-6": 1_000_000,
+  "anthropic.claude-sonnet-4-5-20250929-v1:0": 200_000,
+  "anthropic.claude-haiku-4-5-20251001-v1:0": 200_000,
+  // Amazon Nova
+  "amazon.nova-premier-v1:0": 1_000_000,
+  "amazon.nova-pro-v1:0": 300_000,
+  "amazon.nova-lite-v1:0": 300_000,
+  "amazon.nova-micro-v1:0": 128_000,
+  "amazon.nova-2-lite-v1:0": 300_000,
+  // Meta Llama
+  "meta.llama3-3-70b-instruct-v1:0": 128_000,
+  "meta.llama3-2-90b-instruct-v1:0": 128_000,
+  "meta.llama3-2-11b-instruct-v1:0": 128_000,
+  "meta.llama3-2-3b-instruct-v1:0": 128_000,
+  "meta.llama3-2-1b-instruct-v1:0": 128_000,
+  "meta.llama3-1-405b-instruct-v1:0": 128_000,
+  "meta.llama3-1-70b-instruct-v1:0": 128_000,
+  "meta.llama3-1-8b-instruct-v1:0": 128_000,
+  // Mistral
+  "mistral.mistral-large-2407-v1:0": 128_000,
+  "mistral.mistral-small-2402-v1:0": 32_000,
+  // DeepSeek
+  "deepseek.r1-v1:0": 128_000,
+  // Cohere
+  "cohere.command-r-plus-v1:0": 128_000,
+  "cohere.command-r-v1:0": 128_000,
+  // AI21
+  "ai21.jamba-1-5-large-v1:0": 256_000,
+  "ai21.jamba-1-5-mini-v1:0": 256_000,
+};
+
+/**
+ * Resolve the real context window for a Bedrock model ID.
+ * Strips inference profile prefixes (us., eu., ap., global.) before lookup.
+ */
+function resolveKnownContextWindow(modelId: string): number | undefined {
+  if (KNOWN_CONTEXT_WINDOWS[modelId]) {
+    return KNOWN_CONTEXT_WINDOWS[modelId];
+  }
+  // Strip regional inference profile prefix
+  const stripped = modelId.replace(/^(?:us|eu|ap|global)\./, "");
+  if (stripped !== modelId && KNOWN_CONTEXT_WINDOWS[stripped]) {
+    return KNOWN_CONTEXT_WINDOWS[stripped];
+  }
+  return undefined;
+}
 const DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -163,7 +225,7 @@ function toModelDefinition(
     reasoning: inferReasoningSupport(summary),
     input: mapInputModalities(summary),
     cost: DEFAULT_COST,
-    contextWindow: defaults.contextWindow,
+    contextWindow: resolveKnownContextWindow(id) ?? defaults.contextWindow,
     maxTokens: defaults.maxTokens,
   };
 }
@@ -282,7 +344,9 @@ function resolveInferenceProfiles(
       reasoning: baseModel?.reasoning ?? false,
       input: baseModel?.input ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
-      contextWindow: baseModel?.contextWindow ?? defaults.contextWindow,
+      contextWindow: baseModel?.contextWindow
+        ?? resolveKnownContextWindow(profile.inferenceProfileId ?? "")
+        ?? defaults.contextWindow,
       maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
     });
   }
