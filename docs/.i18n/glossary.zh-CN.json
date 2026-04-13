@@ -4,6 +4,14 @@
     "target": "OpenClaw"
   },
   {
+    "source": "OpenShell",
+    "target": "OpenShell"
+  },
+  {
+    "source": "OpenShell Sandbox",
+    "target": "OpenShell Sandbox"
+  },
+  {
     "source": "Gateway",
     "target": "Gateway 网关"
   },
