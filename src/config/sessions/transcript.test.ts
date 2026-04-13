@@ -122,6 +122,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(
       isOperationalAlertMirrorText("Git backup failed due to conflicts during pull --rebase"),
     ).toBe(true);
+    expect(isOperationalAlertMirrorText("Error en el procesamiento de tu solicitud")).toBe(false);
     expect(isOperationalAlertMirrorText("Hello from delivery mirror!")).toBe(false);
   });
 

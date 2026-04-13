@@ -32,7 +32,7 @@ function extractFileNameFromMediaUrl(value: string): string | null {
 }
 
 const OPERATIONAL_ALERT_PATTERNS = [
-  /^(?:⚠️\s*)?error en\b/i,
+  /^⚠️\s*error en\b/i,
   /^alerta de backup:/i,
   /^git backup failed\b/i,
   /^se han producido conflictos durante el pull --rebase\b/i,
