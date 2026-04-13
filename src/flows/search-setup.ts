@@ -422,14 +422,49 @@ export async function runSearchSetupFlow(
   }
 
   if (!needsCredential) {
-    await prompter.note(
-      [
-        `${entry.label} works without an API key.`,
-        "OpenClaw will enable the plugin and use it as your web_search provider.",
-        `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
-      ].join("\n"),
-      "Web search",
-    );
+    // Provider works without a key but may accept one for additional features.
+    // If the provider declares envVars, offer an optional key prompt.
+    if (entry.envVars.length > 0) {
+      const keyInput = await prompter.text({
+        message: keyConfigured
+          ? `${credentialLabel} (leave blank to keep current)`
+          : envAvailable
+            ? `${credentialLabel} (leave blank to use env var)`
+            : `${credentialLabel} (optional — leave blank to skip)`,
+        placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+      });
+      const key = normalizeOptionalString(keyInput) ?? "";
+      if (key) {
+        const secretInput = resolveSearchSecretInput(config, choice, key, opts?.secretInputMode);
+        return await finalizeSearchProviderSetup({
+          originalConfig: config,
+          nextConfig: applySearchKey(config, choice, secretInput),
+          entry,
+          runtime,
+          prompter,
+          opts,
+        });
+      }
+      if (existingKey) {
+        return await finalizeSearchProviderSetup({
+          originalConfig: config,
+          nextConfig: applySearchKey(config, choice, existingKey),
+          entry,
+          runtime,
+          prompter,
+          opts,
+        });
+      }
+    } else {
+      await prompter.note(
+        [
+          `${entry.label} works without an API key.`,
+          "OpenClaw will enable the plugin and use it as your web_search provider.",
+          `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+        ].join("\n"),
+        "Web search",
+      );
+    }
     return await finalizeSearchProviderSetup({
       originalConfig: config,
       nextConfig: applySearchProviderSelection(config, choice),
