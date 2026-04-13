@@ -172,7 +172,7 @@ function resolveGuardArtifact(
 function createAuthHeaders(settings: GuardSettings): HeadersInit | undefined {
   const token = process.env[settings.tokenEnvVar]?.trim();
   if (!token) {
-    return undefined;
+    throw new Error(`Missing HOL Guard token in ${settings.tokenEnvVar}`);
   }
   return {
     Authorization: `Bearer ${token}`,
@@ -289,6 +289,28 @@ async function emitPainSignal(
   });
 }
 
+async function emitObservabilitySignals(
+  settings: GuardSettings,
+  artifact: GuardArtifact,
+  outcome: GuardResolutionReceipt,
+): Promise<void> {
+  const tasks: Promise<void>[] = [];
+  if (settings.receiptsEnabled) {
+    tasks.push(emitReceipt(settings, artifact, outcome));
+  }
+  if (settings.painSignalsEnabled) {
+    tasks.push(emitPainSignal(settings, artifact, outcome));
+  }
+  if (tasks.length === 0) {
+    return;
+  }
+  const results = await Promise.allSettled(tasks);
+  const rejected = results.find((result) => result.status === "rejected");
+  if (rejected?.status === "rejected") {
+    throw rejected.reason;
+  }
+}
+
 function verdictSource(verdict: GuardPreExecutionVerdict): string {
   return `preexecution-${verdict.scope || "guard"}`;
 }
@@ -312,8 +334,7 @@ async function settleResolution(
     rationale: verdict.rationale || `Guard denied ${artifact.artifactName}.`,
     source: verdictSource(verdict),
   };
-  await emitReceipt(settings, artifact, denial);
-  await emitPainSignal(settings, artifact, denial);
+  await emitObservabilitySignals(settings, artifact, denial);
 }
 
 function rememberPendingExecution(
@@ -370,8 +391,9 @@ export default definePluginEntry({
             rationale: verdict.rationale || `Guard blocked ${artifact.artifactName}.`,
             source: verdictSource(verdict),
           } satisfies GuardResolutionReceipt;
-          await emitReceipt(settings, artifact, blockedOutcome);
-          await emitPainSignal(settings, artifact, blockedOutcome);
+          try {
+            await emitObservabilitySignals(settings, artifact, blockedOutcome);
+          } catch {}
           return {
             block: true,
             blockReason: blockedOutcome.rationale,

@@ -265,4 +265,88 @@ describe("hol-guard plugin", () => {
       blockReason: "HOL Guard policy lookup failed: network down",
     });
   });
+
+  it("fails closed when the configured guard token is missing and failOpen is disabled", async () => {
+    delete process.env.OPENCLAW_GUARD_TOKEN;
+
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const hooks = setupPlugin({
+      baseUrl: "https://guard.example/api/v1/consumer",
+      failOpen: false,
+    });
+    const beforeToolCall = hooks.get("before_tool_call");
+
+    const result = await beforeToolCall?.(
+      {
+        toolName: "mcp_missing_token",
+        toolCallId: "tool-5",
+        params: {
+          artifactId: "mcp-server:openclaw:missing-token",
+          artifactName: "missing token",
+          artifactSlug: "missing-token",
+          artifactType: "mcp-server",
+          launchSummary: "guard token missing",
+        },
+      },
+      {
+        runId: "run-5",
+        toolName: "mcp_missing_token",
+        toolCallId: "tool-5",
+      },
+    );
+
+    expect(result).toEqual({
+      block: true,
+      blockReason:
+        "HOL Guard policy lookup failed: Missing HOL Guard token in OPENCLAW_GUARD_TOKEN",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a block verdict when receipt signaling fails", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          decision: "block",
+          rationale: "Known malicious MCP launcher",
+          scope: "workspace",
+        }),
+      )
+      .mockRejectedValueOnce(new Error("receipt endpoint unavailable"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const hooks = setupPlugin({
+      baseUrl: "https://guard.example/api/v1/consumer",
+      failOpen: true,
+    });
+    const beforeToolCall = hooks.get("before_tool_call");
+
+    const result = await beforeToolCall?.(
+      {
+        toolName: "mcp_bash_proxy",
+        toolCallId: "tool-6",
+        params: {
+          artifactId: "mcp-server:openclaw:malicious-proxy",
+          artifactName: "malicious proxy",
+          artifactSlug: "malicious-proxy",
+          artifactType: "mcp-server",
+          launchSummary: "bash wrapper exfiltrates ~/.env over HTTPS",
+        },
+      },
+      {
+        runId: "run-6",
+        toolName: "mcp_bash_proxy",
+        toolCallId: "tool-6",
+      },
+    );
+
+    expect(result).toEqual({
+      block: true,
+      blockReason: "Known malicious MCP launcher",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 });
