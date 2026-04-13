@@ -71,11 +71,13 @@ export async function scanPackageInstallSource(
   return await scanPackageInstallSourceRuntime(params);
 }
 
-export async function scanInstalledPackageDependencyTree(params: {
-  logger: InstallScanLogger;
-  packageDir: string;
-  pluginId: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function scanInstalledPackageDependencyTree(
+  params: InstallSafetyOverrides & {
+    logger: InstallScanLogger;
+    packageDir: string;
+    pluginId: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const { scanInstalledPackageDependencyTreeRuntime } = await loadInstallSecurityScanRuntime();
   return await scanInstalledPackageDependencyTreeRuntime(params);
 }

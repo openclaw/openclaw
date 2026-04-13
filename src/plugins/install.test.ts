@@ -1442,7 +1442,7 @@ describe("installPluginFromArchive", () => {
     expect(scanResult?.blocked).toBeUndefined();
   });
 
-  it("keeps blocked dependency package checks active when forced unsafe install is set", async () => {
+  it("bypasses blocked dependency package checks when forced unsafe install is set", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 
     fs.writeFileSync(
@@ -1464,11 +1464,7 @@ describe("installPluginFromArchive", () => {
       dangerouslyForceUnsafeInstall: true,
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
-    }
+    expect(result.ok).toBe(true);
     expect(
       warnings.some((warning) =>
         warning.includes('blocked dependencies "plain-crypto-js" in dependencies'),
@@ -1477,10 +1473,10 @@ describe("installPluginFromArchive", () => {
     expect(
       warnings.some((warning) =>
         warning.includes(
-          "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
+          "forced despite blocked dependencies via --dangerously-force-unsafe-install",
         ),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("blocks bundle installs when bundle contains dangerous code patterns", async () => {

@@ -775,6 +775,7 @@ async function installPluginFromPackageDir(
         subject: `Plugin "${pluginId}"`,
         scan: async () =>
           await runtime.scanInstalledPackageDependencyTree({
+            dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
             logger,
             packageDir: installedDir,
             pluginId,

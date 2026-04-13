@@ -666,7 +666,13 @@ export async function scanBundleInstallSourceRuntime(
     targetLabel: `Bundle "${params.pluginId}" installation`,
   });
   if (dependencyBlocked) {
-    return dependencyBlocked;
+    if (params.dangerouslyForceUnsafeInstall) {
+      params.logger.warn?.(
+        `WARNING: Bundle "${params.pluginId}" installation forced despite blocked dependencies via --dangerously-force-unsafe-install: ${dependencyBlocked.blocked?.reason ?? "unknown"}`,
+      );
+    } else {
+      return dependencyBlocked;
+    }
   }
 
   const builtinScan = await scanDirectoryTarget({
@@ -725,7 +731,13 @@ export async function scanPackageInstallSourceRuntime(
     targetLabel: `Plugin "${params.pluginId}" installation`,
   });
   if (dependencyBlocked) {
-    return dependencyBlocked;
+    if (params.dangerouslyForceUnsafeInstall) {
+      params.logger.warn?.(
+        `WARNING: Plugin "${params.pluginId}" installation forced despite blocked dependencies via --dangerously-force-unsafe-install: ${dependencyBlocked.blocked?.reason ?? "unknown"}`,
+      );
+    } else {
+      return dependencyBlocked;
+    }
   }
 
   const forcedScanEntries: string[] = [];
@@ -784,16 +796,26 @@ export async function scanPackageInstallSourceRuntime(
   return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
-export async function scanInstalledPackageDependencyTreeRuntime(params: {
-  logger: InstallScanLogger;
-  packageDir: string;
-  pluginId: string;
-}): Promise<InstallSecurityScanResult | undefined> {
-  return await scanManifestDependencyDenylist({
+export async function scanInstalledPackageDependencyTreeRuntime(
+  params: InstallSafetyOverrides & {
+    logger: InstallScanLogger;
+    packageDir: string;
+    pluginId: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
+  const targetLabel = `Plugin "${params.pluginId}" installation`;
+  const blocked = await scanManifestDependencyDenylist({
     logger: params.logger,
     packageDir: params.packageDir,
-    targetLabel: `Plugin "${params.pluginId}" installation`,
+    targetLabel,
   });
+  if (blocked && params.dangerouslyForceUnsafeInstall) {
+    params.logger.warn?.(
+      `WARNING: ${targetLabel} forced despite blocked dependencies via --dangerously-force-unsafe-install: ${blocked.blocked?.reason ?? "unknown"}`,
+    );
+    return undefined;
+  }
+  return blocked;
 }
 
 export async function scanFileInstallSourceRuntime(
