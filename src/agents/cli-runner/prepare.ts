@@ -1,3 +1,4 @@
+import { applyMergePatch } from "../../config/merge-patch.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
@@ -36,6 +37,7 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
+  createBundleMcpToolRuntime,
   getActiveMcpLoopbackRuntime,
   createMcpLoopbackServerConfig,
   resolveOpenClawDocsPath: async (
@@ -174,13 +176,13 @@ export async function prepareCliRunContext(
   });
   let reportTools: import("../pi-bundle-mcp-types.js").BundleMcpToolRuntime["tools"] = [];
   if (backendResolved.bundleMcp && preparedBackend.reportMcpConfig) {
-    const reportToolRuntime = await createBundleMcpToolRuntime({
+    const reportToolRuntime = await prepareDeps.createBundleMcpToolRuntime({
       workspaceDir,
-      cfg: {
+      cfg: applyMergePatch(params.config ?? {}, {
         mcp: {
           servers: preparedBackend.reportMcpConfig.mcpServers,
         },
-      },
+      }),
     });
     try {
       reportTools = reportToolRuntime.tools;

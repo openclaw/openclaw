@@ -16,7 +16,7 @@ import {
 } from "./cli-runner.test-support.js";
 import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
-import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
+import { prepareCliRunContext, setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
 beforeEach(() => {
@@ -959,6 +959,71 @@ describe("runCliAgent spawn path", () => {
       expect(allArgs).toContain("USER-SECRET");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
+      restoreCliRunnerPrepareTestDeps();
+    }
+  });
+
+  it("passes effective plugin config to the report MCP runtime", async () => {
+    const createBundleMcpToolRuntimeMock = vi.fn(async () => ({
+      tools: [],
+      dispose: async () => {},
+    }));
+
+    setCliRunnerPrepareTestDeps({
+      makeBootstrapWarn: () => () => {},
+      resolveBootstrapContextForRun: async () => ({
+        bootstrapFiles: [],
+        contextFiles: [],
+      }),
+      createBundleMcpToolRuntime: createBundleMcpToolRuntimeMock,
+      getActiveMcpLoopbackRuntime: () =>
+        ({
+          port: 23119,
+          token: "loopback-token-123",
+        }) as { port: number; token: string },
+      resolveOpenClawDocsPath: async () => null,
+    });
+
+    try {
+      await prepareCliRunContext(
+        buildRunClaudeCliAgentParams({
+          sessionId: "s1",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp",
+          prompt: "hi",
+          runId: "run-prepare-plugin-config",
+          timeoutMs: 1_000,
+          config: {
+            plugins: {
+              entries: {
+                "bundle-probe": {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(createBundleMcpToolRuntimeMock).toHaveBeenCalledTimes(1);
+      expect(createBundleMcpToolRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
+        workspaceDir: "/tmp",
+        cfg: {
+          plugins: {
+            entries: {
+              "bundle-probe": {
+                enabled: false,
+              },
+            },
+          },
+          mcp: {
+            servers: {
+              openclaw: expect.any(Object),
+            },
+          },
+        },
+      });
+    } finally {
       restoreCliRunnerPrepareTestDeps();
     }
   });
