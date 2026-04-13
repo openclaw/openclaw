@@ -145,44 +145,12 @@ describe("searxng web search provider", () => {
     expect(resolveSearxngLanguage(config)).toBe("de");
   });
 
-  it("runSetup shows a JSON format note", async () => {
+  it("exposes a credentialNote with JSON format guidance", () => {
     const provider = createSearxngWebSearchProvider();
-    expect(provider.runSetup).toBeDefined();
-
-    const notes: Array<{ message: string; title?: string }> = [];
-    const result = await provider.runSetup!({
-      config: { existing: true } as never,
-      runtime: {} as never,
-      prompter: {
-        note: async (message: string, title?: string) => {
-          notes.push({ message, title });
-        },
-      } as never,
-    });
-
-    expect(notes).toHaveLength(1);
-    expect(notes[0].title).toBe("SearXNG setup");
-    expect(notes[0].message).toContain("json format enabled");
-    expect(notes[0].message).toContain("search.formats");
-    expect(result).toEqual({ existing: true });
-  });
-
-  it("runSetup skips note when quickstartDefaults is true", async () => {
-    const provider = createSearxngWebSearchProvider();
-    const notes: Array<{ message: string; title?: string }> = [];
-    const result = await provider.runSetup!({
-      config: { existing: true } as never,
-      runtime: {} as never,
-      quickstartDefaults: true,
-      prompter: {
-        note: async (message: string, title?: string) => {
-          notes.push({ message, title });
-        },
-      } as never,
-    });
-
-    expect(notes).toHaveLength(0);
-    expect(result).toEqual({ existing: true });
+    expect(provider.credentialNote).toBeDefined();
+    expect(provider.credentialNote).toContain("json format enabled");
+    expect(provider.credentialNote).toContain("search.formats");
+    expect(provider.runSetup).toBeUndefined();
   });
 
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {

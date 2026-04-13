@@ -472,6 +472,10 @@ export async function runSearchSetupFlow(
     });
   }
 
+  if (entry.credentialNote) {
+    await prompter.note(entry.credentialNote, entry.label);
+  }
+
   const keyInput = await prompter.text({
     message: keyConfigured
       ? `${credentialLabel} (leave blank to keep current)`
