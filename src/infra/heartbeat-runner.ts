@@ -725,6 +725,21 @@ export async function runHeartbeatOnce(opts: {
       nowMs: startedAt,
       forceNew: true,
     });
+    // resolveCronSession with forceNew clears deliveryContext, lastThreadId,
+    // and chatType on the new session entry (session.ts:80-86). For heartbeat
+    // isolated sessions, inherit these from the base session so the heartbeat
+    // response routes to the correct channel/thread/topic instead of falling
+    // back to General (#65693).
+    const baseEntry = cronSession.store[sessionKey];
+    if (baseEntry) {
+      const entry = cronSession.sessionEntry;
+      entry.deliveryContext ??= baseEntry.deliveryContext;
+      entry.lastThreadId ??= baseEntry.lastThreadId;
+      entry.lastChannel ??= baseEntry.lastChannel;
+      entry.lastTo ??= baseEntry.lastTo;
+      entry.lastAccountId ??= baseEntry.lastAccountId;
+      entry.chatType ??= baseEntry.chatType;
+    }
     cronSession.store[isolatedKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
     runSessionKey = isolatedKey;
