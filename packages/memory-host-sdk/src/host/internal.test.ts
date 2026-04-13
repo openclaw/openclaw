@@ -359,6 +359,33 @@ describe("chunkMarkdown", () => {
       }
     }
   });
+  it("does not break surrogate pairs at the coarse split boundary (issue #27753)", () => {
+    // tokens=10 -> maxChars = max(32, 10*4) = 40.
+    // A line of 39 ASCII chars followed by an emoji (a surrogate pair) places
+    // the high surrogate at index 39 and the low surrogate at index 40, so the
+    // outer coarse cut at `start + maxChars = 40` lands BETWEEN the pair.
+    // estimateStringChars(coarse) stays <= maxChars (Latin-only weight), so the
+    // inner fine-split path that already handles surrogates is bypassed.
+    const line = "a".repeat(39) + "\uD83C\uDF38" + "b".repeat(39); // 🌸
+    const chunks = chunkMarkdown(line, { tokens: 10, overlap: 0 });
+    for (const chunk of chunks) {
+      for (let i = 0; i < chunk.text.length; i += 1) {
+        const code = chunk.text.charCodeAt(i);
+        if (code >= 0xd800 && code <= 0xdbff) {
+          const next = chunk.text.charCodeAt(i + 1);
+          expect(next).toBeGreaterThanOrEqual(0xdc00);
+          expect(next).toBeLessThanOrEqual(0xdfff);
+        } else if (code >= 0xdc00 && code <= 0xdfff) {
+          const prev = chunk.text.charCodeAt(i - 1);
+          expect(prev).toBeGreaterThanOrEqual(0xd800);
+          expect(prev).toBeLessThanOrEqual(0xdbff);
+        }
+      }
+    }
+    // The emoji must survive intact in the reconstructed text.
+    expect(chunks.map((c) => c.text).join("")).toContain("\uD83C\uDF38");
+  });
+
   it("does not over-split long Latin lines (backward compat)", () => {
     // 2000 ASCII chars / 800 maxChars -> about 3 segments, not 10 tiny ones.
     const longLatinLine = "a".repeat(2000);

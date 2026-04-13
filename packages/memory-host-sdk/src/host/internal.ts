@@ -402,8 +402,17 @@ export function chunkMarkdown(
       // Second pass: if a segment's *weighted* size still exceeds the budget
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
-      for (let start = 0; start < line.length; start += maxChars) {
-        const coarse = line.slice(start, start + maxChars);
+      for (let start = 0; start < line.length; ) {
+        let coarseEnd = Math.min(line.length, start + maxChars);
+        // Avoid splitting inside a UTF-16 surrogate pair (emoji, CJK Extension B+).
+        if (coarseEnd < line.length) {
+          const lastCode = line.charCodeAt(coarseEnd - 1);
+          if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+            coarseEnd += 1; // include the trailing low surrogate
+          }
+        }
+        const coarse = line.slice(start, coarseEnd);
+        start = coarseEnd;
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
           for (let j = 0; j < coarse.length; ) {
