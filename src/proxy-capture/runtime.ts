@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
@@ -18,6 +19,128 @@ type GlobalFetchPatchedState = {
 type GlobalFetchPatchTarget = typeof globalThis & {
   [DEBUG_PROXY_FETCH_PATCH_KEY]?: GlobalFetchPatchedState;
 };
+
+export type DebugProxyCaptureContext = {
+  sessionKey?: string;
+  parentSessionKey?: string;
+  topLevelUserRequestId?: string;
+  messageId?: string;
+  agentId?: string;
+  agentName?: string;
+  spawnedBy?: string;
+  trigger?: string;
+  inputProvenanceKind?: string;
+  originSessionId?: string;
+  sourceSessionKey?: string;
+  sourceTool?: string;
+};
+
+const DEBUG_PROXY_CAPTURE_CONTEXT = new AsyncLocalStorage<DebugProxyCaptureContext>();
+
+function normalizeCaptureContextValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeCaptureContext(
+  context?: DebugProxyCaptureContext,
+): DebugProxyCaptureContext | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const normalized: DebugProxyCaptureContext = {
+    sessionKey: normalizeCaptureContextValue(context.sessionKey),
+    parentSessionKey: normalizeCaptureContextValue(context.parentSessionKey),
+    topLevelUserRequestId: normalizeCaptureContextValue(context.topLevelUserRequestId),
+    messageId: normalizeCaptureContextValue(context.messageId),
+    agentId: normalizeCaptureContextValue(context.agentId),
+    agentName: normalizeCaptureContextValue(context.agentName),
+    spawnedBy: normalizeCaptureContextValue(context.spawnedBy),
+    trigger: normalizeCaptureContextValue(context.trigger),
+    inputProvenanceKind: normalizeCaptureContextValue(context.inputProvenanceKind),
+    originSessionId: normalizeCaptureContextValue(context.originSessionId),
+    sourceSessionKey: normalizeCaptureContextValue(context.sourceSessionKey),
+    sourceTool: normalizeCaptureContextValue(context.sourceTool),
+  };
+  return Object.values(normalized).some((value) => typeof value === "string" && value.length > 0)
+    ? normalized
+    : undefined;
+}
+
+function buildCaptureContextMeta(
+  context?: DebugProxyCaptureContext,
+): Record<string, unknown> | undefined {
+  const normalized = normalizeCaptureContext(context);
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    ...(normalized.sessionKey
+      ? { sessionKey: normalized.sessionKey, session_key: normalized.sessionKey }
+      : {}),
+    ...(normalized.parentSessionKey
+      ? {
+          parentSessionKey: normalized.parentSessionKey,
+          parent_session_key: normalized.parentSessionKey,
+          parent_agent_id: normalized.parentSessionKey,
+          parentAgentId: normalized.parentSessionKey,
+        }
+      : {}),
+    ...(normalized.topLevelUserRequestId
+      ? {
+          top_level_user_request_id: normalized.topLevelUserRequestId,
+          topLevelUserRequestId: normalized.topLevelUserRequestId,
+        }
+      : {}),
+    ...(normalized.messageId
+      ? { message_id: normalized.messageId, messageId: normalized.messageId }
+      : {}),
+    ...(normalized.agentId
+      ? {
+          agent_id: normalized.agentId,
+          agentId: normalized.agentId,
+        }
+      : {}),
+    ...(normalized.agentName
+      ? { agent_name: normalized.agentName, agentName: normalized.agentName }
+      : {}),
+    ...(normalized.spawnedBy ? { spawnedBy: normalized.spawnedBy } : {}),
+    ...(normalized.trigger ? { trigger: normalized.trigger } : {}),
+    ...(normalized.inputProvenanceKind
+      ? { inputProvenanceKind: normalized.inputProvenanceKind }
+      : {}),
+    ...(normalized.originSessionId ? { originSessionId: normalized.originSessionId } : {}),
+    ...(normalized.sourceSessionKey ? { sourceSessionKey: normalized.sourceSessionKey } : {}),
+    ...(normalized.sourceTool ? { sourceTool: normalized.sourceTool } : {}),
+    lineageSource: "runtime-context",
+  };
+}
+
+function resolveCaptureMeta(meta?: Record<string, unknown>): Record<string, unknown> | undefined {
+  const contextMeta = buildCaptureContextMeta(DEBUG_PROXY_CAPTURE_CONTEXT.getStore());
+  if (contextMeta && meta) {
+    return { ...contextMeta, ...meta };
+  }
+  return meta ?? contextMeta;
+}
+
+export function getDebugProxyCaptureContext(): DebugProxyCaptureContext | undefined {
+  return DEBUG_PROXY_CAPTURE_CONTEXT.getStore();
+}
+
+export function runWithDebugProxyCaptureContext<T>(
+  context: DebugProxyCaptureContext | undefined,
+  fn: () => T,
+): T {
+  const normalized = normalizeCaptureContext(context);
+  if (!normalized) {
+    return fn();
+  }
+  return DEBUG_PROXY_CAPTURE_CONTEXT.run(normalized, fn);
+}
 
 function protocolFromUrl(rawUrl: string): CaptureProtocol {
   try {
@@ -114,7 +237,12 @@ function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
           host: parsed.host,
           path: `${parsed.pathname}${parsed.search}`,
           errorText: error instanceof Error ? error.message : String(error),
-          metaJson: safeJsonString({ captureOrigin: "global-fetch" }),
+          metaJson: safeJsonString(
+            resolveCaptureMeta({
+              captureOrigin: "global-fetch",
+              source: settings.sourceProcess,
+            }),
+          ),
         });
       }
       throw error;
@@ -181,6 +309,7 @@ export function captureHttpExchange(params: {
   const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
   const flowId = params.flowId ?? randomUUID();
   const url = new URL(params.url);
+  const resolvedMeta = resolveCaptureMeta(params.meta);
   const requestBody =
     typeof params.requestBody === "string" || Buffer.isBuffer(params.requestBody)
       ? params.requestBody
@@ -213,7 +342,7 @@ export function captureHttpExchange(params: {
         ? Object.fromEntries(params.requestHeaders.entries())
         : params.requestHeaders,
     ),
-    metaJson: safeJsonString(params.meta),
+    metaJson: safeJsonString(resolvedMeta),
     ...requestPayload,
   });
   const cloneable =
@@ -242,7 +371,7 @@ export function captureHttpExchange(params: {
         params.response.headers && typeof params.response.headers.entries === "function"
           ? safeJsonString(Object.fromEntries(params.response.headers.entries()))
           : undefined,
-      metaJson: safeJsonString({ ...params.meta, bodyCapture: "unavailable" }),
+      metaJson: safeJsonString({ ...resolvedMeta, bodyCapture: "unavailable" }),
     });
     return;
   }
@@ -269,7 +398,7 @@ export function captureHttpExchange(params: {
         status: params.response.status,
         contentType: params.response.headers.get("content-type") ?? undefined,
         headersJson: safeJsonString(Object.fromEntries(params.response.headers.entries())),
-        metaJson: safeJsonString(params.meta),
+        metaJson: safeJsonString(resolvedMeta),
         ...responsePayload,
       });
     })
@@ -307,6 +436,7 @@ export function captureWsEvent(params: {
   }
   const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
   const url = new URL(params.url);
+  const resolvedMeta = resolveCaptureMeta(params.meta);
   const payload = persistEventPayload(store, {
     data: params.payload,
     contentType: "application/json",
@@ -324,7 +454,7 @@ export function captureWsEvent(params: {
     path: `${url.pathname}${url.search}`,
     closeCode: params.closeCode,
     errorText: params.errorText,
-    metaJson: safeJsonString(params.meta),
+    metaJson: safeJsonString(resolvedMeta),
     ...payload,
   });
 }
