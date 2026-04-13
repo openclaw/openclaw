@@ -107,7 +107,7 @@ import {
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
-import { classifyTurnIntent } from "./run/personality-routing.js";
+import { classifyTurnIntent, runPersonalityCloseout } from "./run/personality-routing.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
@@ -1554,7 +1554,7 @@ export async function runEmbeddedPiAgent(
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
 
-          const payloads = buildEmbeddedRunPayloads({
+          let payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
@@ -1758,28 +1758,70 @@ export async function runEmbeddedPiAgent(
             };
           }
 
-          // --- Personality closeout (pre-send sanitizer) ---
-          // When hybrid personality mode is active and this was an execution
-          // turn, catch the visible text payloads before they're returned and
-          // note that they're candidates for personality rewriting. The actual
-          // 5.2 inference call for the closeout will be integrated as a
-          // post-processing step in the outbound delivery pipeline, where the
-          // message can be rewritten before it reaches the channel. This keeps
-          // the run function focused on turn execution while the personality
-          // pass happens at the delivery layer.
+          // --- Personality closeout (pre-send sanitizer, Option B) ---
+          // When hybrid mode is active and this was an execution turn, catch
+          // the visible text before delivery and run it through the personality
+          // model (e.g. gpt-5.2) for emotional rewriting. The personality model
+          // gets SOUL.md in its system prompt automatically via bootstrap files.
+          // Best-effort: if the personality call fails, deliver the original.
           if (
             personalityMode === "hybrid" &&
             turnIntent === "execution" &&
+            personalityModelRef &&
             !aborted &&
             payloads.length > 0 &&
             !attempt.didSendViaMessagingTool
           ) {
-            log.info(
-              `personality-closeout: runId=${params.runId} ` +
-                `executionModel=${executionProvider}/${executionModelId} ` +
-                `personalityModel=${personalityModelRef ?? "none"} ` +
-                `payloads=${payloads.length} — eligible for personality rewrite`,
-            );
+            const visibleText = payloads
+              .filter((p) => typeof p.text === "string" && !p.isError && !p.isReasoning)
+              .map((p) => p.text)
+              .join("\n\n")
+              .trim();
+            if (visibleText.length > 0 && visibleText.length < 4000) {
+              const personalitySlash = personalityModelRef.indexOf("/");
+              const pProvider =
+                personalitySlash > 0 ? personalityModelRef.slice(0, personalitySlash) : provider;
+              const pModelId =
+                personalitySlash > 0
+                  ? personalityModelRef.slice(personalitySlash + 1)
+                  : personalityModelRef;
+              log.info(
+                `personality-closeout: runId=${params.runId} ` +
+                  `executionModel=${executionProvider}/${executionModelId} ` +
+                  `personalityModel=${pProvider}/${pModelId} — rewriting ${visibleText.length} chars`,
+              );
+              const rewritten = await runPersonalityCloseout({
+                cfg: params.config,
+                personalityProvider: pProvider,
+                personalityModelId: pModelId,
+                agentDir,
+                executionText: visibleText,
+                signal: params.abortSignal,
+              });
+              if (rewritten) {
+                // Replace visible text payloads with the personality-rewritten
+                // version. Keep non-text payloads (media, errors, reasoning)
+                // intact so tool results and attachments are not lost.
+                let rewrittenUsed = false;
+                payloads = payloads.map((p) => {
+                  if (
+                    typeof p.text === "string" &&
+                    !p.isError &&
+                    !p.isReasoning &&
+                    !rewrittenUsed
+                  ) {
+                    rewrittenUsed = true;
+                    return { ...p, text: rewritten };
+                  }
+                  // Clear remaining text payloads that were part of the
+                  // original visible text (now folded into the rewrite).
+                  if (typeof p.text === "string" && !p.isError && !p.isReasoning && rewrittenUsed) {
+                    return { ...p, text: "" };
+                  }
+                  return p;
+                });
+              }
+            }
           }
           // --- End personality closeout ---
 

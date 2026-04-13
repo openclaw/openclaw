@@ -1,3 +1,7 @@
+import { complete } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { prepareSimpleCompletionModel } from "../../simple-completion-runtime.js";
+import { prepareModelForSimpleCompletion } from "../../simple-completion-transport.js";
 import { isLikelyExecutionAckPrompt } from "./incomplete-turn.js";
 
 /**
@@ -95,3 +99,65 @@ export const PERSONALITY_CLOSEOUT_INSTRUCTION =
   "Keep all factual content, tool results, code blocks, and file references exactly as-is. " +
   "Add warmth and natural language framing around the technical parts. " +
   "Keep it concise — do not expand or add new information.";
+
+/**
+ * Run the pre-send personality sanitizer (Option B). Takes the execution
+ * model's visible text, passes it through the personality model with the
+ * closeout instruction, and returns the rewritten text. If the personality
+ * model call fails for any reason, returns null so the original text is
+ * used unchanged — the closeout is best-effort and should never block
+ * delivery.
+ *
+ * The personality model's system prompt includes SOUL.md from workspace
+ * bootstrap files (loaded automatically during model preparation), so it
+ * naturally adopts the agent's configured personality.
+ */
+export async function runPersonalityCloseout(params: {
+  cfg: OpenClawConfig | undefined;
+  personalityProvider: string;
+  personalityModelId: string;
+  agentDir?: string;
+  executionText: string;
+  signal?: AbortSignal;
+}): Promise<string | null> {
+  try {
+    const prepared = await prepareSimpleCompletionModel({
+      cfg: params.cfg,
+      provider: params.personalityProvider,
+      modelId: params.personalityModelId,
+      agentDir: params.agentDir,
+    });
+    if ("error" in prepared) {
+      return null;
+    }
+    const model = prepareModelForSimpleCompletion({
+      model: prepared.model,
+      cfg: params.cfg,
+    });
+    const result = await complete(
+      model,
+      {
+        systemPrompt: PERSONALITY_CLOSEOUT_INSTRUCTION,
+        messages: [{ role: "user", content: params.executionText, timestamp: Date.now() }],
+      },
+      {
+        maxTokens: 2048,
+        signal: params.signal,
+      },
+    );
+    // AssistantMessage has .content (array of content blocks)
+    const text = result?.content
+      ?.filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("\n\n")
+      .trim();
+    if (text && text.length > 0) {
+      return text;
+    }
+    return null;
+  } catch {
+    // Best-effort — if the personality model fails, deliver the
+    // original execution output unchanged.
+    return null;
+  }
+}
