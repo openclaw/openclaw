@@ -30,7 +30,14 @@ get() {
 }
 
 post() {
-  curl -fsS -X POST "$(build_url "$1")" "${headers[@]}" -H "Content-Type: application/json" --connect-timeout "$TIMEOUT" --max-time "$TIMEOUT"
+  local path="$1"
+  local body="${2:-}"
+
+  if [ -n "$body" ]; then
+    curl -fsS -X POST "$(build_url "$path")" "${headers[@]}" -H "Content-Type: application/json" --data "$body" --connect-timeout "$TIMEOUT" --max-time "$TIMEOUT"
+  else
+    curl -fsS -X POST "$(build_url "$path")" "${headers[@]}" -H "Content-Type: application/json" --connect-timeout "$TIMEOUT" --max-time "$TIMEOUT"
+  fi
 }
 
 cmd="${1:-}"

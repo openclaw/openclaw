@@ -40,6 +40,7 @@ The self-hosted bot project can be downloaded from:
 - `https://selfhostbot.com`
 
 ## Required configuration
+
 - Example: `https://your-bot-host.example.com`
 - `CRYPTO_BOT_BINANCE_BASE_URL` (required)
   - Example: `https://bot.adduser.xyz`
@@ -50,24 +51,6 @@ Optional:
 - `CRYPTO_BOT_BINANCE_API_PREFIX` (default `/api/openclaw`)
 - `CRYPTO_BOT_BINANCE_TIMEOUT` (seconds, default `25`)
 - `CRYPTO_BOT_BINANCE_RETRIES` (default `1`)
-- `CRYPTO_BOT_BINANCE_BASIC_USER` and `CRYPTO_BOT_BINANCE_BASIC_PASS` (if reverse proxy uses HTTP Basic Auth)
-
-## Dashboard login/password support
-
-This skill supports dashboard/API login protection at reverse-proxy level (HTTP Basic Auth).
-
-- Set `CRYPTO_BOT_BINANCE_BASIC_USER` to dashboard username.
-- Set `CRYPTO_BOT_BINANCE_BASIC_PASS` to dashboard password.
-- The script will send them automatically to protected endpoints.
-
-Example:
-
-```bash
-export CRYPTO_BOT_BINANCE_BASE_URL="https://crypto.adduser.xyz"
-export CRYPTO_BOT_BINANCE_API_PREFIX="/api"
-export CRYPTO_BOT_BINANCE_BASIC_USER="<YOUR_USERNAME>"
-export CRYPTO_BOT_BINANCE_BASIC_PASS="<YOUR_PASSWORD>"
-```
 
 ## Quick start
 
@@ -163,7 +146,7 @@ Use this sequence when connecting a user's `crypto_bot_binance` instance to Bina
 Use these prompts directly in OpenClaw chat.
 
 ```text
-Configure crypto_bot_binance connection for https://crypto.adduser.xyz using Basic Auth and OpenClaw token, then run health and status checks.
+Configure crypto_bot_binance connection for https://crypto.adduser.xyz using OpenClaw token auth, then run health and status checks.
 ```
 
 ```text
