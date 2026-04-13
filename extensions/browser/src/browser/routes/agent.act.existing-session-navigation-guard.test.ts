@@ -186,6 +186,47 @@ describe("existing-session interaction navigation guard", () => {
     ]);
   });
 
+  it("fails closed when a newly opened tab URL is blocked", async () => {
+    routeState.profileCtx.listTabs
+      .mockResolvedValueOnce([
+        {
+          targetId: "7",
+          url: "https://example.com",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          targetId: "7",
+          url: "https://example.com",
+        },
+        {
+          targetId: "9",
+          url: "http://169.254.169.254/latest/meta-data/",
+        },
+      ]);
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
+      async ({ url }: { url: string }) => {
+        if (url.includes("169.254.169.254")) {
+          throw new Error("blocked new tab");
+        }
+      },
+    );
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const pending =
+      handler?.({ params: {}, query: {}, body: { kind: "click", ref: "btn-1" } }, response.res) ??
+      Promise.resolve();
+    void pending.catch(() => {});
+    const completion = (async () => {
+      await vi.runAllTimersAsync();
+      await pending;
+    })();
+
+    await expect(completion).rejects.toThrow("blocked new tab");
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when location probes never return a usable url", async () => {
     chromeMcpMocks.evaluateChromeMcpScript
       .mockResolvedValueOnce("result" as never)

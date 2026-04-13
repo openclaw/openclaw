@@ -24,7 +24,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
-  withBrowserNavigationPolicy: vi.fn(() => ({})),
+  withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
@@ -72,20 +72,20 @@ vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
-function getSnapshotGetHandler() {
+function getSnapshotGetHandler(ssrfPolicy?: unknown) {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, {
-    state: () => ({ resolved: { ssrfPolicy: undefined } }),
+    state: () => ({ resolved: { ssrfPolicy } }),
   } as never);
   const handler = getHandlers.get("/snapshot");
   expect(handler).toBeTypeOf("function");
   return handler;
 }
 
-function getSnapshotPostHandler() {
+function getSnapshotPostHandler(ssrfPolicy?: unknown) {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, {
-    state: () => ({ resolved: { ssrfPolicy: undefined } }),
+    state: () => ({ resolved: { ssrfPolicy } }),
   } as never);
   const handler = postHandlers.get("/screenshot");
   expect(handler).toBeTypeOf("function");
@@ -135,9 +135,7 @@ describe("existing-session browser routes", () => {
       profileName: "chrome-live",
       targetId: "7",
     });
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "https://example.com",
-    });
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
 
@@ -166,8 +164,37 @@ describe("existing-session browser routes", () => {
       fullPage: false,
       format: "jpeg",
     });
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
+  it("checks existing-session snapshot URL when SSRF policy is configured", async () => {
+    const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
+    const response = createBrowserRouteResponse();
+    await handler?.({ params: {}, query: { format: "ai" } }, response.res);
+
+    expect(response.statusCode).toBe(200);
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
       url: "https://example.com",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+  });
+
+  it("checks existing-session screenshot URL when SSRF policy is configured", async () => {
+    const handler = getSnapshotPostHandler({ allowPrivateNetwork: false });
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { ref: "btn-1", type: "jpeg" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+      url: "https://example.com",
+      ssrfPolicy: { allowPrivateNetwork: false },
     });
   });
 

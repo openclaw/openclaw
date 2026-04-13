@@ -319,10 +319,12 @@ export function registerBrowserAgentSnapshotRoutes(
           if (element) {
             return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
           }
-          await assertBrowserNavigationResultAllowed({
-            url: tab.url,
-            ...ssrfPolicyOpts,
-          });
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
+              url: tab.url,
+              ...ssrfPolicyOpts,
+            });
+          }
           const buffer = await takeChromeMcpScreenshot({
             profileName: profileCtx.profile.name,
             userDataDir: profileCtx.profile.userDataDir,
@@ -405,10 +407,12 @@ export function registerBrowserAgentSnapshotRoutes(
         if (plan.selectorValue || plan.frameSelectorValue) {
           return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
         }
-        await assertBrowserNavigationResultAllowed({
-          url: tab.url,
-          ...ssrfPolicyOpts,
-        });
+        if (ssrfPolicyOpts.ssrfPolicy) {
+          await assertBrowserNavigationResultAllowed({
+            url: tab.url,
+            ...ssrfPolicyOpts,
+          });
+        }
         const snapshot = await takeChromeMcpSnapshot({
           profileName: profileCtx.profile.name,
           userDataDir: profileCtx.profile.userDataDir,

@@ -71,15 +71,12 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   userDataDir?: string;
   targetId: string;
   ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
-  listTabs?: () => Promise<Array<{ targetId: string; url: string }>>;
-  initialTabTargetIds?: ReadonlySet<string>;
+  listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+  initialTabTargetIds: ReadonlySet<string>;
 }): Promise<void> {
   const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
   if (!ssrfPolicyOpts.ssrfPolicy) {
     return;
-  }
-  if (!params.listTabs || !params.initialTabTargetIds) {
-    throw new Error("Missing tab-list context for post-interaction navigation verification");
   }
   const listTabs = params.listTabs;
   const initialTabTargetIds = params.initialTabTargetIds;
@@ -392,7 +389,7 @@ export function registerBrowserAgentActRoutes(
         if (isExistingSession) {
           const initialTabTargetIds = withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy
             ? new Set((await profileCtx.listTabs()).map((currentTab) => currentTab.targetId))
-            : undefined;
+            : new Set<string>();
           const existingSessionNavigationGuard = {
             profileName,
             userDataDir: profileCtx.profile.userDataDir,
