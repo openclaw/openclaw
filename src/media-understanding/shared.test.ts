@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock, hasProxyEnvConfiguredMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
-  hasProxyEnvConfiguredMock: vi.fn(() => false),
-}));
+const { fetchWithSsrFGuardMock, hasEnvHttpProxyConfiguredMock, matchesNoProxyMock } = vi.hoisted(
+  () => ({
+    fetchWithSsrFGuardMock: vi.fn(),
+    hasEnvHttpProxyConfiguredMock: vi.fn(() => false),
+    matchesNoProxyMock: vi.fn(() => false),
+  }),
+);
 
 vi.mock("../infra/net/fetch-guard.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
@@ -21,7 +24,8 @@ vi.mock("../infra/net/proxy-env.js", async () => {
   );
   return {
     ...actual,
-    hasProxyEnvConfigured: hasProxyEnvConfiguredMock,
+    hasEnvHttpProxyConfigured: hasEnvHttpProxyConfiguredMock,
+    matchesNoProxy: matchesNoProxyMock,
   };
 });
 
@@ -34,7 +38,8 @@ import {
 } from "./shared.js";
 
 beforeEach(() => {
-  hasProxyEnvConfiguredMock.mockReturnValue(false);
+  hasEnvHttpProxyConfiguredMock.mockReturnValue(false);
+  matchesNoProxyMock.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -285,7 +290,7 @@ describe("fetchWithTimeoutGuarded", () => {
   });
 
   it("does not set a guarded fetch mode when no HTTP proxy env is configured", async () => {
-    hasProxyEnvConfiguredMock.mockReturnValue(false);
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(false);
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
       finalUrl: "https://example.com",
@@ -300,7 +305,7 @@ describe("fetchWithTimeoutGuarded", () => {
   });
 
   it("auto-selects trusted env proxy mode when HTTP proxy env is configured", async () => {
-    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(true);
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
       finalUrl: "https://api.minimax.io",
@@ -322,7 +327,7 @@ describe("fetchWithTimeoutGuarded", () => {
   });
 
   it("respects an explicit mode from the caller when HTTP proxy env is configured", async () => {
-    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(true);
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
       finalUrl: "https://api.example.com",
@@ -341,7 +346,7 @@ describe("fetchWithTimeoutGuarded", () => {
   });
 
   it("auto-upgrades transcription requests to trusted env proxy when proxy env is configured", async () => {
-    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(true);
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
       finalUrl: "https://api.openai.com",
@@ -363,7 +368,7 @@ describe("fetchWithTimeoutGuarded", () => {
   });
 
   it("forwards an explicit mode override through postJsonRequest even when proxy env is configured", async () => {
-    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(true);
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
       finalUrl: "https://api.example.com",
@@ -386,7 +391,7 @@ describe("fetchWithTimeoutGuarded", () => {
   });
 
   it("forwards an explicit mode override through postTranscriptionRequest even when proxy env is configured", async () => {
-    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(true);
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
       finalUrl: "https://api.example.com",
@@ -406,5 +411,80 @@ describe("fetchWithTimeoutGuarded", () => {
         mode: "strict",
       }),
     );
+  });
+
+  it("does not auto-upgrade when only ALL_PROXY is configured (HTTP(S) proxy gate)", async () => {
+    // ALL_PROXY is ignored by EnvHttpProxyAgent; `hasEnvHttpProxyConfigured`
+    // reflects that by returning false when only ALL_PROXY is set. Auto-upgrade
+    // must NOT fire, otherwise the request would skip pinned-DNS/SSRF checks
+    // and then be dispatched directly.
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(false);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://api.example.com",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.example.com/v1/image",
+      headers: new Headers(),
+      body: { ok: true },
+      fetchFn: fetch,
+    });
+
+    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call).not.toHaveProperty("mode");
+  });
+
+  it("does not auto-upgrade when caller passes explicit dispatcherPolicy", async () => {
+    // Callers with custom proxy URL / proxyTls / connect options must keep
+    // control over the dispatcher. Auto-upgrade would build an
+    // EnvHttpProxyAgent that silently drops those overrides.
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(true);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://api.example.com",
+      release: async () => {},
+    });
+
+    const explicitPolicy = {
+      mode: "explicit-proxy" as const,
+      proxyUrl: "http://corp-proxy.internal:3128",
+    };
+
+    await fetchWithTimeoutGuarded("https://api.example.com/v1/image", {}, undefined, fetch, {
+      dispatcherPolicy: explicitPolicy,
+    });
+
+    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call).not.toHaveProperty("mode");
+    expect(call).toHaveProperty("dispatcherPolicy", explicitPolicy);
+  });
+
+  it("does not auto-upgrade when target URL matches NO_PROXY", async () => {
+    // With HTTP_PROXY + NO_PROXY, EnvHttpProxyAgent makes direct connections
+    // for NO_PROXY matches, but in TRUSTED_ENV_PROXY mode fetchWithSsrFGuard
+    // skips pinned-DNS checks — so auto-upgrading those targets would bypass
+    // SSRF protection. Keep strict mode for NO_PROXY matches.
+    hasEnvHttpProxyConfiguredMock.mockReturnValue(true);
+    matchesNoProxyMock.mockReturnValue(true);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://internal.corp.example",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://internal.corp.example/v1/image",
+      headers: new Headers(),
+      body: { ok: true },
+      fetchFn: fetch,
+    });
+
+    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call).not.toHaveProperty("mode");
   });
 });

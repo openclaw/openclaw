@@ -11,7 +11,7 @@ import {
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
-import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
+import { hasEnvHttpProxyConfigured, matchesNoProxy } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
@@ -86,6 +86,63 @@ export function resolveProviderHttpRequestConfig(params: {
   };
 }
 
+/**
+ * Decide whether to auto-upgrade a provider HTTP request into
+ * `TRUSTED_ENV_PROXY` mode based on the runtime environment.
+ *
+ * This is gated conservatively to avoid the SSRF bypasses the initial
+ * auto-upgrade path exposed (see openclaw#64974 review threads):
+ *
+ * 1. If the caller supplied an explicit `dispatcherPolicy` — custom proxy URL,
+ *    `proxyTls`, or `connect` options — do NOT override it. Trusted-env mode
+ *    builds an `EnvHttpProxyAgent` that would silently drop those overrides,
+ *    breaking enterprise proxy/mTLS configs.
+ *
+ * 2. Only auto-upgrade when `HTTP_PROXY` or `HTTPS_PROXY` (lower- or
+ *    upper-case) is configured for the target protocol. `ALL_PROXY` is
+ *    explicitly ignored by `EnvHttpProxyAgent`, so counting it would
+ *    auto-upgrade requests that then make direct connections while skipping
+ *    pinned-DNS/SSRF hostname checks.
+ *
+ * 3. If `NO_PROXY` would bypass the proxy for this target, do NOT auto-upgrade.
+ *    `EnvHttpProxyAgent` makes direct connections for `NO_PROXY` matches, but
+ *    in `TRUSTED_ENV_PROXY` mode `fetchWithSsrFGuard` skips
+ *    `resolvePinnedHostnameWithPolicy` — so those direct connections would
+ *    bypass SSRF protection. Keep strict mode for `NO_PROXY` matches.
+ */
+function shouldAutoUpgradeToTrustedEnvProxy(params: {
+  url: string;
+  dispatcherPolicy: PinnedDispatcherPolicy | undefined;
+}): boolean {
+  if (params.dispatcherPolicy) {
+    return false;
+  }
+
+  let protocol: "http" | "https";
+  try {
+    const parsed = new URL(params.url);
+    if (parsed.protocol === "http:") {
+      protocol = "http";
+    } else if (parsed.protocol === "https:") {
+      protocol = "https";
+    } else {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  if (!hasEnvHttpProxyConfigured(protocol)) {
+    return false;
+  }
+
+  if (matchesNoProxy(params.url)) {
+    return false;
+  }
+
+  return true;
+}
+
 export async function fetchWithTimeoutGuarded(
   url: string,
   init: RequestInit,
@@ -110,17 +167,26 @@ export async function fetchWithTimeoutGuarded(
   // case so the request goes through the configured proxy agent instead of
   // doing a local DNS pre-resolution.
   //
-  // This does not weaken SSRF protection: when an HTTP CONNECT proxy sits in
-  // the egress path, the proxy itself performs hostname resolution and can
-  // rewrite traffic to any destination, so client-side DNS pinning does not
-  // meaningfully constrain the target IP. Callers that explicitly need strict
-  // pinned-DNS can still opt in by passing `mode: GUARDED_FETCH_MODE.STRICT`
-  // here or by using `fetchWithSsrFGuard` directly.
+  // This does not weaken SSRF protection when the auto-upgrade fires: an HTTP
+  // CONNECT proxy on the egress path performs hostname resolution itself and
+  // client-side DNS pinning cannot meaningfully constrain the target IP. But
+  // the auto-upgrade is gated (see `shouldAutoUpgradeToTrustedEnvProxy`) to
+  // avoid three SSRF-bypass edge cases: caller-provided `dispatcherPolicy`,
+  // `ALL_PROXY`-only envs, and `NO_PROXY` target matches. Callers that
+  // explicitly need strict pinned-DNS can still opt in by passing
+  // `mode: GUARDED_FETCH_MODE.STRICT` here or by using `fetchWithSsrFGuard`
+  // directly.
   //
   // See openclaw#52162 for the reported failure mode on memory embeddings,
   // which shares this code path with image/music/video/audio generation.
   const resolvedMode =
-    options?.mode ?? (hasProxyEnvConfigured() ? GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY : undefined);
+    options?.mode ??
+    (shouldAutoUpgradeToTrustedEnvProxy({
+      url,
+      dispatcherPolicy: options?.dispatcherPolicy,
+    })
+      ? GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY
+      : undefined);
   return await fetchWithSsrFGuard({
     url,
     fetchImpl: fetchFn,

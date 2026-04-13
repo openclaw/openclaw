@@ -53,3 +53,96 @@ export function hasEnvHttpProxyConfigured(
 ): boolean {
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
 }
+
+/**
+ * Check whether a target URL should bypass the HTTP proxy per NO_PROXY env var.
+ *
+ * Mirrors undici EnvHttpProxyAgent semantics:
+ * - Comma-separated list; case-insensitive
+ * - Empty or missing → no bypass
+ * - `*` → bypass everything
+ * - Exact hostname match
+ * - Leading-dot or subdomain suffix match (`.example.com` matches `foo.example.com`)
+ * - Optional `:port` suffix; when present, must match target port
+ * - IPv6 literals in bracketed form (`[::1]`)
+ *
+ * Undici does not export its matcher, so this is a targeted reimplementation
+ * kept in sync with `undici/lib/dispatcher/env-http-proxy-agent.js`. Paired
+ * with `hasEnvHttpProxyConfigured` this gates the trusted-env-proxy
+ * auto-upgrade in provider HTTP helpers; see openclaw#64974 review thread on
+ * NO_PROXY SSRF bypass.
+ */
+export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY);
+  if (!raw) {
+    return false;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return false;
+  }
+
+  const targetHost = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!targetHost) {
+    return false;
+  }
+
+  const targetPort =
+    parsed.port !== ""
+      ? parsed.port
+      : parsed.protocol === "https:"
+        ? "443"
+        : parsed.protocol === "http:"
+          ? "80"
+          : "";
+
+  for (const rawEntry of raw.split(",")) {
+    const entry = rawEntry.trim().toLowerCase();
+    if (!entry) {
+      continue;
+    }
+    if (entry === "*") {
+      return true;
+    }
+
+    let entryHost: string;
+    let entryPort: string | undefined;
+    if (entry.startsWith("[")) {
+      const m = entry.match(/^\[([^\]]+)\](?::(\d+))?$/);
+      if (!m) {
+        continue;
+      }
+      entryHost = m[1];
+      entryPort = m[2];
+    } else {
+      const colonIdx = entry.lastIndexOf(":");
+      if (colonIdx > 0 && /^\d+$/.test(entry.slice(colonIdx + 1))) {
+        entryHost = entry.slice(0, colonIdx);
+        entryPort = entry.slice(colonIdx + 1);
+      } else {
+        entryHost = entry;
+      }
+    }
+
+    if (entryPort && entryPort !== targetPort) {
+      continue;
+    }
+
+    const normalizedEntry = entryHost.startsWith(".") ? entryHost.slice(1) : entryHost;
+    if (!normalizedEntry) {
+      continue;
+    }
+
+    if (targetHost === normalizedEntry) {
+      return true;
+    }
+    if (targetHost.endsWith("." + normalizedEntry)) {
+      return true;
+    }
+  }
+
+  return false;
+}
