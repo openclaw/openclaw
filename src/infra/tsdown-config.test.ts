@@ -114,7 +114,7 @@ describe("tsdown config", () => {
   });
 
   // Regression test for session store runtime entry
-  // See: https://github.com/openclaw/openclaw/pull/XXXXX
+  // See: https://github.com/openclaw/openclaw/pull/65962
   it("includes config/sessions/store.runtime entry", () => {
     const unifiedGraph = unifiedDistGraph();
     const entries = entryKeys(unifiedGraph!);
