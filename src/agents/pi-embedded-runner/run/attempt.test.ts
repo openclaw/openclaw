@@ -14,6 +14,7 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
+  resolveUnknownToolGuardThreshold,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
@@ -421,6 +422,24 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
+
+describe("resolveUnknownToolGuardThreshold", () => {
+  it("returns undefined when loop detection is disabled", () => {
+    expect(resolveUnknownToolGuardThreshold({ enabled: false, unknownToolThreshold: 4 })).toBe(
+      undefined,
+    );
+    expect(resolveUnknownToolGuardThreshold(undefined)).toBe(undefined);
+  });
+
+  it("uses the default threshold when loop detection is enabled without an override", () => {
+    expect(resolveUnknownToolGuardThreshold({ enabled: true })).toBe(10);
+  });
+
+  it("uses the configured threshold override when provided", () => {
+    expect(resolveUnknownToolGuardThreshold({ enabled: true, unknownToolThreshold: 4 })).toBe(4);
+  });
+});
+
 describe("wrapStreamFnTrimToolCallNames", () => {
   async function invokeWrappedStream(
     baseFn: (...args: never[]) => unknown,
