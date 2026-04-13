@@ -58,7 +58,14 @@ export type FsSafeTestHooks = {
 
 let fsSafeTestHooks: FsSafeTestHooks | undefined;
 
+function allowFsSafeTestHooks(): boolean {
+  return process.env.NODE_ENV === "test" || process.env.VITEST === "true";
+}
+
 export function __setFsSafeTestHooksForTest(hooks?: FsSafeTestHooks): void {
+  if (hooks && !allowFsSafeTestHooks()) {
+    throw new Error("__setFsSafeTestHooksForTest is only available in tests");
+  }
   fsSafeTestHooks = hooks;
 }
 
@@ -130,7 +137,12 @@ async function openVerifiedLocalFile(
         : OPEN_READ_FLAGS;
     await fsSafeTestHooks?.beforeOpen?.(filePath, openFlags);
     handle = await fs.open(filePath, openFlags);
-    await fsSafeTestHooks?.afterOpen?.(filePath, handle);
+    try {
+      await fsSafeTestHooks?.afterOpen?.(filePath, handle);
+    } catch (err) {
+      await handle.close().catch(() => {});
+      throw err;
+    }
   } catch (err) {
     if (isNotFoundPathError(err)) {
       throw new SafeOpenError("not-found", "file not found");

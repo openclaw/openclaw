@@ -1,3 +1,4 @@
+import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +29,7 @@ const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
+  vi.unstubAllEnvs();
   await tempDirs.cleanup();
 });
 
@@ -277,6 +279,42 @@ describe("fs-safe", () => {
       ).rejects.toMatchObject({ code: "invalid-path" });
     },
   );
+
+  it("closes the opened handle when afterOpen hook throws", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const filePath = path.join(root, "inside.txt");
+    await fs.writeFile(filePath, "inside");
+
+    let openedHandle: FileHandle | undefined;
+    __setFsSafeTestHooksForTest({
+      afterOpen: (_target, handle) => {
+        openedHandle = handle;
+        throw new Error("after-open boom");
+      },
+    });
+
+    await expect(
+      openFileWithinRoot({
+        rootDir: root,
+        relativePath: "inside.txt",
+      }),
+    ).rejects.toThrow("after-open boom");
+    expect(openedHandle).toBeDefined();
+    await expect(openedHandle?.readFile({ encoding: "utf8" })).rejects.toMatchObject({
+      code: "EBADF",
+    });
+  });
+
+  it("rejects setting fs-safe test hooks outside test mode", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VITEST", undefined);
+
+    expect(() =>
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: () => {},
+      }),
+    ).toThrow("__setFsSafeTestHooksForTest is only available in tests");
+  });
 
   it.runIf(process.platform !== "win32")("blocks hardlink aliases under root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");

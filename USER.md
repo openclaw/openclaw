@@ -81,3 +81,7 @@ I've assigned the work to eleqtrizit.
   2026-04-13: Committed and pushed the fix on PR branch `423` as `9b0ebdd588` (`fix(fssafe): restore symlink read identity check`).
   2026-04-13: Resolved addressed Codex thread `PRRT_kwDOQb6kR856op8j`, deleted stale review-trigger comments `IC 4239185490` and `IC 4239185593`, and posted fresh `@greptile review` / `@codex review` trigger comments `IC 4239268526` and `IC 4239268527`.
   2026-04-13: All review threads on openclaw/openclaw#66079 are resolved again. Status: [AGENTS ARE REVIEWING] — waiting on fresh Greptile and Codex re-review of commit `9b0ebdd588`.
+  2026-04-13: Re-read `USER.md`, fetched NVIDIA-dev/openclaw-tracking#423 with `gh issue view 423 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`, and re-queried openclaw/openclaw#66079 review threads/comments. Confirmed all review threads remain resolved, but validated a new top-level Aisle security comment as actionable on `src/infra/fs-safe.ts`.
+  2026-04-13: Updated `src/infra/fs-safe.ts` so `openVerifiedLocalFile()` closes the opened handle before rethrowing when the `afterOpen` test hook fails, preventing descriptor leaks during deterministic race tests, and restricted `__setFsSafeTestHooksForTest()` to test runtimes only.
+  2026-04-13: Added targeted regressions in `src/infra/fs-safe.test.ts` covering both the after-open handle-close path and the test-only hook guard.
+  2026-04-13: Ran `corepack pnpm test src/infra/fs-safe.test.ts` and it passed (34 tests).
