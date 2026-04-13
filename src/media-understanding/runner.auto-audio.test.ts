@@ -8,14 +8,19 @@ import { runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
+type HasAvailableAuthForProviderFn =
+  typeof import("../agents/model-auth.js").hasAvailableAuthForProvider;
+type ResolveApiKeyForProviderFn = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type RequireApiKeyFn = typeof import("../agents/model-auth.js").requireApiKey;
+
 const modelAuthMocks = vi.hoisted(() => ({
-  hasAvailableAuthForProvider: vi.fn(() => true),
-  resolveApiKeyForProvider: vi.fn(async () => ({
+  hasAvailableAuthForProvider: vi.fn<HasAvailableAuthForProviderFn>(async () => true),
+  resolveApiKeyForProvider: vi.fn<ResolveApiKeyForProviderFn>(async () => ({
     apiKey: "test-key",
     source: "test",
-    mode: "api-key",
+    mode: "api-key" as const,
   })),
-  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "test-key"),
+  requireApiKey: vi.fn<RequireApiKeyFn>((auth) => auth.apiKey ?? "test-key"),
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -180,13 +185,13 @@ describe("runCapability auto audio entries", () => {
 
   it("tries later key-backed providers when an override-only provider is considered available but fails at execution time", async () => {
     modelAuthMocks.hasAvailableAuthForProvider.mockImplementation(
-      async (params: { provider: string; runtimeOverrideRegistrationIsAvailable?: boolean }) =>
+      async (params: Parameters<HasAvailableAuthForProviderFn>[0]) =>
         params.provider === "openai"
           ? params.runtimeOverrideRegistrationIsAvailable === true
           : params.provider === "mistral",
     );
     modelAuthMocks.resolveApiKeyForProvider.mockImplementation(
-      async (params: { provider: string }) => {
+      async (params: Parameters<ResolveApiKeyForProviderFn>[0]) => {
         if (params.provider === "openai") {
           throw new Error("broker unavailable");
         }
@@ -200,59 +205,58 @@ describe("runCapability auto audio entries", () => {
 
     try {
       let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
-      await withAudioFixture("openclaw-auto-audio-runtime-override-fallback", async ({
-        ctx,
-        media,
-        cache,
-      }) => {
-        const providerRegistry = createProviderRegistry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
-            transcribeAudio: async () => ({
-              text: "openai",
-              model: "gpt-4o-transcribe",
-            }),
-          },
-          mistral: {
-            id: "mistral",
-            capabilities: ["audio"],
-            transcribeAudio: async (req) => ({
-              text: "mistral",
-              model: req.model ?? "unknown",
-            }),
-          },
-        });
-        const cfg = {
-          models: {
-            providers: {
-              openai: {
-                models: [],
-              },
-              mistral: {
-                apiKey: "mistral-test-key", // pragma: allowlist secret
-                models: [],
+      await withAudioFixture(
+        "openclaw-auto-audio-runtime-override-fallback",
+        async ({ ctx, media, cache }) => {
+          const providerRegistry = createProviderRegistry({
+            openai: {
+              id: "openai",
+              capabilities: ["audio"],
+              transcribeAudio: async () => ({
+                text: "openai",
+                model: "gpt-4o-transcribe",
+              }),
+            },
+            mistral: {
+              id: "mistral",
+              capabilities: ["audio"],
+              transcribeAudio: async (req) => ({
+                text: "mistral",
+                model: req.model ?? "unknown",
+              }),
+            },
+          });
+          const cfg = {
+            models: {
+              providers: {
+                openai: {
+                  models: [],
+                },
+                mistral: {
+                  apiKey: "mistral-test-key", // pragma: allowlist secret
+                  models: [],
+                },
               },
             },
-          },
-          tools: {
-            media: {
-              audio: {
-                enabled: true,
+            tools: {
+              media: {
+                audio: {
+                  enabled: true,
+                },
               },
             },
-          },
-        } as unknown as OpenClawConfig;
+          } as unknown as OpenClawConfig;
 
-        runResult = await runCapability({
-          capability: "audio",
-          cfg,
-          ctx,
-          attachments: cache,
-          media,
-          providerRegistry,
-        });
-      });
+          runResult = await runCapability({
+            capability: "audio",
+            cfg,
+            ctx,
+            attachments: cache,
+            media,
+            providerRegistry,
+          });
+        },
+      );
 
       if (!runResult) {
         throw new Error("Expected auto audio fallback result");
@@ -260,20 +264,19 @@ describe("runCapability auto audio entries", () => {
       expect(runResult.decision.outcome).toBe("success");
       expect(runResult.outputs[0]?.provider).toBe("mistral");
       expect(runResult.outputs[0]?.text).toBe("mistral");
-      expect(runResult.decision.attachments[0]?.attempts.map((attempt) => attempt.provider)).toEqual([
-        "openai",
-        "mistral",
-      ]);
+      expect(
+        runResult.decision.attachments[0]?.attempts.map((attempt) => attempt.provider),
+      ).toEqual(["openai", "mistral"]);
       expect(runResult.decision.attachments[0]?.attempts[0]?.outcome).toBe("failed");
       expect(runResult.decision.attachments[0]?.attempts[1]?.outcome).toBe("success");
     } finally {
       modelAuthMocks.hasAvailableAuthForProvider.mockReset();
-      modelAuthMocks.hasAvailableAuthForProvider.mockImplementation(() => true);
+      modelAuthMocks.hasAvailableAuthForProvider.mockImplementation(async () => true);
       modelAuthMocks.resolveApiKeyForProvider.mockReset();
       modelAuthMocks.resolveApiKeyForProvider.mockImplementation(async () => ({
         apiKey: "test-key",
         source: "test",
-        mode: "api-key",
+        mode: "api-key" as const,
       }));
     }
   });

@@ -1160,7 +1160,7 @@ describe("resolveApiKeyForProvider — plugin runtime auth overrides", () => {
           // Simulates a plugin calling back into the resolver from inside its run().
           // Without the reentrancy guard this would recurse indefinitely.
           const inner = await resolveApiKeyForProvider({ provider, store: emptyStore });
-          return { apiKey: inner.apiKey, source: "reentry-via-inner" };
+          return { apiKey: requireApiKey(inner, provider), source: "reentry-via-inner" };
         }),
       ]);
 
