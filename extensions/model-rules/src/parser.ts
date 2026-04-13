@@ -12,7 +12,8 @@ export async function readModelsFile(
   filename: string = "MODELS.md",
 ): Promise<string | null> {
   const filePath = resolve(workspaceDir, filename);
-  if (!filePath.startsWith(resolve(workspaceDir))) {
+  const boundary = resolve(workspaceDir) + "/";
+  if (!filePath.startsWith(boundary) && filePath !== resolve(workspaceDir)) {
     return null;
   }
   try {

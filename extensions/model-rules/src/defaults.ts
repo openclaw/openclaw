@@ -220,7 +220,8 @@ export async function ensureDefaultModelsFile(
   filename: string = "MODELS.md",
 ): Promise<boolean> {
   const filePath = resolve(workspaceDir, filename);
-  if (!filePath.startsWith(resolve(workspaceDir))) {
+  const boundary = resolve(workspaceDir) + "/";
+  if (!filePath.startsWith(boundary) && filePath !== resolve(workspaceDir)) {
     return false;
   }
   try {
