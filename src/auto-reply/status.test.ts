@@ -134,7 +134,10 @@ describe("buildStatusMessage", () => {
           updatedAt: 0,
           verboseLevel: "on",
           pluginDebugEntries: [
-            { pluginId: "active-memory", lines: ["🧩 Active Memory: timeout 15s recent"] },
+            {
+              pluginId: "active-memory",
+              lines: ["🧩 Active Memory: status=timeout elapsed=15s query=recent"],
+            },
           ],
         },
         sessionKey: "agent:main:main",
@@ -151,7 +154,10 @@ describe("buildStatusMessage", () => {
           updatedAt: 0,
           verboseLevel: "off",
           pluginDebugEntries: [
-            { pluginId: "active-memory", lines: ["🧩 Active Memory: timeout 15s recent"] },
+            {
+              pluginId: "active-memory",
+              lines: ["🧩 Active Memory: status=timeout elapsed=15s query=recent"],
+            },
           ],
         },
         sessionKey: "agent:main:main",
@@ -159,8 +165,8 @@ describe("buildStatusMessage", () => {
       }),
     );
 
-    expect(visible).toContain("Active Memory: timeout 15s recent");
-    expect(hidden).not.toContain("Active Memory: timeout 15s recent");
+    expect(visible).toContain("Active Memory: status=timeout elapsed=15s query=recent");
+    expect(hidden).not.toContain("Active Memory: status=timeout elapsed=15s query=recent");
   });
 
   it("shows structured plugin debug lines in verbose status", () => {
@@ -174,7 +180,10 @@ describe("buildStatusMessage", () => {
           updatedAt: 0,
           verboseLevel: "on",
           pluginDebugEntries: [
-            { pluginId: "active-memory", lines: ["🧩 Active Memory: ok 842ms recent 34 chars"] },
+            {
+              pluginId: "active-memory",
+              lines: ["🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars"],
+            },
           ],
         },
         sessionKey: "agent:main:main",
@@ -182,7 +191,9 @@ describe("buildStatusMessage", () => {
       }),
     );
 
-    expect(visible).toContain("Active Memory: ok 842ms recent 34 chars");
+    expect(visible).toContain(
+      "Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
+    );
   });
 
   it("shows trace lines only when trace is enabled", () => {
