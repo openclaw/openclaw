@@ -232,7 +232,7 @@ override you will see one of:
 - `<label> must stay within the workspace root; ignoring "<path>"` —
   emitted when a configured path escapes the workspace root. `<label>` is
   the exact config path (for example
-  `agents.defaults.agentsFilesByModel.openai/gpt-5.4`).
+  `agents.defaults.agentsFilesByModel["openai/gpt-5.4"]`).
 - `configured AGENTS file from <label> could not be loaded at <resolvedPath>; falling back (read failed)`
   — the override path resolved inside the workspace but the file could
   not be opened.
