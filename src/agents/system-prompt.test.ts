@@ -628,6 +628,25 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Default: do not narrate routine, low-risk tool calls");
   });
 
+  it("adds anti-flattening chat guidance to default prompt sections", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      "In conversational exchanges, open with a response or action, not unnecessary explanation-first framing.",
+    );
+    expect(prompt).toContain(
+      "Preserve persona signals in wording and reply shape when they support continuity, clarity, and task completion.",
+    );
+    expect(prompt).toContain(
+      "Use lists and headings when they improve scanning or execution, not by default.",
+    );
+    expect(prompt).toContain(
+      "In conversational replies, prefer acting over asking for reassurance when the next safe step is already clear.",
+    );
+  });
+
   it("includes inline button style guidance when runtime supports inline buttons", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

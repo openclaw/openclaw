@@ -102,6 +102,7 @@ function createContinueDirectivesResult() {
       directiveAck: undefined,
       perMessageQueueMode: undefined,
       perMessageQueueOptions: undefined,
+      conversationalFreeform: true,
     },
   };
 }

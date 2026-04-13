@@ -94,6 +94,7 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
       directiveAck: undefined,
       perMessageQueueMode: undefined,
       perMessageQueueOptions: undefined,
+      conversationalFreeform: false,
     },
   };
 }

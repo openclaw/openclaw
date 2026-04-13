@@ -65,4 +65,21 @@ describe("getReplyFromConfig media note plumbing", () => {
     );
     expect(prompt).toContain(describedBody);
   });
+
+  it("does not add conversational hints unless the flag is enabled", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "hello",
+      BodyForAgent: "hello",
+      From: "+1001",
+      To: "+2000",
+    });
+    const prompt = buildReplyPromptBodies({
+      ctx: sessionCtx,
+      sessionCtx,
+      effectiveBaseBody: sessionCtx.BodyForAgent,
+      prefixedBody: sessionCtx.BodyForAgent,
+    }).prefixedCommandBody;
+
+    expect(prompt).not.toContain("[Reply shaping hint]");
+  });
 });

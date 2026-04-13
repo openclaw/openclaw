@@ -39,6 +39,27 @@ import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
+function isLikelyConversationalFreeformBody(body: string): boolean {
+  const trimmed = normalizeOptionalString(body)?.trim() ?? "";
+  if (!trimmed) {
+    return false;
+  }
+  if (/^\s*[-*=#]{2,}\s*$/m.test(trimmed)) {
+    return false;
+  }
+  if (/^\s*(#{1,6}|[-*+]\s|\d+[.)]\s|```)/m.test(trimmed)) {
+    return false;
+  }
+  if (/\n\s*\n/.test(trimmed) && /^\s*(#{1,6}|[-*+]\s|\d+[.)]\s)/m.test(trimmed)) {
+    return false;
+  }
+  const lineCount = trimmed.split(/\n/).length;
+  if (lineCount >= 8) {
+    return false;
+  }
+  return true;
+}
+
 let commandsRegistryPromise: Promise<typeof import("../commands-registry.runtime.js")> | null =
   null;
 let skillCommandsPromise: Promise<typeof import("../skill-commands.runtime.js")> | null = null;
@@ -115,6 +136,7 @@ export type ReplyDirectiveContinuation = {
     cap?: number;
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
+  conversationalFreeform: boolean;
 };
 
 export type ReplyDirectiveResult =
@@ -341,6 +363,8 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.BodyForAgent = cleanedBody;
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
+
+  const conversationalFreeform = isLikelyConversationalFreeformBody(cleanedBody);
 
   const messageProviderKey = normalizeOptionalString(sessionCtx.Provider)
     ? normalizeLowercaseStringOrEmpty(sessionCtx.Provider)
@@ -576,6 +600,7 @@ export async function resolveReplyDirectives(params: {
       directiveAck,
       perMessageQueueMode,
       perMessageQueueOptions,
+      conversationalFreeform,
     },
   };
 }
