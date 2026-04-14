@@ -551,6 +551,43 @@ vi.mock("./doctor-config-preflight.js", async () => {
           parsed = {};
         }
       }
+      if (injected?.preflightMode === "fast") {
+        return {
+          snapshot: {
+            exists,
+            path: configPath,
+            parsed,
+            config: parsed,
+            sourceConfig: parsed,
+            valid: true,
+            warnings: [],
+            legacyIssues: [],
+          },
+          baseConfig: parsed,
+        };
+      }
+      if (injected?.preflightMode === "issues") {
+        const legacyIssues = findLegacyConfigIssues(
+          parsed,
+          parsed,
+          listPluginDoctorLegacyConfigRules({
+            pluginIds: collectRelevantDoctorPluginIds(parsed),
+          }),
+        );
+        return {
+          snapshot: {
+            exists,
+            path: configPath,
+            parsed,
+            config: parsed,
+            sourceConfig: parsed,
+            valid: legacyIssues.length === 0,
+            warnings: [],
+            legacyIssues,
+          },
+          baseConfig: parsed,
+        };
+      }
       const legacyIssues = findLegacyConfigIssues(
         parsed,
         parsed,
