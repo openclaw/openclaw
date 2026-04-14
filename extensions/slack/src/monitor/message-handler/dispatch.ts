@@ -17,6 +17,7 @@ import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runti
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
