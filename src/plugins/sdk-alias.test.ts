@@ -185,12 +185,19 @@ function writePluginEntry(root: string, relativePath: string) {
 }
 
 function createUserInstalledPluginSdkAliasFixture() {
-  const { fixture, sourceRootAlias } = createPluginSdkAliasTargetFixture();
+  const { fixture, sourceRootAlias, sourceChannelRuntimePath } =
+    createPluginSdkAliasTargetFixture();
   const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
   const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
   mkdirSafeDir(externalPluginRoot);
   fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
-  return { externalPluginEntry, externalPluginRoot, fixture, sourceRootAlias };
+  return {
+    externalPluginEntry,
+    externalPluginRoot,
+    fixture,
+    sourceRootAlias,
+    sourceChannelRuntimePath,
+  };
 }
 
 function resolvePluginSdkAlias(params: {

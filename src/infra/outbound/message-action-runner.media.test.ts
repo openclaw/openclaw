@@ -648,6 +648,9 @@ describe("runMessageAction media behavior", () => {
         });
 
         expect(result.kind).toBe("send");
+        if (result.kind !== "send") {
+          throw new Error("expected send result");
+        }
         expect(result.sendResult).toMatchObject({
           channel: "profile-demo",
         });
