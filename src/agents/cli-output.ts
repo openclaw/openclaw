@@ -193,6 +193,31 @@ function collectCliText(value: unknown): string {
   return "";
 }
 
+function unwrapNestedCliResultText(raw: string): string {
+  let text = raw;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("{")) {
+      return text;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        !isRecord(parsed) ||
+        typeof parsed.type !== "string" ||
+        parsed.type !== "result" ||
+        typeof parsed.result !== "string"
+      ) {
+        return text;
+      }
+      text = parsed.result;
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
 function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
   const nested = readNestedErrorMessage(parsed);
   if (nested) {
@@ -260,7 +285,7 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
       collectCliText(parsed.result) ||
       collectCliText(parsed.response) ||
       collectCliText(parsed);
-    const trimmedText = nextText.trim();
+    const trimmedText = unwrapNestedCliResultText(nextText).trim();
     if (trimmedText) {
       text = trimmedText;
       sawStructuredOutput = true;
@@ -292,7 +317,7 @@ function parseClaudeCliJsonlResult(params: {
     params.parsed.type === "result" &&
     typeof params.parsed.result === "string"
   ) {
-    const resultText = params.parsed.result.trim();
+    const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
     if (resultText) {
       return { text: resultText, sessionId: params.sessionId, usage: params.usage };
     }

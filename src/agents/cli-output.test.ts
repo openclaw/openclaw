@@ -125,6 +125,33 @@ describe("parseCliJson", () => {
     });
   });
 
+  it("unwraps nested Claude result JSON from JSON output", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "session-nested-json",
+        result: JSON.stringify({
+          type: "result",
+          result: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            result: "actual response text",
+          }),
+        }),
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "actual response text",
+      sessionId: "session-nested-json",
+      usage: undefined,
+    });
+  });
+
   it("parses nested OpenAI-style cached token details from CLI json payloads", () => {
     const result = parseCliJson(
       JSON.stringify({
@@ -292,6 +319,38 @@ describe("parseCliJsonl", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("unwraps nested Claude agent result JSON from stream-json output", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-nested-jsonl" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-nested-jsonl",
+          result: JSON.stringify({
+            type: "result",
+            result: JSON.stringify({
+              type: "result",
+              subtype: "success",
+              result: "actual response text",
+            }),
+          }),
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "actual response text",
+      sessionId: "session-nested-jsonl",
+      usage: undefined,
     });
   });
 
