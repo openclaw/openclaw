@@ -247,10 +247,19 @@ const sentMessageCacheHoisted = vi.hoisted(() => ({
 }));
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
 
+const replyRunHoisted = vi.hoisted(() => ({
+  isReplyRunActiveForSessionKey: vi.fn(() => false),
+}));
+export const isReplyRunActiveForSessionKeySpy = replyRunHoisted.isReplyRunActiveForSessionKey;
+
 vi.doMock("./sent-message-cache.js", () => ({
   wasSentByBot: sentMessageCacheHoisted.wasSentByBot,
   recordSentMessage: vi.fn(),
   clearSentMessageCache: vi.fn(),
+}));
+
+vi.doMock("./reply-run-runtime.js", () => ({
+  isReplyRunActiveForSessionKey: replyRunHoisted.isReplyRunActiveForSessionKey,
 }));
 
 // All spy variables used inside vi.mock("grammy", ...) must be created via
@@ -497,6 +506,8 @@ beforeEach(() => {
   sendMessageSpy.mockResolvedValue({ message_id: 77 });
   getFileSpy.mockReset();
   getFileSpy.mockResolvedValue({ file_path: "media/file.jpg" });
+  isReplyRunActiveForSessionKeySpy.mockReset();
+  isReplyRunActiveForSessionKeySpy.mockReturnValue(false);
 
   setMessageReactionSpy.mockReset();
   setMessageReactionSpy.mockResolvedValue(undefined);

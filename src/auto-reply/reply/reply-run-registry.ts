@@ -441,6 +441,10 @@ export const replyRunRegistry: ReplyRunRegistry = {
   },
 };
 
+export function isReplyRunActiveForSessionKey(sessionKey: string): boolean {
+  return replyRunRegistry.isActive(sessionKey);
+}
+
 export function resolveActiveReplyRunSessionId(sessionKey: string): string | undefined {
   return replyRunRegistry.resolveSessionId(sessionKey);
 }
