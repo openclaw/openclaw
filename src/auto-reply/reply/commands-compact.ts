@@ -1,4 +1,5 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { EmbeddedPiQueueHandle } from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -92,7 +93,13 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedPiRunActive(sessionId)) {
     runtime.abortEmbeddedPiRun(sessionId);
-    await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
+    const drained = await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
+    if (!drained) {
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ Cannot compact: previous run is still winding down. Try again in a moment." },
+      };
+    }
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -109,44 +116,65 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentId: sessionAgentId,
     isGroup: params.isGroup,
   });
-  const result = await runtime.compactEmbeddedPiSession({
-    sessionId,
-    sessionKey: params.sessionKey,
-    allowGatewaySubagentBinding: true,
-    messageChannel: params.command.channel,
-    groupId: targetSessionEntry.groupId,
-    groupChannel: targetSessionEntry.groupChannel,
-    groupSpace: targetSessionEntry.space,
-    spawnedBy: targetSessionEntry.spawnedBy,
-    senderId: params.command.senderId,
-    senderName: params.ctx.SenderName,
-    senderUsername: params.ctx.SenderUsername,
-    senderE164: params.ctx.SenderE164,
-    sessionFile: runtime.resolveSessionFilePath(
-      sessionId,
-      targetSessionEntry,
-      runtime.resolveSessionFilePathOptions({
-        agentId: sessionAgentId,
-        storePath: params.storePath,
-      }),
-    ),
-    workspaceDir: params.workspaceDir,
-    agentDir: sessionAgentDir,
-    config: params.cfg,
-    skillsSnapshot: targetSessionEntry.skillsSnapshot,
-    provider: params.provider,
-    model: params.model,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
-    bashElevated: {
-      enabled: false,
-      allowed: false,
-      defaultLevel: "off",
+
+  // Wire up abort signal and register in ACTIVE_EMBEDDED_RUNS so that
+  // chat.abort / abortEmbeddedPiRun / /stop can cancel the compaction.
+  const compactAbortController = new AbortController();
+  const compactHandle: EmbeddedPiQueueHandle = {
+    kind: "embedded",
+    queueMessage: async () => {},
+    isStreaming: () => false,
+    isCompacting: () => true,
+    abort: () => {
+      compactAbortController.abort("user_abort");
     },
-    customInstructions,
-    trigger: "manual",
-    senderIsOwner: params.command.senderIsOwner,
-    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
-  });
+  };
+  runtime.setActiveEmbeddedRun(sessionId, compactHandle, params.sessionKey);
+
+  let result;
+  try {
+    result = await runtime.compactEmbeddedPiSession({
+      sessionId,
+      sessionKey: params.sessionKey,
+      allowGatewaySubagentBinding: true,
+      messageChannel: params.command.channel,
+      groupId: targetSessionEntry.groupId,
+      groupChannel: targetSessionEntry.groupChannel,
+      groupSpace: targetSessionEntry.space,
+      spawnedBy: targetSessionEntry.spawnedBy,
+      senderId: params.command.senderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      sessionFile: runtime.resolveSessionFilePath(
+        sessionId,
+        targetSessionEntry,
+        runtime.resolveSessionFilePathOptions({
+          agentId: sessionAgentId,
+          storePath: params.storePath,
+        }),
+      ),
+      workspaceDir: params.workspaceDir,
+      agentDir: sessionAgentDir,
+      config: params.cfg,
+      skillsSnapshot: targetSessionEntry.skillsSnapshot,
+      provider: params.provider,
+      model: params.model,
+      thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      customInstructions,
+      trigger: "manual",
+      senderIsOwner: params.command.senderIsOwner,
+      ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+      abortSignal: compactAbortController.signal,
+    });
+  } finally {
+    runtime.clearActiveEmbeddedRun(sessionId, compactHandle, params.sessionKey);
+  }
 
   const compactLabel =
     result.ok || isCompactionSkipReason(result.reason)
