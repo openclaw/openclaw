@@ -115,9 +115,16 @@ function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): bo
   if (!message.includes("pairing required")) {
     return false;
   }
+  return canUseLocalPairingFallback(opts);
+}
+
+function canUseLocalPairingFallback(opts: DevicesRpcOpts): boolean {
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
     // Explicit --url might point at a remote/tunneled gateway; never silently
     // switch to local pairing files in that case.
+    return false;
+  }
+  if (normalizeOptionalString(opts.token) || normalizeOptionalString(opts.password)) {
     return false;
   }
   const connection = buildGatewayConnectionDetails();
@@ -161,6 +168,13 @@ async function approvePairingWithFallback(
   opts: DevicesRpcOpts,
   requestId: string,
 ): Promise<Record<string, unknown> | null> {
+  if (canUseLocalPairingFallback(opts)) {
+    const approved = await approveLocalPairingRequest(requestId);
+    if (approved) {
+      return approved;
+    }
+  }
+
   try {
     return await callGatewayCli("device.pair.approve", opts, { requestId });
   } catch (error) {
@@ -170,22 +184,29 @@ async function approvePairingWithFallback(
     if (opts.json !== true) {
       defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
     }
-    const approved = await approveDevicePairing(requestId, {
-      // Local CLI fallback already assumes direct machine access; treat it as an
-      // explicit admin approval path instead of relying on missing caller scopes.
-      callerScopes: ["operator.admin"],
-    });
-    if (!approved) {
-      return null;
-    }
-    if (approved.status === "forbidden") {
-      throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
-    }
-    return {
-      requestId,
-      device: redactLocalPairedDevice(approved.device),
-    };
+    return await approveLocalPairingRequest(requestId, error);
   }
+}
+
+async function approveLocalPairingRequest(
+  requestId: string,
+  cause?: unknown,
+): Promise<Record<string, unknown> | null> {
+  const approved = await approveDevicePairing(requestId, {
+    // Local CLI fallback already assumes direct machine access; treat it as an
+    // explicit admin approval path instead of relying on missing caller scopes.
+    callerScopes: ["operator.admin"],
+  });
+  if (!approved) {
+    return null;
+  }
+  if (approved.status === "forbidden") {
+    throw new Error(formatDevicePairingForbiddenMessage(approved), { cause });
+  }
+  return {
+    requestId,
+    device: redactLocalPairedDevice(approved.device),
+  };
 }
 
 function parseDevicePairingList(value: unknown): DevicePairingList {

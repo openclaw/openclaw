@@ -371,8 +371,7 @@ describe("devices cli local fallback", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
   });
 
-  it("falls back to local approve when gateway returns pairing required on loopback", async () => {
-    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+  it("approves local pairing directly on loopback before attempting gateway approve", async () => {
     approveDevicePairing.mockResolvedValueOnce({
       requestId: "req-latest",
       device: {
@@ -389,7 +388,25 @@ describe("devices cli local fallback", () => {
     expect(approveDevicePairing).toHaveBeenCalledWith("req-latest", {
       callerScopes: ["operator.admin"],
     });
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
+  it("falls back to gateway approve when local loopback request id is unknown", async () => {
+    approveDevicePairing.mockResolvedValueOnce(null);
+    callGateway.mockResolvedValueOnce({ device: { deviceId: "device-gateway" } });
+
+    await runDevicesApprove(["req-remote"]);
+
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-remote", {
+      callerScopes: ["operator.admin"],
+    });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-remote" },
+      }),
+    );
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
   });
 
