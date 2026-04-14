@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
+  resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
 } from "./public-surface-runtime.js";
 
@@ -47,6 +48,25 @@ describe("bundled plugin public surface runtime", () => {
         artifactBasename: "api.js",
       }),
     ).toBe(modulePath);
+  });
+
+  it("falls back from package dist overrides to the source extension tree", () => {
+    const packageRoot = createTempDir();
+    const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
+    fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
+    fs.writeFileSync(sourceModulePath, "export const marker = 'source';\n", "utf8");
+
+    const bundledPluginsDir = path.join(packageRoot, "dist", "extensions");
+    fs.mkdirSync(path.join(bundledPluginsDir, "demo"), { recursive: true });
+
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        rootDir: packageRoot,
+        bundledPluginsDir,
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toBe(sourceModulePath);
   });
 
   it("allows plugin-local nested artifact paths", () => {
