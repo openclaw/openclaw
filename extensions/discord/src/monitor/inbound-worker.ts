@@ -60,7 +60,6 @@ async function processDiscordInboundJob(params: {
   const timeoutMs = normalizeDiscordInboundWorkerTimeoutMs(params.runTimeoutMs);
   const contextSuffix = formatDiscordRunContextSuffix(params.job);
   let finalReplyStarted = false;
-  let finalReplyDelivered = false;
   let createdThreadId: string | undefined;
   let sessionKey: string | undefined;
   const processDiscordMessageImpl = params.testing?.processDiscordMessage ?? processDiscordMessage;
@@ -73,7 +72,6 @@ async function processDiscordInboundJob(params: {
           },
           onFinalReplyDelivered: () => {
             finalReplyStarted = true;
-            finalReplyDelivered = true;
           },
           onReplyPlanResolved: (resolved) => {
             createdThreadId = normalizeOptionalString(resolved.createdThreadId);
@@ -92,15 +90,8 @@ async function processDiscordInboundJob(params: {
             })}${contextSuffix}`,
           ),
         );
-        if (finalReplyDelivered) {
-          return;
-        }
         if (finalReplyStarted) {
-          params.runtime.error?.(
-            danger(
-              `discord inbound worker timed out before final reply delivery completed${contextSuffix}; sending timeout fallback`,
-            ),
-          );
+          return;
         }
         await sendDiscordInboundWorkerTimeoutReply({
           job: params.job,
