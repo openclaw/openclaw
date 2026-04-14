@@ -169,7 +169,7 @@ AI PRs are first-class citizens here. We just want transparency so reviewers kno
 
 We are currently prioritizing:
 
-- **Stability**: Fixing edge cases in channel connections (WhatsApp/Telegram).
+- **Stability**: Fixing edge cases in channel connections (WhatsApp/Telegram) and connection reliability.
 - **UX**: Improving the onboarding wizard and error messages.
 - **Skills**: For skill contributions, head to [ClawHub](https://clawhub.ai/) — the community hub for OpenClaw skills.
 - **Performance**: Optimizing token usage and compaction logic.
