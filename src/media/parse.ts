@@ -130,6 +130,15 @@ function cleanLineText(text: string): string {
   return text.replace(/[ \t]{2,}/g, " ").trim();
 }
 
+function stripMarkdownImageTitle(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(
+    /^(.*?)(?:\s+("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\)))$/,
+  );
+  const destination = match?.[1]?.trim();
+  return destination || trimmed;
+}
+
 function collectMarkdownImageSegments(params: { line: string; media: string[] }): {
   cleanedLine?: string;
   lineSegments: ParsedMediaOutputSegment[];
@@ -140,37 +149,46 @@ function collectMarkdownImageSegments(params: { line: string; media: string[] })
     return { lineSegments: [], foundMedia: false };
   }
 
-  const pieces: string[] = [];
+  const segmentPieces: string[] = [];
+  const visiblePieces: string[] = [];
   const lineSegments: ParsedMediaOutputSegment[] = [];
   let cursor = 0;
   let foundMedia = false;
 
   for (const match of matches) {
     const start = match.index ?? 0;
-    pieces.push(params.line.slice(cursor, start));
+    const before = params.line.slice(cursor, start);
+    segmentPieces.push(before);
+    visiblePieces.push(before);
 
-    const target = normalizeMediaSource(cleanCandidate(unwrapQuoted(match[1]) ?? match[1] ?? ""));
+    const target = normalizeMediaSource(
+      cleanCandidate(stripMarkdownImageTitle(unwrapQuoted(match[1]) ?? match[1] ?? "")),
+    );
     if (isValidMedia(target, { allowSpaces: true, allowBareFilename: true })) {
-      const beforeText = cleanLineText(pieces.join(""));
+      const beforeText = cleanLineText(segmentPieces.join(""));
       if (beforeText) {
         lineSegments.push({ type: "text", text: beforeText });
       }
-      pieces.length = 0;
+      segmentPieces.length = 0;
       params.media.push(target);
       lineSegments.push({ type: "media", url: target });
       foundMedia = true;
     } else {
-      pieces.push(match[0]);
+      segmentPieces.push(match[0]);
+      visiblePieces.push(match[0]);
     }
 
     cursor = start + match[0].length;
   }
 
-  pieces.push(params.line.slice(cursor));
-  const cleanedLine = cleanLineText(pieces.join(""));
-  if (cleanedLine) {
-    lineSegments.push({ type: "text", text: cleanedLine });
+  const after = params.line.slice(cursor);
+  segmentPieces.push(after);
+  visiblePieces.push(after);
+  const trailingText = cleanLineText(segmentPieces.join(""));
+  if (trailingText) {
+    lineSegments.push({ type: "text", text: trailingText });
   }
+  const cleanedLine = cleanLineText(visiblePieces.join(""));
 
   return {
     cleanedLine: cleanedLine || undefined,

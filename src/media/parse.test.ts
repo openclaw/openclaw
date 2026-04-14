@@ -111,12 +111,29 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
+  it("keeps inline caption text around markdown images", () => {
+    expectParsedMediaOutputCase("Look ![chart](https://example.com/chart.png) now", {
+      text: "Look now",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
   it("extracts multiple markdown image urls in order", () => {
     expectParsedMediaOutputCase(
       "Before\n![one](https://example.com/one.png)\nMiddle\n![two](./out/two.png)\nAfter",
       {
         text: "Before\nMiddle\nAfter",
         mediaUrls: ["https://example.com/one.png", "./out/two.png"],
+      },
+    );
+  });
+
+  it("strips markdown image title suffixes from extracted urls", () => {
+    expectParsedMediaOutputCase(
+      'Caption ![chart](https://example.com/chart.png "Quarterly chart")',
+      {
+        text: "Caption",
+        mediaUrls: ["https://example.com/chart.png"],
       },
     );
   });
