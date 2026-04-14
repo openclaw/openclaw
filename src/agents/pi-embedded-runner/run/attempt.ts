@@ -887,6 +887,7 @@ export async function runEmbeddedAttempt(
           attempt: params,
           workspaceDir: effectiveWorkspace,
           agentDir,
+          tokenBudget: params.contextTokenBudget,
         }),
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
@@ -2201,10 +2202,18 @@ export async function runEmbeddedAttempt(
 
         // Let the active context engine run its post-turn lifecycle.
         if (params.contextEngine) {
+          const runtimeCurrentTokenCount =
+            typeof lastCallUsage?.total === "number" &&
+            Number.isFinite(lastCallUsage.total) &&
+            lastCallUsage.total > 0
+              ? Math.floor(lastCallUsage.total)
+              : undefined;
           const afterTurnRuntimeContext = buildAfterTurnRuntimeContext({
             attempt: params,
             workspaceDir: effectiveWorkspace,
             agentDir,
+            tokenBudget: params.contextTokenBudget,
+            currentTokenCount: runtimeCurrentTokenCount,
             promptCache,
           });
           await finalizeAttemptContextEngineTurn({
