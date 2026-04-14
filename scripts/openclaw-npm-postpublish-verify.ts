@@ -21,6 +21,7 @@ import {
   collectRuntimeDependencySpecs,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./lib/npm-update-compat-sidecars.mjs";
+import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 
 type InstalledPackageJson = {
@@ -369,6 +370,10 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
       errors.push(
         `installed openclaw binary version mismatch: expected ${scenario.expectedVersion}, found ${installedBinaryVersion || "<missing>"}.`,
       );
+    }
+
+    if (errors.length === 0) {
+      runInstalledWorkspaceBootstrapSmoke({ packageRoot });
     }
 
     if (errors.length > 0) {
