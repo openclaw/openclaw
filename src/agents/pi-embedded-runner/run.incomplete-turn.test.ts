@@ -69,6 +69,32 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
   });
 
+  it("surfaces an explicit error payload for aborted non-timeout empty terminal turns", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        aborted: true,
+        externalAbort: false,
+        timedOut: false,
+        assistantTexts: [],
+        lastAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-incomplete-turn-aborted-empty-fallback",
+    });
+
+    expect(result.payloads).toEqual([
+      expect.objectContaining({
+        isError: true,
+      }),
+    ]);
+    expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
+    expect(result.meta.livenessState).toBe("blocked");
+  });
+
   it("uses explicit agentId without a session key before surfacing the strict-agentic blocked state", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(

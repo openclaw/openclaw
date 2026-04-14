@@ -1666,6 +1666,52 @@ export async function runEmbeddedPiAgent(
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
+          // Non-timeout internal aborts can also terminate with no payload
+          // (for example around continuation/compaction boundaries). Keep
+          // intentional external aborts silent, but surface an explicit error
+          // for other empty terminal outcomes.
+          if (aborted && !timedOut && !externalAbort && !payloadsWithToolMedia?.length) {
+            const abortedText = attempt.replayMetadata.hadPotentialSideEffects
+              ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
+              : "⚠️ Agent couldn't generate a response. Please try again.";
+            const replayInvalid = resolveReplayInvalidForAttempt(null);
+            const livenessState = resolveRunLivenessState({
+              payloadCount: payloads.length,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: null,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
+            return {
+              payloads: [
+                {
+                  text: abortedText,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
 
           const payloadCount = payloadsWithToolMedia?.length ?? 0;
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
