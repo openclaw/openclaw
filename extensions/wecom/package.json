@@ -6,8 +6,8 @@
   "type": "module",
   "dependencies": {
     "@wecom/aibot-node-sdk": "^1.0.6",
-    "fast-xml-parser": "^5.5.9",
-    "file-type": "^21.3.0",
+    "fast-xml-parser": "5.5.7",
+    "file-type": "22.0.1",
     "undici": "8.0.2",
     "zod": "^4.3.6"
   },
