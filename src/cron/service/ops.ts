@@ -275,8 +275,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
 
     // Check for ID collision if custom ID is provided and non-empty
     if (input.id && input.id.trim()) {
-      const existingJob = state.store?.jobs.find((job) => job.id === input.id,
-      );
+      const existingJob = state.store?.jobs.find((job) => job.id === input.id);
       if (existingJob) {
         throw new DuplicateJobIdError(input.id);
       }
