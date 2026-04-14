@@ -99,4 +99,42 @@ describe("task-registry audit", () => {
 
     expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
   });
+
+  it("ignores tiny startedAt skew before createdAt", () => {
+    const createdAt = Date.parse("2026-03-30T01:00:00.000Z");
+    const findings = listTaskAuditFindings({
+      now: createdAt,
+      tasks: [
+        createTask({
+          taskId: "tiny-skew",
+          status: "running",
+          createdAt,
+          startedAt: createdAt - 1,
+          lastEventAt: createdAt,
+        }),
+      ],
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("still flags meaningful startedAt skew before createdAt", () => {
+    const createdAt = Date.parse("2026-03-30T01:00:00.000Z");
+    const findings = listTaskAuditFindings({
+      now: createdAt,
+      tasks: [
+        createTask({
+          taskId: "meaningful-skew",
+          status: "running",
+          createdAt,
+          startedAt: createdAt - 6,
+          lastEventAt: createdAt,
+        }),
+      ],
+    });
+
+    expect(findings.map((finding) => [finding.code, finding.task.taskId])).toEqual([
+      ["inconsistent_timestamps", "meaningful-skew"],
+    ]);
+  });
 });

@@ -16,6 +16,7 @@ export type TaskAuditOptions = {
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
+const STARTED_AT_CREATED_AT_SKEW_TOLERANCE_MS = 5;
 export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
 
@@ -46,7 +47,7 @@ function taskReferenceAt(task: TaskRecord): number {
 }
 
 function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
-  if (task.startedAt && task.startedAt < task.createdAt) {
+  if (task.startedAt && task.startedAt < task.createdAt - STARTED_AT_CREATED_AT_SKEW_TOLERANCE_MS) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",
