@@ -118,6 +118,22 @@ describe("ensureDefaultModelsFile", () => {
     }
   });
 
+  it("rejects symlinked parent directory pointing outside workspace", async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "model-rules-outside-"));
+    try {
+      const linkPath = path.join(tmpDir, "link");
+      try {
+        await fs.symlink(outsideDir, linkPath);
+      } catch {
+        return; // symlinks not supported
+      }
+      const created = await ensureDefaultModelsFile(tmpDir, "link/MODELS.md");
+      expect(created).toBe(false);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not write when path exists as a directory", async () => {
     await fs.mkdir(path.join(tmpDir, "MODELS.md"));
     const created = await ensureDefaultModelsFile(tmpDir);

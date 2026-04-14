@@ -1,4 +1,4 @@
-import { constants as fsConstants, open } from "node:fs/promises";
+import { constants as fsConstants, open, realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
 const MAX_CACHE_ENTRIES = 64;
@@ -30,6 +30,14 @@ export async function readModelsFile(
     return null;
   }
   try {
+    // Canonical path check: resolve symlinked parent directories and verify
+    // the real target is still inside the real workspace root.
+    const realFile = await realpath(filePath);
+    const realWorkspace = await realpath(workspaceDir);
+    const realBoundary = realWorkspace + sep;
+    if (!realFile.startsWith(realBoundary)) {
+      return null;
+    }
     const fd = await open(filePath, readFlags);
     try {
       const fileInfo = await fd.stat();

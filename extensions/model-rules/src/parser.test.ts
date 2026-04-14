@@ -257,6 +257,23 @@ describe("readModelsFile", () => {
     }
   });
 
+  it("rejects symlinked parent directory pointing outside workspace", async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "model-rules-outside-"));
+    try {
+      await fs.writeFile(path.join(outsideDir, "secret.md"), "## MODEL: leaked\n\nSecret.\n");
+      const linkPath = path.join(tmpDir, "link");
+      try {
+        await fs.symlink(outsideDir, linkPath);
+      } catch {
+        return; // symlinks not supported
+      }
+      const result = await readModelsFile(tmpDir, "link/secret.md");
+      expect(result).toBeNull();
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes cache when file content changes", async () => {
     const filePath = path.join(tmpDir, "MODELS.md");
     await fs.writeFile(filePath, "## MODEL: v1\n\nVersion 1.\n");

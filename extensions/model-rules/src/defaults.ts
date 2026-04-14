@@ -1,5 +1,5 @@
-import { open } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { open, realpath } from "node:fs/promises";
+import { dirname, resolve, sep } from "node:path";
 
 /**
  * Default MODELS.md shipped with the plugin.
@@ -227,6 +227,18 @@ export async function ensureDefaultModelsFile(
   const filePath = resolve(workspaceDir, filename);
   const boundary = resolve(workspaceDir) + sep;
   if (!filePath.startsWith(boundary)) {
+    return false;
+  }
+  // Canonical path check: resolve symlinked parent directories and verify
+  // the real parent is still inside the real workspace root.
+  try {
+    const realWorkspace = await realpath(workspaceDir);
+    const realParent = await realpath(dirname(filePath));
+    const realBoundary = realWorkspace + sep;
+    if (!realParent.startsWith(realBoundary) && realParent !== realWorkspace) {
+      return false;
+    }
+  } catch {
     return false;
   }
   try {
