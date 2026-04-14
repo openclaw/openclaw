@@ -631,7 +631,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.media.video.scope":
     "Scope selector controlling when video understanding is attempted across incoming events. Narrow scope in noisy channels, and broaden only where video interpretation is core to workflow.",
   "skills.allowExternalSkillsIn":
-    "List of directory prefixes whose real paths are allowed to host skill files even when they resolve outside the configured skills root via symlinks. Useful for package-manager stores like /nix/store where skills are installed into an external read-only tree.",
+    "List of directory prefixes whose real paths are allowed to host skill files even when they resolve outside the configured skills root via symlinks. Useful for package-manager stores like /nix/store where skills are installed into an external read-only tree, or for shared git repositories symlinked into the workspace.",
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
   "skills.load.watchDebounceMs":

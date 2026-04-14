@@ -43,7 +43,8 @@ export type SkillsConfig = {
   /**
    * List of external directory prefixes whose real paths are allowed to host
    * skill files even when they resolve outside the configured skills root
-   * (e.g. `/nix/store` for Nix-installed skills).
+   * (e.g. `/nix/store` for Nix-installed skills, or a shared git repository
+   * symlinked into the workspace).
    */
   allowExternalSkillsIn?: string[];
   load?: SkillsLoadConfig;

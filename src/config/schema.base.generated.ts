@@ -22116,7 +22116,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             title: "Allow External Skills In",
             description:
-              "List of directory prefixes whose real paths are allowed to host skill files even when they resolve outside the configured skills root via symlinks. Useful for package-manager stores like /nix/store where skills are installed into an external read-only tree.",
+              "List of directory prefixes whose real paths are allowed to host skill files even when they resolve outside the configured skills root via symlinks. Useful for package-manager stores like /nix/store where skills are installed into an external read-only tree, or for shared git repositories symlinked into the workspace.",
           },
           load: {
             type: "object",
@@ -24484,7 +24484,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "skills.allowExternalSkillsIn": {
       label: "Allow External Skills In",
-      help: "List of directory prefixes whose real paths are allowed to host skill files even when they resolve outside the configured skills root via symlinks. Useful for package-manager stores like /nix/store where skills are installed into an external read-only tree.",
+      help: "List of directory prefixes whose real paths are allowed to host skill files even when they resolve outside the configured skills root via symlinks. Useful for package-manager stores like /nix/store where skills are installed into an external read-only tree, or for shared git repositories symlinked into the workspace.",
       tags: ["access"],
     },
     "skills.load.watch": {
