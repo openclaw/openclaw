@@ -912,6 +912,65 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("shows billing message when all fallback attempts have reason=billing (cooldown skip path)", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "All models failed (2): anthropic/claude-opus-4-6: Provider anthropic has billing issue (skipping all models) (billing) | anthropic/claude-sonnet-4-6: Provider anthropic has billing issue (skipping all models) (billing)",
+        ),
+        {
+          name: "FallbackSummaryError",
+          attempts: [
+            {
+              provider: "anthropic",
+              model: "claude-opus-4-6",
+              error: "Provider anthropic has billing issue (skipping all models)",
+              reason: "billing",
+            },
+            {
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+              error: "Provider anthropic has billing issue (skipping all models)",
+              reason: "billing",
+            },
+          ],
+          soonestCooldownExpiry: null,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      // BILLING_ERROR_USER_MESSAGE is mocked as "billing" at ln45
+      expect(result.payload.text).toBe("billing");
+    }
+  });
+
   it("surfaces gateway restart text when fallback exhaustion wraps a drain error", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(

@@ -311,6 +311,20 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
   );
 }
 
+/**
+ * When all fallback attempts failed due to billing (e.g. auth profile in
+ * billing cooldown), the summary message contains 'has billing issue' which
+ * `isBillingErrorMessage()` does not recognise. Use the structured
+ * `attempt.reason` instead. Note: mirrors `isPureTransientRateLimitSummary`.
+ */
+function isPureBillingSummary(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.length > 0 &&
+    err.attempts.every((attempt) => attempt.reason === "billing")
+  );
+}
+
 function isToolResultTurnMismatchError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   return (
@@ -1320,7 +1334,7 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
       const message = formatErrorMessage(err);
-      const isBilling = isBillingErrorMessage(message);
+      const isBilling = isPureBillingSummary(err) || isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
