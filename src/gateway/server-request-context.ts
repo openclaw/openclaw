@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
@@ -57,6 +57,7 @@ export type GatewayRequestContextParams = {
   wizardRunner: GatewayRequestContext["wizardRunner"];
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
   unavailableGatewayMethods: ReadonlySet<string>;
+  clearPendingChatLifecycleError?: GatewayRequestContext["clearPendingChatLifecycleError"];
 };
 
 export function createGatewayRequestContext(
@@ -150,5 +151,6 @@ export function createGatewayRequestContext(
     wizardRunner: params.wizardRunner,
     broadcastVoiceWakeChanged: params.broadcastVoiceWakeChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,
+    clearPendingChatLifecycleError: params.clearPendingChatLifecycleError,
   };
 }
