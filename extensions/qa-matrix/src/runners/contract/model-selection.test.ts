@@ -45,6 +45,7 @@ describe("matrix qa model selection", () => {
       primaryModel: "custom-primary",
       alternateModel: "custom-alt",
     });
+    expect(loadQaLabRuntimeModule).not.toHaveBeenCalled();
     expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
   });
 });

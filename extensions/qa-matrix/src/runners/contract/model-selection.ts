@@ -13,14 +13,21 @@ export function resolveMatrixQaModels(params: {
   alternateModel?: string;
 }): ResolvedMatrixQaModels {
   const providerMode = normalizeQaProviderMode(params.providerMode ?? "live-frontier");
+  const primaryModel = params.primaryModel?.trim();
+  const alternateModel = params.alternateModel?.trim();
+  if (primaryModel && alternateModel) {
+    return {
+      providerMode,
+      primaryModel,
+      alternateModel,
+    };
+  }
+
   const qaLabRuntime = loadQaLabRuntimeModule();
   return {
     providerMode,
-    primaryModel:
-      params.primaryModel?.trim() ||
-      qaLabRuntime.defaultQaRuntimeModelForMode(providerMode),
+    primaryModel: primaryModel || qaLabRuntime.defaultQaRuntimeModelForMode(providerMode),
     alternateModel:
-      params.alternateModel?.trim() ||
-      qaLabRuntime.defaultQaRuntimeModelForMode(providerMode, { alternate: true }),
+      alternateModel || qaLabRuntime.defaultQaRuntimeModelForMode(providerMode, { alternate: true }),
   };
 }
