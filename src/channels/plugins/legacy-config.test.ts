@@ -136,4 +136,35 @@ describe("collectChannelLegacyConfigRules", () => {
     expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledTimes(1);
     expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledWith("discord");
   });
+
+  it("skips channel ids already covered by explicit legacy rules", () => {
+    loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) => ({
+      legacyConfigRules: [
+        {
+          path: ["channels", channelId],
+          message: `legacy ${channelId} rule`,
+        },
+      ],
+    }));
+
+    const rules = collectChannelLegacyConfigRules(
+      {
+        channels: {
+          discord: {},
+          telegram: {},
+        },
+      },
+      undefined,
+      new Set(["telegram"]),
+    );
+
+    expect(rules).toEqual([
+      {
+        path: ["channels", "discord"],
+        message: "legacy discord rule",
+      },
+    ]);
+    expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledTimes(1);
+    expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledWith("discord");
+  });
 });
