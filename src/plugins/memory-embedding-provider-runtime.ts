@@ -32,8 +32,12 @@ export function getMemoryEmbeddingProvider(
   if (registered) {
     return registered.adapter;
   }
-  if (listRegisteredMemoryEmbeddingProviders().length > 0) {
-    return undefined;
-  }
-  return listMemoryEmbeddingProviders(cfg).find((adapter) => adapter.id === id);
+  // Even when other providers are already registered, the requested provider
+  // may live in a plugin that hasn't loaded yet.  Fall through to the plugin
+  // capability system so that bundled plugins (e.g. ollama) are discovered.
+  const pluginProviders = resolvePluginCapabilityProviders({
+    key: "memoryEmbeddingProviders",
+    cfg,
+  });
+  return pluginProviders.find((adapter) => adapter.id === id);
 }
