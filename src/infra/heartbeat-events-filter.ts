@@ -38,8 +38,25 @@ export function buildCronEventPrompt(
   );
 }
 
-export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {
+export function buildExecEventPrompt(
+  opts?: { deliverToUser?: boolean; execEventTexts?: string[] },
+): string {
   const deliverToUser = opts?.deliverToUser ?? true;
+  const execEventTexts = opts?.execEventTexts ?? [];
+  if (execEventTexts.length > 0) {
+    const eventDetails = execEventTexts.join("\n");
+    if (!deliverToUser) {
+      return (
+        `An async command you ran earlier has completed. The result is:\n${eventDetails}\n` +
+        "Handle the result internally. Do not relay it to the user unless explicitly requested."
+      );
+    }
+    return (
+      `An async command you ran earlier has completed. The result is:\n${eventDetails}\n` +
+      "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
+      "If it failed, explain what went wrong."
+    );
+  }
   if (!deliverToUser) {
     return (
       "An async command you ran earlier has completed. The result is shown in the system messages above. " +

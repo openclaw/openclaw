@@ -686,8 +686,9 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
   }
 
   // Fallback to original behavior
+  const execEvents = pendingEvents.filter(isExecCompletionEvent);
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser, execEventTexts: execEvents })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
