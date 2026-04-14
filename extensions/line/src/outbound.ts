@@ -7,6 +7,8 @@ import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
 import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
 import { getLineRuntime } from "./runtime.js";
+import { createStickerMessage } from "./send.js";
+import { parseLineStickerRaw } from "./sticker-utils.js";
 import type { LineChannelData } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
@@ -113,6 +115,19 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         lastResult = { messageId: result.messageId, chatId: result.chatId };
       }
     };
+
+    // Sticker-only payload: send sticker via LINE Messaging API and return early.
+    if (payload.sticker) {
+      const parsed = parseLineStickerRaw(payload.sticker.raw);
+      if (parsed) {
+        await sendMessageBatch([createStickerMessage(parsed.packageId, parsed.stickerId)]);
+        return createEmptyChannelResult("line", lastResult ?? { messageId: "sticker", chatId: to });
+      }
+      await sendMessageBatch([
+        { type: "text", text: "[Sticker send error: invalid sticker format]" },
+      ]);
+      return createEmptyChannelResult("line", { messageId: "sticker-error", chatId: to });
+    }
 
     const processed = payload.text
       ? outboundRuntime.processLineMessage(payload.text)
