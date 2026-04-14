@@ -14,11 +14,7 @@ import {
   updateSessionStore,
 } from "openclaw/plugin-sdk/config-runtime";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
-import type {
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "openclaw/plugin-sdk/config-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildPluginBindingResolvedText,
@@ -101,6 +97,53 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+
+const INVALID_REQUEST = "INVALID_REQUEST";
+const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
+
+function readErrorCode(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate =
+    (value as { gatewayCode?: unknown; code?: unknown }).gatewayCode ??
+    (value as { gatewayCode?: unknown; code?: unknown }).code;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+}
+
+function readApprovalNotFoundDetailsReason(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const details = (value as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+}
+
+function isApprovalNotFoundError(err: unknown): boolean {
+  const code = readErrorCode(err);
+  if (code === APPROVAL_NOT_FOUND) {
+    return true;
+  }
+  if (code === INVALID_REQUEST && readApprovalNotFoundDetailsReason(err) === APPROVAL_NOT_FOUND) {
+    return true;
+  }
+  return /unknown or expired approval id/i.test(String(err));
+}
+
+function isBenignApprovalCallbackUiError(err: unknown): boolean {
+  const errStr = String(err);
+  return (
+    errStr.includes("message is not modified") ||
+    errStr.includes("there is no text in the message to edit") ||
+    errStr.includes("message to edit not found") ||
+    errStr.includes("message can't be edited") ||
+    errStr.includes("query is too old")
+  );
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -304,7 +347,7 @@ export const registerTelegramHandlers = ({
     senderId?: string | number;
   }): {
     agentId: string;
-    sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
+    sessionEntry: ReturnType<typeof resolveSessionStoreEntry>["existing"];
     sessionKey: string;
     model?: string;
   } => {
@@ -836,9 +879,12 @@ export const registerTelegramHandlers = ({
       // for reactions, we cannot determine if the reaction came from a topic, so block all
       // reactions if requireTopic is enabled for this DM.
       if (!isGroup) {
-        const requireTopic = (eventAuthContext.groupConfig as TelegramDirectConfig | undefined)
-          ?.requireTopic;
-        if (requireTopic === true) {
+        const requireTopic =
+          !!eventAuthContext.groupConfig &&
+          typeof eventAuthContext.groupConfig === "object" &&
+          "requireTopic" in eventAuthContext.groupConfig &&
+          eventAuthContext.groupConfig.requireTopic === true;
+        if (requireTopic) {
           logVerbose(
             `Blocked telegram reaction in DM ${chatId}: requireTopic=true but topic unknown for reactions`,
           );
@@ -1380,23 +1426,33 @@ export const registerTelegramHandlers = ({
             allowPluginFallback: pluginApprovalAuthorizedSender,
           });
         } catch (resolveErr) {
-          const errStr = String(resolveErr);
+          if (isApprovalNotFoundError(resolveErr)) {
+            logVerbose(
+              `telegram: approval callback already resolved ${approvalCallback.approvalId}`,
+            );
+            try {
+              await clearCallbackButtons();
+            } catch (editErr) {
+              if (!isBenignApprovalCallbackUiError(editErr)) {
+                logVerbose(
+                  `telegram: failed to clear already-resolved approval callback buttons: ${String(editErr)}`,
+                );
+              }
+            }
+            return;
+          }
           logVerbose(
-            `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
+            `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${String(resolveErr)}`,
           );
           throw new TelegramRetryableCallbackError(resolveErr);
         }
         try {
           await clearCallbackButtons();
         } catch (editErr) {
-          const errStr = String(editErr);
-          if (
-            errStr.includes("message is not modified") ||
-            errStr.includes("there is no text in the message to edit")
-          ) {
+          if (isBenignApprovalCallbackUiError(editErr)) {
             return;
           }
-          logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
+          logVerbose(`telegram: failed to clear approval callback buttons: ${String(editErr)}`);
         }
         return;
       }
@@ -1535,7 +1591,7 @@ export const registerTelegramHandlers = ({
             }
             return;
           }
-          const models = [...modelSet].toSorted();
+          const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
           const pageSize = getModelsPageSize();
           const totalPages = calculateTotalPages(models.length, pageSize);
           const safePage = Math.max(1, Math.min(page, totalPages));
