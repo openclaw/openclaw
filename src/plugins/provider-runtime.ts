@@ -639,7 +639,33 @@ export function wrapProviderStreamFn(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderWrapStreamFnContext;
 }) {
-  return resolveProviderHookPlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;
+  // First, let the primary matched plugin wrap the stream (e.g. built-in Anthropic
+  // adding beta headers, service tier, fast mode).
+  const matchedPlugin = resolveProviderHookPlugin(params);
+  let wrappedStreamFn = matchedPlugin?.wrapStreamFn?.(params.context) ?? undefined;
+
+  // Then let any other matching plugins (e.g. external plugins with hookAliases)
+  // wrap the already-wrapped stream. This enables external plugins to compose
+  // additional stream transformations on top of the built-in provider's wrapper.
+  const matchedPluginId = matchedPlugin?.id;
+  for (const candidate of resolveProviderPluginsForHooks(params)) {
+    if (
+      !candidate.wrapStreamFn ||
+      candidate.id === matchedPluginId ||
+      !matchesProviderId(candidate, params.provider)
+    ) {
+      continue;
+    }
+    const candidateResult = candidate.wrapStreamFn({
+      ...params.context,
+      streamFn: wrappedStreamFn ?? params.context.streamFn,
+    });
+    if (candidateResult) {
+      wrappedStreamFn = candidateResult;
+    }
+  }
+
+  return wrappedStreamFn;
 }
 
 export function resolveProviderTransportTurnStateWithPlugin(params: {
