@@ -28,10 +28,10 @@ The folder ID is sent as the `OpenAI-Project` header on every request.
 
 ```bash
 openclaw onboard --auth-choice yandex-api-key
-openclaw onboard --auth-choice yandex-folder-id
 ```
 
-This sets `yandex/yandexgpt/latest` as the default model.
+This prompts for both the API key and the folder ID in one step, then sets
+`yandex/yandexgpt/latest` as the default model.
 
 ## Non-interactive example
 
@@ -40,7 +40,6 @@ openclaw onboard --non-interactive \
   --mode local \
   --auth-choice yandex-api-key \
   --yandex-api-key "$YANDEX_API_KEY" \
-  --auth-choice yandex-folder-id \
   --yandex-folder-id "$YANDEX_FOLDER_ID" \
   --skip-health \
   --accept-risk

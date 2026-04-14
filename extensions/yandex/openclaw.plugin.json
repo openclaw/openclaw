@@ -3,7 +3,7 @@
   "enabledByDefault": true,
   "providers": ["yandex"],
   "providerAuthEnvVars": {
-    "yandex": ["YANDEX_API_KEY"]
+    "yandex": ["YANDEX_API_KEY", "YANDEX_FOLDER_ID"]
   },
   "providerAuthChoices": [
     {
@@ -18,6 +18,15 @@
       "cliFlag": "--yandex-api-key",
       "cliOption": "--yandex-api-key <key>",
       "cliDescription": "Yandex AI Studio API key"
+    },
+    {
+      "provider": "yandex",
+      "method": "api-key",
+      "choiceId": "yandex-folder-id",
+      "optionKey": "yandexFolderId",
+      "cliFlag": "--yandex-folder-id",
+      "cliOption": "--yandex-folder-id <id>",
+      "cliDescription": "Yandex Cloud folder ID (required alongside API key)"
     }
   ],
   "configSchema": {

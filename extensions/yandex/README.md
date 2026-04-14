@@ -13,8 +13,9 @@ Two values are required:
 
 ```bash
 openclaw onboard --auth-choice yandex-api-key
-openclaw onboard --auth-choice yandex-folder-id
 ```
+
+Prompts for both API key and folder ID in one step.
 
 Or set environment variables directly:
 
