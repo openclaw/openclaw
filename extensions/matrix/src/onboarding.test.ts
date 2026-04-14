@@ -3,8 +3,10 @@ import { matrixOnboardingAdapter } from "./onboarding.js";
 import {
   createConfiguredMatrixDefaultAccountConfig,
   createConfiguredMatrixTopLevelConfig,
+  createMatrixEnvShortcutAddAccountPrompter,
   createMatrixNamedAccountsConfig,
   createLegacyMatrixTopLevelConfig,
+  installMatrixScopedEnvShortcut,
   createMatrixTokenAddAccountPrompter,
   createMatrixUpdateKeepCredentialsPrompter,
   installMatrixOnboardingEnvRestoreHooks,
@@ -25,23 +27,10 @@ describe("matrix onboarding", () => {
 
   it("offers env shortcut for non-default account when scoped env vars are present", async () => {
     installMatrixTestRuntime();
-
-    process.env.MATRIX_HOMESERVER = "https://matrix.env.example.org";
-    process.env.MATRIX_USER_ID = "@env:example.org";
-    process.env.MATRIX_PASSWORD = "env-password"; // pragma: allowlist secret
-    process.env.MATRIX_ACCESS_TOKEN = "";
-    process.env.MATRIX_OPS_HOMESERVER = "https://matrix.ops.env.example.org";
-    process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-env-token";
+    installMatrixScopedEnvShortcut();
 
     const confirmMessages: string[] = [];
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix already configured. What do you want to do?": "add-account",
-        "Matrix auth method": "token",
-      },
-      text: {
-        "Matrix account name": "ops",
-      },
+    const prompter = createMatrixEnvShortcutAddAccountPrompter({
       onConfirm: (message) => {
         confirmMessages.push(message);
         return message.startsWith("Matrix env vars detected");
@@ -82,24 +71,16 @@ describe("matrix onboarding", () => {
 
   it("routes env-shortcut add-account flow through Matrix invite auto-join setup", async () => {
     installMatrixTestRuntime();
-
-    process.env.MATRIX_HOMESERVER = "https://matrix.env.example.org";
-    process.env.MATRIX_USER_ID = "@env:example.org";
-    process.env.MATRIX_PASSWORD = "env-password"; // pragma: allowlist secret
-    process.env.MATRIX_ACCESS_TOKEN = "";
-    process.env.MATRIX_OPS_HOMESERVER = "https://matrix.ops.env.example.org";
-    process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-env-token";
+    installMatrixScopedEnvShortcut();
 
     const notes: string[] = [];
-    const prompter = createMatrixWizardPrompter({
+    const prompter = createMatrixEnvShortcutAddAccountPrompter({
       notes,
       select: {
-        "Matrix already configured. What do you want to do?": "add-account",
         "Matrix rooms access": "allowlist",
         "Matrix invite auto-join": "allowlist",
       },
       text: {
-        "Matrix account name": "ops",
         "Matrix rooms allowlist (comma-separated)": "!ops-room:example.org",
         "Matrix invite auto-join allowlist (comma-separated)": "#ops-invites:example.org",
       },

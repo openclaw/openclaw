@@ -59,6 +59,8 @@ export function installVitestNoOutputWatchdog(params) {
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const forceKillAfterMs = params.forceKillAfterMs ?? 5_000;
   const streams = params.streams?.filter(Boolean) ?? [];
+  const label = params.label?.trim();
+  const suffix = label ? ` (${label})` : "";
 
   let active = true;
   let silenceTimer = null;
@@ -88,7 +90,7 @@ export function installVitestNoOutputWatchdog(params) {
         return;
       }
       params.log?.(
-        `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group.`,
+        `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group${suffix}.`,
       );
       params.onTimeout?.();
       if (forceKillAfterMs > 0) {
@@ -98,7 +100,7 @@ export function installVitestNoOutputWatchdog(params) {
             return;
           }
           params.log?.(
-            `[vitest] process group still alive after ${forceKillAfterMs}ms; sending SIGKILL.`,
+            `[vitest] process group still alive after ${forceKillAfterMs}ms; sending SIGKILL${suffix}.`,
           );
           params.onForceKill?.();
         }, forceKillAfterMs);
@@ -177,6 +179,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
     streams: [child.stdout, child.stderr],
     timeoutMs: resolveVitestNoOutputTimeoutMs(env),
+    label: argv.join(" "),
     log: (message) => {
       console.error(message);
     },

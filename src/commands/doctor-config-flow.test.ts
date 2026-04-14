@@ -77,6 +77,122 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
     );
   }
 
+  function resolveDiscordStreamMode(entry: Record<string, unknown>): string {
+    if (
+      entry.streamMode === "block" ||
+      entry.streamMode === "partial" ||
+      entry.streamMode === "off"
+    ) {
+      return entry.streamMode;
+    }
+    if (entry.streaming === true) {
+      return "partial";
+    }
+    if (entry.streaming === false) {
+      return "off";
+    }
+    return "off";
+  }
+
+  function normalizeDiscordStreamingEntry(
+    entry: Record<string, unknown>,
+    pathPrefix: string,
+    changes: string[],
+  ): boolean {
+    const hasLegacyStreaming =
+      "streamMode" in entry ||
+      typeof entry.streaming === "boolean" ||
+      typeof entry.streaming === "string" ||
+      "chunkMode" in entry ||
+      "blockStreaming" in entry ||
+      "draftChunk" in entry ||
+      "blockStreamingCoalesce" in entry;
+    if (!hasLegacyStreaming) {
+      return false;
+    }
+
+    let changed = false;
+    const streaming = asRecord(entry.streaming) ?? {};
+    if (!("mode" in streaming) && ("streamMode" in entry || typeof entry.streaming !== "object")) {
+      const mode = resolveDiscordStreamMode(entry);
+      streaming.mode = mode;
+      changes.push(
+        "streamMode" in entry
+          ? `Moved ${pathPrefix}.streamMode → ${pathPrefix}.streaming.mode (${mode}).`
+          : `Moved ${pathPrefix}.streaming (boolean) → ${pathPrefix}.streaming.mode (${mode}).`,
+      );
+      changed = true;
+    }
+    if ("streamMode" in entry) {
+      delete entry.streamMode;
+      changed = true;
+    }
+    if ("chunkMode" in entry && !("chunkMode" in streaming)) {
+      streaming.chunkMode = entry.chunkMode;
+      delete entry.chunkMode;
+      changes.push(`Moved ${pathPrefix}.chunkMode → ${pathPrefix}.streaming.chunkMode.`);
+      changed = true;
+    }
+    const block = asRecord(streaming.block) ?? {};
+    if ("blockStreaming" in entry && !("enabled" in block)) {
+      block.enabled = entry.blockStreaming;
+      delete entry.blockStreaming;
+      changes.push(`Moved ${pathPrefix}.blockStreaming → ${pathPrefix}.streaming.block.enabled.`);
+      changed = true;
+    }
+    if ("blockStreamingCoalesce" in entry && !("coalesce" in block)) {
+      block.coalesce = entry.blockStreamingCoalesce;
+      delete entry.blockStreamingCoalesce;
+      changes.push(
+        `Moved ${pathPrefix}.blockStreamingCoalesce → ${pathPrefix}.streaming.block.coalesce.`,
+      );
+      changed = true;
+    }
+    if (Object.keys(block).length > 0) {
+      streaming.block = block;
+    }
+    const preview = asRecord(streaming.preview) ?? {};
+    if ("draftChunk" in entry && !("chunk" in preview)) {
+      preview.chunk = entry.draftChunk;
+      delete entry.draftChunk;
+      changes.push(`Moved ${pathPrefix}.draftChunk → ${pathPrefix}.streaming.preview.chunk.`);
+      changed = true;
+    }
+    if (Object.keys(preview).length > 0) {
+      streaming.preview = preview;
+    }
+    entry.streaming = streaming;
+    return changed;
+  }
+
+  function normalizeDiscordStreamingAliasesForTest(cfg: unknown): {
+    config: unknown;
+    changes: string[];
+  } {
+    const root = asRecord(cfg);
+    const discord = asRecord(asRecord(root?.channels)?.discord);
+    if (!root || !discord) {
+      return { config: cfg, changes: [] };
+    }
+
+    const next = structuredClone(root);
+    const nextDiscord = asRecord(asRecord(next.channels)?.discord);
+    if (!nextDiscord) {
+      return { config: cfg, changes: [] };
+    }
+
+    const changes: string[] = [];
+    normalizeDiscordStreamingEntry(nextDiscord, "channels.discord", changes);
+    const accounts = asRecord(nextDiscord.accounts);
+    for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
+      const account = asRecord(accountRaw);
+      if (account) {
+        normalizeDiscordStreamingEntry(account, `channels.discord.accounts.${accountId}`, changes);
+      }
+    }
+    return changes.length > 0 ? { config: next, changes } : { config: cfg, changes: [] };
+  }
+
   return {
     collectRelevantDoctorPluginIds: (raw: unknown): string[] => {
       const ids = new Set<string>();
@@ -92,7 +208,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
       }
       return [...ids].toSorted();
     },
-    applyPluginDoctorCompatibilityMigrations: (cfg: unknown) => ({ config: cfg, changes: [] }),
+    applyPluginDoctorCompatibilityMigrations: normalizeDiscordStreamingAliasesForTest,
     listPluginDoctorLegacyConfigRules: () => [
       {
         path: ["channels", "telegram", "groupMentionsOnly"],
@@ -166,11 +282,6 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
   function collectCompatibilityMutations(cfg: { channels?: Record<string, unknown> }) {
     const next = structuredClone(cfg);
     const changes: string[] = [];
-    const discord = asRecord(next.channels?.discord);
-    if (discord && typeof discord.streaming === "boolean") {
-      discord.streaming = { mode: discord.streaming ? "partial" : "off" };
-      changes.push("Normalized channels.discord.streaming legacy scalar.");
-    }
     const telegram = asRecord(next.channels?.telegram);
     if (telegram && "groupMentionsOnly" in telegram) {
       const groups = asRecord(telegram.groups) ?? {};
@@ -409,6 +520,10 @@ vi.mock("./doctor-config-preflight.js", async () => {
     await import("../plugins/doctor-contract-registry.js");
   const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
     await import("../config/legacy.js");
+  const {
+    applyRuntimeLegacyConfigMigrations,
+  }: typeof import("./doctor/shared/runtime-compat-api.js") =
+    await import("./doctor/shared/runtime-compat-api.js");
 
   function resolveConfigPath() {
     const stateDir =
@@ -435,18 +550,20 @@ vi.mock("./doctor-config-preflight.js", async () => {
           pluginIds: collectRelevantDoctorPluginIds(parsed),
         }),
       );
+      const compat = applyRuntimeLegacyConfigMigrations(parsed);
+      const effectiveConfig = compat.next ?? parsed;
       return {
         snapshot: {
           exists,
           path: configPath,
           parsed,
-          config: parsed,
-          sourceConfig: parsed,
+          config: effectiveConfig,
+          sourceConfig: effectiveConfig,
           valid: legacyIssues.length === 0,
           warnings: [],
           legacyIssues,
         },
-        baseConfig: parsed,
+        baseConfig: effectiveConfig,
       };
     }),
   };
@@ -896,14 +1013,16 @@ describe("doctor config flow", () => {
       channels: {
         discord: {
           streamMode?: string;
-          streaming?: {
-            mode?: string;
-          };
+          streaming?:
+            | {
+                mode?: string;
+              }
+            | boolean;
           lifecycle?: unknown;
         };
       };
     };
-    expect(cfg.channels.discord.streaming?.mode).toBe("partial");
+    expect(cfg.channels.discord.streaming).toEqual({ mode: "partial" });
     expect(cfg.channels.discord.streamMode).toBeUndefined();
     expect(cfg.channels.discord.lifecycle).toEqual({
       enabled: true,
@@ -952,14 +1071,6 @@ describe("doctor config flow", () => {
         noteSpy.mock.calls.some(
           ([message, title]) =>
             title === "Legacy config keys detected" &&
-            message.includes("channels.discord:") &&
-            message.includes("channels.discord.streamMode, channels.discord.streaming"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
             message.includes("channels.googlechat:") &&
             message.includes("channels.googlechat.streamMode is legacy and no longer used"),
         ),
@@ -975,6 +1086,55 @@ describe("doctor config flow", () => {
     } finally {
       noteSpy.mockClear();
     }
+  });
+
+  it("keeps discord streaming aliases on disk during repair so downgrades stay recoverable", async () => {
+    await withTempHome(
+      async (home) => {
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(
+          configPath,
+          JSON.stringify(
+            {
+              channels: {
+                discord: {
+                  streaming: false,
+                  chunkMode: "newline",
+                  blockStreaming: true,
+                },
+              },
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          channels?: {
+            discord?: {
+              streaming?: unknown;
+              chunkMode?: unknown;
+              blockStreaming?: unknown;
+            };
+          };
+        };
+
+        expect(persisted.channels?.discord).toEqual({
+          streaming: false,
+          chunkMode: "newline",
+          blockStreaming: true,
+        });
+      },
+      { skipSessionCleanup: true },
+    );
   });
 
   it("repairs legacy googlechat streamMode by removing it", async () => {

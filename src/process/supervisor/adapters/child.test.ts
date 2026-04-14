@@ -1,14 +1,26 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { createChildAdapter } from "./child.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectRealExitWinsOverSigkillFallback,
+  expectWaitStaysPendingUntilSigkillFallback,
+} from "./test-support.js";
 
-const spawnWithFallbackMock = vi.fn();
-
-vi.mock("../../../process/spawn-fallback.js", () => ({
-  spawnWithFallback: (params: any) => spawnWithFallbackMock(params),
+const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
+  spawnWithFallbackMock: vi.fn(),
+  killProcessTreeMock: vi.fn(),
 }));
+
+vi.mock("../../spawn-utils.js", () => ({
+  spawnWithFallback: spawnWithFallbackMock,
+}));
+
+vi.mock("../../kill-tree.js", () => ({
+  killProcessTree: killProcessTreeMock,
+}));
+
+let createChildAdapter: typeof import("./child.js").createChildAdapter;
 
 function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
@@ -41,79 +53,190 @@ async function createAdapterHarness(params?: {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  const { child, killMock, emitClose, emitExit } = createStubChild(params?.pid);
+  const { child, killMock } = createStubChild(params?.pid);
   spawnWithFallbackMock.mockResolvedValue({
     child,
-    command: params?.argv?.[0] ?? "test",
-    args: params?.argv?.slice(1) ?? [],
+    usedFallback: false,
   });
-
   const adapter = await createChildAdapter({
-    argv: params?.argv ?? ["test"],
+    argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
     env: params?.env,
+    stdinMode: "pipe-open",
   });
-
-  return { adapter, child, killMock, emitClose, emitExit };
+  return { adapter, killMock };
 }
 
-describe("ChildProcessAdapter", () => {
+describe("createChildAdapter", () => {
+  const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+  const setPlatform = (platform: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: platform,
+    });
+  };
+
+  beforeAll(async () => {
+    ({ createChildAdapter } = await import("./child.js"));
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    spawnWithFallbackMock.mockClear();
+    killProcessTreeMock.mockClear();
+    delete process.env.OPENCLAW_SERVICE_MARKER;
+    vi.useRealTimers();
   });
 
-  it("spawns a child process with provided arguments and environment", async () => {
-    const argv = ["node", "-e", "console.log('hello')"];
-    const env = { TEST: "123" };
-    const { adapter, child } = await createAdapterHarness({ argv, env });
-
-    expect(spawnWithFallbackMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "node",
-        args: ["-e", "console.log('hello')"],
-        env: expect.objectContaining(env),
-      }),
-    );
-    expect(adapter.pid).toBe(child.pid);
+  afterAll(() => {
+    if (originalServiceMarker === undefined) {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+    } else {
+      process.env.OPENCLAW_SERVICE_MARKER = originalServiceMarker;
+    }
   });
 
-  it("proxies stdout and stderr streams", async () => {
-    const { adapter, child } = await createAdapterHarness();
-    const stdoutData: string[] = [];
-    const stderrData: string[] = [];
-
-    adapter.onStdout((chunk) => stdoutData.push(chunk));
-    adapter.onStderr((chunk) => stderrData.push(chunk));
-
-    child.stdout?.emit("data", Buffer.from("out"));
-    child.stderr?.emit("data", Buffer.from("err"));
-
-    expect(stdoutData.join("")).toBe("out");
-    expect(stderrData.join("")).toBe("err");
+  afterEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+    vi.useRealTimers();
   });
 
-  it("handles process exit", async () => {
-    const { adapter, emitExit } = await createAdapterHarness();
-    const waitPromise = adapter.wait();
+  it("uses process-tree kill for default SIGKILL", async () => {
+    const { adapter, killMock } = await createAdapterHarness({ pid: 4321 });
 
-    emitExit(0);
-    const result = await waitPromise;
-    expect(result.code).toBe(0);
-    expect(result.signal).toBeNull();
-  });
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      options?: { detached?: boolean };
+      fallbacks?: Array<{ options?: { detached?: boolean } }>;
+    };
+    // On Windows, detached defaults to false (headless Scheduled Task compat);
+    // on POSIX, detached is true with a no-detach fallback.
+    if (process.platform === "win32") {
+      expect(spawnArgs.options?.detached).toBe(false);
+      expect(spawnArgs.fallbacks).toEqual([]);
+    } else {
+      expect(spawnArgs.options?.detached).toBe(true);
+      expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+    }
 
-  it("handles process close", async () => {
-    const { adapter, emitClose } = await createAdapterHarness();
-    const waitPromise = adapter.wait();
+    adapter.kill();
 
-    emitClose(1, "SIGTERM");
-    const result = await waitPromise;
-    expect(result.code).toBe(1);
-    expect(result.signal).toBe("SIGTERM");
-  });
-
-  it("kills the child process", async () => {
-    const { adapter, killMock } = await createAdapterHarness();
-    adapter.kill("SIGKILL");
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("uses direct child.kill for non-SIGKILL signals", async () => {
+    const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
+
+    adapter.kill("SIGTERM");
+
+    expect(killProcessTreeMock).not.toHaveBeenCalled();
+    expect(killMock).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("wait does not settle immediately on SIGKILL", async () => {
+    vi.useFakeTimers();
+    const { adapter } = await createAdapterHarness({ pid: 4567 });
+
+    await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
+      adapter.kill();
+    });
+  });
+
+  it("prefers real child close over the SIGKILL fallback settle", async () => {
+    vi.useFakeTimers();
+    const { adapter, emitClose, killMock } = await (async () => {
+      const stub = createStubChild(2468);
+      spawnWithFallbackMock.mockResolvedValue({
+        child: stub.child,
+        usedFallback: false,
+      });
+      const adapter = await createChildAdapter({
+        argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+        stdinMode: "pipe-open",
+      });
+      return { ...stub, adapter };
+    })();
+
+    await expectRealExitWinsOverSigkillFallback({
+      waitPromise: adapter.wait(),
+      triggerKill: () => {
+        adapter.kill();
+      },
+      emitExit: () => {
+        emitClose(0, "SIGKILL");
+      },
+      expected: { code: 0, signal: "SIGKILL" },
+    });
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("settles wait from exit state on Windows even when close never arrives", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+
+    const { adapter, emitExit, child } = await (async () => {
+      const stub = createStubChild(8642);
+      spawnWithFallbackMock.mockResolvedValue({
+        child: stub.child,
+        usedFallback: false,
+      });
+      const adapter = await createChildAdapter({
+        argv: ["openclaw", "version"],
+        stdinMode: "pipe-closed",
+      });
+      return { ...stub, adapter };
+    })();
+
+    const settled = vi.fn();
+    void adapter.wait().then((result) => {
+      settled(result);
+    });
+
+    emitExit(0, null);
+    child.stdout?.emit("end");
+    child.stderr?.emit("end");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
+  });
+
+  it("disables detached mode in service-managed runtime", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+
+    await createAdapterHarness({ pid: 7777 });
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      options?: { detached?: boolean };
+      fallbacks?: Array<{ options?: { detached?: boolean } }>;
+    };
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.fallbacks ?? []).toEqual([]);
+  });
+
+  it("keeps inherited env when no override env is provided", async () => {
+    await createAdapterHarness({
+      pid: 3333,
+      argv: ["node", "-e", "process.exit(0)"],
+    });
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      options?: { env?: NodeJS.ProcessEnv };
+    };
+    expect(spawnArgs.options?.env).toBeUndefined();
+  });
+
+  it("passes explicit env overrides as strings", async () => {
+    await createAdapterHarness({
+      pid: 4444,
+      argv: ["node", "-e", "process.exit(0)"],
+      env: { FOO: "bar", COUNT: "12", DROP_ME: undefined },
+    });
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      options?: { env?: Record<string, string> };
+    };
+    expect(spawnArgs.options?.env).toEqual({ FOO: "bar", COUNT: "12" });
   });
 });

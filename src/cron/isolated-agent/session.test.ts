@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-vi.mock("../../config/sessions/store.js", () => ({
+vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: vi.fn(),
 }));
 
@@ -9,7 +9,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/reset.js", () => ({
+vi.mock("../../config/sessions/reset-policy.js", () => ({
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
@@ -24,8 +24,8 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 }));
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { evaluateSessionFreshness } from "../../config/sessions/reset.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
+import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -165,6 +165,24 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+    });
+
+    it("clears stale sessionFile when forceNew rolls to a fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-456",
+          updatedAt: NOW_MS - 1000,
+          sessionFile: "/tmp/stale-session.jsonl",
+          modelOverride: "sonnet-4",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
     });
 
     it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {

@@ -1,5 +1,5 @@
-import { vi } from "vitest";
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { vi } from "vitest";
 
 export type SearchImpl = (opts?: {
   maxResults?: number;

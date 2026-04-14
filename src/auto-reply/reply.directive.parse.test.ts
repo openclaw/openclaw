@@ -5,6 +5,7 @@ import {
   extractQueueDirective,
   extractReasoningDirective,
   extractReplyToTag,
+  extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
 } from "./reply.js";
@@ -36,6 +37,18 @@ describe("directive parsing", () => {
     const res = extractVerboseDirective(" please /verbose on now");
     expect(res.hasDirective).toBe(true);
     expect(res.verboseLevel).toBe("on");
+  });
+
+  it("matches trace with leading space", () => {
+    const res = extractTraceDirective(" please /trace on now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.traceLevel).toBe("on");
+  });
+
+  it("matches raw trace directive", () => {
+    const res = extractTraceDirective(" please /trace raw now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.traceLevel).toBe("raw");
   });
 
   it("matches reasoning directive", () => {
