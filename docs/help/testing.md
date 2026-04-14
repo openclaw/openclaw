@@ -67,9 +67,13 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Starts the Docker-backed QA site for operator-style QA work.
 - `pnpm openclaw qa matrix`
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
+  - This QA host is repo/dev-only today. Packaged OpenClaw installs do not ship
+    `qa-lab`, so they do not expose `openclaw qa`.
+  - Repo checkouts can link the in-tree plugin directly:
+    `openclaw plugins install -l ./extensions/qa-matrix`.
   - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
-  - Matrix currently supports only `--credential-source env` because the lane provisions disposable users locally.
+  - Matrix does not expose shared credential-source flags because the lane provisions disposable users locally.
   - Writes a Matrix QA report, summary, and observed-events artifact under `.artifacts/qa-e2e/...`.
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
@@ -170,11 +174,12 @@ Adding a channel to the markdown QA system requires exactly two things:
 1. A transport adapter for the channel.
 2. A scenario pack that exercises the channel contract.
 
-Do not add a channel-specific QA runner when the shared `qa-lab` runner can
+Do not add a new top-level QA command root when the shared `qa-lab` host can
 own the flow.
 
-`qa-lab` owns the shared mechanics:
+`qa-lab` owns the shared host mechanics:
 
+- the `openclaw qa` command root
 - suite startup and teardown
 - worker concurrency
 - artifact writing
@@ -182,8 +187,9 @@ own the flow.
 - scenario execution
 - compatibility aliases for older `qa-channel` scenarios
 
-The channel adapter owns the transport contract:
+Runner plugins own the transport contract:
 
+- how `openclaw qa <runner>` is mounted beneath the shared `qa` root
 - how the gateway is configured for that transport
 - how readiness is checked
 - how inbound events are injected
@@ -194,17 +200,20 @@ The channel adapter owns the transport contract:
 
 The minimum adoption bar for a new channel is:
 
-1. Implement the transport adapter on the shared `qa-lab` seam.
-2. Register the adapter in the transport registry.
-3. Keep transport-specific mechanics inside the adapter or the channel harness.
-4. Author or adapt markdown scenarios under `qa/scenarios/`.
-5. Use the generic scenario helpers for new scenarios.
-6. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
+1. Keep `qa-lab` as the owner of the shared `qa` root.
+2. Implement the transport runner on the shared `qa-lab` host seam.
+3. Keep transport-specific mechanics inside the runner plugin or channel harness.
+4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command.
+   Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`.
+   Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
+5. Author or adapt markdown scenarios under `qa/scenarios/`.
+6. Use the generic scenario helpers for new scenarios.
+7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
 
 The decision rule is strict:
 
 - If behavior can be expressed once in `qa-lab`, put it in `qa-lab`.
-- If behavior depends on one channel transport, keep it in that adapter or plugin harness.
+- If behavior depends on one channel transport, keep it in that runner plugin or plugin harness.
 - If a scenario needs a new capability that more than one channel can use, add a generic helper instead of a channel-specific branch in `suite.ts`.
 - If a behavior is only meaningful for one transport, keep the scenario transport-specific and make that explicit in the scenario contract.
 
