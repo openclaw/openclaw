@@ -347,7 +347,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       {
         deviceId,
         role: entry.role,
-        token: entry.token,
+        token: "[REDACTED]",
         scopes: entry.scopes,
         rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
       },
