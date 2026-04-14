@@ -603,6 +603,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("error");
   });
 
+  it("resets activity to aborted when a terminal aborted arrives after the active run was already cleared", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-late-aborted",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -681,5 +696,55 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets activity to idle when a BTW run finalizes and activeChatRunId is null", () => {
+    const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    noteLocalBtwRunId("run-btw-final");
+    handleChatEvent({
+      runId: "run-btw-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "BTW result" }] },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("resets activity to error when a BTW run errors and activeChatRunId is null", () => {
+    const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    noteLocalBtwRunId("run-btw-error");
+    handleChatEvent({
+      runId: "run-btw-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "BTW error",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("error");
+  });
+
+  it("resets activity to aborted when a BTW run aborts and activeChatRunId is null", () => {
+    const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    noteLocalBtwRunId("run-btw-aborted");
+    handleChatEvent({
+      runId: "run-btw-aborted",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 });
