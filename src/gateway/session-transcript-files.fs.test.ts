@@ -9,6 +9,26 @@ import {
 } from "./session-transcript-files.fs.js";
 import { readSessionMessages } from "./session-utils.fs.js";
 
+function hasAssistantTextMessage(
+  value: unknown,
+): value is { content: Array<{ type: string; text: string }> } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const content = Reflect.get(value, "content");
+  if (!Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  const first = content[0];
+  if (!first || typeof first !== "object") {
+    return false;
+  }
+  return (
+    typeof Reflect.get(first, "text") === "string" &&
+    typeof Reflect.get(first, "type") === "string"
+  );
+}
+
 describe("session transcript root fallback", () => {
   const fixture = useTempSessionsFixture("session-transcript-files-");
   const sessionId = "12345678-1234-4123-8123-1234567890ab";
@@ -54,9 +74,14 @@ describe("session transcript root fallback", () => {
     );
 
     const messages = readSessionMessages(sessionId, storePath, sessionsPath);
+    const firstMessage = messages[0];
 
     expect(messages).toHaveLength(1);
-    expect((messages[0] as any).content[0].text).toBe("ROOT_FALLBACK_OK");
+    expect(hasAssistantTextMessage(firstMessage)).toBe(true);
+    if (!hasAssistantTextMessage(firstMessage)) {
+      throw new Error("expected assistant text message");
+    }
+    expect(firstMessage.content[0]?.text).toBe("ROOT_FALLBACK_OK");
   });
 
   it("archives the root transcript in the drift case", () => {
@@ -70,11 +95,16 @@ describe("session transcript root fallback", () => {
       sessionFile: sessionsPath,
       reason: "deleted",
     });
+    const [archivedEntry] = archived;
 
     expect(archived).toHaveLength(1);
-    expect(archived[0]?.sourcePath).toBe(rootPath);
-    expect(archived[0]?.archivedPath).toMatch(/\.deleted\./);
+    expect(archivedEntry?.sourcePath).toBe(rootPath);
+    expect(archivedEntry?.archivedPath).toMatch(/\.deleted\./);
     expect(fs.existsSync(rootPath)).toBe(false);
-    expect(fs.existsSync(archived[0]!.archivedPath)).toBe(true);
+    expect(archivedEntry).toBeDefined();
+    if (!archivedEntry) {
+      throw new Error("expected archived transcript entry");
+    }
+    expect(fs.existsSync(archivedEntry.archivedPath)).toBe(true);
   });
 });
