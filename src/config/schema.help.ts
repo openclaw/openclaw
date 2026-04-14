@@ -1035,6 +1035,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Requires at least this many appended transcript messages before reindex is triggered (default: 50). Lower this for near-real-time transcript recall, or raise it to reduce indexing churn.",
   "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
     "Forces a session memory-search reindex after compaction-triggered transcript updates (default: true). Keep enabled when compacted summaries must be immediately searchable, or disable to reduce write-time indexing pressure.",
+  "agents.defaults.contextPruning.microCompress.enabled":
+    "Enables safe in-memory micro-compression for prunable tool results before trim/clear decisions (default: true in cache-ttl mode). When enabled, line endings are normalized and outer empty lines are removed before any optional ANSI stripping, trailing-whitespace trimming, or blank-line collapse. Disable to preserve current pruning behavior exactly.",
+  "agents.defaults.contextPruning.microCompress.stripAnsi":
+    "Strips ANSI escape sequences from prunable tool-result text before pruning (default: true). Disable only if terminal color codes themselves are semantically important.",
+  "agents.defaults.contextPruning.microCompress.trimTrailingWhitespace":
+    "Removes trailing spaces and tabs from each line of prunable tool-result text before pruning (default: true). Keep enabled unless exact whitespace at line ends matters to the tool output.",
+  "agents.defaults.contextPruning.microCompress.collapseBlankLines":
+    "Collapses runs of three or more blank lines down to two in prunable tool-result text before pruning (default: true). Disable if repeated blank-line spacing carries meaning in your tool output.",
   ui: "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",

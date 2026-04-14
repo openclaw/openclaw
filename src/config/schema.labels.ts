@@ -169,6 +169,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.alsoAllow": "Tool Allowlist Additions",
   "agents.list[].tools.profile": "Agent Tool Profile",
   "agents.list[].tools.alsoAllow": "Agent Tool Allowlist Additions",
+  "agents.defaults.contextPruning.microCompress.enabled": "Enable Tool Result Micro-Compression",
+  "agents.defaults.contextPruning.microCompress.stripAnsi": "Strip ANSI Escape Codes",
+  "agents.defaults.contextPruning.microCompress.trimTrailingWhitespace":
+    "Trim Trailing Tool Output Whitespace",
+  "agents.defaults.contextPruning.microCompress.collapseBlankLines":
+    "Collapse Repeated Blank Lines",
   "tools.byProvider": "Tool Policy by Provider",
   "agents.list[].tools.byProvider": "Agent Tool Policy by Provider",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",

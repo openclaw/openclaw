@@ -8,6 +8,18 @@ import { makeToolPrunablePredicate } from "./tools.js";
 
 const IMAGE_CHAR_ESTIMATE = 8_000;
 const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+const ANSI_ESCAPE_PATTERN = new RegExp(
+  `${ESC}(?:\\[[0-?]*[ -/]*[@-~]|\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)|[@-Z\\\\-_])`,
+  "g",
+);
+const DEFAULT_MICRO_COMPRESS_SETTINGS: EffectiveContextPruningSettings["microCompress"] = {
+  enabled: true,
+  stripAnsi: true,
+  trimTrailingWhitespace: true,
+  collapseBlankLines: true,
+};
 
 function asText(text: string): TextContent {
   return { type: "text", text };
@@ -37,6 +49,76 @@ function collectPrunableToolResultSegments(
     }
   }
   return parts;
+}
+
+function trimOuterEmptyLines(text: string): string {
+  if (text.length === 0) {
+    return text;
+  }
+  const lines = text.split("\n");
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start]?.trim() === "") {
+    start++;
+  }
+  while (end > start && lines[end - 1]?.trim() === "") {
+    end--;
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+function normalizeMicroCompressedText(
+  text: string,
+  settings: EffectiveContextPruningSettings["microCompress"] | undefined,
+): string {
+  const effectiveSettings = settings ?? DEFAULT_MICRO_COMPRESS_SETTINGS;
+  // CR/CRLF normalization plus outer empty-line trimming are always-on safety
+  // steps for prunable tool text; the per-flag toggles only control the more
+  // opinionated formatting-noise reductions below.
+  let next = text.replace(/\r\n?/g, "\n");
+  if (effectiveSettings.stripAnsi) {
+    next = next.replace(ANSI_ESCAPE_PATTERN, "");
+  }
+  if (effectiveSettings.trimTrailingWhitespace) {
+    next = next.replace(/[^\S\n]+$/gm, "");
+  }
+  next = trimOuterEmptyLines(next);
+  if (effectiveSettings.collapseBlankLines) {
+    next = next.replace(/\n{3,}/g, "\n\n");
+  }
+  return next;
+}
+
+function maybeMicroCompressJoinedText(params: {
+  text: string;
+  settings: EffectiveContextPruningSettings;
+}): string {
+  const microCompress = params.settings.microCompress ?? DEFAULT_MICRO_COMPRESS_SETTINGS;
+  if (!microCompress.enabled) {
+    return params.text;
+  }
+  const normalized = normalizeMicroCompressedText(params.text, microCompress);
+  return normalized !== params.text ? normalized : params.text;
+}
+
+function maybeMicroCompressToolResultMessage(params: {
+  msg: ToolResultMessage;
+  settings: EffectiveContextPruningSettings;
+}): ToolResultMessage | null {
+  const { msg, settings } = params;
+  const microCompress = settings.microCompress ?? DEFAULT_MICRO_COMPRESS_SETTINGS;
+  if (!microCompress.enabled || hasImageBlocks(msg.content)) {
+    return null;
+  }
+  const joined = collectTextSegments(msg.content).join("\n");
+  const normalized = maybeMicroCompressJoinedText({ text: joined, settings });
+  if (normalized === joined) {
+    return null;
+  }
+  const rewritten = { ...msg, content: [asText(normalized)] };
+  const beforeChars = estimateMessageChars(msg as unknown as AgentMessage);
+  const afterChars = estimateMessageChars(rewritten as unknown as AgentMessage);
+  return afterChars < beforeChars ? rewritten : null;
 }
 
 function estimateJoinedTextLength(parts: string[]): number {
@@ -226,25 +308,31 @@ function softTrimToolResultMessage(params: {
   const parts = hasImages
     ? collectPrunableToolResultSegments(msg.content)
     : collectTextSegments(msg.content);
-  const rawLen = estimateJoinedTextLength(parts);
+  const joined = parts.join("\n");
+  const effectiveJoined = maybeMicroCompressJoinedText({ text: joined, settings });
+  const effectiveParts = effectiveJoined === joined ? parts : effectiveJoined.split("\n");
+  const rawLen = estimateJoinedTextLength(effectiveParts);
+  const normalizedWithoutTrim = { ...msg, content: [asText(effectiveJoined)] };
+  const beforeChars = estimateMessageChars(msg as unknown as AgentMessage);
+  const normalizedChars = estimateMessageChars(normalizedWithoutTrim as unknown as AgentMessage);
   if (rawLen <= settings.softTrim.maxChars) {
-    if (!hasImages) {
+    if (!hasImages && effectiveJoined === joined) {
       return null;
     }
-    return { ...msg, content: [asText(parts.join("\n"))] };
+    return hasImages || normalizedChars < beforeChars ? normalizedWithoutTrim : null;
   }
 
   const headChars = Math.max(0, settings.softTrim.headChars);
   const tailChars = Math.max(0, settings.softTrim.tailChars);
   if (headChars + tailChars >= rawLen) {
-    if (!hasImages) {
+    if (!hasImages && effectiveJoined === joined) {
       return null;
     }
-    return { ...msg, content: [asText(parts.join("\n"))] };
+    return hasImages || normalizedChars < beforeChars ? normalizedWithoutTrim : null;
   }
 
-  const head = takeHeadFromJoinedText(parts, headChars);
-  const tail = takeTailFromJoinedText(parts, tailChars);
+  const head = takeHeadFromJoinedText(effectiveParts, headChars);
+  const tail = takeTailFromJoinedText(effectiveParts, tailChars);
   const trimmed = `${head}
 ...
 ${tail}`;
@@ -304,6 +392,7 @@ export function pruneContextMessages(params: {
   }
 
   const prunableToolIndexes: number[] = [];
+  let hasPrunableImageToolResult = false;
   let next: AgentMessage[] | null = null;
 
   for (let i = pruneStartIndex; i < cutoffIndex; i++) {
@@ -315,6 +404,40 @@ export function pruneContextMessages(params: {
       continue;
     }
     prunableToolIndexes.push(i);
+    if (hasImageBlocks((msg as unknown as ToolResultMessage).content)) {
+      hasPrunableImageToolResult = true;
+    }
+
+    const microCompressed = maybeMicroCompressToolResultMessage({
+      msg: msg as unknown as ToolResultMessage,
+      settings,
+    });
+    if (!microCompressed) {
+      continue;
+    }
+
+    const beforeChars = estimateMessageChars(msg);
+    const afterChars = estimateMessageChars(microCompressed as unknown as AgentMessage);
+    totalChars += afterChars - beforeChars;
+    if (!next) {
+      next = messages.slice();
+    }
+    next[i] = microCompressed as unknown as AgentMessage;
+  }
+
+  ratio = totalChars / charWindow;
+  const restrictSoftTrimToImagesOnly = ratio < settings.softTrimRatio && hasPrunableImageToolResult;
+  if (ratio < settings.softTrimRatio && !restrictSoftTrimToImagesOnly) {
+    return next ?? messages;
+  }
+  for (const i of prunableToolIndexes) {
+    const msg = (next ?? messages)[i];
+    if (!msg || msg.role !== "toolResult") {
+      continue;
+    }
+    if (restrictSoftTrimToImagesOnly && !hasImageBlocks(msg.content)) {
+      continue;
+    }
 
     const updated = softTrimToolResultMessage({
       msg: msg as unknown as ToolResultMessage,

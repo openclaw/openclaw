@@ -109,6 +109,15 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        microCompress: z
+          .object({
+            enabled: z.boolean().optional(),
+            stripAnsi: z.boolean().optional(),
+            trimTrailingWhitespace: z.boolean().optional(),
+            collapseBlankLines: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

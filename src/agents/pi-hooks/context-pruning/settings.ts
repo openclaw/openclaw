@@ -24,6 +24,12 @@ export type ContextPruningConfig = {
     enabled?: boolean;
     placeholder?: string;
   };
+  microCompress?: {
+    enabled?: boolean;
+    stripAnsi?: boolean;
+    trimTrailingWhitespace?: boolean;
+    collapseBlankLines?: boolean;
+  };
 };
 
 export type EffectiveContextPruningSettings = {
@@ -43,6 +49,12 @@ export type EffectiveContextPruningSettings = {
     enabled: boolean;
     placeholder: string;
   };
+  microCompress: {
+    enabled: boolean;
+    stripAnsi: boolean;
+    trimTrailingWhitespace: boolean;
+    collapseBlankLines: boolean;
+  };
 };
 
 export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings = {
@@ -61,6 +73,12 @@ export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings =
   hardClear: {
     enabled: true,
     placeholder: "[Old tool result content cleared]",
+  },
+  microCompress: {
+    enabled: true,
+    stripAnsi: true,
+    trimTrailingWhitespace: true,
+    collapseBlankLines: true,
   },
 };
 
@@ -116,6 +134,20 @@ export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningS
     }
     if (typeof cfg.hardClear.placeholder === "string" && cfg.hardClear.placeholder.trim()) {
       s.hardClear.placeholder = cfg.hardClear.placeholder.trim();
+    }
+  }
+  if (cfg.microCompress) {
+    if (typeof cfg.microCompress.enabled === "boolean") {
+      s.microCompress.enabled = cfg.microCompress.enabled;
+    }
+    if (typeof cfg.microCompress.stripAnsi === "boolean") {
+      s.microCompress.stripAnsi = cfg.microCompress.stripAnsi;
+    }
+    if (typeof cfg.microCompress.trimTrailingWhitespace === "boolean") {
+      s.microCompress.trimTrailingWhitespace = cfg.microCompress.trimTrailingWhitespace;
+    }
+    if (typeof cfg.microCompress.collapseBlankLines === "boolean") {
+      s.microCompress.collapseBlankLines = cfg.microCompress.collapseBlankLines;
     }
   }
 

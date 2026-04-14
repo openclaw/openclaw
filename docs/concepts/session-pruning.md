@@ -23,6 +23,12 @@ Long sessions accumulate tool output that inflates the context window. This
 increases cost and can force [compaction](/concepts/compaction) sooner than
 necessary.
 
+OpenClaw can also micro-compress prunable tool-result text by removing
+formatting noise such as ANSI color codes, outer blank lines, trailing
+whitespace, and repeated blank lines. This normalization is intentionally
+limited to in-memory tool output and does not rewrite conversation text, code,
+or on-disk transcripts.
+
 Pruning is especially valuable for **Anthropic prompt caching**. After the cache
 TTL expires, the next request re-caches the full prompt. Pruning reduces the
 cache-write size, directly lowering cost.
@@ -31,9 +37,10 @@ cache-write size, directly lowering cost.
 
 1. Wait for the cache TTL to expire (default 5 minutes).
 2. Find old tool results for normal pruning (conversation text is left alone).
-3. **Soft-trim** oversized results -- keep the head and tail, insert `...`.
-4. **Hard-clear** the rest -- replace with a placeholder.
-5. Reset the TTL so follow-up requests reuse the fresh cache.
+3. Optionally micro-compress prunable tool-result text to remove formatting noise.
+4. **Soft-trim** oversized results -- keep the head and tail, insert `...`.
+5. **Hard-clear** the rest -- replace with a placeholder.
+6. Reset the TTL so follow-up requests reuse the fresh cache.
 
 ## Legacy image cleanup
 
@@ -84,6 +91,10 @@ To disable: set `mode: "off"`.
 
 They complement each other -- pruning keeps tool output lean between
 compaction cycles.
+
+With `contextPruning.microCompress.enabled`, prunable tool output always gets
+line-ending normalization plus outer empty-line trimming before any optional
+ANSI stripping, trailing-whitespace trimming, or blank-line collapse.
 
 ## Further reading
 

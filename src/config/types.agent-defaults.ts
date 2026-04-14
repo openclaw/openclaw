@@ -48,6 +48,12 @@ export type AgentContextPruningConfig = {
     enabled?: boolean;
     placeholder?: string;
   };
+  microCompress?: {
+    enabled?: boolean;
+    stripAnsi?: boolean;
+    trimTrailingWhitespace?: boolean;
+    collapseBlankLines?: boolean;
+  };
 };
 
 export type AgentStartupContextConfig = {

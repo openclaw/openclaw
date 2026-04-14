@@ -1296,6 +1296,12 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
         minPrunableToolChars: 50000,
         softTrim: { maxChars: 4000, headChars: 1500, tailChars: 1500 },
         hardClear: { enabled: true, placeholder: "[Old tool result content cleared]" },
+        microCompress: {
+          enabled: true,
+          stripAnsi: true,
+          trimTrailingWhitespace: true,
+          collapseBlankLines: true,
+        },
         tools: { deny: ["browser", "canvas"] },
       },
     },
@@ -1307,6 +1313,7 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
 
 - `mode: "cache-ttl"` enables pruning passes.
 - `ttl` controls how often pruning can run again (after the last cache touch).
+- `microCompress` runs a safe normalization pass on prunable tool-result text before trim/clear decisions.
 - Pruning soft-trims oversized tool results first, then hard-clears older tool results if needed.
 
 **Soft-trim** keeps beginning + end and inserts `...` in the middle.
@@ -1316,6 +1323,7 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
 Notes:
 
 - Image blocks are never trimmed/cleared.
+- `microCompress` only affects prunable `toolResult` text in memory. When enabled, it always normalizes line endings and removes outer blank lines; the sub-flags additionally control ANSI stripping, trailing-whitespace trimming, and repeated blank-line collapse.
 - Ratios are character-based (approximate), not exact token counts.
 - If fewer than `keepLastAssistants` assistant messages exist, pruning is skipped.
 

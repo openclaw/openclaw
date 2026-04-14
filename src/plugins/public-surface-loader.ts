@@ -45,14 +45,6 @@ function isSourceArtifactPath(modulePath: string): boolean {
   }
 }
 
-function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
-  return (
-    !params.tryNative &&
-    isSourceArtifactPath(params.modulePath) &&
-    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
-  );
-}
-
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
@@ -124,7 +116,15 @@ function loadPublicSurfaceModule(modulePath: string): unknown {
     moduleUrl: import.meta.url,
     preferBuiltDist: true,
   });
-  if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
+  if (!tryNative && isSourceArtifactPath(modulePath)) {
+    // Bundled source artifacts commonly use repo-wide `.js` import specifiers
+    // that rely on Jiti's extension remapping when loading from `.ts` sources.
+    return getJiti(modulePath)(modulePath);
+  }
+  if (
+    typeof sourceArtifactRequire.extensions?.[".ts"] === "function" &&
+    isSourceArtifactPath(modulePath)
+  ) {
     return sourceArtifactRequire(modulePath);
   }
   return getJiti(modulePath)(modulePath);

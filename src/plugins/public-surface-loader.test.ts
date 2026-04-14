@@ -65,8 +65,9 @@ describe("bundled plugin public surface loader", () => {
     }
   });
 
-  it("prefers source require for bundled source public artifacts when a ts require hook exists", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "jiti-should-not-run" })));
+  it("prefers jiti for bundled source public artifacts even when a ts require hook exists", async () => {
+    const jitiLoader = vi.fn(() => ({ marker: "source-jiti-ok" }));
+    const createJiti = vi.fn(() => jitiLoader);
     vi.doMock("jiti", () => ({
       createJiti,
     }));
@@ -101,8 +102,9 @@ describe("bundled plugin public surface loader", () => {
         dirName: "demo",
         artifactBasename: "secret-contract-api.js",
       }).marker,
-    ).toBe("source-require-ok");
-    expect(requireLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
-    expect(createJiti).not.toHaveBeenCalled();
+    ).toBe("source-jiti-ok");
+    expect(jitiLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
+    expect(requireLoader).not.toHaveBeenCalled();
+    expect(createJiti).toHaveBeenCalled();
   });
 });

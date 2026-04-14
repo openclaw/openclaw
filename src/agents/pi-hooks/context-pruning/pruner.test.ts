@@ -91,6 +91,7 @@ function buildToolTrimSettings() {
     tools: DEFAULT_CONTEXT_PRUNING_SETTINGS.tools,
     softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
     hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+    microCompress: DEFAULT_CONTEXT_PRUNING_SETTINGS.microCompress,
   };
 }
 
@@ -101,6 +102,12 @@ function expectToolResultWasTrimmed(result: AgentMessage[]) {
   >;
   const textBlock = toolResult.content[0] as { type: "text"; text: string };
   expect(textBlock.text).toContain("[Tool result trimmed:");
+}
+
+function getToolResultText(result: AgentMessage[], index = 1): string {
+  const toolResult = result[index] as Extract<AgentMessage, { role: "toolResult" }>;
+  const textBlock = toolResult.content[0] as { type: "text"; text: string };
+  return textBlock.text;
 }
 
 describe("pruneContextMessages", () => {
@@ -221,6 +228,266 @@ describe("pruneContextMessages", () => {
     expect(result).toBe(messages);
   });
 
+  it("micro-compresses CRLF-heavy tool output before trim thresholds are evaluated", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\r\n\r\nalpha\r\nbeta\r\n" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\nbeta");
+  });
+
+  it("strips ANSI-colored output before trim thresholds are evaluated", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\u001b[31merror\u001b[0m\nok" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(getToolResultText(result)).toBe("error\nok");
+  });
+
+  it("collapses repeated blank lines and trims trailing whitespace", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "alpha  \n\n\n\nbeta   \n" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\n\nbeta");
+  });
+
+  it("leaves tool results unchanged when micro-compression cannot reduce size", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "alpha\nbeta" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(result).toBe(messages);
+  });
+
+  it("skips micro-compression rewrites that would grow multi-block tool results", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([
+        { type: "text", text: "alpha" },
+        { type: "text", text: "beta" },
+        { type: "text", text: "gamma " },
+      ]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(result).toBe(messages);
+  });
+
+  it("can disable micro-compression entirely", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\u001b[31merror\u001b[0m\r\n" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        microCompress: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.microCompress,
+          enabled: false,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(result).toBe(messages);
+  });
+
+  it("supports disabling individual micro-compression transforms", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\u001b[31merror\u001b[0m\r\n\r\n" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        microCompress: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.microCompress,
+          stripAnsi: false,
+          collapseBlankLines: false,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(getToolResultText(result)).toBe("\u001b[31merror\u001b[0m");
+  });
+
+  it("still normalizes CR-only line endings when that is the only change", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "alpha\rbeta\r" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        microCompress: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.microCompress,
+          stripAnsi: false,
+          trimTrailingWhitespace: false,
+          collapseBlankLines: false,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\nbeta");
+  });
+
+  it("never micro-compresses user or assistant messages", () => {
+    const messages: AgentMessage[] = [
+      makeUser("alpha  \r\n\r\n"),
+      makeAssistant([{ type: "text", text: "\u001b[31mbeta\u001b[0m  " }]),
+      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...buildToolTrimSettings(),
+        keepLastAssistants: 0,
+        softTrimRatio: 0,
+      },
+      ctx: CONTEXT_WINDOW_5K,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 100,
+    });
+
+    expect(result[0]).toBe(messages[0]);
+    expect(result[1]).toBe(messages[1]);
+    expectToolResultWasTrimmed(result);
+  });
+
+  it("normalizes text around image placeholders before trimming", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([
+        { type: "text", text: "\r\n\r\nalpha  " },
+        { type: "image", data: "img", mimeType: "image/png" },
+        { type: "text", text: "\n\n\nbeta\t\t" },
+      ]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\n[image removed during context pruning]\n\nbeta");
+  });
+
   it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),
@@ -296,6 +563,122 @@ describe("pruneContextMessages", () => {
     expect(toolResult.content).toEqual([
       { type: "text", text: "[image removed during context pruning]" },
     ]);
+  });
+
+  it("stops before soft-trim once micro-compression drops below soft-trim ratio", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\r\n".repeat(200) + "alpha\r\nbeta\r\n" }]),
+      makeToolResult([{ type: "text", text: "X".repeat(250) }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.7,
+        hardClearRatio: 10,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 120,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\nbeta");
+    expect(getToolResultText(result, 2)).toBe("X".repeat(250));
+  });
+
+  it("still rewrites image placeholders after micro-compression drops below soft-trim ratio", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\r\n".repeat(200) + "alpha\r\nbeta\r\n" }]),
+      makeToolResult([
+        { type: "text", text: "\r\n\r\nbefore  " },
+        { type: "image", data: "img", mimeType: "image/png" },
+        { type: "text", text: "\n\nafter\t\t" },
+      ]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.7,
+        hardClearRatio: 10,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 120,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\nbeta");
+    expect(getToolResultText(result, 2)).toBe(
+      "before\n[image removed during context pruning]\n\nafter",
+    );
+  });
+
+  it("keeps text-only tool results once only image cleanup remains necessary", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "text", text: "\r\n".repeat(200) + "alpha\r\nbeta\r\n" }]),
+      makeToolResult([{ type: "text", text: "B".repeat(6_000) }]),
+      makeToolResult([
+        { type: "text", text: "\r\n\r\nbefore  " },
+        { type: "image", data: "img", mimeType: "image/png" },
+        { type: "text", text: "\n\nafter\t\t" },
+      ]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.7,
+        hardClearRatio: 10,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 5_100,
+    });
+
+    expect(getToolResultText(result)).toBe("alpha\nbeta");
+    expect(getToolResultText(result, 2)).toBe("B".repeat(6_000));
+    expect(getToolResultText(result, 3)).toBe(
+      "before\n[image removed during context pruning]\n\nafter",
+    );
   });
 
   it("hard-clears image-containing tool results once ratios require clearing", () => {

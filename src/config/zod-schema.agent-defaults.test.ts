@@ -55,6 +55,23 @@ describe("agent defaults schema", () => {
     expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
   });
 
+  it("accepts contextPruning.microCompress options", () => {
+    const result = AgentDefaultsSchema.parse({
+      contextPruning: {
+        mode: "cache-ttl",
+        microCompress: {
+          enabled: true,
+          stripAnsi: false,
+          trimTrailingWhitespace: true,
+          collapseBlankLines: false,
+        },
+      },
+    })!;
+
+    expect(result.contextPruning?.microCompress?.stripAnsi).toBe(false);
+    expect(result.contextPruning?.microCompress?.collapseBlankLines).toBe(false);
+  });
+
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
       heartbeat: { timeoutSeconds: 45 },

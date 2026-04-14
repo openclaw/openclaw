@@ -1,9 +1,19 @@
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
 
+let pruneContextMessagesPromise:
+  | Promise<typeof import("./pruner.js").pruneContextMessages>
+  | undefined;
+
+async function getPruneContextMessages() {
+  if (!pruneContextMessagesPromise) {
+    pruneContextMessagesPromise = import("./pruner.js").then((mod) => mod.pruneContextMessages);
+  }
+  return await pruneContextMessagesPromise;
+}
+
 export default function contextPruningExtension(api: ExtensionAPI): void {
-  api.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
+  api.on("context", async (event: ContextEvent, ctx: ExtensionContext) => {
     const runtime = getContextPruningRuntime(ctx.sessionManager);
     if (!runtime) {
       return undefined;
@@ -20,6 +30,7 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
       }
     }
 
+    const pruneContextMessages = await getPruneContextMessages();
     const next = pruneContextMessages({
       messages: event.messages,
       settings: runtime.settings,
