@@ -165,11 +165,22 @@ export const downloadVideoTool = {
         { signal }
       );
       
-      // Create sanitized filename
-      const sanitized = rawTitle.trim()
+      // Create sanitized filename with fallback for non-ASCII titles
+      let sanitized = rawTitle.trim()
         .replace(/[^a-zA-Z0-9\s]/g, '')
         .replace(/\s+/g, '_')
         .substring(0, 50);
+      
+      if (!sanitized) {
+        sanitized = rawTitle.trim()
+          .replace(/[^\p{L}\p{N}\s]/gu, '')
+          .replace(/\s+/g, '_')
+          .substring(0, 50);
+      }
+      
+      if (!sanitized) {
+        sanitized = `video_${Date.now()}`;
+      }
       
       const outputTemplate = `${sanitized}.%(ext)s`;
 
