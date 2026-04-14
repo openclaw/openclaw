@@ -1,7 +1,41 @@
 services:
+  openclaw-init:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    # Repair node-owned runtime dirs on every compose start so a fresh
+    # OPENCLAW_HOME_VOLUME does not hide the image-baked writable tool paths.
+    user: root
+    environment:
+      HOME: /home/node
+      PNPM_HOME: /home/node/.local/share/pnpm
+      NPM_CONFIG_PREFIX: /home/node/.npm-global
+      GOPATH: /home/node/go
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+    init: true
+    restart: "no"
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        set -eu
+        mkdir -p /home/node/.openclaw /home/node/.openclaw/workspace
+        mkdir -p /home/node/.cache /home/node/.npm "${PNPM_HOME:-/home/node/.local/share/pnpm}" \
+          "${NPM_CONFIG_PREFIX:-/home/node/.npm-global}/bin" "${GOPATH:-/home/node/go}/bin"
+        chown -R node:node /home/node/.cache /home/node/.local /home/node/.npm \
+          /home/node/.npm-global /home/node/go
+        find /home/node/.openclaw -xdev -exec chown node:node {} +
+        [ -d /home/node/.openclaw/workspace/.openclaw ] && \
+          chown -R node:node /home/node/.openclaw/workspace/.openclaw || true
+
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    # Keep the runtime on the image default `node` user so `docker compose exec`
+    # against the running gateway does not create root-owned config/state files.
+    # Rely on the image's default entrypoint so pinned older tags still start.
     environment:
+      # Compose reads the project .env for interpolation, but only this
+      # allowlist is injected so host-only overrides do not leak into Docker.
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
@@ -26,6 +60,9 @@ services:
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    depends_on:
+      openclaw-init:
+        condition: service_completed_successfully
     command:
       [
         "node",
@@ -58,6 +95,8 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
+      # Keep the CLI env surface aligned with the gateway allowlist instead of
+      # passing every project-root .env key into the container.
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
@@ -75,4 +114,5 @@ services:
     init: true
     entrypoint: ["node", "dist/index.js"]
     depends_on:
-      - openclaw-gateway
+      openclaw-gateway:
+        condition: service_started

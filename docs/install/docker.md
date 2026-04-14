@@ -50,7 +50,6 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 
   <Step title="Complete onboarding">
     The setup script runs onboarding automatically. It will:
-
     - prompt for provider API keys
     - generate a gateway token and write it to `.env`
     - start the gateway via Docker Compose
@@ -124,15 +123,136 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                       | Purpose                                                          |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                   |
-| `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)        |
-| `OPENCLAW_EXTENSIONS`          | Pre-install extension deps at build time (space-separated names) |
-| `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
-| `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
-| `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
-| `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
+| Variable                             | Purpose                                                          |
+| ------------------------------------ | ---------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`                     | Use a remote image instead of building locally                   |
+| `OPENCLAW_DOCKER_APT_PACKAGES`       | Install extra apt packages during build (space-separated)        |
+| `OPENCLAW_INSTALL_BROWSER`           | Install Chromium and Playwright deps during the image build      |
+| `OPENCLAW_EXTENSIONS`                | Pre-install extension deps at build time (space-separated names) |
+| `OPENCLAW_EXTRA_MOUNTS`              | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
+| `OPENCLAW_HOME_VOLUME`               | Persist `/home/node` in a named Docker volume                    |
+| `OPENCLAW_SANDBOX`                   | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
+| `OPENCLAW_DOCKER_SOCKET`             | Override Docker socket path                                      |
+| `OPENCLAW_INSTALL_DOCKER_CLI`        | Install Docker CLI in the image (auto-set for sandbox bootstrap) |
+| `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS` | Allow trusted private-network `ws://` client targets             |
+| `OPENCLAW_TZ`                        | Set container timezone (for example `America/Los_Angeles`)       |
+| `OPENCLAW_DOCKER_EXEC_SECURITY`      | Pin `tools.exec.security` during Docker setup                    |
+| `OPENCLAW_DOCKER_EXEC_ASK`           | Pin `tools.exec.ask` during Docker setup                         |
+| `OPENCLAW_DOCKER_EXEC_ASK_FALLBACK`  | Pin gateway exec approval fallback policy during Docker setup    |
+
+### Use a remote image (skip local build)
+
+Use image name `ghcr.io/openclaw/openclaw` (not similarly named Docker Hub
+images).
+
+Common tags:
+
+- `main` — latest build from `main`
+- `<version>` — release tag builds (for example `2026.3.12`)
+- `latest` — latest stable release tag
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+./scripts/docker/setup.sh
+```
+
+### Extra mounts (optional)
+
+Set `OPENCLAW_EXTRA_MOUNTS` to add host directories to both containers:
+
+```bash
+export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/home/node/github:rw"
+./scripts/docker/setup.sh
+```
+
+Notes:
+
+- Paths must be shared with Docker Desktop on macOS/Windows.
+- Each entry must be `source:target[:options]` with no spaces or control characters.
+- Rerun the setup script after changing the value so `docker-compose.extra.yml`
+  is regenerated.
+
+### Persist the entire container home (optional)
+
+Use `OPENCLAW_HOME_VOLUME` if you want `/home/node` to survive container
+recreation:
+
+```bash
+export OPENCLAW_HOME_VOLUME="openclaw_home"
+./scripts/docker/setup.sh
+```
+
+OpenClaw bootstraps the writable tool dirs inside that volume on setup and on
+every `docker compose up`, so `pnpm`, `npm -g`, `go install`, and cache writes
+still work after the fresh `/home/node` mount hides the image-baked paths.
+
+### Install extra apt packages (optional)
+
+`OPENCLAW_DOCKER_APT_PACKAGES` installs additional Debian packages at build time:
+
+```bash
+export OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg build-essential"
+./scripts/docker/setup.sh
+```
+
+The Docker image already includes a baseline for common container workflows:
+`cron`, `gosu`, `pnpm`, non-root `npm -g`, `go install`, Linuxbrew, and browser
+runtime libraries. Add only the extra packages your environment needs.
+
+### Install browser dependencies at build time (optional)
+
+If you want Chromium baked into the image instead of downloading it later:
+
+```bash
+export OPENCLAW_INSTALL_BROWSER=1
+./scripts/docker/setup.sh
+```
+
+This installs Chromium through Playwright during the image build, configures
+Docker-safe browser defaults automatically, and wires
+`browser.executablePath` to the bundled
+`openclaw-playwright-chromium` launcher. Verify it from the running gateway:
+
+```bash
+docker compose exec openclaw-gateway node dist/index.js browser status
+```
+
+### Keep permissive exec policy in Docker (optional, trusted setups only)
+
+If you want Docker setup to keep gateway exec fully permissive across rebuilds
+and restarts:
+
+```bash
+export OPENCLAW_DOCKER_EXEC_SECURITY=full
+export OPENCLAW_DOCKER_EXEC_ASK=off
+export OPENCLAW_DOCKER_EXEC_ASK_FALLBACK=full
+./scripts/docker/setup.sh
+```
+
+This pins both `tools.exec.*` config and the gateway `exec-approvals.json`
+defaults for the `main` agent. Use this only on a trusted single-user gateway,
+because it disables interactive approval prompts for host exec.
+
+### Pre-install extension dependencies (optional)
+
+Extensions with their own `package.json` can be baked into the image:
+
+```bash
+export OPENCLAW_EXTENSIONS="diagnostics-otel matrix"
+./scripts/docker/setup.sh
+```
+
+### Base image metadata
+
+The main Docker image uses `node:24-bookworm` and publishes OCI base-image
+annotations including:
+
+- `org.opencontainers.image.base.name`
+- `org.opencontainers.image.base.digest`
+- `org.opencontainers.image.source`
+- `org.opencontainers.image.documentation`
+
+Reference: [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 
 ### Health checks
 
@@ -178,6 +298,12 @@ That mounted config directory is where OpenClaw keeps:
 - `openclaw.json` for behavior config
 - `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
+
+Compose reads the project-root Docker `.env` for variable interpolation, but
+the containers only receive the allowlisted environment keys declared in
+`docker-compose.yml`. Put extra OpenClaw runtime env vars in
+`$OPENCLAW_CONFIG_DIR/.env`; that file lives inside the mounted config
+directory and is preserved across container replacement.
 
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).

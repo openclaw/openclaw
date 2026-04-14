@@ -11,6 +11,9 @@ RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
+DOCKER_EXEC_SECURITY="${OPENCLAW_DOCKER_EXEC_SECURITY:-}"
+DOCKER_EXEC_ASK="${OPENCLAW_DOCKER_EXEC_ASK:-}"
+DOCKER_EXEC_ASK_FALLBACK="${OPENCLAW_DOCKER_EXEC_ASK_FALLBACK:-}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -105,36 +108,132 @@ read_env_gateway_token() {
   fi
 }
 
-sync_gateway_config() {
-  local allowed_origin_json=""
-  local current_allowed_origins=""
-  local batch_json=""
+config_path_exists() {
+  local path="$1"
+  local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
+  if [[ ! -f "$config_path" ]]; then
+    return 1
+  fi
+  # Ask the containerized CLI so path checks honor the same JSON5 parsing and
+  # config semantics as `openclaw config`, regardless of host tooling.
+  run_prestart_cli config get "$path" >/dev/null 2>&1
+}
 
-  if [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
-    allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
-    current_allowed_origins="$(
-      run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
-    )"
-    current_allowed_origins="${current_allowed_origins//$'\r'/}"
+set_config_if_missing() {
+  local path="$1"
+  local value="$2"
+
+  if config_path_exists "$path"; then
+    return 0
   fi
 
-  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$OPENCLAW_GATEWAY_BIND")"
-  if [[ -n "$allowed_origin_json" ]]; then
-    if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
-      echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
-    else
-      batch_json+=",{\"path\":\"gateway.controlUi.allowedOrigins\",\"value\":$allowed_origin_json}"
-    fi
-  fi
-  batch_json+="]"
+  run_prestart_cli config set "$path" "$value" >/dev/null
+  echo "Set $path=$value"
+}
 
-  run_prestart_cli config set --batch-json "$batch_json" >/dev/null
+set_config_value() {
+  local path="$1"
+  local value="$2"
+  run_prestart_cli config set "$path" "$value" >/dev/null
+  echo "Set $path=$value"
+}
+
+configure_docker_browser_defaults() {
+  if [[ -z "${OPENCLAW_INSTALL_BROWSER:-}" ]]; then
+    return 0
+  fi
+
+  # Only seed browser defaults when the selected image can actually launch the
+  # bundled Chromium wrapper. Pulled images may not have the browser payload.
+  if ! run_prestart_gateway --user node --entrypoint sh openclaw-gateway \
+    -lc 'openclaw-playwright-chromium --version >/dev/null 2>&1'; then
+    echo "Skipping Docker browser defaults because Playwright Chromium is not installed in $IMAGE_NAME."
+    return 0
+  fi
+
+  echo "Applying Docker browser defaults for Playwright Chromium."
+  set_config_if_missing browser.enabled true
+  set_config_if_missing browser.defaultProfile openclaw
+  set_config_if_missing browser.headless true
+  set_config_if_missing browser.noSandbox true
+  set_config_if_missing browser.executablePath /usr/local/bin/openclaw-playwright-chromium
+}
+
+validate_exec_security_value() {
+  local label="$1"
+  local value="$2"
+  case "$value" in
+    deny | allowlist | full) ;;
+    *) fail "$label must be one of: deny, allowlist, full." ;;
+  esac
+}
+
+validate_exec_ask_value() {
+  local label="$1"
+  local value="$2"
+  case "$value" in
+    off | on-miss | always) ;;
+    *) fail "$label must be one of: off, on-miss, always." ;;
+  esac
+}
+
+write_exec_approvals_policy() {
+  local approvals_path="/home/node/.openclaw/exec-approvals.json"
+  local update_script='const fs=require("node:fs"); const [approvalsPath, security, ask, askFallback]=process.argv.slice(1); let data={}; if (fs.existsSync(approvalsPath)) { try { data=JSON.parse(fs.readFileSync(approvalsPath, "utf8")); } catch (error) { const message=error instanceof Error ? error.message : String(error); console.error(`Failed to parse ${approvalsPath}: ${message}`); process.exit(1); } } if (!data || typeof data !== "object" || Array.isArray(data)) { console.error(`Failed to parse ${approvalsPath}: expected a JSON object`); process.exit(1); } data.version ??= 1; data.defaults = data.defaults && typeof data.defaults === "object" ? data.defaults : {}; data.agents = data.agents && typeof data.agents === "object" ? data.agents : {}; data.agents.main = data.agents.main && typeof data.agents.main === "object" ? data.agents.main : {}; for (const target of [data.defaults, data.agents.main]) { if (security) target.security = security; if (ask) target.ask = ask; if (askFallback) target.askFallback = askFallback; } fs.writeFileSync(approvalsPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");'
+
+  # Keep approvals writes inside the container mount so reruns do not depend
+  # on the host uid matching the image's node user.
+  run_prestart_gateway --user node --entrypoint node openclaw-gateway \
+    -e "$update_script" \
+    "$approvals_path" \
+    "$DOCKER_EXEC_SECURITY" \
+    "$DOCKER_EXEC_ASK" \
+    "$DOCKER_EXEC_ASK_FALLBACK" >/dev/null
+}
+
+configure_docker_exec_policy() {
+  if [[ -z "$DOCKER_EXEC_SECURITY" && -z "$DOCKER_EXEC_ASK" && -z "$DOCKER_EXEC_ASK_FALLBACK" ]]; then
+    return 0
+  fi
+
+  echo "Applying Docker exec policy defaults."
+  if [[ -n "$DOCKER_EXEC_SECURITY" ]]; then
+    set_config_value tools.exec.security "$DOCKER_EXEC_SECURITY"
+  fi
+  if [[ -n "$DOCKER_EXEC_ASK" ]]; then
+    set_config_value tools.exec.ask "$DOCKER_EXEC_ASK"
+  fi
+  write_exec_approvals_policy
+  echo "Aligned exec approvals defaults in $OPENCLAW_CONFIG_DIR/exec-approvals.json."
+}
+
+ensure_control_ui_allowed_origins() {
+  if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
+    return 0
+  fi
+
+  local allowed_origin_json
+  local current_allowed_origins
+  allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
+  current_allowed_origins="$(
+    run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+  )"
+  current_allowed_origins="${current_allowed_origins//$'\r'/}"
+
+  if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
+    echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
+    return 0
+  fi
+
+  run_prestart_cli config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json \
+    >/dev/null
+  echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
+}
+
+sync_gateway_mode_and_bind() {
+  run_prestart_cli config set gateway.mode local >/dev/null
+  run_prestart_cli config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
-  if [[ -n "$allowed_origin_json" ]]; then
-    if [[ -z "$current_allowed_origins" || "$current_allowed_origins" == "null" || "$current_allowed_origins" == "[]" ]]; then
-      echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
-    fi
-  fi
 }
 
 run_prestart_gateway() {
@@ -146,7 +245,7 @@ run_prestart_cli() {
   # requires the gateway container's network namespace to already exist. That
   # creates a circular dependency for config writes that are needed before the
   # gateway can start cleanly.
-  run_prestart_gateway --entrypoint node openclaw-gateway \
+  run_prestart_gateway --user node --entrypoint node openclaw-gateway \
     dist/index.js "$@"
 }
 
@@ -261,6 +360,24 @@ if [[ -n "$TIMEZONE" ]]; then
     fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
   fi
 fi
+if [[ -n "$DOCKER_EXEC_SECURITY" ]]; then
+  if contains_disallowed_chars "$DOCKER_EXEC_SECURITY"; then
+    fail "OPENCLAW_DOCKER_EXEC_SECURITY contains unsupported control characters."
+  fi
+  validate_exec_security_value "OPENCLAW_DOCKER_EXEC_SECURITY" "$DOCKER_EXEC_SECURITY"
+fi
+if [[ -n "$DOCKER_EXEC_ASK" ]]; then
+  if contains_disallowed_chars "$DOCKER_EXEC_ASK"; then
+    fail "OPENCLAW_DOCKER_EXEC_ASK contains unsupported control characters."
+  fi
+  validate_exec_ask_value "OPENCLAW_DOCKER_EXEC_ASK" "$DOCKER_EXEC_ASK"
+fi
+if [[ -n "$DOCKER_EXEC_ASK_FALLBACK" ]]; then
+  if contains_disallowed_chars "$DOCKER_EXEC_ASK_FALLBACK"; then
+    fail "OPENCLAW_DOCKER_EXEC_ASK_FALLBACK contains unsupported control characters."
+  fi
+  validate_exec_security_value "OPENCLAW_DOCKER_EXEC_ASK_FALLBACK" "$DOCKER_EXEC_ASK_FALLBACK"
+fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
@@ -277,6 +394,7 @@ export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
+export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
@@ -284,6 +402,9 @@ export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 export OPENCLAW_TZ="$TIMEZONE"
+export OPENCLAW_DOCKER_EXEC_SECURITY="$DOCKER_EXEC_SECURITY"
+export OPENCLAW_DOCKER_EXEC_ASK="$DOCKER_EXEC_ASK"
+export OPENCLAW_DOCKER_EXEC_ASK_FALLBACK="$DOCKER_EXEC_ASK_FALLBACK"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
@@ -328,8 +449,6 @@ write_extra_compose() {
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
 services:
-  openclaw-gateway:
-    volumes:
 YAML
 
   if [[ -n "$home_volume" ]]; then
@@ -339,6 +458,21 @@ YAML
     validate_mount_spec "$gateway_home_mount"
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
+    cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
+  openclaw-init:
+    volumes:
+YAML
+    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+  fi
+
+  cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
+  openclaw-gateway:
+    volumes:
+YAML
+
+  if [[ -n "$home_volume" ]]; then
     printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
@@ -469,7 +603,11 @@ upsert_env "$ENV_FILE" \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
-  OPENCLAW_TZ
+  OPENCLAW_INSTALL_BROWSER \
+  OPENCLAW_TZ \
+  OPENCLAW_DOCKER_EXEC_SECURITY \
+  OPENCLAW_DOCKER_EXEC_ASK \
+  OPENCLAW_DOCKER_EXEC_ASK_FALLBACK
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
@@ -477,6 +615,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
+    --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
     "$ROOT_DIR"
@@ -491,6 +630,12 @@ fi
 # Ensure bind-mounted data directories are writable by the container's `node`
 # user (uid 1000). Host-created dirs inherit the host user's uid which may
 # differ, causing EACCES when the container tries to mkdir/write.
+# Also recreate the tool/cache dirs that disappear behind a fresh
+# OPENCLAW_HOME_VOLUME so onboarding and later runtime shells can still write
+# pnpm, npm, Go, and cache state as `node`.
+# Keep the long-running gateway on the image default `node` user so routine
+# `docker compose exec openclaw-gateway ...` flows do not leave root-owned
+# state behind; this one-shot root container is the ownership repair step.
 # Running a brief root container to chown is the portable Docker idiom --
 # it works regardless of the host uid and doesn't require host-side root.
 echo ""
@@ -501,7 +646,14 @@ echo "==> Fixing data-directory permissions"
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+  'set -eu; \
+   mkdir -p /home/node/.openclaw /home/node/.openclaw/workspace /home/node/.cache /home/node/.npm \
+      "${PNPM_HOME:-/home/node/.local/share/pnpm}" \
+      "${NPM_CONFIG_PREFIX:-/home/node/.npm-global}/bin" \
+      "${GOPATH:-/home/node/go}/bin"; \
+   chown -R node:node /home/node/.cache /home/node/.local /home/node/.npm \
+      /home/node/.npm-global /home/node/go; \
+   find /home/node/.openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
@@ -517,7 +669,19 @@ run_prestart_cli onboard --mode local --no-install-daemon
 
 echo ""
 echo "==> Docker gateway defaults"
-sync_gateway_config
+sync_gateway_mode_and_bind
+
+echo ""
+echo "==> Control UI origin allowlist"
+ensure_control_ui_allowed_origins
+
+echo ""
+echo "==> Browser defaults"
+configure_docker_browser_defaults
+
+echo ""
+echo "==> Exec policy defaults"
+configure_docker_exec_policy
 
 echo ""
 echo "==> Provider setup (optional)"

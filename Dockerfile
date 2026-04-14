@@ -4,7 +4,8 @@
 # Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
 #
 # Multi-stage build produces a minimal runtime image without build tools,
-# source code, or Bun. Works with Docker, Buildx, and Podman.
+# source code, or Bun while still allowing optional runtime tooling for
+# Docker-hosted workflows. Works with Docker, Buildx, and Podman.
 # The ext-deps stage extracts only the package.json files we need from the
 # bundled plugin workspace tree, so the main build layer is not invalidated by
 # unrelated plugin source changes.
@@ -58,6 +59,13 @@ RUN set -eux; \
 ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable
+
+ENV PNPM_HOME=/home/node/.local/share/pnpm
+ENV NPM_CONFIG_PREFIX=/home/node/.npm-global
+ENV GOPATH=/home/node/go
+ENV PATH="/usr/local/go/bin:${PNPM_HOME}:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:${PATH}"
+RUN mkdir -p "${PNPM_HOME}" "${NPM_CONFIG_PREFIX}/bin" "${GOPATH}/bin" && \
+  chown -R node:node /home/node/.local /home/node/.npm-global /home/node/go
 
 WORKDIR /app
 
@@ -148,21 +156,21 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
 
 WORKDIR /app
-
-# Install system utilities present in bookworm but missing in bookworm-slim.
-# On the full bookworm image these are already installed (apt-get is a no-op).
-# Smoke workflows can opt out of distro upgrades to cut repeated CI time while
-# keeping the default runtime image behavior unchanged.
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-    apt-get update && \
-    if [ "${OPENCLAW_DOCKER_APT_UPGRADE}" != "0" ]; then \
-      DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
-    fi && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl
-
+ENV PNPM_HOME=/home/node/.local/share/pnpm
+ENV NPM_CONFIG_PREFIX=/home/node/.npm-global
+ENV COREPACK_HOME=/usr/local/share/corepack
+ENV GOPATH=/home/node/go
+ENV HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew
+ENV HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar
+ENV HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew
+ENV PATH="/usr/local/go/bin:${PNPM_HOME}:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:${PATH}"
 RUN chown node:node /app
+# Keep these dirs writable in the baked image; docker-compose.yml also repairs
+# them at container start when OPENCLAW_HOME_VOLUME hides /home/node.
+RUN mkdir -p /home/node/.cache "${PNPM_HOME}" "${NPM_CONFIG_PREFIX}/bin" "${COREPACK_HOME}" \
+    "${GOPATH}/bin" "${HOMEBREW_REPOSITORY}" "${HOMEBREW_CELLAR}" "${HOMEBREW_PREFIX}/bin" && \
+    chown -R node:node /home/node/.cache /home/node/.local /home/node/.npm-global /home/node/go /home/linuxbrew "${COREPACK_HOME}"
+RUN corepack enable
 
 COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
@@ -190,31 +198,121 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
     done && \
     chmod -R a+rX "$COREPACK_HOME"
 
-# Install additional system packages needed by your skills or extensions.
-# Example: docker build --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 wget" .
+# Install baseline system packages needed by the slim runtime and common
+# Docker workflows. Smoke workflows can opt out of distro upgrades to cut
+# repeated CI time, and extra packages can still be layered in without
+# reinstalling duplicates.
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-    if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES; \
-    fi
+    set -eux; \
+    apt-get update; \
+    if [ "${OPENCLAW_DOCKER_APT_UPGRADE}" != "0" ]; then \
+      DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
+    fi; \
+    BASE_APT_PACKAGES="\
+cron gosu \
+git curl wget ca-certificates jq unzip ripgrep procps hostname openssl lsof file \
+python3 python3-pip python3-venv \
+xvfb xauth \
+libgbm1 libnss3 libasound2 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxss1 libgtk-3-0"; \
+    EXTRA_APT_PACKAGES=""; \
+    for pkg in $OPENCLAW_DOCKER_APT_PACKAGES; do \
+      case " ${BASE_APT_PACKAGES} " in \
+        *" ${pkg} "*) ;; \
+        *) EXTRA_APT_PACKAGES="${EXTRA_APT_PACKAGES} ${pkg}" ;; \
+      esac; \
+    done; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${BASE_APT_PACKAGES} ${EXTRA_APT_PACKAGES}
 
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
+ENV OPENCLAW_PLAYWRIGHT_BROWSERS_PATH=/opt/openclaw/ms-playwright
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      mkdir -p /home/node/.cache/ms-playwright && \
-      PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
+      mkdir -p "$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH" && \
+      PLAYWRIGHT_BROWSERS_PATH="$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH" \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node /home/node/.cache/ms-playwright; \
+      chmod -R a+rX "$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH" && \
+      chown -R node:node "$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH"; \
     fi
+
+# ---- Install Go (official) ----
+# Pin Go so Docker rebuilds stay reproducible across hosts and CI runs.
+ARG GO_VERSION=1.26.1
+ARG GO_LINUX_AMD64_SHA256=031f088e5d955bab8657ede27ad4e3bc5b7c1ba281f05f245bcc304f327c987a
+ARG GO_LINUX_ARM64_SHA256=a290581cfe4fe28ddd737dde3095f3dbeb7f2e4065cab4eae44dfc53b760c2f7
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+  amd64) GOARCH=amd64; GOSHA256="$GO_LINUX_AMD64_SHA256" ;; \
+  arm64) GOARCH=arm64; GOSHA256="$GO_LINUX_ARM64_SHA256" ;; \
+  *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
+  esac; \
+  GOVERSION="go${GO_VERSION#go}"; \
+  echo "Installing ${GOVERSION} for linux-${GOARCH}"; \
+  curl -fsSL "https://go.dev/dl/${GOVERSION}.linux-${GOARCH}.tar.gz" -o /tmp/go.tgz; \
+  printf '%s  %s\n' "$GOSHA256" /tmp/go.tgz | sha256sum -c -; \
+  rm -rf /usr/local/go; \
+  tar -C /usr/local -xzf /tmp/go.tgz; \
+  rm -f /tmp/go.tgz; \
+  /usr/local/go/bin/go version
+
+# Ensure Go is first in PATH (no old go ahead of it)
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# ---- Install gog (gogcli) ----
+# Pin version by setting GOGCLI_TAG at build time.
+# Default stays pinned for reproducible CI builds.
+ARG GOGCLI_TAG=v0.11.0
+ARG GOGCLI_DEFAULT_TAG=v0.11.0
+ARG GOGCLI_LINUX_AMD64_SHA256=ca98ba56e29ccd3713fe7bf835fdca00ae1b97cdcb7b0bc5e393e7edb4089c84
+ARG GOGCLI_LINUX_ARM64_SHA256=1bfe980545641501488fed93c66fc76671c72a4605285f574572dac700efdd35
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+  amd64) GOGARCH=amd64; GOGSHA256="$GOGCLI_LINUX_AMD64_SHA256" ;; \
+  arm64) GOGARCH=arm64; GOGSHA256="$GOGCLI_LINUX_ARM64_SHA256" ;; \
+  *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
+  esac; \
+  tag="$GOGCLI_TAG"; \
+  if [ "$tag" = "latest" ]; then \
+  tag="$(curl -fsSI -H 'User-Agent: openclaw-docker-build' https://github.com/steipete/gogcli/releases/latest | awk 'tolower($1)==\"location:\" {print $2}' | tr -d '\r' | awk -F/ '{print $NF}' | tail -n1)"; \
+  if [ -z "$tag" ]; then \
+    echo "WARN: Failed to resolve gogcli latest release tag; falling back to v0.11.0" >&2; \
+    tag="v0.11.0"; \
+  fi; \
+  fi; \
+  ver="${tag#v}"; \
+  asset="gogcli_${ver}_linux_${GOGARCH}.tar.gz"; \
+  if [ "$tag" != "$GOGCLI_DEFAULT_TAG" ] || [ -z "$GOGSHA256" ]; then \
+    GOGSHA256="$(curl -fsSL "https://github.com/steipete/gogcli/releases/download/$tag/checksums.txt" | awk -v asset="$asset" '$2 == asset { print $1; exit }')"; \
+  fi; \
+  if [ -z "$GOGSHA256" ]; then \
+    echo "ERROR: Missing checksum for $asset" >&2; \
+    exit 1; \
+  fi; \
+  url="https://github.com/steipete/gogcli/releases/download/$tag/gogcli_${ver}_linux_${GOGARCH}.tar.gz"; \
+  echo "Downloading: $url"; \
+  curl -fsSL "$url" -o /tmp/gogcli.tgz; \
+  printf '%s  %s\n' "$GOGSHA256" /tmp/gogcli.tgz | sha256sum -c -; \
+  tar -xzf /tmp/gogcli.tgz -C /tmp; \
+  install -m 0755 /tmp/gog /usr/local/bin/gog; \
+  rm -f /tmp/gog /tmp/gogcli.tgz; \
+  gog --help >/dev/null
+
+# Install Linuxbrew in a node-writable prefix so brew installs work at runtime.
+# Pin the Homebrew source tarball for reproducible Docker builds.
+ARG HOMEBREW_BREW_TAG=5.1.3
+RUN set -eux; \
+  curl -fsSL "https://github.com/Homebrew/brew/archive/refs/tags/${HOMEBREW_BREW_TAG}.tar.gz" | tar xz --strip-components=1 -C "${HOMEBREW_REPOSITORY}"; \
+  ln -sf ../Homebrew/bin/brew "${HOMEBREW_PREFIX}/bin/brew"; \
+  chown -R node:node /home/linuxbrew
+RUN gosu node brew --version >/dev/null
 
 # Optionally install Docker CLI for sandbox container management.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
@@ -248,8 +346,19 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
+COPY --from=build --chown=node:node /app/scripts/docker ./scripts/docker
+# Normalize extension paths so plugin safety checks do not reject
+# world-writable directories inherited from source file modes.
+RUN for dir in /app/extensions /app/.agent /app/.agents; do \
+      if [ -d "$dir" ]; then \
+        find "$dir" -type d -exec chmod 755 {} +; \
+        find "$dir" -type f -exec chmod 644 {} +; \
+      fi; \
+    done
+RUN chmod +x scripts/docker/gateway-entrypoint.sh scripts/docker/playwright-chromium.sh
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
+ && ln -sf /app/scripts/docker/playwright-chromium.sh /usr/local/bin/openclaw-playwright-chromium \
  && chmod 755 /app/openclaw.mjs
 
 ENV NODE_ENV=production

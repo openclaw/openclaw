@@ -20,6 +20,70 @@ async function writeDockerStub(binDir: string, logPath: string) {
 set -euo pipefail
 log="$DOCKER_STUB_LOG"
 fail_match="\${DOCKER_STUB_FAIL_MATCH:-}"
+sync_exec_approvals() {
+  local approvals_path="$OPENCLAW_CONFIG_DIR/exec-approvals.json"
+  local security="$1"
+  local ask="$2"
+  local ask_fallback="$3"
+
+  node - "$approvals_path" "$security" "$ask" "$ask_fallback" <<'NODE'
+const fs = require("node:fs");
+const [approvalsPath, security, ask, askFallback] = process.argv.slice(2);
+
+let data = {};
+if (fs.existsSync(approvalsPath)) {
+  data = JSON.parse(fs.readFileSync(approvalsPath, "utf8"));
+}
+
+if (!data || typeof data !== "object" || Array.isArray(data)) {
+  throw new Error(\`Failed to parse \${approvalsPath}: expected a JSON object\`);
+}
+
+data.version ??= 1;
+data.defaults = data.defaults && typeof data.defaults === "object" ? data.defaults : {};
+data.agents = data.agents && typeof data.agents === "object" ? data.agents : {};
+data.agents.main =
+  data.agents.main && typeof data.agents.main === "object" ? data.agents.main : {};
+
+for (const target of [data.defaults, data.agents.main]) {
+  if (security) target.security = security;
+  if (ask) target.ask = ask;
+  if (askFallback) target.askFallback = askFallback;
+}
+
+fs.writeFileSync(approvalsPath, \`\${JSON.stringify(data, null, 2)}\\n\`, "utf8");
+NODE
+}
+config_path_exists_in_stub() {
+  local path="$1"
+  local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
+  if [[ ! -f "$config_path" ]]; then
+    return 1
+  fi
+
+  node - "$config_path" "$path" <<'NODE'
+const fs = require("node:fs");
+const vm = require("node:vm");
+const configPath = process.argv[2];
+const parts = process.argv[3].split(".");
+
+try {
+  const source = fs.readFileSync(configPath, "utf8");
+  let current = vm.runInNewContext(\`(\${source})\`, Object.create(null), {
+    timeout: 1000,
+  });
+  for (const part of parts) {
+    if (!current || typeof current !== "object" || !(part in current)) {
+      process.exit(1);
+    }
+    current = current[part];
+  }
+  process.exit(0);
+} catch {
+  process.exit(1);
+}
+NODE
+}
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "version" ]]; then
   exit 0
 fi
@@ -35,6 +99,32 @@ if [[ "\${1:-}" == "compose" ]]; then
   if [[ -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
     echo "compose-fail $*" >>"$log"
     exit 1
+  fi
+  if [[ "$*" == *"openclaw-playwright-chromium --version"* ]]; then
+    echo "compose $*" >>"$log"
+    if [[ "\${DOCKER_STUB_BROWSER_AVAILABLE:-1}" != "1" ]]; then
+      exit 1
+    fi
+    exit 0
+  fi
+  if [[ "$*" == *"dist/index.js config get "* ]]; then
+    args=("$@")
+    path_index=$((\${#args[@]} - 1))
+    if ! config_path_exists_in_stub "\${args[$path_index]}"; then
+      echo "compose-fail $*" >>"$log"
+      exit 1
+    fi
+  fi
+  if [[ "$*" == *"--entrypoint node openclaw-gateway -e"* && "$*" == *"/home/node/.openclaw/exec-approvals.json"* ]]; then
+    args=("$@")
+    approvals_path_index=$((\${#args[@]} - 4))
+    security_index=$((\${#args[@]} - 3))
+    ask_index=$((\${#args[@]} - 2))
+    ask_fallback_index=$((\${#args[@]} - 1))
+    sync_exec_approvals \
+      "\${args[$security_index]}" \
+      "\${args[$ask_index]}" \
+      "\${args[$ask_fallback_index]}"
   fi
   echo "compose $*" >>"$log"
   exit 0
@@ -226,16 +316,26 @@ describe("scripts/docker/setup.sh", () => {
       join(activeSandbox.rootDir, "docker-compose.extra.yml"),
       "utf8",
     );
+    expect(extraCompose).toContain("openclaw-init:");
     expect(extraCompose).toContain("openclaw-home:/home/node");
+    expect(extraCompose).toContain(
+      "openclaw-init:\n    volumes:\n      - openclaw-home:/home/node",
+    );
     expect(extraCompose).toContain("volumes:");
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readDockerLog(activeSandbox);
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
     expect(log).toContain(
-      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon",
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon",
     );
     expect(log).toContain(
-      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]',
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set gateway.mode local",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set gateway.bind lan",
+    );
+    expect(log).toContain(
+      'run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] --strict-json',
     );
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
@@ -301,6 +401,158 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_TZ=Asia/Shanghai");
   });
 
+  it("configures Docker browser defaults when OPENCLAW_INSTALL_BROWSER is enabled", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_INSTALL_BROWSER: "1",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("--build-arg OPENCLAW_INSTALL_BROWSER=1");
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set browser.enabled true",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set browser.defaultProfile openclaw",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set browser.headless true",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set browser.noSandbox true",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set browser.executablePath /usr/local/bin/openclaw-playwright-chromium",
+    );
+  });
+
+  it("preserves explicit browser config when Docker browser defaults are applied", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const configDir = join(activeSandbox.rootDir, "config-browser-explicit");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-browser-explicit");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "openclaw.json"),
+      `{
+        // JSON5 syntax should still count as explicitly configured.
+        browser: {
+          enabled: false,
+          headless: false,
+          executablePath: "/custom/browser",
+        },
+      }
+      `,
+    );
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_INSTALL_BROWSER: "1",
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config get browser.enabled",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config get browser.executablePath",
+    );
+    expect(log).not.toContain("config set browser.enabled true");
+    expect(log).not.toContain("config set browser.headless true");
+    expect(log).not.toContain(
+      "config set browser.executablePath /usr/local/bin/openclaw-playwright-chromium",
+    );
+    expect(log).toContain("config set browser.defaultProfile openclaw");
+    expect(log).toContain("config set browser.noSandbox true");
+  });
+
+  it("skips Docker browser defaults when the selected image lacks Chromium", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_IMAGE: "ghcr.io/openclaw/openclaw:latest",
+      OPENCLAW_INSTALL_BROWSER: "1",
+      DOCKER_STUB_BROWSER_AVAILABLE: "0",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("openclaw-playwright-chromium --version");
+    expect(log).not.toContain("config set browser.enabled true");
+    expect(log).not.toContain("config set browser.defaultProfile openclaw");
+    expect(log).not.toContain("config set browser.headless true");
+    expect(log).not.toContain("config set browser.noSandbox true");
+    expect(log).not.toContain(
+      "config set browser.executablePath /usr/local/bin/openclaw-playwright-chromium",
+    );
+  });
+
+  it("applies Docker exec policy defaults and preserves existing allowlist entries", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const configDir = join(activeSandbox.rootDir, "config-exec-policy");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-exec-policy");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "on-miss",
+          askFallback: "deny",
+        },
+        agents: {
+          main: {
+            allowlist: [{ pattern: "/usr/bin/uname" }],
+          },
+        },
+      }),
+    );
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+      OPENCLAW_DOCKER_EXEC_SECURITY: "full",
+      OPENCLAW_DOCKER_EXEC_ASK: "off",
+      OPENCLAW_DOCKER_EXEC_ASK_FALLBACK: "full",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set tools.exec.security full",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set tools.exec.ask off",
+    );
+    expect(log).toContain("run --rm --no-deps --user node --entrypoint node openclaw-gateway -e");
+
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_DOCKER_EXEC_SECURITY=full");
+    expect(envFile).toContain("OPENCLAW_DOCKER_EXEC_ASK=off");
+    expect(envFile).toContain("OPENCLAW_DOCKER_EXEC_ASK_FALLBACK=full");
+
+    const approvals = JSON.parse(await readFile(join(configDir, "exec-approvals.json"), "utf8"));
+    expect(approvals.defaults).toMatchObject({
+      security: "full",
+      ask: "off",
+      askFallback: "full",
+    });
+    expect(approvals.agents.main).toMatchObject({
+      security: "full",
+      ask: "off",
+      askFallback: "full",
+    });
+    expect(approvals.agents.main.allowlist).toEqual([{ pattern: "/usr/bin/uname" }]);
+  });
+
   it("precreates agent data dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");
@@ -324,6 +576,10 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+    expect(log).toContain("set -eu;");
+    expect(log).toContain("/home/node/.cache");
+    expect(log).toContain("/home/node/.npm-global");
+    expect(log).toContain("/home/node/go");
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
@@ -537,7 +793,9 @@ describe("scripts/docker/setup.sh", () => {
   it("keeps docker-compose CLI network namespace settings in sync", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose).toContain('network_mode: "service:openclaw-gateway"');
-    expect(compose).toContain("depends_on:\n      - openclaw-gateway");
+    expect(compose).toContain(
+      "depends_on:\n      openclaw-gateway:\n        condition: service_started",
+    );
   });
 
   it("keeps docker-compose gateway token env defaults aligned across services", async () => {
@@ -550,5 +808,31 @@ describe("scripts/docker/setup.sh", () => {
   it("keeps docker-compose timezone env defaults aligned across services", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
+  });
+
+  it("allowlists Docker runtime env keys instead of injecting the full project .env", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose).not.toContain("env_file:");
+    expect(compose).not.toContain("/app/.env:ro");
+  });
+
+  it("bootstraps node-owned runtime dirs before starting the gateway", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose).toContain("openclaw-init:");
+    expect(compose).toContain("condition: service_completed_successfully");
+    expect(compose).toContain("set -eu");
+    expect(compose).toContain(
+      'mkdir -p /home/node/.cache /home/node/.npm "${PNPM_HOME:-/home/node/.local/share/pnpm}"',
+    );
+    expect(compose).toContain(
+      "chown -R node:node /home/node/.cache /home/node/.local /home/node/.npm",
+    );
+  });
+
+  it("keeps the gateway on the image-default user while the init service runs as root", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose).toMatch(/openclaw-init:[\s\S]*?\n\s+user: root/);
+    expect(compose).not.toMatch(/openclaw-gateway:[\s\S]*?\n\s+user: root/);
+    expect(compose).not.toContain('entrypoint: ["/app/scripts/docker/gateway-entrypoint.sh"]');
   });
 });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
@@ -21,6 +21,7 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
 import {
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
+  resolveScopedChannelPluginIds,
 } from "./channel-plugin-ids.js";
 
 function createManifestRegistryFixture() {
@@ -135,16 +136,16 @@ function expectStartupPluginIds(params: {
   activationSourceConfig?: OpenClawConfig;
   expected: readonly string[];
 }) {
-  expect(
-    resolveGatewayStartupPluginIds({
-      config: params.config,
-      ...(params.activationSourceConfig !== undefined
-        ? { activationSourceConfig: params.activationSourceConfig }
-        : {}),
-      workspaceDir: "/tmp",
-      env: process.env,
-    }),
-  ).toEqual(params.expected);
+  const runtimeParams = {
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    workspaceDir: "/tmp",
+    env: process.env,
+  } satisfies Parameters<typeof resolveGatewayStartupPluginIds>[0];
+
+  expect(resolveGatewayStartupPluginIds(runtimeParams)).toEqual(params.expected);
   expect(loadPluginManifestRegistry).toHaveBeenCalled();
 }
 
@@ -467,7 +468,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
 
   it("does not treat auto-enabled non-bundled channel owners as explicitly trusted", () => {
     expect(
-      resolveConfiguredChannelPluginIds({
+      resolveScopedChannelPluginIds({
         config: createStartupConfig({
           channelIds: ["global-activation-channel"],
           enabledPluginIds: ["global-activation-channel-plugin"],
@@ -475,6 +476,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         activationSourceConfig: createStartupConfig({
           channelIds: ["global-activation-channel"],
         }),
+        channelIds: ["global-activation-channel"],
         workspaceDir: "/tmp",
         env: process.env,
       }),
