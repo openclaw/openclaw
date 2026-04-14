@@ -57,6 +57,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     outputs:
       baseline_file_name: ${{ steps.baseline_metadata.outputs.file_name }}
@@ -243,6 +244,7 @@ jobs:
     name: "${{ matrix.display_name }} / ${{ matrix.lane }}"
     needs: prepare
     permissions:
+      actions: read
       contents: read
     strategy:
       fail-fast: false
