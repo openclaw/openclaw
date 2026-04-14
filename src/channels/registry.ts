@@ -1,7 +1,4 @@
-import {
-  getActivePluginChannelRegistryFromState,
-  getPluginRegistryState,
-} from "../plugins/runtime-state.js";
+import { getActivePluginChannelRegistryFromState } from "../plugins/runtime-channel-state.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -14,7 +11,8 @@ import {
   normalizeChatChannelId,
   type ChatChannelId,
 } from "./ids.js";
-import type { ChannelId, ChannelMeta } from "./plugins/types.public.js";
+import type { ChannelId } from "./plugins/channel-id.types.js";
+import type { ChannelMeta } from "./plugins/types.core.js";
 export { getChatChannelMeta, listChatChannels } from "./chat-meta.js";
 export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";
@@ -31,7 +29,7 @@ function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
   if (channelRegistry && channelRegistry.channels && channelRegistry.channels.length > 0) {
     return channelRegistry.channels;
   }
-  return getPluginRegistryState()?.activeRegistry?.channels ?? [];
+  return [];
 }
 
 function findRegisteredChannelPluginEntry(

@@ -3,10 +3,15 @@ import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
+  isActivatedManifestOwner,
+  passesManifestOwnerBasePolicy,
+} from "./manifest-owner-policy.js";
+import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { createPluginIdScopeSet } from "./plugin-scope.js";
 
 export function withBundledProviderVitestCompat(params: {
   config: PluginLoadOptions["config"];
@@ -22,7 +27,7 @@ export function resolveBundledProviderCompatPluginIds(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
 }): string[] {
-  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -45,7 +50,7 @@ export function resolveEnabledProviderPluginIds(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
 }): string[] {
-  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -76,7 +81,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
   onlyPluginIds?: readonly string[];
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
-  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -89,33 +94,133 @@ export function resolveDiscoveredProviderPluginIds(params: {
       if (!(plugin.providers.length > 0 && (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)))) {
         return false;
       }
-      if (!shouldFilterUntrustedWorkspacePlugins || plugin.origin !== "workspace") {
-        return true;
-      }
-      const activation = resolveEffectivePluginActivationState({
-        id: plugin.id,
-        origin: plugin.origin,
-        config: normalizedConfig,
+      return isProviderPluginEligibleForSetupDiscovery({
+        plugin,
+        shouldFilterUntrustedWorkspacePlugins,
+        normalizedConfig,
         rootConfig: params.config,
-        enabledByDefault: plugin.enabledByDefault,
       });
-      if (activation.activated) {
-        return true;
-      }
-      const explicitlyTrustedButDisabled =
-        normalizedConfig.enabled &&
-        !normalizedConfig.deny.includes(plugin.id) &&
-        normalizedConfig.allow.includes(plugin.id) &&
-        normalizedConfig.entries[plugin.id]?.enabled === false;
-      return explicitlyTrustedButDisabled;
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function isProviderPluginEligibleForSetupDiscovery(params: {
+  plugin: PluginManifestRecord;
+  shouldFilterUntrustedWorkspacePlugins: boolean;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig?: PluginLoadOptions["config"];
+}): boolean {
+  if (!params.shouldFilterUntrustedWorkspacePlugins || params.plugin.origin !== "workspace") {
+    return true;
+  }
+  if (
+    !passesManifestOwnerBasePolicy({
+      plugin: params.plugin,
+      normalizedConfig: params.normalizedConfig,
+    })
+  ) {
+    return false;
+  }
+  return isActivatedManifestOwner({
+    plugin: params.plugin,
+    normalizedConfig: params.normalizedConfig,
+    rootConfig: params.rootConfig,
+  });
+}
+
+export function resolveDiscoverableProviderOwnerPluginIds(params: {
+  pluginIds: readonly string[];
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  includeUntrustedWorkspacePlugins?: boolean;
+}): string[] {
+  if (params.pluginIds.length === 0) {
+    return [];
+  }
+  const pluginIdSet = new Set(params.pluginIds);
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        pluginIdSet.has(plugin.id) &&
+        isProviderPluginEligibleForSetupDiscovery({
+          plugin,
+          shouldFilterUntrustedWorkspacePlugins,
+          normalizedConfig,
+          rootConfig: params.config,
+        }),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function isProviderPluginEligibleForRuntimeOwnerActivation(params: {
+  plugin: PluginManifestRecord;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig?: PluginLoadOptions["config"];
+}): boolean {
+  if (
+    !passesManifestOwnerBasePolicy({
+      plugin: params.plugin,
+      normalizedConfig: params.normalizedConfig,
+    })
+  ) {
+    return false;
+  }
+  if (params.plugin.origin !== "workspace") {
+    return true;
+  }
+  return isActivatedManifestOwner({
+    plugin: params.plugin,
+    normalizedConfig: params.normalizedConfig,
+    rootConfig: params.rootConfig,
+  });
+}
+
+export function resolveActivatableProviderOwnerPluginIds(params: {
+  pluginIds: readonly string[];
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  includeUntrustedWorkspacePlugins?: boolean;
+}): string[] {
+  if (params.pluginIds.length === 0) {
+    return [];
+  }
+  const pluginIdSet = new Set(params.pluginIds);
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        pluginIdSet.has(plugin.id) &&
+        isProviderPluginEligibleForRuntimeOwnerActivation({
+          plugin,
+          normalizedConfig,
+          rootConfig: params.config,
+        }),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export const __testing = {
+  resolveActivatableProviderOwnerPluginIds,
   resolveEnabledProviderPluginIds,
   resolveDiscoveredProviderPluginIds,
+  resolveDiscoverableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
   withBundledProviderVitestCompat,
 } as const;

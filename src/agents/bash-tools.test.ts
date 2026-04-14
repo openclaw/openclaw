@@ -206,18 +206,18 @@ const requireRunningSessionId = (result: { details: unknown }) => {
   return requireSessionId(result.details as { sessionId?: string });
 };
 
-function hasNotifyEventForPrefix(prefix: string): boolean {
-  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) => event.includes(prefix));
+function hasNotifyEventForPrefix(prefix: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY): boolean {
+  return peekSystemEvents(sessionKey).some((event) => event.includes(prefix));
 }
 
-async function waitForNotifyEvent(sessionId: string) {
+async function waitForNotifyEvent(sessionId: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
   const prefix = sessionId.slice(0, 8);
   let finished = getFinishedSession(sessionId);
-  let hasEvent = hasNotifyEventForPrefix(prefix);
+  let hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
   await expect
     .poll(() => {
       finished = getFinishedSession(sessionId);
-      hasEvent = hasNotifyEventForPrefix(prefix);
+      hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
       return Boolean(finished && hasEvent);
     }, NOTIFY_POLL_OPTIONS)
     .toBe(true);
@@ -230,6 +230,19 @@ async function waitForNotifyEvent(sessionId: string) {
 async function startBackgroundCommand(tool: ExecToolInstance, command: string) {
   const result = await executeExecCommand(tool, command, { background: true });
   return requireRunningSessionId(result);
+}
+
+async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<string, unknown>) {
+  const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+  const dispose = setHeartbeatWakeHandler(
+    wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+  );
+  try {
+    await startBackgroundCommand(tool, echoAfterDelay("notify"));
+    await expect.poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS).toEqual(expected);
+  } finally {
+    dispose();
+  }
 }
 
 async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
@@ -579,43 +592,43 @@ describe("exec notifyOnExit", () => {
     expect(formatted).toContain("System (untrusted):");
   });
 
-  it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
-    const tool = createNotifyOnExitExecTool();
-    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    const dispose = setHeartbeatWakeHandler(
-      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
-    );
-    try {
-      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+  it("preserves the origin delivery context on background exec completion events", async () => {
+    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+    const tool = createNotifyOnExitExecTool({
+      sessionKey,
+      messageProvider: "telegram",
+      currentChannelId: "telegram:-1003774691294:topic:47",
+      currentThreadTs: "47",
+    });
 
-      await expect
-        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
-        .toMatchObject({
-          reason: "exec-event",
-          sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
-        });
-    } finally {
-      dispose();
-    }
+    const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+
+    await waitForNotifyEvent(sessionId, sessionKey);
+    const queuedEvent = peekSystemEventEntries(sessionKey).find((event) =>
+      event.text.includes(sessionId.slice(0, 8)),
+    );
+
+    expect(queuedEvent).toMatchObject({
+      trusted: false,
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:-1003774691294:topic:47",
+        threadId: "47",
+      },
+    });
+  });
+
+  it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
+    await expectNotifyOnExitWake(createNotifyOnExitExecTool(), {
+      reason: "exec-event",
+      sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
+    });
   });
 
   it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
-    const tool = createNotifyOnExitExecTool({ sessionKey: "global" });
-    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    const dispose = setHeartbeatWakeHandler(
-      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
-    );
-    try {
-      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
-
-      await expect
-        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
-        .toEqual({
-          reason: "exec-event",
-        });
-    } finally {
-      dispose();
-    }
+    await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
+      reason: "exec-event",
+    });
   });
 
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);

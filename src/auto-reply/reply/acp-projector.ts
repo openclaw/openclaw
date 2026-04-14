@@ -15,7 +15,7 @@ import {
   resolveAcpStreamingConfig,
 } from "./acp-stream-settings.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { ReplyDispatchKind } from "./reply-dispatcher.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 
 const ACP_BLOCK_REPLY_TIMEOUT_MS = 15_000;
 const ACP_LIVE_IDLE_FLUSH_FLOOR_MS = 750;

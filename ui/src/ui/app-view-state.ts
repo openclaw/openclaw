@@ -136,6 +136,8 @@ export type AppViewState = {
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;

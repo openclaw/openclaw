@@ -8,7 +8,7 @@ import {
   createChannelPairingController,
 } from "../../runtime-api.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsAllowlistMatch,

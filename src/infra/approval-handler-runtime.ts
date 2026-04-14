@@ -35,10 +35,8 @@ import type {
   PendingApprovalView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-import type {
-  ExecApprovalChannelRuntime,
-  ExecApprovalChannelRuntimeEventKind,
-} from "./exec-approval-channel-runtime.js";
+import type { ExecApprovalChannelRuntime } from "./exec-approval-channel-runtime.js";
+import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 
 export type {
   ApprovalActionView,

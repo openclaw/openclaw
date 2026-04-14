@@ -9,6 +9,7 @@ import {
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
   parseReleaseVersion as parseReleaseVersionBase,
 } from "./lib/npm-publish-plan.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
 
 type PackageJson = {
   name?: string;
@@ -54,7 +55,7 @@ export type NpmDistTagMirrorAuth = {
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
-const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_RULES = [
   {

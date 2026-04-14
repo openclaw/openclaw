@@ -15,7 +15,10 @@ import {
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");

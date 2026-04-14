@@ -34,6 +34,10 @@ const SUPPRESSED_EVAL_WARNING_PATHS = [
   "bottleneck/lib/RedisConnection.js",
 ] as const;
 
+function normalizedLogHaystack(log: { message?: string; id?: string; importer?: string }): string {
+  return [log.message, log.id, log.importer].filter(Boolean).join("\n").replaceAll("\\", "/");
+}
+
 function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
@@ -50,10 +54,13 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     if (log.code === "PLUGIN_TIMINGS") {
       return true;
     }
+    if (log.code === "UNRESOLVED_IMPORT") {
+      return normalizedLogHaystack(log).includes("extensions/");
+    }
     if (log.code !== "EVAL") {
       return false;
     }
-    const haystack = [log.message, log.id, log.importer].filter(Boolean).join("\n");
+    const haystack = normalizedLogHaystack(log);
     return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
   }
 
@@ -139,6 +146,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",

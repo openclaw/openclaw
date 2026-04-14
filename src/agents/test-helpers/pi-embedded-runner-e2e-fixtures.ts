@@ -102,6 +102,7 @@ export function makeEmbeddedRunnerAttempt(
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,

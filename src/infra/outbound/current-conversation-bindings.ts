@@ -5,7 +5,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
 import { saveJsonFile } from "../../plugin-sdk/json-store.js";
-import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-state.js";
+import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
@@ -114,7 +114,10 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   if (!normalized) {
     return false;
   }
-  const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } | null }) =>
+  const matchesPluginId = (plugin: {
+    id?: string | null;
+    meta?: { aliases?: readonly string[] } | null;
+  }) =>
     plugin.id === normalized ||
     (plugin.meta?.aliases ?? []).some(
       (alias) => normalizeOptionalLowercaseString(alias) === normalized,

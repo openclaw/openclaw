@@ -391,6 +391,47 @@ describe("handleInlineActions", () => {
     expect(typing.cleanup).toHaveBeenCalled();
   });
 
+  it("continues into the agent when mention-wrapped inline status leaves real text", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "<@123> /status what's next?",
+      CommandBody: "<@123> /status what's next?",
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      WasMentioned: true,
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "<@123> what's next?",
+        command: {
+          surface: "discord",
+          channel: "discord",
+          channelId: "discord",
+          isAuthorizedSender: true,
+          rawBodyNormalized: "<@123> /status what's next?",
+          commandBodyNormalized: "<@123> /status what's next?",
+        },
+        overrides: {
+          allowTextCommands: true,
+          inlineStatusRequested: true,
+          isGroup: true,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "continue",
+      directives: clearInlineDirectives("<@123> what's next?"),
+      abortedLastRun: false,
+    });
+    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("skips stale queued messages that are at or before the /stop cutoff", async () => {
     const typing = createTypingController();
     const sessionEntry: SessionEntry = {

@@ -4,13 +4,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../gateway/method-scopes.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type {
   ApprovalDecision,

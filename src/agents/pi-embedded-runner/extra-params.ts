@@ -7,8 +7,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
-} from "../../plugins/provider-runtime.js";
-import type { ProviderRuntimeModel } from "../../plugins/types.js";
+} from "../../plugins/provider-hook-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";

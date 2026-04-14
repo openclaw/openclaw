@@ -101,7 +101,11 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./system-events.js";
+import {
+  consumeSystemEventEntries,
+  peekSystemEventEntries,
+  resolveSystemEventDeliveryContext,
+} from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -537,8 +541,28 @@ async function resolveHeartbeatPreflight(params: {
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
+  // Wake-triggered runs should only inspect pending events when preflight peeks
+  // the same queue that the run itself will execute/drain.
+  const shouldInspectWakePendingEvents = (() => {
+    if (!reasonFlags.isWakeReason) {
+      return false;
+    }
+    if (params.heartbeat?.isolatedSession !== true) {
+      return true;
+    }
+    const configuredSession = resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
+    const { isolatedSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      sessionKey: session.sessionKey,
+      configuredSessionKey: configuredSession.sessionKey,
+      sessionEntry: session.entry,
+    });
+    return isolatedSessionKey === session.sessionKey;
+  })();
   const shouldInspectPendingEvents =
-    reasonFlags.isExecEventReason || reasonFlags.isCronEventReason || hasTaggedCronEvents;
+    reasonFlags.isExecEventReason ||
+    reasonFlags.isCronEventReason ||
+    shouldInspectWakePendingEvents ||
+    hasTaggedCronEvents;
   const shouldBypassFileGates =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
@@ -805,6 +829,13 @@ export async function runHeartbeatOnce(opts: {
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
+    // Wake-triggered events should stay queued when the run short-circuits:
+    // no reply turn ran, so there is nothing that actually consumed that wake payload.
+    const shouldConsumeInspectedEvents =
+      !preflight.isWakeReason && preflight.shouldInspectPendingEvents;
+    if (shouldConsumeInspectedEvents && preflight.pendingEventEntries.length > 0) {
+      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    }
     return { status: "skipped", reason: "no-tasks-due" };
   }
 
@@ -904,6 +935,17 @@ export async function runHeartbeatOnce(opts: {
 
     runSessionKey = isolatedSessionKey;
   }
+  const activeSessionPendingEventEntries =
+    runSessionKey === sessionKey
+      ? preflight.pendingEventEntries
+      : peekSystemEventEntries(runSessionKey);
+  const hasUntrustedInspectedEvents =
+    preflight.shouldInspectPendingEvents &&
+    preflight.pendingEventEntries.some((event) => event.trusted === false);
+  const hasUntrustedActiveSessionEvents = activeSessionPendingEventEntries.some(
+    (event) => event.trusted === false,
+  );
+  const hasUntrustedPendingEvents = hasUntrustedInspectedEvents || hasUntrustedActiveSessionEvents;
 
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
@@ -935,6 +977,13 @@ export async function runHeartbeatOnce(opts: {
     await saveSessionStore(storePath, store);
   };
 
+  const consumeInspectedSystemEvents = () => {
+    if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+      return;
+    }
+    consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+  };
+
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
@@ -946,7 +995,7 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
-    ForceSenderIsOwnerFalse: hasExecCompletion,
+    ForceSenderIsOwnerFalse: hasExecCompletion || hasUntrustedPendingEvents,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -1038,6 +1087,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1074,6 +1124,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1110,6 +1161,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1131,6 +1183,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1151,6 +1204,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1226,6 +1280,7 @@ export async function runHeartbeatOnce(opts: {
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     await updateTaskTimestamps();
+    consumeInspectedSystemEvents();
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);

@@ -2,97 +2,54 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import "../cron/isolated-agent.mocks.js";
-import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { __testing as agentCommandTesting } from "../agents/agent-command.js";
 import { resolveSession } from "../agents/command/session.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import * as modelSelectionModule from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import * as commandConfigResolutionModule from "../cli/command-config-resolution.js";
-import type { OpenClawConfig } from "../config/config.js";
-import * as configModule from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
-import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import type { RuntimeEnv } from "../runtime.js";
+import * as commandConfigResolutionRuntimeModule from "../cli/command-config-resolution.runtime.js";
+import * as configIoModule from "../config/io.js";
+import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createDefaultAgentCommandResult,
-  mockAgentCommandConfig,
-  withAgentCommandTempHome,
-} from "./agent-command.test-support.js";
+  mockSharedAgentCommandConfig,
+  resetSharedAgentCommandRuntimeState,
+  runtime,
+  withSharedAgentCommandTempHome,
+} from "./agent-runtime-config.test-support.js";
 
-vi.mock("../agents/auth-profiles.js", () => {
-  return {
-    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
-  };
-});
-
-vi.mock("../agents/auth-profiles/store.js", () => {
-  const createEmptyStore = () => ({ version: 1, profiles: {} });
-  return {
-    clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
-    ensureAuthProfileStore: vi.fn(createEmptyStore),
-    ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
-    loadAuthProfileStore: vi.fn(createEmptyStore),
-    loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
-    loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
-    replaceRuntimeAuthProfileStoreSnapshots: vi.fn(),
-    saveAuthProfileStore: vi.fn(),
-    updateAuthProfileStoreWithLock: vi.fn(async () => createEmptyStore()),
-  };
-});
-
-vi.mock("../agents/command/session-store.js", () => {
+vi.mock("../agents/command/session-store.runtime.js", () => {
   return {
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
   };
 });
 
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
-  }),
-};
-
-const configSpy = vi.spyOn(configModule, "loadConfig");
-const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
+const configSpy = vi.spyOn(configIoModule, "loadConfig");
+const readConfigFileSnapshotForWriteSpy = vi.spyOn(
+  configIoModule,
+  "readConfigFileSnapshotForWrite",
+);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withAgentCommandTempHome("openclaw-agent-", fn);
+  return withSharedAgentCommandTempHome("openclaw-agent-", fn);
 }
 
 function mockConfig(
   home: string,
   storePath: string,
-  agentOverrides?: Parameters<typeof mockAgentCommandConfig>[3],
+  agentOverrides?: Parameters<typeof mockSharedAgentCommandConfig>[3],
 ) {
-  return mockAgentCommandConfig(configSpy, home, storePath, agentOverrides);
+  return mockSharedAgentCommandConfig(configSpy, home, storePath, agentOverrides);
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest();
-  resetAgentRunContextForTest();
-  resetPluginRuntimeStateForTest();
-  acpManagerTesting.resetAcpSessionManagerForTests();
-  configModule.clearRuntimeConfigSnapshot();
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentCommandResult());
-  vi.mocked(loadModelCatalog).mockResolvedValue([]);
-  vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
-  readConfigFileSnapshotForWriteSpy.mockResolvedValue({
-    snapshot: { valid: false, resolved: {} as OpenClawConfig },
-    writeOptions: {},
-  } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
+  resetSharedAgentCommandRuntimeState(readConfigFileSnapshotForWriteSpy);
 });
 
 describe("agentCommand runtime config", () => {
   it("sets runtime snapshots from source config before embedded agent run", async () => {
     await withTempHome(async (home) => {
-      const setRuntimeConfigSnapshotSpy = vi.spyOn(configModule, "setRuntimeConfigSnapshot");
+      const setRuntimeConfigSnapshotSpy = vi.spyOn(
+        runtimeSnapshotModule,
+        "setRuntimeConfigSnapshot",
+      );
 
       const store = path.join(home, "sessions.json");
       const loadedConfig = {
@@ -143,9 +100,9 @@ describe("agentCommand runtime config", () => {
       readConfigFileSnapshotForWriteSpy.mockResolvedValue({
         snapshot: { valid: true, resolved: sourceConfig },
         writeOptions: {},
-      } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
+      } as Awaited<ReturnType<typeof configIoModule.readConfigFileSnapshotForWrite>>);
       const resolveConfigWithSecretsSpy = vi
-        .spyOn(commandConfigResolutionModule, "resolveCommandConfigWithSecrets")
+        .spyOn(commandConfigResolutionRuntimeModule, "resolveCommandConfigWithSecrets")
         .mockResolvedValueOnce({
           resolvedConfig,
           effectiveConfig: resolvedConfig,
@@ -174,8 +131,13 @@ describe("agentCommand runtime config", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const loadedConfig = mockConfig(home, store);
+      loadedConfig.channels = {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      } as unknown as OpenClawConfig["channels"];
       const resolveConfigWithSecretsSpy = vi
-        .spyOn(commandConfigResolutionModule, "resolveCommandConfigWithSecrets")
+        .spyOn(commandConfigResolutionRuntimeModule, "resolveCommandConfigWithSecrets")
         .mockResolvedValueOnce({
           resolvedConfig: loadedConfig,
           effectiveConfig: loadedConfig,
@@ -188,6 +150,22 @@ describe("agentCommand runtime config", () => {
 
       const targetIds = resolveConfigWithSecretsSpy.mock.calls[0]?.[0].targetIds;
       expect(targetIds.has("channels.telegram.botToken")).toBe(true);
+    });
+  });
+
+  it("skips command secret resolution when no relevant SecretRef values exist", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      const resolveConfigWithSecretsSpy = vi.spyOn(
+        commandConfigResolutionRuntimeModule,
+        "resolveCommandConfigWithSecrets",
+      );
+
+      const prepared = await agentCommandTesting.resolveAgentRuntimeConfig(runtime);
+
+      expect(resolveConfigWithSecretsSpy).not.toHaveBeenCalled();
+      expect(prepared.cfg).toBe(loadedConfig);
     });
   });
 
