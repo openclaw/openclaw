@@ -242,7 +242,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       // This call exists solely to fail closed if resolver-side config loading is broken.
       plugin.config.resolveAccount(cfg, accountId);
     } catch (err) {
-      channelLogs[channelId].warn?.(
+      channelLogs[channelId]?.warn?.(
         `[${channelId}:${accountId}] health-monitor: failed to resolve account; skipping monitor (${formatErrorMessage(err)})`,
       );
       return false;
@@ -339,7 +339,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           try {
             await stopTaskScopedApprovalRuntime();
           } catch (error) {
-            log.error?.(`[${id}] ${label}: ${formatErrorMessage(error)}`);
+            log?.error?.(`[${id}] ${label}: ${formatErrorMessage(error)}`);
           }
         };
 
@@ -432,7 +432,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             .catch((err) => {
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
-              log.error?.(`[${id}] channel exited: ${message}`);
+              log?.error?.(`[${id}] channel exited: ${message}`);
             })
             .finally(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
@@ -454,11 +454,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   restartPending: false,
                   reconnectAttempts: attempt,
                 });
-                log.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
+                log?.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
                 return;
               }
               const delayMs = computeBackoff(CHANNEL_RESTART_POLICY, attempt);
-              log.info?.(
+              log?.info?.(
                 `[${id}] auto-restart attempt ${attempt}/${MAX_RESTART_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
               );
               setRuntime(channelId, id, {
@@ -572,7 +572,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           CHANNEL_STOP_ABORT_TIMEOUT_MS,
         );
         if (!stoppedCleanly) {
-          log.warn?.(
+          log?.warn?.(
             `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
           );
           setRuntime(channelId, id, {
