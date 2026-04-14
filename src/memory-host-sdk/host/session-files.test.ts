@@ -174,4 +174,30 @@ describe("buildSessionEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry?.generatedByDreamingNarrative).toBe(true);
   });
+
+  it("flags dreaming narrative transcripts from the dream-diary prompt body", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            "Write a dream diary entry from these memory fragments:\n- Candidate: durable note",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "A drifting archive breathed in moonlight." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "dreaming-prompt-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.generatedByDreamingNarrative).toBe(true);
+    expect(entry?.content).toBe("");
+    expect(entry?.lineMap).toEqual([]);
+  });
 });

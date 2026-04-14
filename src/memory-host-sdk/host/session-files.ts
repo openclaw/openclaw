@@ -7,6 +7,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
+const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+const DREAMING_NARRATIVE_PROMPT_PREFIX = "Write a dream diary entry from these memory fragments";
 
 export type SessionFileEntry = {
   path: string;
@@ -42,7 +44,42 @@ function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
     return false;
   }
   const runId = (candidate.data as { runId?: unknown }).runId;
-  return typeof runId === "string" && runId.startsWith("dreaming-narrative-");
+  return typeof runId === "string" && runId.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+}
+
+function hasDreamingNarrativeRunId(value: unknown): boolean {
+  return typeof value === "string" && value.includes(DREAMING_NARRATIVE_RUN_PREFIX);
+}
+
+function isDreamingNarrativeGeneratedRecord(record: unknown, messageText?: string | null): boolean {
+  if (isDreamingNarrativeBootstrapRecord(record)) {
+    return true;
+  }
+  if (messageText?.includes(DREAMING_NARRATIVE_PROMPT_PREFIX)) {
+    return true;
+  }
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return false;
+  }
+  const candidate = record as {
+    runId?: unknown;
+    sessionKey?: unknown;
+    data?: unknown;
+  };
+  if (
+    hasDreamingNarrativeRunId(candidate.runId) ||
+    hasDreamingNarrativeRunId(candidate.sessionKey)
+  ) {
+    return true;
+  }
+  if (!candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data)) {
+    return false;
+  }
+  const nested = candidate.data as {
+    runId?: unknown;
+    sessionKey?: unknown;
+  };
+  return hasDreamingNarrativeRunId(nested.runId) || hasDreamingNarrativeRunId(nested.sessionKey);
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -140,7 +177,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       } catch {
         continue;
       }
-      if (!generatedByDreamingNarrative && isDreamingNarrativeBootstrapRecord(record)) {
+      if (!generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record)) {
         generatedByDreamingNarrative = true;
       }
       if (
@@ -161,6 +198,12 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       }
       const text = extractSessionText(message.content);
       if (!text) {
+        continue;
+      }
+      if (!generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record, text)) {
+        generatedByDreamingNarrative = true;
+      }
+      if (generatedByDreamingNarrative) {
         continue;
       }
       const safe = redactSensitiveText(text, { mode: "tools" });
