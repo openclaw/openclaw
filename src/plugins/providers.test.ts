@@ -403,6 +403,7 @@ describe("resolvePluginProviders", () => {
       }),
     ).toEqual([]);
   });
+
   it.each([
     {
       name: "can augment restrictive allowlists for bundled provider compatibility",
