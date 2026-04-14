@@ -302,6 +302,7 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
         bundledDistPluginFile("matrix", "openclaw.plugin.json"),
         bundledDistPluginFile("matrix", "package.json"),
+        "dist/subagent-registry.runtime.js",
         bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
         bundledDistPluginFile("whatsapp", "runtime-api.js"),
         bundledDistPluginFile("whatsapp", "openclaw.plugin.json"),
@@ -329,6 +330,7 @@ describe("collectMissingPackPaths", () => {
         "dist/plugin-sdk/root-alias.cjs",
         "dist/build-info.json",
         "dist/channel-catalog.json",
+        "dist/subagent-registry.runtime.js",
       ]),
     ).toEqual([]);
   });

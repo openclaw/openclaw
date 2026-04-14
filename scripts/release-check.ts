@@ -46,6 +46,7 @@ const requiredPathGroups = [
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
+  "dist/subagent-registry.runtime.js",
 ];
 const forbiddenPrefixes = [
   "dist-runtime/",
