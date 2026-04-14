@@ -120,7 +120,7 @@ export function resolveMergedAssistantText(params: {
       return previousText;
     }
   }
-  if (nextDelta) {
+  if (nextDelta && previousText) {
     return appendUniqueSuffix(previousText, nextDelta);
   }
   if (nextText) {
@@ -688,7 +688,7 @@ export function createAgentEventHandler({
     text: string,
     delta?: unknown,
   ) => {
-    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text.trim();
+    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text.trimStart();
     const cleanedDelta =
       typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
