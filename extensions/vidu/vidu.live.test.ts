@@ -17,7 +17,7 @@ const TEST_IMAGE_URL =
   "https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/showcase/roof-camera-sky.jpg";
 // A second distinct image for multi-image endpoints
 const TEST_IMAGE_URL_2 =
-  "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=512&h=512&fit=crop";
+  "https://image01.cf.vidu.studio/vidu/media-asset/imageGlobal1-2-74638297.webp";
 // A short test video for video reference (4s, person subject, Pixabay license)
 const TEST_VIDEO_URL =
   process.env.OPENCLAW_LIVE_VIDU_VIDEO_URL?.trim() ||
@@ -87,59 +87,59 @@ describe.skipIf(!LIVE || !VIDU_API_KEY)("vidu live", () => {
     }
   });
 
-  // // ── 1. text2video ────────────────────────────────────────────────
-  // it(
-  //   "text2video — generates a clip with duration, resolution, aspect ratio, audio, and watermark",
-  //   async () => {
-  //     const { videoProviders } = await registerViduPlugin();
-  //     const provider = requireRegisteredProvider(videoProviders, "vidu");
+  // ── 1. text2video ────────────────────────────────────────────────
+  it(
+    "text2video — generates a clip with duration, resolution, aspect ratio, audio, and watermark",
+    async () => {
+      const { videoProviders } = await registerViduPlugin();
+      const provider = requireRegisteredProvider(videoProviders, "vidu");
 
-  //     const result = await provider.generateVideo({
-  //       provider: "vidu",
-  //       model: LIVE_MODEL,
-  //       prompt:
-  //         "A time-lapse of clouds moving over a mountain range at golden hour, dramatic cinematic lighting.",
-  //       cfg: cfg as never,
-  //       agentDir,
-  //       durationSeconds: 4,
-  //       resolution: "720P",
-  //       aspectRatio: "16:9",
-  //       audio: true,
-  //       watermark: false,
-  //     });
+      const result = await provider.generateVideo({
+        provider: "vidu",
+        model: LIVE_MODEL,
+        prompt:
+          "A time-lapse of clouds moving over a mountain range at golden hour, dramatic cinematic lighting.",
+        cfg: cfg as never,
+        agentDir,
+        durationSeconds: 4,
+        resolution: "720P",
+        aspectRatio: "16:9",
+        audio: true,
+        watermark: false,
+      });
 
-  //     expectValidVideo(result);
-  //     expect(result.metadata).toEqual(
-  //       expect.objectContaining({ taskId: expect.any(String), state: "success" }),
-  //     );
-  //   },
-  //   VIDU_TIMEOUT_MS,
-  // );
+      expectValidVideo(result);
+      expect(result.metadata).toEqual(
+        expect.objectContaining({ taskId: expect.any(String), state: "success" }),
+      );
+    },
+    VIDU_TIMEOUT_MS,
+  );
 
-  // // ── 2. img2video ─────────────────────────────────────────────────
-  // it(
-  //   "img2video — animates a single input image with duration, resolution, and audio",
-  //   async () => {
-  //     const { videoProviders } = await registerViduPlugin();
-  //     const provider = requireRegisteredProvider(videoProviders, "vidu");
+  // ── 2. img2video ─────────────────────────────────────────────────
+  it(
+    "img2video — animates a single input image with duration, resolution, and audio",
+    async () => {
+      const { videoProviders } = await registerViduPlugin();
+      const provider = requireRegisteredProvider(videoProviders, "vidu");
 
-  //     const result = await provider.generateVideo({
-  //       provider: "vidu",
-  //       model: LIVE_MODEL,
-  //       prompt: "The scene slowly comes to life with gentle wind and soft camera movement.",
-  //       cfg: cfg as never,
-  //       agentDir,
-  //       inputImages: [{ url: TEST_IMAGE_URL }],
-  //       durationSeconds: 4,
-  //       resolution: "720P",
-  //       audio: true,
-  //       watermark: true,
-  //     });
+      const result = await provider.generateVideo({
+        provider: "vidu",
+        model: LIVE_MODEL,
+        prompt: "The scene slowly comes to life with gentle wind and soft camera movement.",
+        cfg: cfg as never,
+        agentDir,
+        inputImages: [{ url: TEST_IMAGE_URL }],
+        durationSeconds: 4,
+        resolution: "720P",
+        audio: true,
+        watermark: true,
+      });
 
-  //     expectValidVideo(result);
-  //   },
-  //   VIDU_TIMEOUT_MS,
-  // );
+      expectValidVideo(result);
+    },
+    VIDU_TIMEOUT_MS,
+  );
 
   // ── 3. start-end2video ───────────────────────────────────────────
   it(
@@ -156,8 +156,8 @@ describe.skipIf(!LIVE || !VIDU_API_KEY)("vidu live", () => {
         cfg: cfg as never,
         agentDir,
         inputImages: [
-          { url: TEST_IMAGE_URL, metadata: { role: "start-frame" } },
-          { url: TEST_IMAGE_URL_2, metadata: { role: "end-frame" } },
+          { url: TEST_IMAGE_URL, metadata: { role: "first_frame" } },
+          { url: TEST_IMAGE_URL_2, metadata: { role: "last_frame" } },
         ],
         durationSeconds: 4,
         resolution: "720P",
@@ -171,34 +171,34 @@ describe.skipIf(!LIVE || !VIDU_API_KEY)("vidu live", () => {
   );
 
   // ── 4. reference2video ───────────────────────────────────────────
-  // it(
-  //   "reference2video — generates video from multiple reference images with explicit role",
-  //   async () => {
-  //     const { videoProviders } = await registerViduPlugin();
-  //     const provider = requireRegisteredProvider(videoProviders, "vidu");
+  it(
+    "reference2video — generates video from multiple reference images with explicit role",
+    async () => {
+      const { videoProviders } = await registerViduPlugin();
+      const provider = requireRegisteredProvider(videoProviders, "vidu");
 
-  //     const result = await provider.generateVideo({
-  //       provider: "vidu",
-  //       // reference2video requires a model from VIDU_REFERENCE2VIDEO_MODELS
-  //       model: "viduq2",
-  //       prompt:
-  //         "Two distinct subjects appear in a natural outdoor scene, each maintaining their original appearance.",
-  //       cfg: cfg as never,
-  //       agentDir,
-  //       inputImages: [
-  //         { url: TEST_IMAGE_URL, metadata: { role: "reference" } },
-  //         { url: TEST_IMAGE_URL_2, metadata: { role: "reference" } },
-  //       ],
-  //       durationSeconds: 4,
-  //       resolution: "720P",
-  //       audio: true,
-  //       watermark: false,
-  //     });
+      const result = await provider.generateVideo({
+        provider: "vidu",
+        // reference2video requires a model from VIDU_REFERENCE2VIDEO_MODELS
+        model: "viduq2",
+        prompt:
+          "Two distinct subjects appear in a natural outdoor scene, each maintaining their original appearance.",
+        cfg: cfg as never,
+        agentDir,
+        inputImages: [
+          { url: TEST_IMAGE_URL, metadata: { role: "reference_image" } },
+          { url: TEST_IMAGE_URL_2, metadata: { role: "reference_image" } },
+        ],
+        durationSeconds: 4,
+        resolution: "720P",
+        audio: true,
+        watermark: false,
+      });
 
-  //     expectValidVideo(result);
-  //   },
-  //   VIDU_TIMEOUT_MS,
-  // );
+      expectValidVideo(result);
+    },
+    VIDU_TIMEOUT_MS,
+  );
 
   // ── 5. reference2video with video input ────────────────────────────
   it(
@@ -215,7 +215,7 @@ describe.skipIf(!LIVE || !VIDU_API_KEY)("vidu live", () => {
           "The subject from the reference image appears in the video scene, maintaining consistent appearance.",
         cfg: cfg as never,
         agentDir,
-        inputImages: [{ url: TEST_IMAGE_URL, metadata: { role: "reference" } }],
+        inputImages: [{ url: TEST_IMAGE_URL, metadata: { role: "reference_image" } }],
         inputVideos: [{ url: TEST_VIDEO_URL }],
         durationSeconds: 4,
         resolution: "720P",

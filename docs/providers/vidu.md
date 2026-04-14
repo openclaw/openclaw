@@ -47,8 +47,8 @@ openclaw config set agents.defaults.videoGenerationModel.primary "vidu/viduq3-pr
 
 - Local image references are supported via base64 data URIs.
 - Image-to-video uses a single first-frame image.
-- Start-end-to-video interpolates between a start frame and an end frame. Pass `metadata: { role: "start-frame" }` and `metadata: { role: "end-frame" }` on the input images, or supply exactly 2 images without roles (defaults to start-end).
-- Reference-to-video supports multi-entity consistency with 1-7 reference images per subject, up to 7 subjects. Video references (1-2 videos, `viduq2-pro` only) are also supported. When videos are present, non-subject mode is used with separate `images` and `videos` arrays. Pass `metadata: { role: "reference" }` on input images, or supply 3+ images (auto-detected as reference mode). Each image becomes a separate subject.
+- Start-end-to-video interpolates between a start frame and an end frame. Pass `role: "first_frame"` and `role: "last_frame"` on the input images, or supply exactly 2 images without roles (defaults to start-end).
+- Reference-to-video supports multi-entity consistency with 1-7 reference images per subject, up to 7 subjects. Video references (1-2 videos, `viduq2-pro` only) are also supported. When videos are present, non-subject mode is used with separate `images` and `videos` arrays. Pass `role: "reference_image"` on input images, or supply 3+ images (auto-detected as reference mode). Each image becomes a separate subject.
 
 ## Available models
 

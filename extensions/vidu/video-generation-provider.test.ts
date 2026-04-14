@@ -229,8 +229,8 @@ describe("vidu video generation provider", () => {
       prompt: "Two characters",
       cfg: {},
       inputImages: [
-        { url: "https://example.com/char1.png", metadata: { role: "reference" } },
-        { url: "https://example.com/char2.png", metadata: { role: "reference" } },
+        { url: "https://example.com/char1.png", metadata: { role: "reference_image" } },
+        { url: "https://example.com/char2.png", metadata: { role: "reference_image" } },
       ],
     });
 
@@ -465,27 +465,41 @@ describe("vidu video generation provider", () => {
         prompt: "Characters interacting",
         cfg: {},
         inputImages: [
-          { url: "https://example.com/ref1.png", metadata: { role: "reference" } },
-          { url: "https://example.com/ref2.png", metadata: { role: "reference" } },
+          { url: "https://example.com/ref1.png", metadata: { role: "reference_image" } },
+          { url: "https://example.com/ref2.png", metadata: { role: "reference_image" } },
         ],
       }),
     ).rejects.toThrow(/does not support reference2video/);
   });
 
-  it("throws on invalid image role", async () => {
+  it("ignores unrecognized image roles and falls back to default routing", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ task_id: "t-unknown-role" })),
+      release: vi.fn(),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ state: "success", creations: [{ url: "https://v.mp4" }] })),
+      )
+      .mockResolvedValueOnce(
+        new Response(new ArrayBuffer(2048), { headers: { "content-type": "video/mp4" } }),
+      );
+
     const provider = buildViduVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "vidu",
-        model: "viduq3-pro",
-        prompt: "test",
-        cfg: {},
-        inputImages: [{ url: "https://example.com/img.png", metadata: { role: "invalid-role" } }],
-      }),
-    ).rejects.toThrow(/Invalid image role/);
+    await provider.generateVideo({
+      provider: "vidu",
+      model: "viduq3-pro",
+      prompt: "test",
+      cfg: {},
+      inputImages: [{ url: "https://example.com/img.png", metadata: { role: "invalid-role" } }],
+    });
+    // Unknown role is ignored, routes to img2video (1 image, no recognized role)
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ url: expect.stringContaining("/ent/v2/img2video") }),
+    );
   });
 
-  it("routes 2 images with start-frame/end-frame roles to start-end2video endpoint", async () => {
+  it("routes 2 images with first_frame/last_frame roles to start-end2video endpoint", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({ task_id: "task_se2", state: "created" }),
@@ -512,8 +526,8 @@ describe("vidu video generation provider", () => {
       prompt: "Smooth transition",
       cfg: {},
       inputImages: [
-        { url: "https://example.com/start.png", metadata: { role: "start-frame" } },
-        { url: "https://example.com/end.png", metadata: { role: "end-frame" } },
+        { url: "https://example.com/start.png", metadata: { role: "first_frame" } },
+        { url: "https://example.com/end.png", metadata: { role: "last_frame" } },
       ],
     });
 

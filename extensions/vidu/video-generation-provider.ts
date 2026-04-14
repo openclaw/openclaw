@@ -78,17 +78,11 @@ function resolveViduImageRoles(req: VideoGenerationRequest): (string | undefined
   if (!images || images.length === 0) {
     return [];
   }
-  return images.map((input) => {
-    const metadata = input.metadata;
-    const role = normalizeOptionalString(metadata?.role as string | undefined);
-    // Validate role values
-    if (role && !["start-frame", "end-frame", "reference"].includes(role)) {
-      throw new Error(
-        `Invalid image role "${role}". Supported roles: "start-frame", "end-frame", "reference"`,
-      );
-    }
-    return role;
-  });
+  return images.map(
+    (input) =>
+      normalizeOptionalString(input.role) ??
+      normalizeOptionalString(input.metadata?.role as string | undefined),
+  );
 }
 
 async function pollViduTask(params: {
@@ -182,7 +176,7 @@ function resolveViduEndpoint(
   }
   if (imageUrls.length === 1) {
     // A single image with role "reference" should use reference2video
-    const hasReferenceRole = imageRoles?.some((role) => role === "reference");
+    const hasReferenceRole = imageRoles?.some((role) => role === "reference_image");
     if (hasReferenceRole) {
       return "/ent/v2/reference2video";
     }
@@ -190,13 +184,13 @@ function resolveViduEndpoint(
   }
   if (imageUrls.length === 2) {
     // Check if explicitly marked as reference
-    const hasReferenceRole = imageRoles?.some((role) => role === "reference");
+    const hasReferenceRole = imageRoles?.some((role) => role === "reference_image");
     if (hasReferenceRole) {
       return "/ent/v2/reference2video";
     }
     // Check if marked as start-end frames
     const hasStartEndRoles = imageRoles?.some(
-      (role) => role === "start-frame" || role === "end-frame",
+      (role) => role === "first_frame" || role === "last_frame",
     );
     if (hasStartEndRoles) {
       return "/ent/v2/start-end2video";
@@ -322,6 +316,9 @@ export function buildViduVideoGenerationProvider(): VideoGenerationProvider {
       if (endpoint === "/ent/v2/reference2video") {
         if (videoUrls.length > 0) {
           // Non-subject mode with images + videos
+          if (imageUrls.length > 7) {
+            throw new Error("Vidu reference2video supports at most 7 reference images");
+          }
           if (imageUrls.length > 0) {
             body.images = imageUrls;
           }
@@ -338,8 +335,8 @@ export function buildViduVideoGenerationProvider(): VideoGenerationProvider {
         if (imageUrls.length !== 2) {
           throw new Error("Start-end2video requires exactly 2 images");
         }
-        const startIdx = imageRoles?.indexOf("start-frame") ?? -1;
-        const endIdx = imageRoles?.indexOf("end-frame") ?? -1;
+        const startIdx = imageRoles?.indexOf("first_frame") ?? -1;
+        const endIdx = imageRoles?.indexOf("last_frame") ?? -1;
         if (startIdx !== -1 && endIdx !== -1) {
           body.images = [imageUrls[startIdx], imageUrls[endIdx]];
         } else {
@@ -359,7 +356,7 @@ export function buildViduVideoGenerationProvider(): VideoGenerationProvider {
       if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
         body.duration = Math.max(1, Math.round(req.durationSeconds));
       }
-      if (typeof req.audio === "boolean") {
+      if (typeof req.audio === "boolean" && model.startsWith("viduq3")) {
         body.audio = req.audio;
       }
       if (typeof req.watermark === "boolean") {
