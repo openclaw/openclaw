@@ -140,10 +140,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
-    } else if (!state.activeChatRunId && sessionRuns.size === 0) {
-      // Safety net: if no active or pending runs remain, ensure we leave the
-      // busy indicator. This prevents "streaming" from sticking indefinitely
-      // when the final event's runId no longer matches activeChatRunId.
+    } else if (sessionRuns.size === 0) {
+      // Safety net: if no pending session runs remain after this finalization,
+      // ensure we leave the busy indicator even when wasActiveRun is false
+      // (e.g. activeChatRunId pointed to a different run). This prevents
+      // "streaming" from sticking indefinitely (#63189).
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
@@ -160,9 +161,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
-    } else if (!state.activeChatRunId && sessionRuns.size === 0) {
+    } else if (sessionRuns.size === 0) {
       // Safety net: same as finalizeRun — clear stale busy status when no
-      // runs are left.
+      // pending runs remain.
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();

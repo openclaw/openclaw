@@ -659,15 +659,16 @@ export async function runTui(opts: TuiOptions) {
       clearTimeout(streamingIdleTimer);
       streamingIdleTimer = null;
     }
-    // Arm a safety timer when entering streaming or running state. If no
+    // Arm a safety timer when entering streaming state. If no
     // further status update arrives within the timeout window the UI resets to
     // idle, preventing the "streaming forever" stuck state (#63189).
-    // We intentionally exclude "sending" and "waiting" since those represent
-    // pre-response phases that can legitimately take longer.
-    if (text === "streaming" || text === "running") {
+    // We only apply this to "streaming" — "running" covers tool execution
+    // which can legitimately exceed the timeout (e.g. browser automation,
+    // long code execution). "sending" and "waiting" are also excluded.
+    if (text === "streaming") {
       streamingIdleTimer = setTimeout(() => {
         streamingIdleTimer = null;
-        if (activityStatus === "streaming" || activityStatus === "running") {
+        if (activityStatus === "streaming") {
           activityStatus = "idle";
           // Intentionally do NOT clear state.activeChatRunId here — the run
           // may still be in-flight (e.g. during a long tool call). Clearing
