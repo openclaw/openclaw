@@ -106,7 +106,7 @@ function appendUniqueSuffix(base: string, suffix: string): string {
   return base + suffix;
 }
 
-function resolveMergedAssistantText(params: {
+export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
@@ -690,7 +690,7 @@ export function createAgentEventHandler({
   ) => {
     const cleanedText = stripInlineDirectiveTagsForDisplay(text).text.trim();
     const cleanedDelta =
-      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text.trim() : "";
+      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
