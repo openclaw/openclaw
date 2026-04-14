@@ -129,9 +129,11 @@ function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium"
 }
 
 function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const floored = Math.floor(value);
+  return floored > 0 ? floored : undefined;
 }
 
 function resolveAnthropicMessagesMaxTokens(params: {
