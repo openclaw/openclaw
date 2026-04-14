@@ -143,11 +143,40 @@ describe("parseCliJson", () => {
         output: "json",
         sessionIdFields: ["session_id"],
       },
+      "claude-cli",
     );
 
     expect(result).toEqual({
       text: "actual response text",
       sessionId: "session-nested-json",
+      usage: undefined,
+    });
+  });
+
+  it("does not unwrap nested result-shaped JSON for non-claude json backends", () => {
+    const nestedResult = JSON.stringify({
+      type: "result",
+      result: JSON.stringify({
+        type: "result",
+        result: "actual response text",
+      }),
+    });
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "gemini-session-nested-json",
+        result: nestedResult,
+      }),
+      {
+        command: "gemini",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "gemini",
+    );
+
+    expect(result).toEqual({
+      text: nestedResult,
+      sessionId: "gemini-session-nested-json",
       usage: undefined,
     });
   });

@@ -266,7 +266,25 @@ function pickCliSessionId(
   return undefined;
 }
 
-export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
+function shouldUnwrapNestedCliResultText(params: {
+  backend: CliBackendConfig;
+  providerId?: string;
+  parsed: Record<string, unknown>;
+}): boolean {
+  const isClaudeBackend =
+    (params.providerId && isClaudeCliProvider(params.providerId)) ||
+    /^claude(?:$|[\\/-])/i.test(params.backend.command.trim());
+  if (!isClaudeBackend) {
+    return false;
+  }
+  return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
+}
+
+export function parseCliJson(
+  raw: string,
+  backend: CliBackendConfig,
+  providerId?: string,
+): CliOutput | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {
     return null;
@@ -285,7 +303,11 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
       collectCliText(parsed.result) ||
       collectCliText(parsed.response) ||
       collectCliText(parsed);
-    const trimmedText = unwrapNestedCliResultText(nextText).trim();
+    const trimmedText = (
+      shouldUnwrapNestedCliResultText({ backend, providerId, parsed })
+        ? unwrapNestedCliResultText(nextText)
+        : nextText
+    ).trim();
     if (trimmedText) {
       text = trimmedText;
       sawStructuredOutput = true;
@@ -509,7 +531,7 @@ export function parseCliOutput(params: {
     );
   }
   return (
-    parseCliJson(params.raw, params.backend) ?? {
+    parseCliJson(params.raw, params.backend, params.providerId) ?? {
       text: params.raw.trim(),
       sessionId: params.fallbackSessionId,
     }
