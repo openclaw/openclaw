@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { asRecord, normalizeWebhookMessage } from "./monitor-normalize.js";
 import { processMessage } from "./monitor-processing.js";
@@ -48,14 +49,21 @@ export type BlueBubblesCatchupSummary = {
 export type BlueBubblesCatchupCursor = { lastSeenMs: number; updatedAt: number };
 
 function resolveStateDirFromEnv(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return override;
+  // Explicit OPENCLAW_STATE_DIR overrides take precedence (including
+  // per-test mkdtemp dirs in this module's test suite).
+  if (env.OPENCLAW_STATE_DIR?.trim()) {
+    return resolveStateDir(env);
   }
+  // Default test isolation: per-pid tmpdir, no bleed into real ~/.openclaw.
   if (env.VITEST || env.NODE_ENV === "test") {
     return path.join(os.tmpdir(), `openclaw-vitest-${process.pid}`);
   }
-  return path.join(os.homedir(), ".openclaw");
+  // Canonical OpenClaw state dir: honors `~` expansion + legacy/new
+  // fallback. Sharing this resolver with inbound-dedupe is what guarantees
+  // the catchup cursor and the dedupe state always live under the same
+  // root, so a replayed GUID is recognized by the dedupe after catchup
+  // re-feeds the message through processMessage.
+  return resolveStateDir(env);
 }
 
 function resolveCursorFilePath(accountId: string): string {
@@ -317,6 +325,20 @@ export async function runBlueBubblesCatchup(
       `failed=${summary.failed} fetched=${summary.fetchedCount} ` +
       `window_ms=${nowMs - windowStartMs}`,
   );
+
+  // Emit a distinct warning when the BB result hits perRunLimit. The cursor
+  // has already advanced to nowMs, so any older messages BB would have
+  // returned past the cap are unreachable on the next sweep. Loud signal
+  // for operators to raise perRunLimit before a long outage silently
+  // truncates inbound history.
+  if (summary.fetchedCount >= perRunLimit) {
+    error?.(
+      `[${accountId}] BlueBubbles catchup: WARNING fetched=${summary.fetchedCount} ` +
+        `hit perRunLimit=${perRunLimit}; older messages in the window may have ` +
+        `been truncated. Raise channels.bluebubbles...catchup.perRunLimit if ` +
+        `outages can exceed this many inbound messages.`,
+    );
+  }
 
   return summary;
 }
