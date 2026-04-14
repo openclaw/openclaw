@@ -15,7 +15,6 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type {
-  TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
@@ -63,7 +62,6 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
-  getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumFlag,
@@ -413,6 +411,7 @@ export const registerTelegramHandlers = ({
             path: media.path,
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
+            animationMetadata: media.animationMetadata,
           });
         }
       }
@@ -513,6 +512,7 @@ export const registerTelegramHandlers = ({
           path: media.path,
           contentType: media.contentType,
           stickerMetadata: media.stickerMetadata,
+          animationMetadata: media.animationMetadata,
         },
       ];
     } catch (err) {
@@ -836,7 +836,7 @@ export const registerTelegramHandlers = ({
       // for reactions, we cannot determine if the reaction came from a topic, so block all
       // reactions if requireTopic is enabled for this DM.
       if (!isGroup) {
-        const requireTopic = (eventAuthContext.groupConfig as TelegramDirectConfig | undefined)
+        const requireTopic = (eventAuthContext.groupConfig)
           ?.requireTopic;
         if (requireTopic === true) {
           logVerbose(
@@ -1069,20 +1069,13 @@ export const registerTelegramHandlers = ({
       return;
     }
 
-    // Skip sticker-only messages where the sticker was skipped (animated/video)
-    // These have no media and no text content to process.
-    const hasText = Boolean(getTelegramTextParts(msg).text.trim());
-    if (msg.sticker && !media && !hasText) {
-      logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
-      return;
-    }
-
     const allMedia = media
       ? [
           {
             path: media.path,
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
+            animationMetadata: media.animationMetadata,
           },
         ]
       : [];

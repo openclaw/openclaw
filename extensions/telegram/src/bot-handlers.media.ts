@@ -17,7 +17,15 @@ export function hasInboundMedia(msg: Message): boolean {
   return (
     Boolean(msg.media_group_id) ||
     (Array.isArray(msg.photo) && msg.photo.length > 0) ||
-    Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
+    Boolean(
+      msg.video ??
+      msg.video_note ??
+      msg.document ??
+      msg.audio ??
+      msg.voice ??
+      msg.animation ??
+      msg.sticker,
+    )
   );
 }
 
@@ -35,6 +43,7 @@ export function resolveInboundMediaFileId(msg: Message): string | undefined {
     msg.video_note?.file_id ??
     msg.document?.file_id ??
     msg.audio?.file_id ??
-    msg.voice?.file_id
+    msg.voice?.file_id ??
+    msg.animation?.file_id
   );
 }

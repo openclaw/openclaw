@@ -33,5 +33,5 @@ export * from "./src/targets.js";
 export * from "./src/topic-conversation.js";
 export * from "./src/update-offset-store.js";
 export type { TelegramButtonStyle, TelegramInlineButtons } from "./src/button-types.js";
-export type { StickerMetadata } from "./src/bot/types.js";
+export type { AnimationMetadata, StickerMetadata } from "./src/bot/types.js";
 export type { TelegramTokenResolution } from "./src/token.js";

@@ -290,7 +290,7 @@ export async function buildTelegramInboundContextPayload(params: {
         }))
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
-  const contextMedia = [...currentMediaForContext, ...replyMedia];
+  const contextMedia = [...currentMediaForContext, ...replyMedia].filter((m) => Boolean(m.path));
   const ctxPayload = sessionRuntime.finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: bodyText,
@@ -345,7 +345,10 @@ export async function buildTelegramInboundContextPayload(params: {
         ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
     Sticker: allMedia[0]?.stickerMetadata,
-    StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
+    Animation: allMedia[0]?.animationMetadata,
+    StickerMediaIncluded: allMedia[0]?.stickerMetadata
+      ? !stickerCacheHit && Boolean(allMedia[0]?.path)
+      : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
     CommandSource: options?.commandSource,
