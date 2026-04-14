@@ -148,19 +148,16 @@ function emitSessionsChanged(
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
   const evSubs = context.getSessionEventSubscriberConnIds();
-  const msgSubs = payload.sessionKey
-    ? context.getSessionMessageSubscriberConnIds(payload.sessionKey)
-    : new Set<string>();
-  const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
-
-  if (drainConnIds.size === 0) {
-    return;
-  }
   const isTeardown =
     payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
 
   if (isTeardown) {
-    if (payload.sessionKey) {
+    const msgSubs = payload.sessionKey
+      ? context.getSessionMessageSubscriberConnIds(payload.sessionKey)
+      : new Set<string>();
+    const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
+
+    if (drainConnIds.size > 0 && payload.sessionKey) {
       context.broadcastToConnIds(
         "socket.drain",
         {
