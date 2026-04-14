@@ -118,6 +118,10 @@ export const pluginRegistrationContractCases = {
     pluginId: "perplexity",
     webSearchProviderIds: ["perplexity"],
   },
+  senseaudio: {
+    pluginId: "senseaudio",
+    musicGenerationProviderIds: ["senseaudio"],
+  },
   tavily: {
     pluginId: "tavily",
     webSearchProviderIds: ["tavily"],

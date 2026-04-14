@@ -12,6 +12,7 @@ export { parseProviderModelMap, redactLiveApiKey };
 export const DEFAULT_LIVE_MUSIC_MODELS: Record<string, string> = {
   google: "google/lyria-3-clip-preview",
   minimax: "minimax/music-2.5+",
+  senseaudio: "senseaudio/senseaudio-music-1.0-260319",
 };
 
 export function parseCsvFilter(raw?: string): Set<string> | null {

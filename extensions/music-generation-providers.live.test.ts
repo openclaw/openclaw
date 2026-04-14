@@ -22,6 +22,7 @@ import {
 } from "../test/helpers/plugins/provider-registration.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
+import senseaudioPlugin from "./senseaudio/index.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -49,6 +50,12 @@ const CASES: LiveProviderCase[] = [
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
+  },
+  {
+    plugin: senseaudioPlugin,
+    pluginId: "senseaudio",
+    pluginName: "SenseAudio Provider",
+    providerId: "senseaudio",
   },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
