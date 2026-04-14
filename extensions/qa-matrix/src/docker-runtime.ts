@@ -1,5 +1,5 @@
-import { execFile } from "node:child_process";
 import { createServer } from "node:net";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type RunCommand = (
@@ -85,32 +85,23 @@ function trimCommandOutput(output: string) {
 }
 
 export async function execCommand(command: string, args: string[], cwd: string) {
-  return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-    execFile(
-      command,
-      args,
-      { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const renderedStdout = trimCommandOutput(stdout);
-          const renderedStderr = trimCommandOutput(stderr);
-          reject(
-            new Error(
-              [
-                `Command failed: ${[command, ...args].join(" ")}`,
-                renderedStderr ? `stderr:\n${renderedStderr}` : "",
-                renderedStdout ? `stdout:\n${renderedStdout}` : "",
-              ]
-                .filter(Boolean)
-                .join("\n\n"),
-            ),
-          );
-          return;
-        }
-        resolve({ stdout, stderr });
-      },
+  try {
+    return await runExec(command, args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+  } catch (error) {
+    const failedProcess = error as Error & { stdout?: string; stderr?: string };
+    const renderedStdout = trimCommandOutput(failedProcess.stdout ?? "");
+    const renderedStderr = trimCommandOutput(failedProcess.stderr ?? "");
+    throw new Error(
+      [
+        `Command failed: ${[command, ...args].join(" ")}`,
+        renderedStderr ? `stderr:\n${renderedStderr}` : "",
+        renderedStdout ? `stdout:\n${renderedStdout}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      { cause: error },
     );
-  });
+  }
 }
 
 export async function waitForHealth(
