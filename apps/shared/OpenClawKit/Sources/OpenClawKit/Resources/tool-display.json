@@ -666,6 +666,16 @@
         "cleanup"
       ]
     },
+    "model_spawn": {
+      "emoji": "🔀",
+      "title": "Model Spawn",
+      "detailKeys": [
+        "mode",
+        "model",
+        "task",
+        "cleanup"
+      ]
+    },
     "subagents": {
       "emoji": "🤖",
       "title": "Subagents",
