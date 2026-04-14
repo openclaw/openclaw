@@ -549,7 +549,7 @@ export function createOpenClawReadTool(
 
         if (offset > 0 || limit !== undefined) {
           const lines = text.split('\n');
-          const start = Math.min(offset, lines.length);
+          const start = Math.max(0, Math.min(offset - 1, lines.length));
           const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
           text = lines.slice(start, end).join('\n');
           truncated = true;
