@@ -90,7 +90,9 @@ function getPackageRoot() {
 function findDistChunkByPrefix(prefix) {
   const distRoot = path.join(getPackageRoot(), "dist");
   try {
-    const entries = fs.readdirSync(distRoot, { withFileTypes: true });
+    const entries = fs
+      .readdirSync(distRoot, { withFileTypes: true })
+      .toSorted((left, right) => left.name.localeCompare(right.name));
     const match = entries.find(
       (entry) =>
         entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith(".js"),

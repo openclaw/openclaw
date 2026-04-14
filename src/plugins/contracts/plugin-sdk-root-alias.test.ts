@@ -331,6 +331,32 @@ describe("plugin-sdk root alias", () => {
     );
   });
 
+  it("chooses hashed dist diagnostic events chunks deterministically", () => {
+    const packageRoot = createPackageRoot();
+    const distAliasPath = createDistAliasPath();
+    const lazyModule = loadRootAliasWithStubs({
+      aliasPath: distAliasPath,
+      distExists: false,
+      distEntries: ["diagnostic-events-zeta.js", "diagnostic-events-alpha.js"],
+      monolithicExports: {
+        r: (): (() => void) => () => undefined,
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect(
+      typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
+        () => undefined,
+      ),
+    ).toBe("function");
+    expect(lazyModule.loadedSpecifiers).toContain(
+      path.join(packageRoot, "dist", "diagnostic-events-alpha.js"),
+    );
+    expect(lazyModule.loadedSpecifiers).not.toContain(
+      path.join(packageRoot, "dist", "diagnostic-events-zeta.js"),
+    );
+  });
+
   it.each([
     {
       name: "forwards delegateCompactionToRuntime through the compat-backed root alias",
