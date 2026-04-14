@@ -231,8 +231,6 @@ export function createChatRunState(): ChatRunState {
     abortedRuns,
     clear,
   };
-
-  return { handler, clearPendingChatLifecycleError };
 }
 
 export type ToolEventRecipientRegistry = {
@@ -1031,6 +1029,6 @@ export function createAgentEventHandler({
       }
     }
   };
+  return { handler, clearPendingChatLifecycleError };
+
 }
-
-
