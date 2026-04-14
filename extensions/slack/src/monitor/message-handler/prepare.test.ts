@@ -259,10 +259,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("skips mention resolution when the message contains no Slack mentions", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: { slack: { enabled: true } },
-      } as OpenClawConfig,
+    const slackCtx = createReplyToAllSlackCtx({
+      defaultRequireMention: false,
+      asChannel: true,
     });
     const resolveUserName = vi.fn(async () => ({ name: "Bek" }) as any);
     slackCtx.resolveUserName = resolveUserName;
@@ -271,6 +270,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
       slackCtx,
       defaultAccount,
       createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
         text: "hi there",
       }),
     );
