@@ -3,6 +3,26 @@
   "version": "2026.4.12",
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
   "type": "module",
+  "keywords": [
+    "openclaw",
+    "memory",
+    "lancedb",
+    "vector-database",
+    "plugin",
+    "ai-memory",
+    "recall"
+  ],
+  "author": "OpenClaw Contributors (https://github.com/openclaw/openclaw/graphs/contributors)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "extensions/memory-lancedb"
+  },
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "homepage": "https://github.com/openclaw/openclaw/tree/main/extensions/memory-lancedb#readme",
   "dependencies": {
     "@lancedb/lancedb": "^0.27.2",
     "@sinclair/typebox": "0.34.49",
@@ -10,6 +30,9 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "openclaw": {
     "extensions": [

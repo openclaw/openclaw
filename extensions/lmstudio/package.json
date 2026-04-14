@@ -2,11 +2,34 @@
   "name": "@openclaw/lmstudio-provider",
   "version": "2026.4.6",
   "private": true,
-  "description": "OpenClaw LM Studio provider plugin",
+  "description": "OpenClaw LM Studio provider plugin for local model inference",
   "type": "module",
+  "keywords": [
+    "openclaw",
+    "lmstudio",
+    "local-llm",
+    "provider",
+    "plugin",
+    "ai",
+    "ml"
+  ],
+  "author": "OpenClaw Contributors (https://github.com/openclaw/openclaw/graphs/contributors)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "extensions/lmstudio"
+  },
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "homepage": "https://github.com/openclaw/openclaw/tree/main/extensions/lmstudio#readme",
   "openclaw": {
     "extensions": [
       "./index.ts"
     ]
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
