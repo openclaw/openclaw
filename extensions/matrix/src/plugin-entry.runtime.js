@@ -38,6 +38,10 @@ function readPackageJson(packageRoot) {
   }
 }
 
+function normalizeLowercaseStringOrEmpty(value) {
+  return typeof value === "string" ? value.toLowerCase() : "";
+}
+
 function hasTrustedOpenClawRootIndicator(packageRoot, packageJson) {
   const packageExports = packageJson?.exports ?? {};
   if (!Object.prototype.hasOwnProperty.call(packageExports, "./plugin-sdk")) {
@@ -45,7 +49,8 @@ function hasTrustedOpenClawRootIndicator(packageRoot, packageJson) {
   }
   const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
   const hasOpenClawBin =
-    (typeof packageJson?.bin === "string" && packageJson.bin.includes("openclaw")) ||
+    (typeof packageJson?.bin === "string" &&
+      normalizeLowercaseStringOrEmpty(packageJson.bin).includes("openclaw")) ||
     (typeof packageJson?.bin === "object" &&
       packageJson.bin !== null &&
       typeof packageJson.bin.openclaw === "string");
