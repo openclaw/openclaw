@@ -116,7 +116,7 @@ function getTopicStoreState(persistedPath?: string): TopicNameStoreState {
         store: readPersistedTopicNames(persistedPath),
       }
     : createTopicNameStoreState();
-  next.lastUpdatedAt = Math.max(0, ...next.store.values().map((entry) => entry.updatedAt));
+  next.lastUpdatedAt = Math.max(0, ...Array.from(next.store.values(), (entry) => entry.updatedAt));
   state.stores.set(stateKey, next);
   return next;
 }
