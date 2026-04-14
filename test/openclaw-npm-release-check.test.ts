@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
@@ -280,6 +281,10 @@ describe("parseNpmPackJsonOutput", () => {
 describe("collectControlUiPackErrors", () => {
   it("rejects packs that ship the dashboard HTML without the asset payload", () => {
     expect(collectControlUiPackErrors(["dist/control-ui/index.html"])).toEqual([
+      ...WORKSPACE_TEMPLATE_PACK_PATHS.map(
+        (requiredPath) =>
+          `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+      ),
       'npm package is missing Control UI asset payload under "dist/control-ui/assets/". Refuse release when the dashboard tarball would be empty.',
     ]);
   });
@@ -288,6 +293,7 @@ describe("collectControlUiPackErrors", () => {
     expect(
       collectControlUiPackErrors([
         "dist/control-ui/index.html",
+        ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
