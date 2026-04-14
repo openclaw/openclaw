@@ -160,6 +160,6 @@ keep this note
     expect(parsed.body).toContain("<!-- openclaw:human:start -->");
     await expect(
       fs.readFile(path.join(rootDir, "entities", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha](entities/alpha.md)");
+    ).resolves.toContain("[Alpha](alpha.md)");
   });
 });
