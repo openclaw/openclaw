@@ -77,21 +77,26 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 
 describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
-    expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual([
-      "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
-      "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
-      "src/agents/agent-scope-config.ts|no-control-regex|1",
-      "src/agents/agent-scope.ts|no-control-regex|1",
-      "src/agents/pi-embedded-runner/run/images.ts|no-control-regex|1",
-      "src/agents/skills-clawhub.ts|no-control-regex|1",
-      "src/agents/subagent-attachments.ts|no-control-regex|1",
-      "src/agents/subagent-spawn.ts|no-control-regex|1",
-      "src/agents/tools/common.ts|typescript/no-explicit-any|1",
-      "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
-      "src/config/types.channels.ts|@typescript-eslint/no-explicit-any|1",
-      "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
-      "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
-    ]);
+expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual([
+  "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
+  "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
+  "src/agents/agent-scope-config.ts|no-control-regex|1",
+  "src/agents/agent-scope.ts|no-control-regex|1",
+  "src/agents/pi-embedded-runner/compact.ts|@typescript-eslint/no-explicit-any|1",
+  "src/agents/pi-embedded-runner/run/attempt.ts|@typescript-eslint/no-explicit-any|1",
+  "src/agents/pi-embedded-runner/run/images.ts|no-control-regex|1",
+  "src/agents/pi-tools.types.ts|@typescript-eslint/no-explicit-any|1",
+  "src/agents/skills-clawhub.ts|no-control-regex|1",
+  "src/agents/subagent-attachments.ts|no-control-regex|1",
+  "src/agents/subagent-spawn.ts|no-control-regex|1",
+  "src/agents/tool-media.ts|@typescript-eslint/no-explicit-any|1",
+  "src/agents/tools/common.ts|typescript/no-explicit-any|1",
+  "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
+  "src/config/types.channels.ts|@typescript-eslint/no-explicit-any|1",
+  "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
+  "ui/src/ui/chat/grouped-render.ts|@typescript-eslint/no-base-to-string|1",
+  "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
+]);
   });
 
   it("keeps production no-explicit-any suppressions on an explicit allowlist", () => {
