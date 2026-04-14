@@ -1,3 +1,4 @@
+import { loadConfig } from "../config/config.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendCdpPath, fetchJson, isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
@@ -49,6 +50,15 @@ export async function captureScreenshot(opts: {
 }): Promise<Buffer> {
   return await withCdpSocket(opts.wsUrl, async (send) => {
     await send("Page.enable");
+    // In headless mode, enforce 1920x1080 viewport via CDP
+    if (loadConfig().browser?.headless) {
+      await send("Emulation.setDeviceMetricsOverride", {
+        width: 1920,
+        height: 1080,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+    }
 
     let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
     if (opts.fullPage) {

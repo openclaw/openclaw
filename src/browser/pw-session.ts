@@ -7,6 +7,7 @@ import type {
   Response,
 } from "playwright-core";
 import { chromium } from "playwright-core";
+import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
@@ -735,6 +736,12 @@ export async function createPageViaPlaywright(opts: {
 
   const page = await context.newPage();
   ensurePageState(page);
+
+  // In headless mode, CDP connections lack a reliable default viewport.
+  // Explicitly set 1920x1080 so screenshots match Full-HD resolution.
+  if (loadConfig().browser?.headless) {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+  }
 
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";

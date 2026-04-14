@@ -1,3 +1,4 @@
+import { loadConfig } from "../config/config.js";
 import type { BrowserFormField } from "./client-actions-core.js";
 import {
   ensurePageState,
@@ -452,6 +453,13 @@ export async function takeScreenshotViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  // Ensure headless viewport is 1920x1080 (CDP connections may default to a small size)
+  if (loadConfig().browser?.headless) {
+    const vp = page.viewportSize();
+    if (!vp || vp.width < 1920 || vp.height < 1080) {
+      await page.setViewportSize({ width: 1920, height: 1080 });
+    }
+  }
   const type = opts.type ?? "png";
   if (opts.ref) {
     if (opts.fullPage) {
