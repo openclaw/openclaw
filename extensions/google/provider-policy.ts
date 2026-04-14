@@ -35,8 +35,10 @@ export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
     const url = new URL(raw);
     url.hash = "";
     url.search = "";
-    if (isGoogleGenerativeAiUrl(url) && trimTrailingSlashes(url.pathname || "") === "") {
-      url.pathname = "/v1beta";
+    if (isGoogleGenerativeAiUrl(url)) {
+      const normalizedPath = trimTrailingSlashes(url.pathname || "");
+      const strippedCompatPath = normalizedPath.replace(/\/openai$/i, "");
+      url.pathname = strippedCompatPath || "/v1beta";
     }
     return trimTrailingSlashes(url.toString());
   } catch {
