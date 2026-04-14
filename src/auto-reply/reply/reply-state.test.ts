@@ -516,6 +516,73 @@ describe("applyMemoryFlushSharesToPlan", () => {
     expect(small.reserveTokensFloor).toBe(800);
     expect(small.softThresholdTokens).toBe(160);
   });
+
+  // Regression: a single agent runs sessions with different models. The share
+  // must be evaluated against the SESSION-active model's context window, not
+  // a value statically derived from the agent's default model. Two sessions
+  // of the same agent with different active models must yield different
+  // resolved budgets.
+  it("share resolves against the SESSION-active model, not the agent default model", () => {
+    // Same agent config: both share fields set, no absolute overrides.
+    const cfg = {
+      models: {
+        providers: {
+          glm: { models: [{ id: "glm-4.7", contextWindow: 200_000 }] },
+          moonshot: { models: [{ id: "kimi-k2", contextWindow: 1_000_000 }] },
+        },
+      },
+      agents: {
+        defaults: {
+          // Agent-level default model (would be used as a fallback when the
+          // session does not override).
+          model: { primary: "glm/glm-4.7" },
+          compaction: {
+            reserveTokensFloorShare: 0.1,
+            memoryFlush: { softThresholdTokensShare: 0.02 },
+          },
+        },
+      },
+    } as never;
+
+    // Session S1 inherits the agent default (glm-4.7, 200k window).
+    const sessionS1Window = resolveMemoryFlushContextWindowTokens({
+      cfg,
+      provider: "glm",
+      modelId: "glm-4.7",
+    });
+    expect(sessionS1Window).toBe(200_000);
+
+    const planS1 = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg,
+      contextWindowTokens: sessionS1Window,
+    });
+    expect(planS1.reserveTokensFloor).toBe(20_000); // 200k × 0.1
+    expect(planS1.softThresholdTokens).toBe(4_000); // 200k × 0.02
+
+    // Session S2 of the SAME agent overrides to kimi-k2 (1M window). The
+    // share must scale to the active session model, NOT stay locked at the
+    // agent default's 200k.
+    const sessionS2Window = resolveMemoryFlushContextWindowTokens({
+      cfg,
+      provider: "moonshot",
+      modelId: "kimi-k2",
+    });
+    expect(sessionS2Window).toBe(1_000_000);
+
+    const planS2 = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg,
+      contextWindowTokens: sessionS2Window,
+    });
+    expect(planS2.reserveTokensFloor).toBe(100_000); // 1M × 0.1
+    expect(planS2.softThresholdTokens).toBe(20_000); // 1M × 0.02
+
+    // Sanity: budgets really did differ between the two sessions even though
+    // the agent config is identical — proving the ratio is session-scoped.
+    expect(planS2.reserveTokensFloor).not.toBe(planS1.reserveTokensFloor);
+    expect(planS2.softThresholdTokens).not.toBe(planS1.softThresholdTokens);
+  });
 });
 
 describe("incrementCompactionCount", () => {
