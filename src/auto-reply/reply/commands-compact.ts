@@ -1,4 +1,8 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/pi-embedded-runner/runs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -94,6 +98,23 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     runtime.abortEmbeddedPiRun(sessionId);
     await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
+  
+  // Create AbortController for the compaction session
+  const compactionAbortController = new AbortController();
+  
+  // Create handle for registration in ACTIVE_EMBEDDED_RUNS
+  const compactionHandle = {
+    kind: "embedded" as const,
+    queueMessage: async (text: string) => {
+      // Compaction doesn't queue messages, but required for interface
+    },
+    isStreaming: () => false, // Compaction is not streaming
+    isCompacting: () => true, // This is a compaction run
+    abort: () => compactionAbortController.abort(),
+  };
+  
+  // Register the compaction run so it can be cancelled via standard paths
+  setActiveEmbeddedRun(sessionId, compactionHandle, params.sessionKey);
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
     : (params.agentId ?? "main");
@@ -146,7 +167,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     trigger: "manual",
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+    abortSignal: compactionAbortController.signal, // Wire up cancellation support
   });
+  
+  // Clean up the active run registration
+  clearActiveEmbeddedRun(sessionId, compactionHandle);
 
   const compactLabel =
     result.ok || isCompactionSkipReason(result.reason)
