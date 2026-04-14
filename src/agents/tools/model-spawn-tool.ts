@@ -89,6 +89,8 @@ export function createModelSpawnTool(
     agentAccountId?: string;
     agentTo?: string;
     agentThreadId?: string | number;
+    /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
+    requesterAgentIdOverride?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   return {
@@ -209,6 +211,7 @@ export function createModelSpawnTool(
         agentGroupId: opts?.agentGroupId,
         agentGroupChannel: opts?.agentGroupChannel,
         agentGroupSpace: opts?.agentGroupSpace,
+        requesterAgentIdOverride: opts?.requesterAgentIdOverride,
         workspaceDir: opts?.workspaceDir,
       } as const;
 
@@ -241,20 +244,37 @@ export function createModelSpawnTool(
           }
 
           const fullTask = entryContext ? `${entryContext}\n\n${entryTask}` : entryTask;
-          const result = await spawnSubagentDirect(
-            {
-              task: fullTask,
+          try {
+            const result = await spawnSubagentDirect(
+              {
+                task: fullTask,
+                model: entryModel,
+                cleanup,
+                runTimeoutSeconds: timeoutSeconds,
+                expectsCompletionMessage: true,
+              },
+              spawnCtx,
+            );
+            return { label: entryLabel, index: idx, model: entryModel, ...result };
+          } catch (err) {
+            return {
+              label: entryLabel,
+              index: idx,
               model: entryModel,
-              cleanup,
-              runTimeoutSeconds: timeoutSeconds,
-              expectsCompletionMessage: true,
-            },
-            spawnCtx,
-          );
-          return { label: entryLabel, index: idx, model: entryModel, ...result };
+              status: "error" as const,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
         });
 
-        const results = await Promise.all(spawnPromises);
+        // Use allSettled so an unexpected rejection in any promise does not discard
+        // results from already-completed spawns.
+        const settled = await Promise.allSettled(spawnPromises);
+        const results = settled.map((r) =>
+          r.status === "fulfilled"
+            ? r.value
+            : { status: "error" as const, error: String(r.reason) },
+        );
         return jsonResult({ mode: "spawn", multi: true, count: results.length, results });
       }
 
