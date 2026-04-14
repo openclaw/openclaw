@@ -6,6 +6,10 @@ import {
   agentsBindCommand,
   agentsDeleteCommand,
   agentsListCommand,
+  agentsRepoSlotsEnsureCommand,
+  agentsRepoSlotsListCommand,
+  agentsRepoSlotsRemoveCommand,
+  agentsRepoSlotsResetCommand,
   agentsSetIdentityCommand,
   agentsUnbindCommand,
 } from "../../commands/agents.js";
@@ -43,6 +47,12 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       false,
     )
     .option("--deliver", "Send the agent's reply back to the selected channel", false)
+    .option("--workspace-dir <dir>", "Override the agent workspace for this run")
+    .option("--repo <path>", "Canonical repo root/path used with --repo-slot (defaults to cwd)")
+    .option(
+      "--repo-slot <name>",
+      "Run in an isolated reusable repo slot instead of the canonical checkout",
+    )
     .option("--json", "Output result as JSON", false)
     .option(
       "--timeout <seconds>",
@@ -246,6 +256,80 @@ ${formatHelpExamples([
             theme: opts.theme as string | undefined,
             emoji: opts.emoji as string | undefined,
             avatar: opts.avatar as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const repoSlots = agents
+    .command("repo-slots")
+    .description("Manage isolated reusable repo work slots");
+
+  repoSlots
+    .command("list")
+    .description("List isolated repo slots")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsRepoSlotsListCommand({ json: Boolean(opts.json) }, defaultRuntime);
+      });
+    });
+
+  repoSlots
+    .command("ensure <slot>")
+    .description("Create or reuse an isolated repo slot")
+    .option("--repo <path>", "Canonical repo root/path (defaults to cwd)")
+    .option("--ref <git-ref>", "Base ref/commit to materialize")
+    .option("--json", "Output JSON", false)
+    .action(async (slot, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsRepoSlotsEnsureCommand(
+          {
+            slot: String(slot),
+            repo: opts.repo as string | undefined,
+            ref: opts.ref as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  repoSlots
+    .command("reset <slot>")
+    .description("Hard reset and clean an isolated repo slot")
+    .option("--repo <path>", "Canonical repo root/path (defaults to cwd)")
+    .option("--ref <git-ref>", "Target ref/commit after reset")
+    .option("--no-fetch", "Skip fetch before reset")
+    .option("--json", "Output JSON", false)
+    .action(async (slot, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsRepoSlotsResetCommand(
+          {
+            slot: String(slot),
+            repo: opts.repo as string | undefined,
+            ref: opts.ref as string | undefined,
+            fetch: opts.fetch as boolean,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  repoSlots
+    .command("remove <slot>")
+    .description("Remove an isolated repo slot")
+    .option("--repo <path>", "Canonical repo root/path (defaults to cwd)")
+    .option("--json", "Output JSON", false)
+    .action(async (slot, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsRepoSlotsRemoveCommand(
+          {
+            slot: String(slot),
+            repo: opts.repo as string | undefined,
             json: Boolean(opts.json),
           },
           defaultRuntime,
