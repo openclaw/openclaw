@@ -353,22 +353,30 @@ describe("runBlueBubblesCatchup", () => {
     expect(summary?.cursorAfter).toBe(now);
   });
 
-  it("skips the rate-limit gate when stored cursor is in the future (clock skew)", async () => {
+  it("recovers from a future-dated cursor by falling through to firstRunLookback", async () => {
+    // Clock-skew scenario: cursor was written with a wall time that is now
+    // ahead of the corrected clock. Catchup must NOT pass `after=future`
+    // to BB (which would return zero), and must NOT save cursor=nowMs
+    // without first replaying the [earliestAllowed, nowMs] window.
     const now = 1_000_000;
-    const futureCursor = now + 60_000; // future-dated by clock correction
+    const futureCursor = now + 60_000;
     await saveBlueBubblesCatchupCursor("test-account", futureCursor);
-    let fetched = false;
+    let seenSince = -1;
     const summary = await runBlueBubblesCatchup(makeTarget(), {
       now: () => now,
-      fetchMessages: async () => {
-        fetched = true;
+      fetchMessages: async (sinceMs) => {
+        seenSince = sinceMs;
         return { resolved: true, messages: [] };
       },
       processMessageFn: async () => {},
     });
-    // Should NOT short-circuit on the MIN_INTERVAL_MS gate; should run.
-    expect(fetched).toBe(true);
+    // Should fall through to firstRunLookback (default 30 min), clamped
+    // to maxAge (default 120 min) — i.e. nowMs - 30min, NOT nowMs.
+    expect(seenSince).toBe(now - 30 * 60_000);
     expect(summary).not.toBeNull();
+    // Cursor should be repaired to nowMs so subsequent runs are normal.
+    const repaired = await loadBlueBubblesCatchupCursor("test-account");
+    expect(repaired?.lastSeenMs).toBe(now);
   });
 
   it("isolates one failing message and keeps processing the rest", async () => {

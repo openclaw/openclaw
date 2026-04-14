@@ -235,10 +235,20 @@ export async function runBlueBubblesCatchup(
   }
 
   const earliestAllowed = nowMs - maxAgeMs;
-  // First-run lookback is also clamped to the maxAge ceiling so a config
-  // with `maxAgeMinutes: 5, firstRunLookbackMinutes: 30` doesn't silently
-  // exceed the operator's stated lookback cap on first startup.
-  const windowStartMs = existing
+  // A future-dated cursor (clock rollback via NTP correction or manual
+  // adjust) is unusable: querying with `after` set to a future timestamp
+  // would return zero records, and saving `nowMs` as the new cursor would
+  // permanently skip any real messages missed in the
+  // [earliestAllowed, nowMs] window. Treat it as if no cursor exists and
+  // fall through to the firstRun lookback path; the inbound-dedupe cache
+  // from #66230 handles any overlap with already-processed messages, and
+  // saving cursor = nowMs at the end of the run repairs the cursor.
+  const cursorIsUsable = existing !== null && existing.lastSeenMs <= nowMs;
+  // First-run (and recovered-future-cursor) lookback is also clamped to
+  // the maxAge ceiling so a config with `maxAgeMinutes: 5,
+  // firstRunLookbackMinutes: 30` doesn't silently exceed the operator's
+  // stated lookback cap on first startup.
+  const windowStartMs = cursorIsUsable
     ? Math.max(existing.lastSeenMs, earliestAllowed)
     : Math.max(nowMs - firstRunLookbackMs, earliestAllowed);
 
