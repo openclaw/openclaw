@@ -73,6 +73,53 @@ function instantiatePiModelRegistry(
   return new Registry(authStorage, modelsFile);
 }
 
+function getCatalogEntryKey(provider: string, id: string): string {
+  return `${normalizeLowercaseStringOrEmpty(provider)}::${normalizeLowercaseStringOrEmpty(id)}`;
+}
+
+function appendCatalogEntryIfAbsent(
+  entries: ModelCatalogEntry[],
+  seen: Set<string>,
+  entry: ModelCatalogEntry,
+): void {
+  const key = getCatalogEntryKey(entry.provider, entry.id);
+  if (seen.has(key)) {
+    return;
+  }
+  entries.push(entry);
+  seen.add(key);
+}
+
+function resolveConfiguredCatalogEntries(config?: OpenClawConfig): ModelCatalogEntry[] {
+  const entries: ModelCatalogEntry[] = [];
+  for (const [providerKey, provider] of Object.entries(config?.models?.providers ?? {})) {
+    const normalizedProvider = normalizeProviderId(providerKey);
+    if (!normalizedProvider) {
+      continue;
+    }
+    for (const model of provider?.models ?? []) {
+      const id = normalizeOptionalString(model?.id) ?? "";
+      if (!id) {
+        continue;
+      }
+      const name = normalizeOptionalString(model?.name ?? id) || id;
+      const contextWindow =
+        typeof model?.contextWindow === "number" && model.contextWindow > 0
+          ? model.contextWindow
+          : undefined;
+      entries.push({
+        id,
+        name,
+        provider: normalizedProvider,
+        contextWindow,
+        reasoning: typeof model?.reasoning === "boolean" ? model.reasoning : undefined,
+        input: Array.isArray(model?.input) ? (model.input as ModelInputType[]) : undefined,
+      });
+    }
+  }
+  return entries;
+}
+
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
@@ -86,6 +133,7 @@ export async function loadModelCatalog(params?: {
 
   modelCatalogPromise = (async () => {
     const models: ModelCatalogEntry[] = [];
+    const seenModelKeys = new Set<string>();
     const timingEnabled = shouldLogModelCatalogTiming();
     const startMs = timingEnabled ? Date.now() : 0;
     const logStage = (stage: string, extra?: string) => {
@@ -146,7 +194,19 @@ export async function loadModelCatalog(params?: {
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input });
+        appendCatalogEntryIfAbsent(models, seenModelKeys, {
+          id,
+          name,
+          provider,
+          contextWindow,
+          reasoning,
+          input,
+        });
+      }
+      for (const entry of resolveConfiguredCatalogEntries(cfg)) {
+        // Gateway capability checks must see explicitly configured provider models
+        // even when Pi discovery omits them from the runtime registry.
+        appendCatalogEntryIfAbsent(models, seenModelKeys, entry);
       }
       const supplemental = await augmentModelCatalogWithProviderPlugins({
         config: cfg,
@@ -159,19 +219,8 @@ export async function loadModelCatalog(params?: {
         },
       });
       if (supplemental.length > 0) {
-        const seen = new Set(
-          models.map(
-            (entry) =>
-              `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`,
-          ),
-        );
         for (const entry of supplemental) {
-          const key = `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`;
-          if (seen.has(key)) {
-            continue;
-          }
-          models.push(entry);
-          seen.add(key);
+          appendCatalogEntryIfAbsent(models, seenModelKeys, entry);
         }
       }
       logStage("plugin-models-merged", `entries=${models.length}`);

@@ -311,6 +311,44 @@ describe("loadModelCatalog", () => {
     );
   });
 
+  it("includes configured custom provider models even when Pi discovery omits them", async () => {
+    mockSingleOpenAiCatalogModel();
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            bigmodel: {
+              api: "openai-completions",
+              baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+              models: [
+                {
+                  id: "glm-5v-turbo",
+                  name: "GLM-5V Turbo",
+                  api: "openai-completions",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 202752,
+                  maxTokens: 131072,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "bigmodel",
+        id: "glm-5v-turbo",
+        name: "GLM-5V Turbo",
+        input: ["text", "image"],
+      }),
+    );
+  });
+
   it("dedupes supplemental models against registry entries", async () => {
     mockSingleOpenAiCatalogModel();
     augmentCatalogMock.mockResolvedValueOnce([
