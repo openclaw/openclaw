@@ -1,11 +1,11 @@
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { loadConfig, resolveConfigPath } from "../../config/config.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -91,10 +91,33 @@ export function createAgentsListTool(opts?: {
         configured: configuredIds.includes(id),
       }));
 
+      // Include diagnostic info when no agents are allowlisted beyond the requester.
+      // This helps users diagnose config issues when agents.list or allowAgents is missing.
+      const hasExplicitAllowlist = allowAgents.length > 0;
+      const requesterConfigured = resolveAgentConfig(cfg, requesterAgentId) !== undefined;
+      const configuredAgentCount = configuredIds.length;
+
       return jsonResult({
         requester: requesterAgentId,
         allowAny,
         agents,
+        // Diagnostic fields to help debug config issues (only when relevant)
+        ...(hasExplicitAllowlist
+          ? {}
+          : {
+              diagnostic: {
+                configPath: resolveConfigPath(),
+                requesterConfigured,
+                configuredAgentCount,
+                configuredAgentIds: configuredAgentCount > 0 ? listAgentIds(cfg) : [],
+                hint:
+                  !requesterConfigured && configuredAgentCount === 0
+                    ? "No agents configured in agents.list. Check that your config file is loaded from the expected path."
+                    : !hasExplicitAllowlist
+                      ? `No allowAgents configured for "${requesterAgentId}". Set subagents.allowAgents on this agent or agents.defaults.subagents.allowAgents.`
+                      : undefined,
+              },
+            }),
       });
     },
   };

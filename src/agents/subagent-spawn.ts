@@ -463,9 +463,14 @@ export async function spawnSubagentDirect(
     );
     if (!allowAny && !allowSet.has(normalizedTargetId)) {
       const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+      // Include hint when no agents are allowlisted to help diagnose config issues.
+      const hint =
+        allowSet.size === 0
+          ? ` Set subagents.allowAgents on "${requesterAgentId}" or agents.defaults.subagents.allowAgents. Use agents_list to check config.`
+          : "";
       return {
         status: "forbidden",
-        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText}).${hint}`,
       };
     }
   }
