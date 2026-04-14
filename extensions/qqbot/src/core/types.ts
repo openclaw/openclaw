@@ -1,0 +1,194 @@
+/**
+ * Core API layer public types.
+ *
+ * These types are independent of the root `src/types.ts` and only define
+ * what the `core/api/` modules need.  The old `src/types.ts` remains
+ * untouched for backward compatibility.
+ */
+
+// ============ Structured API Error ============
+
+/**
+ * Structured API error with HTTP status, path, and optional business error code.
+ *
+ * Compared to the old `api.ts` which throws plain `Error`, this carries
+ * machine-readable fields for downstream retry/fallback decisions.
+ */
+export class ApiError extends Error {
+  override readonly name = "ApiError";
+
+  constructor(
+    message: string,
+    /** HTTP status code returned by the QQ Open Platform. */
+    public readonly httpStatus: number,
+    /** API path that produced the error (e.g. `/v2/users/{id}/messages`). */
+    public readonly path: string,
+    /** Business error code from the response body (`code` or `err_code`). */
+    public readonly bizCode?: number,
+    /** Original error message from the response body. */
+    public readonly bizMessage?: string,
+  ) {
+    super(message);
+  }
+}
+
+// ============ Logger ============
+
+/** Minimal logger interface injected into core modules via constructor. */
+export interface ApiLogger {
+  info: (msg: string) => void;
+  error: (msg: string) => void;
+  warn?: (msg: string) => void;
+  debug?: (msg: string) => void;
+}
+
+// ============ Chat Scope ============
+
+/** Chat scope used to unify C2C/Group path construction. */
+export type ChatScope = "c2c" | "group";
+
+// ============ Message Response ============
+
+/** Standard message send response from the QQ Open Platform. */
+export interface MessageResponse {
+  id: string;
+  timestamp: number | string;
+  /** Reference index for future quoting. */
+  ext_info?: {
+    ref_idx?: string;
+  };
+}
+
+// ============ Media Types ============
+
+/** QQ Open Platform media file type codes. */
+export enum MediaFileType {
+  IMAGE = 1,
+  VIDEO = 2,
+  VOICE = 3,
+  FILE = 4,
+}
+
+/** Media upload response from the QQ Open Platform. */
+export interface UploadMediaResponse {
+  file_uuid: string;
+  file_info: string;
+  ttl: number;
+  id?: string;
+}
+
+/** Structured metadata recorded for outbound messages. */
+export interface OutboundMeta {
+  /** Message text content. */
+  text?: string;
+  /** Media type tag. */
+  mediaType?: "image" | "voice" | "video" | "file";
+  /** Remote URL of the media source. */
+  mediaUrl?: string;
+  /** Local file path of the media source. */
+  mediaLocalPath?: string;
+  /** Original TTS text (voice messages only). */
+  ttsText?: string;
+}
+
+// ============ API Client Config ============
+
+/** Configuration for the core HTTP client. */
+export interface ApiClientConfig {
+  /** Base URL for the QQ Open Platform REST API. */
+  baseUrl?: string;
+  /** Default request timeout in milliseconds. */
+  defaultTimeoutMs?: number;
+  /** File upload request timeout in milliseconds. */
+  fileUploadTimeoutMs?: number;
+  /** Logger instance. */
+  logger?: ApiLogger;
+  /** User-Agent header value. */
+  userAgent?: string;
+}
+
+// ============ Chunked Upload Types ============
+
+/** Individual upload part metadata. */
+export interface UploadPart {
+  /** Part index (1-based). */
+  index: number;
+  /** Pre-signed upload URL. */
+  presigned_url: string;
+}
+
+/** Response from the upload_prepare endpoint. */
+export interface UploadPrepareResponse {
+  /** Upload task identifier. */
+  upload_id: string;
+  /** Block size in bytes. */
+  block_size: number;
+  /** Pre-signed upload parts. */
+  parts: UploadPart[];
+  /** Server-suggested upload concurrency. */
+  concurrency?: number;
+  /** Server-suggested retry timeout for upload_part_finish (seconds). */
+  retry_timeout?: number;
+}
+
+/** Complete upload response. */
+export interface MediaUploadResponse {
+  file_uuid: string;
+  file_info: string;
+  ttl: number;
+}
+
+/** File hash information for upload_prepare. */
+export interface UploadPrepareHashes {
+  /** Whole-file MD5 (hex). */
+  md5: string;
+  /** Whole-file SHA1 (hex). */
+  sha1: string;
+  /** MD5 of the first 10,002,432 bytes (hex). */
+  md5_10m: string;
+}
+
+// ============ Stream Message Types ============
+
+/** Stream message input state. */
+export enum StreamInputState {
+  GENERATING = "1",
+  DONE = "10",
+}
+
+/** Stream message request body. */
+export interface StreamMessageRequest {
+  input_mode: string;
+  input_state: string;
+  content_type: string;
+  content_raw: string;
+  event_id?: string;
+  msg_id?: string;
+  msg_seq?: number;
+  index?: number;
+  stream_msg_id?: string;
+}
+
+// ============ Inline Keyboard Types ============
+
+/** Inline keyboard button for approval/interaction flows. */
+export interface KeyboardButton {
+  id: string;
+  render_data: {
+    label: string;
+    visited_label: string;
+    style: number;
+  };
+  action: {
+    type: number;
+    permission: { type: number };
+    data: string;
+  };
+}
+
+/** Inline keyboard structure attached to messages. */
+export interface InlineKeyboard {
+  keyboard: {
+    rows: Array<{ buttons: KeyboardButton[] }>;
+  };
+}
