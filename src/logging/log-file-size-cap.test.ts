@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getLogger,
@@ -49,7 +50,7 @@ describe("log file size cap", () => {
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(2048);
   });
 
-  it("suppresses file writes after cap is reached and warns once", () => {
+  it("rotates files and continues writing after cap is reached", () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(
       () => true as unknown as ReturnType<typeof process.stderr.write>, // preserve stream contract in test spy
     );
@@ -59,17 +60,27 @@ describe("log file size cap", () => {
     for (let i = 0; i < 200; i++) {
       logger.error(`network-failure-${i}-${"x".repeat(80)}`);
     }
-    const sizeAfterCap = fs.statSync(logPath).size;
+    const sizeAfterBurst = fs.statSync(logPath).size;
     for (let i = 0; i < 20; i++) {
       logger.error(`post-cap-${i}-${"y".repeat(80)}`);
     }
     const sizeAfterExtraLogs = fs.statSync(logPath).size;
 
-    expect(sizeAfterExtraLogs).toBe(sizeAfterCap);
-    expect(sizeAfterCap).toBeLessThanOrEqual(1024 + 512);
-    const capWarnings = stderrSpy.mock.calls
+    expect(sizeAfterBurst).toBeGreaterThan(0);
+    expect(sizeAfterExtraLogs).toBeGreaterThan(0);
+    expect(sizeAfterExtraLogs).toBeLessThanOrEqual(1024 + 512);
+
+    const dir = path.dirname(logPath);
+    const base = path.basename(logPath, path.extname(logPath));
+    const ext = path.extname(logPath);
+    const rotated = fs
+      .readdirSync(dir)
+      .filter((name) => name.startsWith(`${base}.`) && name.endsWith(ext));
+    expect(rotated.length).toBeGreaterThan(0);
+
+    const failureWarnings = stderrSpy.mock.calls
       .map(([firstArg]) => String(firstArg))
-      .filter((line) => line.includes("log file size cap reached"));
-    expect(capWarnings).toHaveLength(1);
+      .filter((line) => line.includes("rotation failed") || line.includes("payload exceeds"));
+    expect(failureWarnings).toHaveLength(0);
   });
 });

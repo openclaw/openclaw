@@ -70,7 +70,7 @@ describe("logger helpers", () => {
     });
   });
 
-  it("uses daily rolling default log file and prunes old ones", () => {
+  it("uses daily rolling default log file and prunes old rolling files", () => {
     resetLogger();
     setLoggerOverride({ level: "info" }); // force default file path with enabled file logging
     const today = localDateString(new Date());
@@ -78,9 +78,12 @@ describe("logger helpers", () => {
 
     // create an old file to be pruned
     const oldPath = path.join(DEFAULT_LOG_DIR, "openclaw-2000-01-01.log");
+    const oldRotatedPath = path.join(DEFAULT_LOG_DIR, "openclaw-2000-01-01.20000101-000000000.log");
     fs.mkdirSync(DEFAULT_LOG_DIR, { recursive: true });
     fs.writeFileSync(oldPath, "old");
+    fs.writeFileSync(oldRotatedPath, "old-rotated");
     fs.utimesSync(oldPath, new Date(0), new Date(0));
+    fs.utimesSync(oldRotatedPath, new Date(0), new Date(0));
     fs.rmSync(todayPath, { force: true });
 
     logInfo("roll-me");
@@ -88,6 +91,7 @@ describe("logger helpers", () => {
     expect(fs.existsSync(todayPath)).toBe(true);
     expect(fs.readFileSync(todayPath, "utf-8")).toContain("roll-me");
     expect(fs.existsSync(oldPath)).toBe(false);
+    expect(fs.existsSync(oldRotatedPath)).toBe(false);
 
     fs.rmSync(todayPath, { force: true });
   });

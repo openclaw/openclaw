@@ -48,6 +48,7 @@ const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
+const MAX_ROTATION_SUFFIX_ATTEMPTS = 1000;
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
@@ -171,7 +172,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
-  let warnedAboutSizeCap = false;
+  let warnedAboutFileWriteFailure = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
@@ -179,19 +180,43 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
+      if (currentFileBytes + payloadBytes > settings.maxFileBytes) {
+        const rotated = rotateLogFile(settings.file);
+        if (!rotated) {
+          if (!warnedAboutFileWriteFailure) {
+            warnedAboutFileWriteFailure = true;
+            const warningLine = JSON.stringify({
+              time: formatTimestamp(new Date(), { style: "long" }),
+              level: "warn",
+              subsystem: "logging",
+              message: `log file rotation failed; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+            });
+            appendLogLine(settings.file, `${warningLine}\n`);
+            process.stderr.write(
+              `[openclaw] log file rotation failed; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+            );
+          }
+          return;
+        }
+        currentFileBytes = getCurrentLogFileBytes(settings.file);
+        if (isRollingPath(settings.file)) {
+          pruneOldRollingLogs(path.dirname(settings.file));
+        }
+      }
+
       const nextBytes = currentFileBytes + payloadBytes;
       if (nextBytes > settings.maxFileBytes) {
-        if (!warnedAboutSizeCap) {
-          warnedAboutSizeCap = true;
+        if (!warnedAboutFileWriteFailure) {
+          warnedAboutFileWriteFailure = true;
           const warningLine = JSON.stringify({
             time: formatTimestamp(new Date(), { style: "long" }),
             level: "warn",
             subsystem: "logging",
-            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+            message: `log payload exceeds maxFileBytes; dropping entry file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
           });
           appendLogLine(settings.file, `${warningLine}\n`);
           process.stderr.write(
-            `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+            `[openclaw] log payload exceeds maxFileBytes; dropping entry file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
           );
         }
         return;
@@ -232,6 +257,29 @@ function appendLogLine(file: string, line: string): boolean {
   } catch {
     return false;
   }
+}
+
+function rotateLogFile(file: string): boolean {
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size <= 0) {
+      return true;
+    }
+  } catch {
+    return true;
+  }
+
+  const timestamp = formatRotationTimestamp(new Date());
+  for (let suffix = 0; suffix < MAX_ROTATION_SUFFIX_ATTEMPTS; suffix++) {
+    const rotatedPath = buildRotatedPath(file, timestamp, suffix);
+    try {
+      fs.renameSync(file, rotatedPath);
+      return true;
+    } catch {
+      // try the next suffix
+    }
+  }
+  return false;
 }
 
 export function getLogger(): TsLogger<LogObj> {
@@ -346,6 +394,26 @@ function isRollingPath(file: string): boolean {
     base.endsWith(LOG_SUFFIX) &&
     base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
   );
+}
+
+function formatRotationTimestamp(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  const millis = String(date.getMilliseconds()).padStart(3, "0");
+  return `${year}${month}${day}-${hours}${minutes}${seconds}${millis}`;
+}
+
+function buildRotatedPath(file: string, timestamp: string, suffix: number): string {
+  const dir = path.dirname(file);
+  const base = path.basename(file);
+  const ext = path.extname(base);
+  const baseWithoutExt = ext.length > 0 ? base.slice(0, -ext.length) : base;
+  const suffixPart = suffix > 0 ? `.${suffix}` : "";
+  return path.join(dir, `${baseWithoutExt}.${timestamp}${suffixPart}${ext}`);
 }
 
 function pruneOldRollingLogs(dir: string): void {
