@@ -77,6 +77,7 @@ function writeOpenClawPackageFixture(fixtureRoot: string) {
       2,
     ) + "\n",
   );
+  writeFixtureFile(fixtureRoot, "openclaw.mjs", "export {};\n");
   writeFixtureFile(fixtureRoot, "dist/plugin-sdk/index.js", "export {};\n");
 }
 
@@ -100,6 +101,7 @@ function writeOpenClawAliasFixture(fixtureRoot: string, extraExports?: Record<st
   );
   writeFixtureFile(fixtureRoot, "src/plugin-sdk/root-alias.cjs", "module.exports = {};\n");
   writeFixtureFile(fixtureRoot, "src/plugin-sdk/group-access.ts", "export {};\n");
+  writeFixtureFile(fixtureRoot, "openclaw.mjs", "export {};\n");
   writeFixtureFile(fixtureRoot, "dist/plugin-sdk/index.js", "export {};\n");
   writeFixtureFile(fixtureRoot, "dist/plugin-sdk/root-alias.cjs", "module.exports = {};\n");
   writeFixtureFile(fixtureRoot, "dist/plugin-sdk/group-access.js", "export {};\n");
@@ -261,4 +263,68 @@ it("keeps wrapper plugin-sdk aliases deterministic and ignores unsafe subpaths",
     "openclaw/plugin-sdk/zeta",
     "@openclaw/plugin-sdk/zeta",
   ]);
+}, 240_000);
+
+it("ignores nearby untrusted openclaw package stubs when resolving the wrapper root", async () => {
+  const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-trusted-root-");
+  const wrapperSource = fs.readFileSync(
+    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+    "utf8",
+  );
+
+  delete matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions;
+  writeOpenClawAliasFixture(fixtureRoot);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/package.json",
+    JSON.stringify(
+      {
+        name: "openclaw",
+        type: "module",
+        exports: {
+          "./plugin-sdk": "./dist/plugin-sdk/index.js",
+          "./plugin-sdk/group-access": "./dist/plugin-sdk/group-access.js",
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/src/plugin-sdk/root-alias.cjs",
+    "module.exports = {};\n",
+  );
+  writeFixtureFile(fixtureRoot, "extensions/src/plugin-sdk/group-access.ts", "export {};\n");
+  writeCapturingJitiFixture(fixtureRoot);
+  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/plugin-entry.handlers.runtime.js",
+    PACKAGED_RUNTIME_STUB,
+  );
+
+  const wrapperUrl = pathToFileURL(
+    path.join(fixtureRoot, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+  );
+  await import(`${wrapperUrl.href}?t=${Date.now()}`);
+
+  expect(matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions).toMatchObject({
+    alias: {
+      "openclaw/plugin-sdk": path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
+      "@openclaw/plugin-sdk": path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
+      "openclaw/plugin-sdk/group-access": path.join(
+        fixtureRoot,
+        "src",
+        "plugin-sdk",
+        "group-access.ts",
+      ),
+      "@openclaw/plugin-sdk/group-access": path.join(
+        fixtureRoot,
+        "src",
+        "plugin-sdk",
+        "group-access.ts",
+      ),
+    },
+  });
 }, 240_000);

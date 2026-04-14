@@ -38,11 +38,26 @@ function readPackageJson(packageRoot) {
   }
 }
 
+function hasTrustedOpenClawRootIndicator(packageRoot, packageJson) {
+  const packageExports = packageJson?.exports ?? {};
+  if (!Object.prototype.hasOwnProperty.call(packageExports, "./plugin-sdk")) {
+    return false;
+  }
+  const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
+  const hasOpenClawBin =
+    (typeof packageJson?.bin === "string" && packageJson.bin.includes("openclaw")) ||
+    (typeof packageJson?.bin === "object" &&
+      packageJson.bin !== null &&
+      typeof packageJson.bin.openclaw === "string");
+  const hasOpenClawEntrypoint = fs.existsSync(path.join(packageRoot, "openclaw.mjs"));
+  return hasCliEntryExport || hasOpenClawBin || hasOpenClawEntrypoint;
+}
+
 function findOpenClawPackageRoot(startDir) {
   let cursor = path.resolve(startDir);
   for (let i = 0; i < 12; i += 1) {
     const pkg = readPackageJson(cursor);
-    if (pkg?.name === "openclaw" && pkg.exports?.["./plugin-sdk"]) {
+    if (pkg?.name === "openclaw" && hasTrustedOpenClawRootIndicator(cursor, pkg)) {
       return { packageRoot: cursor, packageJson: pkg };
     }
     const parent = path.dirname(cursor);
