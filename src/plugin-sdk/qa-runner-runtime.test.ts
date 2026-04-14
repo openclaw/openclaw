@@ -3,9 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const listBundledQaRunnerCatalog = vi.hoisted(() => vi.fn(() => []));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
+}));
+
+vi.mock("../plugins/qa-runner-catalog.js", () => ({
+  listBundledQaRunnerCatalog,
 }));
 
 vi.mock("./facade-runtime.js", () => ({
@@ -18,6 +23,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
       plugins: [],
       diagnostics: [],
     });
+    listBundledQaRunnerCatalog.mockReset().mockReturnValue([]);
     tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
   });
 
@@ -93,6 +99,29 @@ describe("plugin-sdk qa-runner-runtime", () => {
     ]);
   });
 
+  it("reports missing optional runners from the generated catalog", async () => {
+    listBundledQaRunnerCatalog.mockReturnValue([
+      {
+        pluginId: "qa-matrix",
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
+        npmSpec: "@openclaw/qa-matrix",
+      },
+    ]);
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(module.listQaRunnerCliContributions()).toEqual([
+      {
+        pluginId: "qa-matrix",
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
+        status: "missing",
+        npmSpec: "@openclaw/qa-matrix",
+      },
+    ]);
+  });
+
   it("fails fast when two plugins declare the same qa runner command", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
@@ -115,6 +144,31 @@ describe("plugin-sdk qa-runner-runtime", () => {
 
     expect(() => module.listQaRunnerCliContributions()).toThrow(
       'QA runner command "matrix" declared by both "alpha" and "beta"',
+    );
+  });
+
+  it("fails when runtime registrations include an undeclared command", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "qa-matrix",
+          qaRunners: [{ commandName: "matrix" }],
+          rootDir: "/tmp/qa-matrix",
+        },
+      ],
+      diagnostics: [],
+    });
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      qaRunnerCliRegistrations: [
+        { commandName: "matrix", register: vi.fn() },
+        { commandName: "extra", register: vi.fn() },
+      ],
+    });
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(() => module.listQaRunnerCliContributions()).toThrow(
+      'QA runner plugin "qa-matrix" exported "extra" from runtime-api.js but did not declare it in openclaw.plugin.json',
     );
   });
 });

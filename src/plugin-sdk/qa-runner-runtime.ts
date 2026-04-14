@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { listBundledQaRunnerCatalog } from "../plugins/qa-runner-catalog.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 export type QaRunnerCliRegistration = {
@@ -26,6 +27,13 @@ export type QaRunnerCliContribution =
       commandName: string;
       description?: string;
       status: "blocked";
+    }
+  | {
+      pluginId: string;
+      commandName: string;
+      description?: string;
+      status: "missing";
+      npmSpec: string;
     };
 
 function listDeclaredQaRunnerPlugins(): Array<
@@ -69,9 +77,33 @@ function listRuntimeRegistrations(
   return registrations;
 }
 
-export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
-  const contributions: QaRunnerCliContribution[] = [];
+function buildKnownQaRunnerCatalog(): readonly QaRunnerCliContribution[] {
+  const knownRunners = listBundledQaRunnerCatalog();
   const seenCommandNames = new Map<string, string>();
+  return knownRunners.map((runner) => {
+    const previousOwner = seenCommandNames.get(runner.commandName);
+    if (previousOwner) {
+      throw new Error(
+        `QA runner command "${runner.commandName}" declared by both "${previousOwner}" and "${runner.pluginId}"`,
+      );
+    }
+    seenCommandNames.set(runner.commandName, runner.pluginId);
+    return {
+      pluginId: runner.pluginId,
+      commandName: runner.commandName,
+      ...(runner.description ? { description: runner.description } : {}),
+      status: "missing" as const,
+      npmSpec: runner.npmSpec,
+    };
+  });
+}
+
+export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
+  const contributions = new Map<string, QaRunnerCliContribution>();
+
+  for (const runner of buildKnownQaRunnerCatalog()) {
+    contributions.set(runner.commandName, runner);
+  }
 
   for (const plugin of listDeclaredQaRunnerPlugins()) {
     const runtimeSurface = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>(
@@ -83,21 +115,21 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
     const runtimeRegistrations = runtimeSurface
       ? listRuntimeRegistrations(plugin.id, runtimeSurface)
       : null;
+    const declaredCommandNames = new Set(plugin.qaRunners.map((runner) => runner.commandName));
 
     for (const runner of plugin.qaRunners) {
-      const previousOwner = seenCommandNames.get(runner.commandName);
-      if (previousOwner) {
+      const previous = contributions.get(runner.commandName);
+      if (previous && previous.pluginId !== plugin.id) {
         throw new Error(
-          `QA runner command "${runner.commandName}" declared by both "${previousOwner}" and "${plugin.id}"`,
+          `QA runner command "${runner.commandName}" declared by both "${previous.pluginId}" and "${plugin.id}"`,
         );
       }
-      seenCommandNames.set(runner.commandName, plugin.id);
 
       const registration = runtimeRegistrations?.find(
         (entry) => entry.commandName === runner.commandName,
       );
       if (!runtimeSurface) {
-        contributions.push({
+        contributions.set(runner.commandName, {
           pluginId: plugin.id,
           commandName: runner.commandName,
           ...(runner.description ? { description: runner.description } : {}),
@@ -110,7 +142,7 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
           `QA runner plugin "${plugin.id}" declared "${runner.commandName}" in openclaw.plugin.json but did not export a matching CLI registration`,
         );
       }
-      contributions.push({
+      contributions.set(runner.commandName, {
         pluginId: plugin.id,
         commandName: runner.commandName,
         ...(runner.description ? { description: runner.description } : {}),
@@ -118,7 +150,15 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
         registration,
       });
     }
+
+    for (const registration of runtimeRegistrations ?? []) {
+      if (!declaredCommandNames.has(registration.commandName)) {
+        throw new Error(
+          `QA runner plugin "${plugin.id}" exported "${registration.commandName}" from runtime-api.js but did not declare it in openclaw.plugin.json`,
+        );
+      }
+    }
   }
 
-  return contributions;
+  return [...contributions.values()];
 }

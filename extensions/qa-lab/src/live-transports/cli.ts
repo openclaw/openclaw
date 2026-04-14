@@ -2,14 +2,6 @@ import { listQaRunnerCliContributions } from "openclaw/plugin-sdk/qa-runner-runt
 import type { LiveTransportQaCliRegistration } from "./shared/live-transport-cli.js";
 import { telegramQaCliRegistration } from "./telegram/cli.js";
 
-const OPTIONAL_QA_RUNNER_INSTALLS = [
-  {
-    commandName: "matrix",
-    description: "Run the Matrix live QA lane (install @openclaw/qa-matrix first)",
-    npmSpec: "@openclaw/qa-matrix",
-  },
-] as const;
-
 function createMissingQaRunnerCliRegistration(params: {
   commandName: string;
   description: string;
@@ -55,26 +47,25 @@ export const LIVE_TRANSPORT_QA_CLI_REGISTRATIONS: readonly LiveTransportQaCliReg
 export function listLiveTransportQaCliRegistrations(): readonly LiveTransportQaCliRegistration[] {
   const liveRegistrations = [...LIVE_TRANSPORT_QA_CLI_REGISTRATIONS];
   const discoveredRunners = listQaRunnerCliContributions();
-  const seenCommandNames = new Set(liveRegistrations.map((registration) => registration.commandName));
 
   for (const runner of discoveredRunners) {
-    seenCommandNames.add(runner.commandName);
     liveRegistrations.push(
       runner.status === "available"
         ? runner.registration
-        : createBlockedQaRunnerCliRegistration({
-            commandName: runner.commandName,
-            description: runner.description,
-            pluginId: runner.pluginId,
-          }),
+        : runner.status === "blocked"
+          ? createBlockedQaRunnerCliRegistration({
+              commandName: runner.commandName,
+              description: runner.description,
+              pluginId: runner.pluginId,
+            })
+          : createMissingQaRunnerCliRegistration({
+              commandName: runner.commandName,
+              description:
+                runner.description ??
+                `Run the ${runner.commandName} live QA lane (install ${runner.npmSpec} first)`,
+              npmSpec: runner.npmSpec,
+            }),
     );
-  }
-
-  for (const runner of OPTIONAL_QA_RUNNER_INSTALLS) {
-    if (seenCommandNames.has(runner.commandName)) {
-      continue;
-    }
-    liveRegistrations.push(createMissingQaRunnerCliRegistration(runner));
   }
 
   return liveRegistrations;

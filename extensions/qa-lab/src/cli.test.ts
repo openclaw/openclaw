@@ -88,7 +88,15 @@ describe("qa cli registration", () => {
   });
 
   it("shows an install hint when the matrix runner plugin is unavailable", async () => {
-    listQaRunnerCliContributions.mockReset().mockReturnValue([]);
+    listQaRunnerCliContributions.mockReset().mockReturnValue([
+      {
+        pluginId: "qa-matrix",
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
+        status: "missing",
+        npmSpec: "@openclaw/qa-matrix",
+      },
+    ]);
     const missingProgram = new Command();
     registerQaLabCli(missingProgram);
 
