@@ -1,4 +1,9 @@
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
+import {
+  listChatCommands,
+  maybeResolveTextAlias,
+  normalizeCommandBody,
+} from "openclaw/plugin-sdk/command-auth";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
 import { isAbortRequestText } from "openclaw/plugin-sdk/reply-runtime";
 import { isBtwRequestText } from "openclaw/plugin-sdk/reply-runtime";
@@ -20,6 +25,26 @@ export type TelegramSequentialKeyContext = {
   };
 };
 
+function resolveStatusCommandControlLane(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
+  // Status-category slash commands are read-only inspection paths, so they can
+  // safely bypass the per-topic lane without changing ordinary message order.
+  const normalizedBody = normalizeCommandBody(
+    params.rawText?.trim() ?? "",
+    params.botUsername ? { botUsername: params.botUsername } : undefined,
+  );
+  const alias = maybeResolveTextAlias(normalizedBody);
+  if (!alias) {
+    return false;
+  }
+  const command = listChatCommands().find((entry) =>
+    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
+  );
+  return command?.category === "status";
+}
+
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
@@ -38,6 +63,12 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
   if (isAbortRequestText(rawText, botUsername ? { botUsername } : undefined)) {
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:control`;
+    }
+    return "telegram:control";
+  }
+  if (resolveStatusCommandControlLane({ rawText, botUsername })) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:control`;
     }
