@@ -9,7 +9,7 @@ import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.
 import {
   buildPluginLoaderAliasMap,
   isBundledPluginExtensionPath,
-  resolvePluginLoaderJitiConfig,
+  resolvePluginLoaderJitiTryNative,
   resolveLoaderPackageRoot,
 } from "./sdk-alias.js";
 
@@ -94,12 +94,7 @@ function resolvePublicSurfaceLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const { tryNative } = resolvePluginLoaderJitiConfig({
-    modulePath,
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
-    preferBuiltDist: true,
-  });
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
   const sharedLoader = getSharedBundledPublicSurfaceJiti(modulePath, tryNative);
   if (sharedLoader) {
     return sharedLoader;
@@ -115,12 +110,7 @@ function getJiti(modulePath: string) {
 }
 
 function loadPublicSurfaceModule(modulePath: string): unknown {
-  const { tryNative } = resolvePluginLoaderJitiConfig({
-    modulePath,
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
-    preferBuiltDist: true,
-  });
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
   if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
     return sourceArtifactRequire(modulePath);
   }

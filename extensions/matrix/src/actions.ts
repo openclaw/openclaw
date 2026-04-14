@@ -57,9 +57,7 @@ const MATRIX_PROFILE_MEDIA_PROPERTIES = {
     }),
   ),
 } as const;
-const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(
-  Object.keys(MATRIX_PROFILE_MEDIA_PROPERTIES),
-);
+const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPath"]);
 
 function createMatrixExposedActions(params: {
   gate: ReturnType<typeof createActionGate>;

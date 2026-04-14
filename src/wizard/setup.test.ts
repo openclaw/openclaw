@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
@@ -78,6 +79,18 @@ const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+
+function providerPluginStub(
+  overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
+): ProviderPlugin {
+  const { id, ...rest } = overrides;
+  return {
+    id,
+    label: id || "provider",
+    auth: [],
+    ...rest,
+  };
+}
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
@@ -294,15 +307,21 @@ describe("runSetupWizard", () => {
     });
     resolvePreferredProviderForAuthChoice.mockResolvedValueOnce("demo-provider");
     resolvePluginProvidersRuntime.mockReturnValueOnce([
-      { id: undefined } as unknown as { id: string },
-      { id: "demo-provider", wizard: { setup: {} } } as unknown as { id: string },
+      providerPluginStub({ id: "" }),
+      providerPluginStub({ id: "demo-provider", wizard: { setup: {} } }),
     ]);
 
     const caseDir = await makeCaseDir("provider-missing-id-");
     const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
-      if (message === "Select setup mode") return "quickstart";
-      if (message === "Select channel (QuickStart)") return "__skip__";
-      if (message === "How do you want to hatch your bot?") return "skip";
+      if (message === "Select setup mode") {
+        return "quickstart";
+      }
+      if (message === "Select channel (QuickStart)") {
+        return "__skip__";
+      }
+      if (message === "How do you want to hatch your bot?") {
+        return "skip";
+      }
       return "skip";
     }) as unknown as WizardPrompter["select"];
     const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];

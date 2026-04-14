@@ -3,11 +3,7 @@ import path from "node:path";
 import { loadConfig } from "../../config/config.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import {
-  resolvePluginSdkAliasFile,
-  resolvePluginSdkScopedAliasMap,
-  shouldPreferNativeJiti,
-} from "../sdk-alias.js";
+import { buildPluginLoaderAliasMap, shouldPreferNativeJiti } from "../sdk-alias.js";
 
 type PluginRuntimeRecord = {
   origin?: string;
@@ -120,20 +116,7 @@ export function resolvePluginRuntimeModulePath(
 
 export function getPluginBoundaryJiti(modulePath: string, loaders: PluginJitiLoaderCache) {
   const tryNative = shouldPreferNativeJiti(modulePath);
-  const pluginSdkAlias = resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
-    modulePath,
-  });
-  const aliasMap = {
-    ...(pluginSdkAlias
-      ? {
-          "openclaw/plugin-sdk": pluginSdkAlias,
-          "@openclaw/plugin-sdk": pluginSdkAlias,
-        }
-      : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
-  };
+  const aliasMap = buildPluginLoaderAliasMap(modulePath);
   return getCachedPluginJitiLoader({
     cache: loaders,
     modulePath,
