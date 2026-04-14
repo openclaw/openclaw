@@ -74,6 +74,7 @@ export function syncCronSessionLiveSelection(params: {
 }) {
   params.entry.modelProvider = params.liveSelection.provider;
   params.entry.model = params.liveSelection.model;
+  params.entry.modelIsFromFallback = false;
   if (params.liveSelection.authProfileId) {
     params.entry.authProfileOverride = params.liveSelection.authProfileId;
     params.entry.authProfileOverrideSource = params.liveSelection.authProfileIdSource;
