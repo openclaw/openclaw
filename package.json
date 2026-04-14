@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.12-beta.1",
+  "version": "2026.4.14-beta.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -53,6 +53,14 @@
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
+    },
+    "./plugin-sdk/lmstudio": {
+      "types": "./dist/plugin-sdk/lmstudio.d.ts",
+      "default": "./dist/plugin-sdk/lmstudio.js"
+    },
+    "./plugin-sdk/lmstudio-runtime": {
+      "types": "./dist/plugin-sdk/lmstudio-runtime.d.ts",
+      "default": "./dist/plugin-sdk/lmstudio-runtime.js"
     },
     "./plugin-sdk/provider-setup": {
       "types": "./dist/plugin-sdk/provider-setup.d.ts",
@@ -473,6 +481,10 @@
     "./plugin-sdk/command-status": {
       "types": "./dist/plugin-sdk/command-status.d.ts",
       "default": "./dist/plugin-sdk/command-status.js"
+    },
+    "./plugin-sdk/command-status-runtime": {
+      "types": "./dist/plugin-sdk/command-status-runtime.d.ts",
+      "default": "./dist/plugin-sdk/command-status-runtime.js"
     },
     "./plugin-sdk/command-detection": {
       "types": "./dist/plugin-sdk/command-detection.d.ts",
@@ -1240,6 +1252,7 @@
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
+    "test:build:bundled-runtime-deps": "node scripts/test-built-bundled-runtime-deps.mjs",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:bundled": "node scripts/run-vitest.mjs run --config test/vitest/vitest.bundled.config.ts",
     "test:changed": "node scripts/test-projects.mjs --changed origin/main",
@@ -1371,6 +1384,7 @@
     "@sinclair/typebox": "0.34.49",
     "@slack/bolt": "^4.7.0",
     "@slack/web-api": "^7.15.0",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
@@ -1453,6 +1467,8 @@
   "optionalDependencies": {
     "@discordjs/opus": "^0.10.0",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "fake-indexeddb": "^6.2.5",
+    "music-metadata": "^11.12.3",
     "openshell": "0.1.0"
   },
   "overrides": {

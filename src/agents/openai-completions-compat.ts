@@ -33,6 +33,7 @@ export function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
 ): OpenAICompletionsCompatDefaults {
   const {
+    provider,
     endpointClass,
     knownProviderFamily,
     supportsNativeStreamingUsageCompat = false,
@@ -64,7 +65,8 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
-    (isDefaultRoute && isDefaultRouteProvider(input.provider, "chutes"));
+    (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
+  const isOllamaCompatProvider = provider === "ollama";
 
   return {
     supportsStore:
@@ -81,10 +83,11 @@ export function resolveOpenAICompletionsCompatDefaults(
     // the `usage` field from streaming responses, causing token tracking and context
     // compaction to break entirely.
     supportsUsageInStreaming:
-      !isNonStandard &&
-      (!usesConfiguredNonOpenAIEndpoint ||
-        supportsNativeStreamingUsageCompat ||
-        endpointClass === "local"),
+      isOllamaCompatProvider ||
+      (!isNonStandard &&
+        (!usesConfiguredNonOpenAIEndpoint ||
+          supportsNativeStreamingUsageCompat ||
+          endpointClass === "local")),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
