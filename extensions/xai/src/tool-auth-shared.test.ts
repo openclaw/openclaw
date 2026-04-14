@@ -138,7 +138,7 @@ describe("xai tool auth helpers", () => {
     expect(isXaiToolEnabled({ enabled: true })).toBe(true);
   });
 
-  it("does not throw on unresolved source SecretRefs and still falls back to env", () => {
+  it("does not use env fallback when a non-env SecretRef is configured but unavailable", () => {
     vi.stubEnv("XAI_API_KEY", "env-key");
 
     expect(
@@ -161,7 +161,7 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBe("env-key");
+    ).toBeUndefined();
   });
 
   it("resolves env SecretRefs from source config when runtime snapshot is unavailable", () => {
@@ -188,5 +188,31 @@ describe("xai tool auth helpers", () => {
         },
       }),
     ).toBe("xai-secretref-key");
+  });
+
+  it("does not read arbitrary env SecretRef ids for xAI tool auth", () => {
+    vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
+
+    expect(
+      resolveXaiToolApiKey({
+        sourceConfig: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "UNRELATED_SECRET",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
   });
 });

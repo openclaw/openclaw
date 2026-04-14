@@ -72,7 +72,7 @@ describe("buildProviderStatusIndex", () => {
     });
   });
 
-  it("skips accounts that throw during read-only resolution", async () => {
+  it("records accounts that throw during read-only resolution as not configured", async () => {
     const plugin = {
       id: "telegram",
       meta: { label: "Telegram" },
@@ -88,6 +88,18 @@ describe("buildProviderStatusIndex", () => {
     mocks.listChannelPlugins.mockReturnValue([plugin]);
     mocks.getChannelPlugin.mockReturnValue(plugin);
 
-    await expect(buildProviderStatusIndex({} as OpenClawConfig)).resolves.toEqual(new Map());
+    await expect(buildProviderStatusIndex({} as OpenClawConfig)).resolves.toEqual(
+      new Map([
+        [
+          "telegram:default",
+          {
+            provider: "telegram",
+            accountId: "default",
+            state: "not configured",
+            configured: false,
+          },
+        ],
+      ]),
+    );
   });
 });

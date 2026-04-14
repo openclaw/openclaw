@@ -39,7 +39,7 @@ export async function scanStatusJsonWithPolicy(
     await ensureCliPluginRegistryLoaded({
       scope: "configured-channels",
       routeLogsToStderr: true,
-      config: overview.cfg,
+      config: overview.sourceConfig,
       activationSourceConfig: overview.sourceConfig,
     });
   }

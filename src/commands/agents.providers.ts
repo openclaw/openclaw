@@ -66,6 +66,12 @@ export async function buildProviderStatusIndex(
       try {
         account = await resolveReadOnlyAccount({ plugin, cfg, accountId });
       } catch {
+        map.set(providerAccountKey(plugin.id, accountId), {
+          provider: plugin.id,
+          accountId,
+          state: "not configured",
+          configured: false,
+        });
         continue;
       }
       if (!account) {

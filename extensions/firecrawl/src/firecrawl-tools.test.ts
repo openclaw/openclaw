@@ -497,7 +497,7 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlApiKey(cfg)).toBe("firecrawl-env-ref-key");
   });
 
-  it("does not throw on unresolved non-env SecretRefs and can still fall back to env", () => {
+  it("does not use env fallback when a non-env SecretRef is configured but unavailable", () => {
     vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-fallback");
     const cfg = {
       plugins: {
@@ -517,7 +517,30 @@ describe("firecrawl tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBe("firecrawl-env-fallback");
+    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+  });
+
+  it("does not read arbitrary env SecretRef ids for Firecrawl API key resolution", () => {
+    vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "UNRELATED_SECRET",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
   });
 
   it("only allows the official Firecrawl API host for fetch endpoints", () => {
