@@ -160,6 +160,7 @@ describe("isExecCompletionEvent", () => {
     expect(isExecCompletionEvent("Nightly backup exec failed – see logs")).toBe(false);
     expect(isExecCompletionEvent("Cron: check if exec completed successfully")).toBe(false);
     expect(isExecCompletionEvent("exec killed the process manually")).toBe(false);
+    expect(isExecCompletionEvent("Exec finished weekly backup checks")).toBe(false);
     // Parenthesized false positive from review feedback — must not match mid-string
     expect(isExecCompletionEvent("Nightly backup exec failed (see logs)")).toBe(false);
     expect(isExecCompletionEvent("Check: exec completed (last run was yesterday)")).toBe(false);
