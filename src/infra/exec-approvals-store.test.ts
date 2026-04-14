@@ -15,6 +15,7 @@ type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
 let addAllowlistEntry: ExecApprovalsModule["addAllowlistEntry"];
 let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
+let assertNoSymlinkPathComponents: ExecApprovalsModule["assertNoSymlinkPathComponents"];
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
@@ -34,6 +35,7 @@ beforeAll(async () => {
   ({
     addAllowlistEntry,
     addDurableCommandApproval,
+    assertNoSymlinkPathComponents,
     ensureExecApprovals,
     mergeExecApprovalsSocketDefaults,
     normalizeExecApprovals,
@@ -214,6 +216,39 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(path.join(realOcDir, "exec-approvals.json"))).toBe(true);
   });
 
+  it("refuses a symlinked .openclaw whose target is not owned by the current user", () => {
+    // Skip on Windows where process.getuid is unavailable
+    if (typeof process.getuid !== "function") {
+      return;
+    }
+
+    const realHome = makeTempDir();
+    const realOcDir = path.join(realHome, "real-openclaw-dir");
+    fs.mkdirSync(realOcDir, { recursive: true });
+    const symlinkOcDir = path.join(realHome, ".openclaw");
+    fs.symlinkSync(realOcDir, symlinkOcDir);
+    process.env.OPENCLAW_HOME = realHome;
+
+    // Mock statSync to return a different uid for the resolved .openclaw target
+    const originalStatSync = fs.statSync;
+    const spy = vi
+      .spyOn(fs, "statSync")
+      .mockImplementation((...args: Parameters<typeof fs.statSync>) => {
+        const result = originalStatSync(...args);
+        // When checking the resolved .openclaw target, fake a different uid
+        if (String(args[0]).includes("real-openclaw-dir")) {
+          const fakeUid = (process.getuid!() ?? 0) + 999;
+          Object.defineProperty(result, "uid", { value: fakeUid });
+        }
+        return result;
+      });
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/target not owned by current user/);
+    spy.mockRestore();
+  });
+
   it("refuses to traverse a symlink deeper inside the .openclaw directory", () => {
     const realHome = makeTempDir();
     const ocDir = path.join(realHome, ".openclaw");
@@ -223,17 +258,14 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(realSubDir);
     const linkedSubDir = path.join(ocDir, "subdir");
     fs.symlinkSync(realSubDir, linkedSubDir);
-    // Point the exec-approvals path through the symlinked subdir
-    // We test via OPENCLAW_HOME; the guard checks the dirname of the approvals file
-    // Since exec-approvals.json lives directly in .openclaw/, not in a subdir,
-    // this scenario is guarded by assertSafeExecApprovalsDestination instead.
-    process.env.OPENCLAW_HOME = realHome;
 
-    // The direct .openclaw/exec-approvals.json path doesn't traverse "subdir",
-    // so saveExecApprovals itself succeeds. The symlink guard protects against
-    // path traversal attacks through deeper nested symlinks.
-    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
-    expect(fs.existsSync(path.join(ocDir, "exec-approvals.json"))).toBe(true);
+    // Directly test the guard function with a path that traverses the
+    // deeper symlink. The exec-approvals.json path itself doesn't go
+    // through "subdir", but assertNoSymlinkPathComponents must reject
+    // any path that does — this protects against future deeper paths.
+    expect(() =>
+      assertNoSymlinkPathComponents(path.join(ocDir, "subdir", "some-file.json"), realHome),
+    ).toThrow(/Refusing to traverse symlink in exec approvals path/);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {

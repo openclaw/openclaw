@@ -241,7 +241,8 @@ function ensureDir(filePath: string) {
   return dir;
 }
 
-function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
+/** @internal Exported for testing only. */
+export function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
   const resolvedTarget = path.resolve(targetPath);
   const lexicalRoot = path.resolve(trustedRoot);
 
@@ -265,12 +266,27 @@ function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string):
         // Allow the first-level .openclaw symlink directly under the home dir
         if (i === 0 && segments[i] === ".openclaw") {
           // Resolve through the symlink and continue checking from the real path
+          let resolved: string;
           try {
-            current = fs.realpathSync(current);
+            resolved = fs.realpathSync(current);
           } catch {
             // If realpathSync fails, the original error applies
             throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
           }
+          // On Unix, verify the symlink target is owned by the current user
+          // to prevent tampering in multi-user setups. On Windows,
+          // process.getuid is unavailable; skip the check (NTFS symlinks
+          // already require elevated privileges to create).
+          const currentUid = process.getuid?.();
+          if (currentUid !== undefined) {
+            const resolvedStat = fs.statSync(resolved);
+            if (resolvedStat.uid !== currentUid) {
+              throw new Error(
+                `Refusing to follow .openclaw symlink: target not owned by current user: ${current}`,
+              );
+            }
+          }
+          current = resolved;
           continue;
         }
         throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
