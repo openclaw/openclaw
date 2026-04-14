@@ -1,0 +1,9 @@
+Test Files  3 passed (3)
+     Tests  30 passed (30)
+  Start at  12:01:57
+  Duration  218ms (transform 223ms, setup 81ms, import 48ms, tests 9ms, environment 0ms)
+
+All 30 tests pass:
+- routing-lanes (10 tests): inferRoutingLane, buildRouteMetadata, LANE_DESCRIPTIONS
+- judge-gate (11 tests): persistJudgeOutcome/loadJudgeOutcome round-trip, isJudgeAccepted, shouldEscalateAfterRevise
+- challenger-lane (9 tests): isChallengerEnabled, shouldInvokeChallenger trigger policy

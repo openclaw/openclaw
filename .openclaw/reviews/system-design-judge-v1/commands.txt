@@ -1,0 +1,1 @@
+npx vitest run src/agents/routing-lanes.test.ts src/agents/judge-gate.test.ts src/agents/challenger-lane.test.ts --reporter verbose
