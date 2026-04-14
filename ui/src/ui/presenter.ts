@@ -78,6 +78,9 @@ function formatCommonCronExpression(expr: string): string | null {
     return null;
   }
   if (minute === "0") {
+    if (hour === "*") {
+      return `Every ${formatCronIntervalUnit(1, "hour")}`;
+    }
     const hourStep = parsePositiveCronStep(hour);
     if (hourStep !== null) {
       return `Every ${formatCronIntervalUnit(hourStep, "hour")}`;

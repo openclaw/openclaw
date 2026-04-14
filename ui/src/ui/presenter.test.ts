@@ -18,8 +18,13 @@ function cronSchedule(expr: string, tz?: string): CronJob {
 
 describe("formatCronSchedule", () => {
   it("formats common hourly cron intervals as human-readable intervals", () => {
+    expect(formatCronSchedule(cronSchedule("0 * * * *"))).toBe("Every 1 hour");
     expect(formatCronSchedule(cronSchedule("0 */6 * * *"))).toBe("Every 6 hours");
     expect(formatCronSchedule(cronSchedule("0 */1 * * *", "UTC"))).toBe("Every 1 hour (UTC)");
+  });
+
+  it("formats common minute cron intervals as human-readable intervals", () => {
+    expect(formatCronSchedule(cronSchedule("*/5 * * * *"))).toBe("Every 5 minutes");
   });
 
   it("keeps unsupported cron expressions on the raw cron fallback", () => {
