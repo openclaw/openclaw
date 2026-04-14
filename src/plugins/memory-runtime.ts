@@ -5,14 +5,38 @@ import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
+import type { PluginLogger } from "./types.js";
 
-function ensureMemoryRuntime(cfg?: OpenClawConfig) {
+function createQuietMemoryRuntimeLogger(): PluginLogger {
+  return {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  };
+}
+
+function ensureMemoryRuntime(
+  cfg?: OpenClawConfig,
+  options?: {
+    emitTrustWarnings?: boolean;
+    logger?: PluginLogger;
+  },
+) {
   const current = getMemoryRuntime();
   if (current || !cfg) {
     return current;
   }
   resolveRuntimePluginRegistry(
-    buildPluginRuntimeLoadOptions(resolvePluginRuntimeLoadContext({ config: cfg })),
+    buildPluginRuntimeLoadOptions(
+      resolvePluginRuntimeLoadContext({
+        config: cfg,
+        ...(options?.logger ? { logger: options.logger } : {}),
+      }),
+      options?.emitTrustWarnings !== undefined
+        ? { emitTrustWarnings: options.emitTrustWarnings }
+        : {},
+    ),
   );
   return getMemoryRuntime();
 }
@@ -22,7 +46,15 @@ export async function getActiveMemorySearchManager(params: {
   agentId: string;
   purpose?: "default" | "status";
 }) {
-  const runtime = ensureMemoryRuntime(params.cfg);
+  const runtime = ensureMemoryRuntime(
+    params.cfg,
+    params.purpose === "status"
+      ? {
+          emitTrustWarnings: false,
+          logger: createQuietMemoryRuntimeLogger(),
+        }
+      : {},
+  );
   if (!runtime) {
     return { manager: null, error: "memory plugin unavailable" };
   }

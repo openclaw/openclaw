@@ -1,6 +1,7 @@
 import {
   applyProviderNativeStreamingUsageCompatWithPlugin,
   normalizeProviderConfigWithPlugin,
+  normalizeProviderModelIdWithPlugin,
   resolveProviderConfigApiKeyWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
@@ -36,6 +37,20 @@ export function normalizeProviderConfigPolicy(
       },
     }) ?? provider
   );
+}
+
+export function normalizeProviderModelIdPolicy(
+  providerKey: string,
+  modelId: string,
+): string | undefined {
+  const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey).trim();
+  return normalizeProviderModelIdWithPlugin({
+    provider: runtimeProviderKey,
+    context: {
+      provider: providerKey,
+      modelId,
+    },
+  });
 }
 
 export function resolveProviderConfigApiKeyPolicy(

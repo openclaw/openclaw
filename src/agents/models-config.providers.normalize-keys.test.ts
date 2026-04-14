@@ -16,6 +16,10 @@ vi.mock("./models-config.providers.policy.runtime.js", async () => {
     applyProviderNativeStreamingUsagePolicy: () => undefined,
     normalizeProviderConfigPolicy: (providerKey: string, provider: unknown) =>
       providerKey === "lmstudio" ? normalizeLmstudioProviderConfig(provider as never) : undefined,
+    normalizeProviderModelIdPolicy: (providerKey: string, modelId: string) =>
+      providerKey === "google-vertex"
+        ? modelId.replace("flash-lite", "flash-lite-preview")
+        : undefined,
     resolveProviderConfigApiKeyPolicy: () => undefined,
   };
 });
@@ -290,6 +294,37 @@ describe("normalizeProviders", () => {
 
       const normalized = normalizeProviders({ providers, agentDir });
       expect(normalized?.lmstudio?.baseUrl).toBe("http://localhost:1234/v1");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes provider model ids through provider plugin hooks", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        "google-vertex": {
+          baseUrl: "https://example.invalid/v1",
+          api: "openai-completions",
+          apiKey: "GOOGLE_VERTEX_API_KEY",
+          models: [createModel({ id: "gemini-3.1-flash-lite", name: "gemini-3.1-flash-lite" })],
+        },
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "OPENAI_API_KEY",
+          models: [createModel({ id: "gpt-5", name: "GPT-5" })],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+
+      expect(normalized).not.toBe(providers);
+      expect(normalized?.["google-vertex"]?.models?.[0]).toMatchObject({
+        id: "gemini-3.1-flash-lite-preview",
+        name: "gemini-3.1-flash-lite-preview",
+      });
+      expect(normalized?.openai).toBe(providers.openai);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

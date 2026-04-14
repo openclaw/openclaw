@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
+  normalizeProviderConfigModelId,
   normalizeProviderSpecificConfig,
   resolveProviderConfigApiKeyResolver,
 } from "./models-config.providers.policy.js";
@@ -15,6 +16,31 @@ import {
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+
+function normalizeProviderModelIds(providerKey: string, provider: ProviderConfig): ProviderConfig {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+    return provider;
+  }
+  let mutated = false;
+  const models = provider.models.map((model) => {
+    const normalizedId = normalizeProviderConfigModelId(providerKey, model.id);
+    if (!normalizedId || normalizedId === model.id) {
+      return model;
+    }
+    mutated = true;
+    const nextName = model.name === model.id ? normalizedId : model.name;
+    return nextName === model.name
+      ? { ...model, id: normalizedId }
+      : { ...model, id: normalizedId, name: nextName };
+  });
+  if (!mutated) {
+    return provider;
+  }
+  return {
+    ...provider,
+    models,
+  };
+}
 
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
@@ -120,6 +146,15 @@ export function normalizeProviders(params: {
     if (providerSpecificNormalized !== normalizedProvider) {
       mutated = true;
       normalizedProvider = providerSpecificNormalized;
+    }
+
+    const providerWithNormalizedModelIds = normalizeProviderModelIds(
+      normalizedKey,
+      normalizedProvider,
+    );
+    if (providerWithNormalizedModelIds !== normalizedProvider) {
+      mutated = true;
+      normalizedProvider = providerWithNormalizedModelIds;
     }
 
     const existing = next[normalizedKey];

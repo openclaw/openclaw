@@ -5,6 +5,7 @@ import {
   listRegisteredMemoryEmbeddingProviders,
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
+import type { PluginLogger } from "./types.js";
 
 export { listRegisteredMemoryEmbeddingProviders };
 
@@ -13,6 +14,10 @@ export function listRegisteredMemoryEmbeddingProviderAdapters(): MemoryEmbedding
 }
 export function listMemoryEmbeddingProviders(
   cfg?: OpenClawConfig,
+  options?: {
+    emitTrustWarnings?: boolean;
+    logger?: PluginLogger;
+  },
 ): MemoryEmbeddingProviderAdapter[] {
   const registered = listRegisteredMemoryEmbeddingProviderAdapters();
   if (registered.length > 0) {
@@ -21,12 +26,20 @@ export function listMemoryEmbeddingProviders(
   return resolvePluginCapabilityProviders({
     key: "memoryEmbeddingProviders",
     cfg,
+    ...(options?.emitTrustWarnings !== undefined
+      ? { emitTrustWarnings: options.emitTrustWarnings }
+      : {}),
+    ...(options?.logger ? { logger: options.logger } : {}),
   });
 }
 
 export function getMemoryEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,
+  options?: {
+    emitTrustWarnings?: boolean;
+    logger?: PluginLogger;
+  },
 ): MemoryEmbeddingProviderAdapter | undefined {
   const registered = getRegisteredMemoryEmbeddingProvider(id);
   if (registered) {
@@ -35,5 +48,5 @@ export function getMemoryEmbeddingProvider(
   if (listRegisteredMemoryEmbeddingProviders().length > 0) {
     return undefined;
   }
-  return listMemoryEmbeddingProviders(cfg).find((adapter) => adapter.id === id);
+  return listMemoryEmbeddingProviders(cfg, options).find((adapter) => adapter.id === id);
 }

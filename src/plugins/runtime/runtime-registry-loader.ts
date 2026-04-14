@@ -79,6 +79,7 @@ export function ensurePluginRegistryLoaded(options?: {
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
+  emitTrustWarnings?: boolean;
 }): void {
   const scope = options?.scope ?? "all";
   const requestedPluginIds = normalizePluginIdScope(options?.onlyPluginIds);
@@ -144,6 +145,9 @@ export function ensurePluginRegistryLoaded(options?: {
         shouldForwardChannelScope({ scope, scopedLoad }) ||
         hasNonEmptyPluginIdScope(expectedChannelPluginIds)
           ? { onlyPluginIds: expectedChannelPluginIds }
+          : {}),
+        ...(options?.emitTrustWarnings !== undefined
+          ? { emitTrustWarnings: options.emitTrustWarnings }
           : {}),
       },
     ),

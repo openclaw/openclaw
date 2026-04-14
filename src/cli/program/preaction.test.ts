@@ -209,7 +209,10 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "channels",
+      emitTrustWarnings: false,
+    });
     expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();
@@ -224,7 +227,10 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["message", "send"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      emitTrustWarnings: false,
+    });
     processTitleSetSpy.mockRestore();
   });
 
@@ -238,7 +244,10 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["agent", "hi"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      emitTrustWarnings: false,
+    });
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {

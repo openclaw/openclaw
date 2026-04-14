@@ -60,6 +60,18 @@ describe("plugin-registry-loader", () => {
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
+  it("forwards trust warning suppression when requested", async () => {
+    await ensureCliPluginRegistryLoaded({
+      scope: "channels",
+      emitTrustWarnings: false,
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "channels",
+      emitTrustWarnings: false,
+    });
+  });
+
   it("maps command paths to plugin registry scopes", () => {
     expect(resolvePluginRegistryScopeForCommandPath(["status"])).toBe("channels");
     expect(resolvePluginRegistryScopeForCommandPath(["health"])).toBe("channels");

@@ -22,7 +22,7 @@ import {
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
 import { hasKind } from "./slots.js";
-import type { PluginHookName } from "./types.js";
+import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
@@ -152,14 +152,25 @@ type PluginReportParams = {
   env?: NodeJS.ProcessEnv;
 };
 
+function createQuietPluginStatusLogger(): PluginLogger {
+  return {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  };
+}
+
 function buildPluginReport(
   params: PluginReportParams | undefined,
   loadModules: boolean,
 ): PluginStatusReport {
+  const logger = createQuietPluginStatusLogger();
   const baseContext = resolvePluginRuntimeLoadContext({
     config: params?.config ?? loadConfig(),
     env: params?.env,
     workspaceDir: params?.workspaceDir,
+    logger,
   });
   const workspaceDir = baseContext.workspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const context =
@@ -202,6 +213,7 @@ function buildPluginReport(
           loadModules,
           activate: false,
           cache: false,
+          emitTrustWarnings: false,
         }),
       )
     : loadPluginMetadataRegistrySnapshot({
@@ -209,7 +221,9 @@ function buildPluginReport(
         activationSourceConfig: rawConfig,
         workspaceDir,
         env: params?.env,
+        logger,
         loadModules: false,
+        emitTrustWarnings: false,
       });
   const importedPluginIds = new Set([
     ...(loadModules

@@ -17,6 +17,7 @@ export function resolvePluginRegistryScopeForCommandPath(
 export async function ensureCliPluginRegistryLoaded(params: {
   scope: PluginRegistryScope;
   routeLogsToStderr?: boolean;
+  emitTrustWarnings?: boolean;
 }) {
   const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
   const previousForceStderr = loggingState.forceConsoleToStderr;
@@ -24,7 +25,12 @@ export async function ensureCliPluginRegistryLoaded(params: {
     loggingState.forceConsoleToStderr = true;
   }
   try {
-    ensurePluginRegistryLoaded({ scope: params.scope });
+    ensurePluginRegistryLoaded({
+      scope: params.scope,
+      ...(params.emitTrustWarnings !== undefined
+        ? { emitTrustWarnings: params.emitTrustWarnings }
+        : {}),
+    });
   } finally {
     loggingState.forceConsoleToStderr = previousForceStderr;
   }

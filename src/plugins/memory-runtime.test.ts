@@ -159,6 +159,24 @@ describe("memory runtime auto-enable loading", () => {
     await expectAutoEnabledMemoryRuntimeCase({ run, expectedResult });
   });
 
+  it("suppresses trust warnings when status probes bootstrap memory runtime", async () => {
+    const { rawConfig, autoEnabledConfig } = setAutoEnabledMemoryRuntime();
+
+    await getActiveMemorySearchManager({
+      cfg: rawConfig as never,
+      agentId: "main",
+      purpose: "status",
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
+        activationSourceConfig: rawConfig,
+        emitTrustWarnings: false,
+      }),
+    );
+  });
+
   it.each([
     {
       name: "does not bootstrap the memory runtime just to close managers",

@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type NormalizeProviderSpecificConfig =
   typeof import("./models-config.providers.policy.js").normalizeProviderSpecificConfig;
+type NormalizeProviderConfigModelId =
+  typeof import("./models-config.providers.policy.js").normalizeProviderConfigModelId;
 type ResolveProviderConfigApiKeyResolver =
   typeof import("./models-config.providers.policy.js").resolveProviderConfigApiKeyResolver;
 
 const GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com";
 let normalizeProviderSpecificConfig: NormalizeProviderSpecificConfig;
+let normalizeProviderConfigModelId: NormalizeProviderConfigModelId;
 let resolveProviderConfigApiKeyResolver: ResolveProviderConfigApiKeyResolver;
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -44,12 +47,24 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     }
     return undefined;
   },
+  normalizeProviderModelIdWithPlugin: (params: {
+    provider: string;
+    context: { modelId: string };
+  }) => {
+    if (params.provider !== "google") {
+      return undefined;
+    }
+    return params.context.modelId.replace("flash-lite", "flash-lite-preview");
+  },
 }));
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ normalizeProviderSpecificConfig, resolveProviderConfigApiKeyResolver } =
-    await import("./models-config.providers.policy.js"));
+  ({
+    normalizeProviderSpecificConfig,
+    normalizeProviderConfigModelId,
+    resolveProviderConfigApiKeyResolver,
+  } = await import("./models-config.providers.policy.js"));
 });
 
 describe("models-config.providers.policy", () => {
@@ -85,6 +100,12 @@ describe("models-config.providers.policy", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
+  });
+
+  it("normalizes aliased provider model ids through provider plugin hooks", () => {
+    expect(normalizeProviderConfigModelId("google-vertex", "gemini-3.1-flash-lite")).toBe(
+      "gemini-3.1-flash-lite-preview",
+    );
   });
 
   it("does not treat generic transport APIs as provider plugin ids", () => {

@@ -523,9 +523,9 @@ describe("gateway server hooks", () => {
       mockIsolatedRunOk();
       await expectFirstHookDelivery(port, oversizedKey);
       await postAgentHookWithIdempotency(port, oversizedKey);
-      await waitForSystemEvent();
-
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+      });
     });
   });
 
