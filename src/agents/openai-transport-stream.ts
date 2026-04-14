@@ -754,6 +754,20 @@ function resolveOpenAIReasoningEffort(
   ) as Exclude<OpenAIApiReasoningEffort, "none">;
 }
 
+function coerceOpenAIApiReasoningEffort(effort: string): OpenAIApiReasoningEffort {
+  const normalized = normalizeOpenAIReasoningEffort(effort);
+  switch (normalized) {
+    case "none":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return normalized;
+    default:
+      return "high";
+  }
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -799,12 +813,17 @@ export function buildOpenAIResponsesParams(
   }
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
-      const reasoningEffort = mapOpenAIReasoningEffortForModel({
-        model,
-        effort: resolveOpenAIReasoningEffort(options),
-      });
+      const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
+      const reasoningEffort = coerceOpenAIApiReasoningEffort(
+        mapOpenAIReasoningEffortForModel({
+          model,
+          effort: requestedReasoningEffort,
+        }) ?? requestedReasoningEffort,
+      );
+      const normalizedReasoningEffort: Exclude<OpenAIApiReasoningEffort, "none"> =
+        reasoningEffort === "none" ? "high" : reasoningEffort;
       params.reasoning = {
-        effort: reasoningEffort ?? "high",
+        effort: normalizedReasoningEffort,
         summary: options?.reasoningSummary || "auto",
       };
       params.include = ["reasoning.encrypted_content"];

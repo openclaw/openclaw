@@ -30,7 +30,7 @@ export function resolveOpenAIReasoningEffortMap(
 ): Record<string, string> {
   const provider = normalizeLowercaseStringOrEmpty(model.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(model.id ?? "");
-  const builtinMap =
+  const builtinMap: Record<string, string> =
     (provider === "openai" || provider === "openai-codex") &&
     OPENAI_MEDIUM_ONLY_REASONING_MODEL_IDS.has(id)
       ? { minimal: "medium", low: "medium" }
