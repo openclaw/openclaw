@@ -18,6 +18,8 @@ const runtimeApiMocks = vi.hoisted(() => ({
   })),
   handleBrowserGatewayRequest: vi.fn(),
   registerBrowserCli: vi.fn(),
+  runBrowserProxyCommand: vi.fn(async () => "ok"),
+  collectBrowserSecurityAuditFindings: vi.fn(() => []),
 }));
 
 vi.mock("./register.runtime.js", async () => {
@@ -29,6 +31,8 @@ vi.mock("./register.runtime.js", async () => {
     createBrowserTool: runtimeApiMocks.createBrowserTool,
     handleBrowserGatewayRequest: runtimeApiMocks.handleBrowserGatewayRequest,
     registerBrowserCli: runtimeApiMocks.registerBrowserCli,
+    runBrowserProxyCommand: runtimeApiMocks.runBrowserProxyCommand,
+    collectBrowserSecurityAuditFindings: runtimeApiMocks.collectBrowserSecurityAuditFindings,
   };
 });
 
@@ -65,14 +69,14 @@ describe("browser plugin", () => {
 
   it("forwards per-session browser options into the tool factory", async () => {
     const { api, registerTool } = createApi();
-    registerBrowserPlugin(api);
+    await registerBrowserPlugin(api);
 
     const tool = registerTool.mock.calls[0]?.[0];
     if (typeof tool !== "function") {
       throw new Error("expected browser plugin to register a tool factory");
     }
 
-    tool({
+    await tool({
       sessionKey: "agent:main:webchat:direct:123",
       browser: {
         sandboxBridgeUrl: "http://127.0.0.1:9999",
@@ -85,5 +89,24 @@ describe("browser plugin", () => {
       allowHostControl: true,
       agentSessionKey: "agent:main:webchat:direct:123",
     });
+  });
+
+  it("registers CLI descriptors so browser commands can stay lazy", async () => {
+    const { api, registerCli } = createApi();
+    await registerBrowserPlugin(api);
+
+    expect(registerCli).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        commands: ["browser"],
+        descriptors: [
+          {
+            name: "browser",
+            description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
+            hasSubcommands: true,
+          },
+        ],
+      }),
+    );
   });
 });
