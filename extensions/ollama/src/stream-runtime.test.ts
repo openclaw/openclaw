@@ -56,6 +56,23 @@ describe("buildOllamaChatRequest", () => {
       model: "qwen3:14b-q8_0",
     });
   });
+
+  it("preserves keep_alive when provided", () => {
+    expect(
+      buildOllamaChatRequest({
+        modelId: "gemma4:26b",
+        messages: [{ role: "user", content: "hello" }],
+        options: { num_ctx: 65536 },
+        keep_alive: "15m",
+      }),
+    ).toEqual({
+      model: "gemma4:26b",
+      messages: [{ role: "user", content: "hello" }],
+      stream: true,
+      options: { num_ctx: 65536 },
+      keep_alive: "15m",
+    });
+  });
 });
 
 describe("createConfiguredOllamaCompatStreamWrapper", () => {
