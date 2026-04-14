@@ -15,6 +15,7 @@ import {
   OPENAI_GPT5_EXECUTION_BIAS,
   OPENAI_GPT5_OUTPUT_CONTRACT,
   OPENAI_GPT5_TOOL_CALL_STYLE,
+  OPENAI_GPT5_TOOL_ENFORCEMENT,
 } from "./prompt-overlay.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -370,6 +371,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_enforcement: OPENAI_GPT5_TOOL_ENFORCEMENT,
       },
     });
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("This is a live chat, not a memo.");
@@ -387,6 +389,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_enforcement: OPENAI_GPT5_TOOL_ENFORCEMENT,
       },
     });
     expect(
@@ -504,6 +507,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_enforcement: OPENAI_GPT5_TOOL_ENFORCEMENT,
       },
     });
   });
@@ -531,6 +535,7 @@ describe("openai plugin", () => {
       stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_enforcement: OPENAI_GPT5_TOOL_ENFORCEMENT,
       },
     });
   });
@@ -557,6 +562,7 @@ describe("openai plugin", () => {
       stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_enforcement: OPENAI_GPT5_TOOL_ENFORCEMENT,
       },
     });
   });
@@ -585,6 +591,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_enforcement: OPENAI_GPT5_TOOL_ENFORCEMENT,
       },
     });
   });
@@ -612,6 +619,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_enforcement: OPENAI_GPT5_TOOL_ENFORCEMENT,
       },
     });
   });

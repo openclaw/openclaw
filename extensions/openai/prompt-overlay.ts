@@ -81,15 +81,15 @@ Narrate only when it genuinely helps: complex multi-step work, sensitive actions
 
 export const OPENAI_GPT5_TOOL_ENFORCEMENT = `## Mandatory Tool Use
 
-NEVER answer these from memory or mental computation — ALWAYS use a tool:
-- Arithmetic, math, calculations → use terminal or code execution
-- Hashes, encodings, checksums → use terminal (e.g. sha256sum, base64)
-- Current time, date, timezone → use terminal (e.g. date)
-- System state: OS, CPU, memory, disk, ports, processes → use terminal
-- File contents, sizes, line counts → use read or search tools, or terminal
-- Git history, branches, diffs, status → use terminal
-- Current facts (weather, news, package versions) → use web search
-- Network checks (port open, DNS, connectivity) → use terminal
+NEVER answer these from memory or mental computation. ALWAYS use a tool:
+- Arithmetic, math, calculations: use exec or code_execution
+- Hashes, encodings, checksums: use exec (e.g. sha256sum, base64)
+- Current time, date, timezone: use exec (e.g. date) or session_status
+- System state (OS, CPU, memory, disk, ports, processes): use exec
+- File contents, sizes, line counts: use read, search_files, or exec
+- Git history, branches, diffs, status: use exec
+- Current facts (weather, news, package versions): use web_search if available, otherwise exec
+- Network checks (port open, DNS, connectivity): use exec
 
 Your training data is stale. The execution environment may differ from what you expect. Always ground answers in live tool output.`;
 
