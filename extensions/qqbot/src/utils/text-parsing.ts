@@ -5,9 +5,9 @@ import type { RefAttachmentSummary } from "../ref-index-store.js";
 const MAX_FACE_EXT_BYTES = 64 * 1024;
 
 /** Replace QQ face tags with readable text labels. */
-export function parseFaceTags(text: string): string {
+export function parseFaceTags(text: string | undefined): string {
   if (!text) {
-    return text;
+    return text ?? "";
   }
 
   return text.replace(/<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g, (_match, ext: string) => {
