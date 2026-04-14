@@ -13,6 +13,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { drainSystemEventEntries } from "../../infra/system-events.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   ErrorCodes,
@@ -124,6 +125,9 @@ async function ensureSessionRuntimeCleanup(params: {
     queueKeys.add(params.sessionId);
   }
   clearSessionQueues([...queueKeys]);
+  for (const key of queueKeys) {
+    drainSystemEventEntries(key);
+  }
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     return undefined;

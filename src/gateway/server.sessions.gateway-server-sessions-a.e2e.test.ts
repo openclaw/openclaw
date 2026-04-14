@@ -17,6 +17,7 @@ import {
 const sessionCleanupMocks = vi.hoisted(() => ({
   clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
+  drainSystemEventEntries: vi.fn(() => []),
 }));
 
 const sessionHookMocks = vi.hoisted(() => ({
@@ -40,6 +41,16 @@ vi.mock("../auto-reply/reply/abort.js", async () => {
   return {
     ...actual,
     stopSubagentsForRequester: sessionCleanupMocks.stopSubagentsForRequester,
+  };
+});
+
+vi.mock("../infra/system-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/system-events.js")>(
+    "../infra/system-events.js",
+  );
+  return {
+    ...actual,
+    drainSystemEventEntries: sessionCleanupMocks.drainSystemEventEntries,
   };
 });
 
@@ -105,6 +116,13 @@ function expectActiveRunCleanup(
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
   const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
   expect(clearedKeys).toEqual(expect.arrayContaining(expectedQueueKeys));
+  // Verify system events are drained for each queue key
+  expect(sessionCleanupMocks.drainSystemEventEntries).toHaveBeenCalledTimes(
+    expectedQueueKeys.length,
+  );
+  for (const key of expectedQueueKeys) {
+    expect(sessionCleanupMocks.drainSystemEventEntries).toHaveBeenCalledWith(key);
+  }
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
@@ -128,6 +146,7 @@ describe("gateway server sessions", () => {
   beforeEach(() => {
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
+    sessionCleanupMocks.drainSystemEventEntries.mockClear();
     sessionHookMocks.triggerInternalHook.mockClear();
   });
 
