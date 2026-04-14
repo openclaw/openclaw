@@ -40,6 +40,116 @@ describe("typing persistence bug fix", () => {
     expect(onReplyStartSpy).not.toHaveBeenCalledTimes(2);
   });
 
+  it("stops a generic active run when the typing TTL expires without a quiet-phase lease", async () => {
+    controller = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      typingIntervalSeconds: 6,
+      typingTtlMs: 10_000,
+      log: vi.fn(),
+    });
+
+    await controller.startTypingLoop();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    // Past the 10s TTL, a generic active run should self-clean.
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
+    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps typing alive past the run TTL during an explicit long quiet phase", async () => {
+    controller = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      typingIntervalSeconds: 6,
+      typingTtlMs: 10_000,
+      log: vi.fn(),
+    });
+
+    await controller.startTypingLoop();
+    controller.enterLongQuietPhase?.();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(3);
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    controller.exitLongQuietPhase?.();
+
+    controller.markRunComplete();
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    controller.markDispatchIdle();
+    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns to normal TTL cleanup after a long quiet phase ends", async () => {
+    controller = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      typingIntervalSeconds: 6,
+      typingTtlMs: 10_000,
+      log: vi.fn(),
+    });
+
+    await controller.startTypingLoop();
+    controller.enterLongQuietPhase?.();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    // While the quiet phase is active, the old 10s TTL should not stop typing.
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(3);
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    controller.exitLongQuietPhase?.();
+
+    // The loop can still tick once more, but without the lease the watchdog
+    // should eventually self-clean if no new lifecycle signal arrives.
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(4);
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the quiet-phase lease active until the final nested phase exits", async () => {
+    controller = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      typingIntervalSeconds: 6,
+      typingTtlMs: 10_000,
+      log: vi.fn(),
+    });
+
+    await controller.startTypingLoop();
+    controller.enterLongQuietPhase?.();
+    controller.enterLongQuietPhase?.();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(3);
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    controller.exitLongQuietPhase?.();
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(5);
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    controller.exitLongQuietPhase?.();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("should stop typing when both runComplete and dispatchIdle are true", async () => {
     // Start typing
     await controller.startTypingLoop();

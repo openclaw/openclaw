@@ -10,6 +10,7 @@ import {
 import type { TemplateContext } from "../templating.js";
 import { runMemoryFlushIfNeeded, setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.js";
 import type { FollowupRun } from "./queue.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const runWithModelFallbackMock = vi.fn();
 const runEmbeddedPiAgentMock = vi.fn();
@@ -286,5 +287,33 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.silentExpected).toBe(true);
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+
+  it("leases typing around the silent memory flush run", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const typing = createMockTypingController();
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      typing,
+    });
+
+    expect(typing.enterLongQuietPhase).toHaveBeenCalledTimes(1);
+    expect(typing.exitLongQuietPhase).toHaveBeenCalledTimes(1);
   });
 });

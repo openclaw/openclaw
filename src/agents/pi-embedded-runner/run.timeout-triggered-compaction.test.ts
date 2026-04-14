@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -100,6 +100,33 @@ describe("timeout-triggered compaction", () => {
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("emits a terminal compaction event when timeout recovery compaction throws", async () => {
+    const onAgentEvent = vi.fn();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        lastAssistant: {
+          usage: { input: 150000 },
+        } as never,
+      }),
+    );
+    mockedCompactDirect.mockRejectedValueOnce(new Error("boom"));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      onAgentEvent,
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "compaction",
+      data: { phase: "start" },
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "compaction",
+      data: { phase: "end", willRetry: false, completed: false },
+    });
   });
 
   it("retries the prompt after successful timeout compaction", async () => {

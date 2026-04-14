@@ -1024,15 +1024,24 @@ export async function runAgentTurnWithFallback(params: {
                     evt.stream === "lifecycle" && typeof evt.data.phase === "string";
                   if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
                     notifyAgentRunStart();
+                    params.typingSignals.signalProgress();
                   }
                   // Trigger typing when tools start executing.
                   // Must await to ensure typing indicator starts before tool summaries are emitted.
                   if (evt.stream === "tool") {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     const name = readStringValue(evt.data.name);
+                    const toolPhaseEnded =
+                      phase === "result" || phase === "end" || phase === "error";
+                    if (phase === "start") {
+                      params.typingSignals.enterLongQuietPhase();
+                    }
                     if (phase === "start" || phase === "update") {
                       await params.typingSignals.signalToolStart();
                       await params.opts?.onToolStart?.({ name, phase });
+                    }
+                    if (toolPhaseEnded) {
+                      params.typingSignals.exitLongQuietPhase();
                     }
                   }
                   if (evt.stream === "item") {
@@ -1123,6 +1132,7 @@ export async function runAgentTurnWithFallback(params: {
                   if (evt.stream === "compaction") {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     if (phase === "start") {
+                      params.typingSignals.enterLongQuietPhase();
                       // Keep custom compaction callbacks active, but gate the
                       // fallback user-facing notice behind explicit opt-in.
                       const notifyUser =
@@ -1151,6 +1161,9 @@ export async function runAgentTurnWithFallback(params: {
                           );
                         }
                       }
+                    }
+                    if (phase === "end" || phase === "error") {
+                      params.typingSignals.exitLongQuietPhase();
                     }
                     const completed = evt.data?.completed === true;
                     if (phase === "end" && completed) {

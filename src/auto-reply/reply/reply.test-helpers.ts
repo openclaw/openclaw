@@ -4,6 +4,8 @@ export function createMockTypingController() {
     startTypingLoop: async () => undefined,
     startTypingOnText: async () => undefined,
     refreshTypingTtl: () => undefined,
+    enterLongQuietPhase: () => undefined,
+    exitLongQuietPhase: () => undefined,
     isActive: () => false,
     markRunComplete: () => undefined,
     markDispatchIdle: () => undefined,

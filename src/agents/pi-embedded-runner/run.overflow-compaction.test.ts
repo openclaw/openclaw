@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -122,6 +122,28 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         }),
       }),
     );
+  });
+
+  it("emits compaction lifecycle events during explicit overflow recovery", async () => {
+    const onAgentEvent = vi.fn();
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      onAgentEvent,
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "compaction",
+      data: { phase: "start" },
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "compaction",
+      data: { phase: "end", willRetry: true, completed: true },
+    });
   });
 
   it("threads prompt-cache runtime context into overflow compaction", async () => {

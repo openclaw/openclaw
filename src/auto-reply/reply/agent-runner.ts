@@ -1090,6 +1090,7 @@ export async function runReplyAgent(params: {
       storePath,
       isHeartbeat,
       replyOperation,
+      typing,
     });
     preflightCompactionApplied =
       (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
@@ -1109,6 +1110,7 @@ export async function runReplyAgent(params: {
       storePath,
       isHeartbeat,
       replyOperation,
+      typing,
     });
 
     runFollowupTurn = createFollowupRunner({

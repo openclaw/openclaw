@@ -513,6 +513,27 @@ describe("createFollowupRunner runtime config", () => {
       | undefined;
     expect(call?.config).toBe(runtimeConfig);
   });
+
+  it("forwards typing into preflight compaction so silent compaction can lease typing", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const typing = createMockTypingController();
+    const runner = createFollowupRunner({
+      typing,
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(createQueuedRun());
+
+    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        typing,
+      }),
+    );
+  });
 });
 
 describe("createFollowupRunner compaction", () => {

@@ -10,6 +10,8 @@ export function createMockTypingController(
     startTypingLoop: vi.fn(async () => {}),
     startTypingOnText: vi.fn(async () => {}),
     refreshTypingTtl: vi.fn(),
+    enterLongQuietPhase: vi.fn(),
+    exitLongQuietPhase: vi.fn(),
     isActive: vi.fn(() => false),
     markRunComplete: vi.fn(),
     markDispatchIdle: vi.fn(),

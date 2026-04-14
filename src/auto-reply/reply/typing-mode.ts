@@ -52,6 +52,9 @@ export type TypingSignaler = {
   signalTextDelta: (text?: string) => Promise<void>;
   signalReasoningDelta: () => Promise<void>;
   signalToolStart: () => Promise<void>;
+  signalProgress: () => void;
+  enterLongQuietPhase: () => void;
+  exitLongQuietPhase: () => void;
 };
 
 export function createTypingSignaler(params: {
@@ -141,6 +144,24 @@ export function createTypingSignaler(params: {
     typing.refreshTypingTtl();
   };
 
+  const signalProgress = () => {
+    if (disabled || !typing.isActive()) {
+      return;
+    }
+    typing.refreshTypingTtl();
+  };
+
+  const enterLongQuietPhase = () => {
+    if (disabled) {
+      return;
+    }
+    typing.enterLongQuietPhase?.();
+  };
+
+  const exitLongQuietPhase = () => {
+    typing.exitLongQuietPhase?.();
+  };
+
   return {
     mode,
     shouldStartImmediately,
@@ -152,5 +173,8 @@ export function createTypingSignaler(params: {
     signalTextDelta,
     signalReasoningDelta,
     signalToolStart,
+    signalProgress,
+    enterLongQuietPhase,
+    exitLongQuietPhase,
   };
 }

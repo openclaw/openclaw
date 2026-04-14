@@ -43,6 +43,7 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import type { TypingController } from "./typing.js";
 
 async function compactEmbeddedPiSessionDefault(
   ...args: Parameters<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>
@@ -355,6 +356,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
+  typing?: TypingController;
 }): Promise<SessionEntry | undefined> {
   if (!params.sessionKey) {
     return params.sessionEntry;
@@ -445,61 +447,66 @@ export async function runPreflightCompactionIfNeeded(params: {
   );
 
   params.replyOperation.setPhase("preflight_compacting");
-  const sessionFile = resolveSessionLogPath(
-    entry.sessionId,
-    entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
-    params.sessionKey ?? params.followupRun.run.sessionKey,
-    { storePath: params.storePath },
-  );
-  const result = await memoryDeps.compactEmbeddedPiSession({
-    sessionId: entry.sessionId,
-    sessionKey: params.sessionKey,
-    allowGatewaySubagentBinding: true,
-    messageChannel: params.followupRun.run.messageProvider,
-    groupId: entry.groupId ?? params.followupRun.run.groupId,
-    groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
-    groupSpace: entry.space ?? params.followupRun.run.groupSpace,
-    senderId: params.followupRun.run.senderId,
-    senderName: params.followupRun.run.senderName,
-    senderUsername: params.followupRun.run.senderUsername,
-    senderE164: params.followupRun.run.senderE164,
-    sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
-    workspaceDir: params.followupRun.run.workspaceDir,
-    agentDir: params.followupRun.run.agentDir,
-    config: params.cfg,
-    skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
-    provider: params.followupRun.run.provider,
-    model: params.followupRun.run.model,
-    thinkLevel: params.followupRun.run.thinkLevel,
-    bashElevated: params.followupRun.run.bashElevated,
-    trigger: "budget",
-    currentTokenCount: tokenCountForCompaction,
-    senderIsOwner: params.followupRun.run.senderIsOwner,
-    ownerNumbers: params.followupRun.run.ownerNumbers,
-    abortSignal: params.replyOperation.abortSignal,
-  });
-
-  if (!result?.ok || !result.compacted) {
-    logVerbose(
-      `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${result?.reason ?? "not_compacted"}`,
+  params.typing?.enterLongQuietPhase?.();
+  try {
+    const sessionFile = resolveSessionLogPath(
+      entry.sessionId,
+      entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+      params.sessionKey ?? params.followupRun.run.sessionKey,
+      { storePath: params.storePath },
     );
-    return entry ?? params.sessionEntry;
-  }
+    const result = await memoryDeps.compactEmbeddedPiSession({
+      sessionId: entry.sessionId,
+      sessionKey: params.sessionKey,
+      allowGatewaySubagentBinding: true,
+      messageChannel: params.followupRun.run.messageProvider,
+      groupId: entry.groupId ?? params.followupRun.run.groupId,
+      groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
+      groupSpace: entry.space ?? params.followupRun.run.groupSpace,
+      senderId: params.followupRun.run.senderId,
+      senderName: params.followupRun.run.senderName,
+      senderUsername: params.followupRun.run.senderUsername,
+      senderE164: params.followupRun.run.senderE164,
+      sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
+      workspaceDir: params.followupRun.run.workspaceDir,
+      agentDir: params.followupRun.run.agentDir,
+      config: params.cfg,
+      skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+      thinkLevel: params.followupRun.run.thinkLevel,
+      bashElevated: params.followupRun.run.bashElevated,
+      trigger: "budget",
+      currentTokenCount: tokenCountForCompaction,
+      senderIsOwner: params.followupRun.run.senderIsOwner,
+      ownerNumbers: params.followupRun.run.ownerNumbers,
+      abortSignal: params.replyOperation.abortSignal,
+    });
 
-  await incrementCompactionCount({
-    cfg: params.cfg,
-    sessionEntry: entry,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    tokensAfter: result.result?.tokensAfter,
-  });
-  await appendPostCompactionRefreshPrompt({
-    cfg: params.cfg,
-    followupRun: params.followupRun,
-  });
-  entry = params.sessionStore?.[params.sessionKey] ?? entry;
-  return entry ?? params.sessionEntry;
+    if (!result?.ok || !result.compacted) {
+      logVerbose(
+        `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${result?.reason ?? "not_compacted"}`,
+      );
+      return entry ?? params.sessionEntry;
+    }
+
+    await incrementCompactionCount({
+      cfg: params.cfg,
+      sessionEntry: entry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      tokensAfter: result.result?.tokensAfter,
+    });
+    await appendPostCompactionRefreshPrompt({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+    });
+    entry = params.sessionStore?.[params.sessionKey] ?? entry;
+    return entry ?? params.sessionEntry;
+  } finally {
+    params.typing?.exitLongQuietPhase?.();
+  }
 }
 
 export async function runMemoryFlushIfNeeded(params: {
@@ -517,6 +524,7 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
+  typing?: TypingController;
 }): Promise<SessionEntry | undefined> {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
@@ -707,6 +715,7 @@ export async function runMemoryFlushIfNeeded(params: {
   );
 
   params.replyOperation.setPhase("memory_flushing");
+  params.typing?.enterLongQuietPhase?.();
   let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
@@ -842,6 +851,8 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
+  } finally {
+    params.typing?.exitLongQuietPhase?.();
   }
 
   return activeSessionEntry;

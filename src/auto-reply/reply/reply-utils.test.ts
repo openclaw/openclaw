@@ -679,6 +679,22 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
+
+  it("refreshes ttl on progress only when typing is already active", () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    signaler.signalProgress();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
+
+    (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    signaler.signalProgress();
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("block reply coalescer", () => {

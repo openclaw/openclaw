@@ -8,6 +8,8 @@ export type TypingController = {
   startTypingLoop: () => Promise<void>;
   startTypingOnText: (text?: string) => Promise<void>;
   refreshTypingTtl: () => void;
+  enterLongQuietPhase?: () => void;
+  exitLongQuietPhase?: () => void;
   isActive: () => boolean;
   markRunComplete: () => void;
   markDispatchIdle: () => void;
@@ -36,6 +38,8 @@ export function createTypingController(params: {
       startTypingLoop: async () => {},
       startTypingOnText: async () => {},
       refreshTypingTtl: () => {},
+      enterLongQuietPhase: () => {},
+      exitLongQuietPhase: () => {},
       isActive: () => false,
       markRunComplete: () => {},
       markDispatchIdle: () => {},
@@ -46,6 +50,7 @@ export function createTypingController(params: {
   let active = false;
   let runComplete = false;
   let dispatchIdle = false;
+  let longQuietPhaseDepth = 0;
   // Important: callbacks (tool/block streaming) can fire late (after the run completed),
   // especially when upstream event emitters don't await async listeners.
   // Once we stop typing, we "seal" the controller so late events can't restart typing forever.
@@ -102,6 +107,8 @@ export function createTypingController(params: {
     if (typingTtlTimer) {
       clearTimeout(typingTtlTimer);
     }
+    // Safety watchdog: stop typing when no lifecycle signal refreshes typing
+    // within the configured budget.
     typingTtlTimer = setTimeout(() => {
       if (!typingLoop.isRunning()) {
         return;
@@ -112,6 +119,18 @@ export function createTypingController(params: {
   };
 
   const isActive = () => active && !sealed;
+
+  const enterLongQuietPhase = () => {
+    if (sealed) {
+      return;
+    }
+    longQuietPhaseDepth += 1;
+    refreshTypingTtl();
+  };
+
+  const exitLongQuietPhase = () => {
+    longQuietPhaseDepth = Math.max(0, longQuietPhaseDepth - 1);
+  };
 
   const startGuard = createTypingStartGuard({
     isSealed: () => sealed,
@@ -127,7 +146,17 @@ export function createTypingController(params: {
 
   const typingLoop = createTypingKeepaliveLoop({
     intervalMs: typingIntervalMs,
-    onTick: triggerTyping,
+    onTick: async () => {
+      if (sealed || runComplete) {
+        return;
+      }
+      // Extend the watchdog only during known long-quiet phases such as
+      // compaction and memory flush. Generic stale runs should still self-clean.
+      if (longQuietPhaseDepth > 0) {
+        refreshTypingTtl();
+      }
+      await triggerTyping();
+    },
   });
 
   const ensureStart = async () => {
@@ -226,6 +255,8 @@ export function createTypingController(params: {
     startTypingLoop,
     startTypingOnText,
     refreshTypingTtl,
+    enterLongQuietPhase,
+    exitLongQuietPhase,
     isActive,
     markRunComplete,
     markDispatchIdle,
