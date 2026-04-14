@@ -24,4 +24,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
     expect(configs).not.toContain("test/vitest/vitest.extension-telegram.config.ts");
   });
+
+  it("marks only dist-dependent shards for built artifact restore", () => {
+    const requiresDistShardNames = createNodeTestShards()
+      .filter((shard) => shard.requiresDist)
+      .map((shard) => shard.shardName);
+
+    expect(requiresDistShardNames).toEqual(["core-support-boundary", "core-runtime", "agentic"]);
+  });
 });
