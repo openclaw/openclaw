@@ -75,6 +75,7 @@ describe("run-command", () => {
       const now = new Date("2026-04-14T14:30:22.000Z");
       const result = await handleRunCommand(makeContext("digest"), {
         now: () => now,
+        executeRun: vi.fn(async () => sampleQueuedExecutionResult()),
       });
       expect(result.text).toContain("受付しました");
       expect(result.text).toContain("タスク: `digest`");
@@ -97,6 +98,19 @@ describe("run-command", () => {
     }
   });
 
+  it("starts execution in the background after queueing", async () => {
+    const executeRun = vi.fn(async () => sampleQueuedExecutionResult());
+    const result = await handleRunCommand(makeContext("health"), {
+      writeRecord: vi.fn(async () => ({ path: "/tmp/run.json" })),
+      executeRun,
+    });
+    expect(result.text).toContain("受付しました");
+    expect(executeRun).toHaveBeenCalledTimes(1);
+    expect(executeRun.mock.calls[0]?.[0]).toMatchObject({
+      status: "queued",
+      kind: "health",
+    });
+  });
   it("queues free-text work as kind=free", () => {
     const built = buildQueuedRunRecord({
       args: "NAS backup status を確認して",
@@ -143,3 +157,27 @@ describe("run-command", () => {
     expect(result.text).toContain("まだ未実装です");
   });
 });
+
+function sampleQueuedExecutionResult() {
+  return {
+    run_id: "run_20260414_143022_a3f",
+    requested_by: "U123456789",
+    requested_by_name: "taro",
+    channel_id: "C0123456789",
+    channel_name: null,
+    raw_text: "health",
+    kind: "health" as const,
+    normalized_task: "health",
+    params: {},
+    status: "running" as const,
+    sense_job_id: null,
+    queued_at: "2026-04-14T14:30:22.000Z",
+    started_at: "2026-04-14T14:30:24.000Z",
+    done_at: null,
+    result: null,
+    error: null,
+    retry_of: null,
+    retry_count: 0,
+    slack_ts: null,
+  };
+}

@@ -1,4 +1,5 @@
 import type { PluginCommandContext } from "../../../src/plugins/types.js";
+import { executeQueuedRun } from "./run-execution.js";
 import { formatRunId, writeRunRecord } from "./run-store.js";
 import type { RunKind, RunRecord } from "./run-types.js";
 
@@ -139,6 +140,7 @@ export async function handleRunCommand(
   deps: {
     now?: () => Date;
     writeRecord?: typeof writeRunRecord;
+    executeRun?: typeof executeQueuedRun;
   } = {},
 ): Promise<{ text: string }> {
   const built = buildQueuedRunRecord({
@@ -153,6 +155,10 @@ export async function handleRunCommand(
 
   const writeRecord = deps.writeRecord ?? writeRunRecord;
   await writeRecord(built.record);
+  const executeRun = deps.executeRun ?? executeQueuedRun;
+  void executeRun(built.record, { config: ctx.config }).catch((error) => {
+    console.error("[sense-worker] run execution failed", error);
+  });
 
   return {
     text: [
