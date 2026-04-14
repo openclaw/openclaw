@@ -240,7 +240,7 @@ type PreparedCronRunContext = {
   persistSessionEntry: PersistCronSessionEntry;
   withRunSession: WithRunSession;
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
-  resolvedDelivery: Awaited<ReturnType<typeof resolveDeliveryTarget>>;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
   skillsSnapshot: SkillSnapshot;

@@ -4,13 +4,17 @@ import {
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
-import { buildTelegramInboundContextPayload } from "./bot-message-context.session.js";
+import {
+  buildTelegramInboundContextPayload,
+  resolveTelegramMessageContextStorePath,
+} from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
   buildTypingThreadParams,
@@ -33,7 +37,7 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
-import { getTopicName, updateTopicName } from "./topic-name-cache.js";
+import { getTopicName, resolveTopicNameCachePath, updateTopicName } from "./topic-name-cache.js";
 
 export type {
   BuildTelegramMessageContextParams,
@@ -148,40 +152,55 @@ export const buildTelegramMessageContext = async ({
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  const topicNameCachePath = resolveTopicNameCachePath(
+    await resolveTelegramMessageContextStorePath({
+      cfg,
+      agentId: account.accountId,
+      sessionRuntime,
+    }),
+  );
   let topicName: string | undefined;
   if (isForum && resolvedThreadId != null) {
     const ftCreated = msg.forum_topic_created;
     const ftEdited = msg.forum_topic_edited;
     const ftClosed = msg.forum_topic_closed;
     const ftReopened = msg.forum_topic_reopened;
+    const topicPatch = ftCreated?.name
+      ? {
+          name: ftCreated.name,
+          iconColor: ftCreated.icon_color,
+          iconCustomEmojiId: ftCreated.icon_custom_emoji_id,
+          closed: false,
+        }
+      : ftEdited?.name
+        ? {
+            name: ftEdited.name,
+            iconCustomEmojiId: ftEdited.icon_custom_emoji_id,
+          }
+        : ftClosed
+          ? { closed: true }
+          : ftReopened
+            ? { closed: false }
+            : undefined;
 
-    if (ftCreated?.name) {
-      updateTopicName(chatId, resolvedThreadId, {
-        name: ftCreated.name,
-        iconColor: ftCreated.icon_color,
-        iconCustomEmojiId: ftCreated.icon_custom_emoji_id,
-        closed: false,
-      });
-    } else if (ftEdited?.name) {
-      updateTopicName(chatId, resolvedThreadId, {
-        name: ftEdited.name,
-        iconCustomEmojiId: ftEdited.icon_custom_emoji_id,
-      });
-    } else if (ftClosed) {
-      updateTopicName(chatId, resolvedThreadId, { closed: true });
-    } else if (ftReopened) {
-      updateTopicName(chatId, resolvedThreadId, { closed: false });
+    if (topicPatch) {
+      updateTopicName(chatId, resolvedThreadId, topicPatch, topicNameCachePath);
     }
 
-    topicName = getTopicName(chatId, resolvedThreadId);
+    topicName = getTopicName(chatId, resolvedThreadId, topicNameCachePath);
     if (!topicName) {
       const replyFtCreated = msg.reply_to_message?.forum_topic_created;
       if (replyFtCreated?.name) {
-        updateTopicName(chatId, resolvedThreadId, {
-          name: replyFtCreated.name,
-          iconColor: replyFtCreated.icon_color,
-          iconCustomEmojiId: replyFtCreated.icon_custom_emoji_id,
-        });
+        updateTopicName(
+          chatId,
+          resolvedThreadId,
+          {
+            name: replyFtCreated.name,
+            iconColor: replyFtCreated.icon_color,
+            iconCustomEmojiId: replyFtCreated.icon_custom_emoji_id,
+          },
+          topicNameCachePath,
+        );
         topicName = replyFtCreated.name;
       }
     }
@@ -189,6 +208,10 @@ export const buildTelegramMessageContext = async ({
 
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
+  const directConfig = !isGroup ? (groupConfig as TelegramDirectConfig | undefined) : undefined;
+  const telegramGroupConfig = isGroup
+    ? (groupConfig as TelegramGroupConfig | undefined)
+    : undefined;
   // Use direct config dmPolicy override if available for DMs
   const effectiveDmPolicy =
     !isGroup && groupConfig && "dmPolicy" in groupConfig
@@ -266,7 +289,7 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  const requireTopic = groupConfig?.requireTopic;
+  const requireTopic = directConfig?.requireTopic;
   const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
   if (topicRequiredButMissing) {
     logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
@@ -377,7 +400,7 @@ export const buildTelegramMessageContext = async ({
   const requireMention = firstDefined(
     activationOverride,
     topicConfig?.requireMention,
-    groupConfig?.requireMention,
+    telegramGroupConfig?.requireMention,
     baseRequireMention,
   );
 
