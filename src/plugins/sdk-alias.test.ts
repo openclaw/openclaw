@@ -103,9 +103,13 @@ function createPluginSdkAliasFixture(params?: {
   return { root, srcFile, distFile };
 }
 
-function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: string }) {
+function createExtensionApiAliasFixture(params?: {
+  srcBody?: string;
+  distBody?: string;
+  srcExtension?: ".ts" | ".mts" | ".js" | ".mjs" | ".cts" | ".cjs";
+}) {
   const root = makeTempDir();
-  const srcFile = path.join(root, "src", "extensionAPI.ts");
+  const srcFile = path.join(root, "src", `extensionAPI${params?.srcExtension ?? ".ts"}`);
   const distFile = path.join(root, "dist", "extensionAPI.js");
   mkdirSafeDir(path.dirname(srcFile));
   mkdirSafeDir(path.dirname(distFile));
@@ -438,6 +442,16 @@ describe("plugin sdk alias helpers", () => {
       argv1,
       env,
       expected,
+    });
+  });
+
+  it("resolves source extension-api aliases through the wider source extension family", () => {
+    const fixture = createExtensionApiAliasFixture({ srcExtension: ".mts" });
+    expectExtensionApiAliasResolution({
+      fixture,
+      modulePath: (root: string) => path.join(root, "src", "plugins", "loader.ts"),
+      env: { NODE_ENV: undefined },
+      expected: "src",
     });
   });
 
