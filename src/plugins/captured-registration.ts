@@ -1,15 +1,18 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
+  AgentHarness,
+  CliBackendPlugin,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   MusicGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
+  PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -28,7 +31,10 @@ type CapturedPluginCliRegistration = {
 export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
+  agentHarnesses: AgentHarness[];
   cliRegistrars: CapturedPluginCliRegistration[];
+  cliBackends: CliBackendPlugin[];
+  textTransforms: PluginTextTransformRegistration[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -47,7 +53,10 @@ export function createCapturedPluginRegistration(params?: {
   registrationMode?: OpenClawPluginApi["registrationMode"];
 }): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
+  const agentHarnesses: AgentHarness[] = [];
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
+  const cliBackends: CliBackendPlugin[] = [];
+  const textTransforms: PluginTextTransformRegistration[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -68,7 +77,10 @@ export function createCapturedPluginRegistration(params?: {
 
   return {
     providers,
+    agentHarnesses,
     cliRegistrars,
+    cliBackends,
+    textTransforms,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -115,6 +127,15 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
+        },
+        registerAgentHarness(harness: AgentHarness) {
+          agentHarnesses.push(harness);
+        },
+        registerCliBackend(backend: CliBackendPlugin) {
+          cliBackends.push(backend);
+        },
+        registerTextTransforms(transforms: PluginTextTransformRegistration) {
+          textTransforms.push(transforms);
         },
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);

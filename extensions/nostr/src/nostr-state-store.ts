@@ -9,7 +9,7 @@ import { getNostrRuntime } from "./runtime.js";
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
 
-type NostrBusStateV1 = {
+type _NostrBusStateV1 = {
   version: 1;
   /** Unix timestamp (seconds) of the last processed event */
   lastProcessedAt: number | null;

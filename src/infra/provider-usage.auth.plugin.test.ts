@@ -3,6 +3,17 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
   async (..._args: unknown[]): Promise<unknown> => null,
 );
+const ensureAuthProfileStoreMock = vi.fn(() => ({
+  profiles: {},
+}));
+
+vi.mock("../agents/auth-profiles.js", () => ({
+  dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
+  ensureAuthProfileStore: () => ensureAuthProfileStoreMock(),
+  listProfilesForProvider: () => [],
+  resolveApiKeyForProfile: async () => null,
+  resolveAuthProfileOrder: () => [],
+}));
 
 vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
@@ -22,6 +33,7 @@ describe("resolveProviderAuths plugin boundary", () => {
   });
 
   beforeEach(() => {
+    ensureAuthProfileStoreMock.mockClear();
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
@@ -41,5 +53,6 @@ describe("resolveProviderAuths plugin boundary", () => {
         token: "plugin-zai-token",
       },
     ]);
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 });

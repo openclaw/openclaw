@@ -222,7 +222,6 @@ describe("memory plugin e2e", () => {
 
     try {
       const { default: memoryPlugin } = await import("./index.js");
-      // oxlint-disable-next-line typescript/no-explicit-any
       const registeredTools: any[] = [];
       const mockApi = {
         id: "memory-lancedb",
@@ -246,20 +245,15 @@ describe("memory plugin e2e", () => {
           error: vi.fn(),
           debug: vi.fn(),
         },
-        // oxlint-disable-next-line typescript/no-explicit-any
         registerTool: (tool: any, opts: any) => {
           registeredTools.push({ tool, opts });
         },
-        // oxlint-disable-next-line typescript/no-explicit-any
         registerCli: vi.fn(),
-        // oxlint-disable-next-line typescript/no-explicit-any
         registerService: vi.fn(),
-        // oxlint-disable-next-line typescript/no-explicit-any
         on: vi.fn(),
         resolvePath: (p: string) => p,
       };
 
-      // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
       const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
       if (!recallTool) {

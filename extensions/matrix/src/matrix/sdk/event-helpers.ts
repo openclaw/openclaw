@@ -11,7 +11,7 @@ export function matrixEventToRaw(event: MatrixEvent): MatrixRawEvent {
     sender: event.getSender() ?? "",
     type: event.getType() ?? "",
     origin_server_ts: event.getTs() ?? 0,
-    content: ((event.getContent?.() ?? {}) as Record<string, unknown>) || {},
+    content: (event.getContent?.() ?? {}) || {},
     unsigned,
   };
   const stateKey = resolveMatrixStateKey(event);

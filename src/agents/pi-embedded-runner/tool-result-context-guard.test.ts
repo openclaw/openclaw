@@ -1,12 +1,13 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ContextEngine } from "../../context-engine/types.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
-  PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE,
-  PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
+  formatContextLimitTruncationNotice,
+  installContextEngineLoopHook,
   installToolResultContextGuard,
+  PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
 } from "./tool-result-context-guard.js";
 
 function makeUser(text: string): AgentMessage {
@@ -61,6 +62,9 @@ function makeToolResultWithDetails(id: string, text: string, detailText: string)
 
 function getToolResultText(msg: AgentMessage): string {
   const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
   if (!Array.isArray(content)) {
     return "";
   }
@@ -79,342 +83,524 @@ function makeGuardableAgent(
   return { transformContext };
 }
 
-function makeTwoToolResultOverflowContext(): AgentMessage[] {
-  return [
-    makeUser("u".repeat(2_000)),
-    makeToolResult("call_old", "x".repeat(1_000)),
-    makeToolResult("call_new", "y".repeat(1_000)),
-  ];
-}
-
 async function applyGuardToContext(
   agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
   contextForNextCall: AgentMessage[],
+  contextWindowTokens = 1_000,
 ) {
   installToolResultContextGuard({
     agent,
-    contextWindowTokens: 1_000,
+    contextWindowTokens,
   });
   return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 }
 
-function expectReadableCompaction(text: string, prefix: string) {
-  expect(text.includes(PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE)).toBe(true);
-  expect(text).toContain(prefix.repeat(64));
-  expect(text).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-  expect(text).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+function expectPiStyleTruncation(text: string): void {
+  expect(text).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  expect(text).toMatch(/\[\.\.\. \d+ more characters truncated\]$/);
+  expect(text).not.toContain("[compacted: tool output removed to free context]");
+  expect(text).not.toContain("[compacted: tool output trimmed to free context]");
+  expect(text).not.toContain("[truncated: output exceeded context limit]");
 }
 
-function expectReadableToolSlice(text: string, prefix: string) {
-  expect(text).toContain(prefix.repeat(64));
-  expect(text).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-  expect(
-    text.includes(PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE) ||
-      text.includes(CONTEXT_LIMIT_TRUNCATION_NOTICE),
-  ).toBe(true);
-}
-
-function expectCompactedOrPlaceholder(text: string, prefix: string) {
-  if (text === PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER) {
-    return;
-  }
-  expectReadableCompaction(text, prefix);
-}
+describe("formatContextLimitTruncationNotice", () => {
+  it("formats pi-style truncation wording with a count", () => {
+    expect(formatContextLimitTruncationNotice(123)).toBe("[... 123 more characters truncated]");
+  });
+});
 
 describe("installToolResultContextGuard", () => {
-  it("returns a cloned guarded context so original tool output stays visible", async () => {
+  it("passes through unchanged context when under the per-tool and total budget", async () => {
     const agent = makeGuardableAgent();
-    const contextForNextCall = makeTwoToolResultOverflowContext();
+    const contextForNextCall = [makeUser("hello"), makeToolResult("call_ok", "small output")];
+
     const transformed = await applyGuardToContext(agent, contextForNextCall);
 
-    expect(transformed).not.toBe(contextForNextCall);
-    const transformedMessages = transformed as AgentMessage[];
-    expectReadableCompaction(getToolResultText(transformedMessages[1]), "x");
-    expectReadableCompaction(getToolResultText(transformedMessages[2]), "y");
-    expect(getToolResultText(contextForNextCall[1])).toBe("x".repeat(1_000));
-    expect(getToolResultText(contextForNextCall[2])).toBe("y".repeat(1_000));
+    expect(transformed).toBe(contextForNextCall);
   });
 
-  it("keeps at least one readable older slice before falling back to a placeholder", async () => {
+  it("does not preemptively overflow large non-tool context that is still under the high-water mark", async () => {
     const agent = makeGuardableAgent();
+    const contextForNextCall = [makeUser("u".repeat(3_200))];
 
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
+    const transformed = await applyGuardToContext(agent, contextForNextCall);
 
-    const contextForNextCall = [
-      makeUser("u".repeat(2_200)),
-      makeToolResult("call_1", "a".repeat(800)),
-      makeToolResult("call_2", "b".repeat(800)),
-      makeToolResult("call_3", "c".repeat(800)),
-    ];
-
-    const transformed = (await agent.transformContext?.(
-      contextForNextCall,
-      new AbortController().signal,
-    )) as AgentMessage[];
-
-    const first = getToolResultText(transformed[1]);
-    const second = getToolResultText(transformed[2]);
-    const third = getToolResultText(transformed[3]);
-
-    expectReadableCompaction(first, "a");
-    expectReadableCompaction(third, "c");
-    expect(
-      second === "b".repeat(800) || second === PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
-    ).toBe(true);
+    expect(transformed).toBe(contextForNextCall);
   });
 
-  it("keeps the newest large tool result visible when an older one can absorb overflow", async () => {
+  it("returns a cloned guarded context so original oversized tool output stays visible", async () => {
     const agent = makeGuardableAgent();
-
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 100_000,
-    });
-
-    const contextForNextCall: AgentMessage[] = [makeUser("stress")];
-    let transformed: AgentMessage[] | undefined;
-    for (let i = 1; i <= 4; i++) {
-      contextForNextCall.push(makeToolResult(`call_${i}`, String(i).repeat(95_000)));
-      transformed = (await agent.transformContext?.(
-        contextForNextCall,
-        new AbortController().signal,
-      )) as AgentMessage[];
-    }
-
-    const toolResultTexts = (transformed ?? [])
-      .filter((msg) => msg.role === "toolResult")
-      .map((msg) => getToolResultText(msg as AgentMessage));
-
-    expect(toolResultTexts[0]).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-    expectReadableCompaction(toolResultTexts[1] ?? "", "2");
-    expectReadableCompaction(toolResultTexts[2] ?? "", "3");
-    expectReadableToolSlice(toolResultTexts[3] ?? "", "4");
-  });
-
-  it("truncates an individually oversized tool result with a context-limit notice", async () => {
-    const agent = makeGuardableAgent();
-
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
-
     const contextForNextCall = [makeToolResult("call_big", "z".repeat(5_000))];
 
-    const transformed = (await agent.transformContext?.(
-      contextForNextCall,
-      new AbortController().signal,
-    )) as AgentMessage[];
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
 
+    expect(transformed).not.toBe(contextForNextCall);
     const newResultText = getToolResultText(transformed[0]);
     expect(newResultText.length).toBeLessThan(5_000);
-    expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-  });
-
-  it("falls back to compacting the newest tool result when older ones are insufficient", async () => {
-    const agent = makeGuardableAgent();
-
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
-
-    const contextForNextCall = [
-      makeUser("u".repeat(2_600)),
-      makeToolResult("call_old", "x".repeat(700)),
-      makeToolResult("call_new", "y".repeat(1_000)),
-    ];
-
-    const transformed = (await agent.transformContext?.(
-      contextForNextCall,
-      new AbortController().signal,
-    )) as AgentMessage[];
-    expectCompactedOrPlaceholder(getToolResultText(transformed[1]), "x");
-    expectCompactedOrPlaceholder(getToolResultText(transformed[2]), "y");
+    expectPiStyleTruncation(newResultText);
+    expect(getToolResultText(contextForNextCall[0])).toBe("z".repeat(5_000));
   });
 
   it("wraps an existing transformContext and guards the transformed output", async () => {
-    const agent = makeGuardableAgent((messages) => {
-      return messages.map((msg) =>
+    const agent = makeGuardableAgent((messages) =>
+      messages.map((msg) =>
         castAgentMessage({
           ...(msg as unknown as Record<string, unknown>),
         }),
-      );
-    });
-    const contextForNextCall = makeTwoToolResultOverflowContext();
-    const transformed = await applyGuardToContext(agent, contextForNextCall);
+      ),
+    );
+    const contextForNextCall = [makeToolResult("call_big", "x".repeat(5_000))];
+
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
 
     expect(transformed).not.toBe(contextForNextCall);
-    const transformedMessages = transformed as AgentMessage[];
-    const oldResultText = getToolResultText(transformedMessages[1]);
-    expectReadableCompaction(oldResultText, "x");
+    expectPiStyleTruncation(getToolResultText(transformed[0]));
   });
 
-  it("handles legacy role=tool string outputs when enforcing context budget", async () => {
+  it("handles legacy role=tool string outputs with pi-style truncation wording", async () => {
     const agent = makeGuardableAgent();
+    const contextForNextCall = [makeLegacyToolResult("call_big", "y".repeat(5_000))];
 
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+    const newResultText = getToolResultText(transformed[0]);
 
+    expect(typeof (transformed[0] as { content?: unknown }).content).toBe("string");
+    expectPiStyleTruncation(newResultText);
+  });
+
+  it("drops oversized tool-result details when truncating once", async () => {
+    const agent = makeGuardableAgent();
     const contextForNextCall = [
-      makeUser("u".repeat(2_000)),
-      makeLegacyToolResult("call_old", "x".repeat(1_000)),
-      makeLegacyToolResult("call_new", "y".repeat(1_000)),
+      makeToolResultWithDetails("call_big", "x".repeat(900), "d".repeat(8_000)),
     ];
 
-    const transformed = (await agent.transformContext?.(
-      contextForNextCall,
-      new AbortController().signal,
-    )) as AgentMessage[];
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+    const result = transformed[0] as { details?: unknown };
+    const newResultText = getToolResultText(transformed[0]);
 
-    const oldResultText = (transformed[1] as { content?: unknown }).content;
-    const newResultText = (transformed[2] as { content?: unknown }).content;
-
-    expect(typeof oldResultText).toBe("string");
-    expect(typeof newResultText).toBe("string");
-    expect(oldResultText).toContain(PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE);
-    expect(newResultText).toContain(PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE);
+    expectPiStyleTruncation(newResultText);
+    expect(result.details).toBeUndefined();
+    expect((contextForNextCall[0] as { details?: unknown }).details).toBeDefined();
   });
 
-  it("drops oversized read-tool details payloads when compacting tool results", async () => {
+  it("throws a preemptive overflow when total context still exceeds the high-water mark", async () => {
     const agent = makeGuardableAgent();
-
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
-
     const contextForNextCall = [
-      makeUser("u".repeat(1_600)),
-      makeToolResultWithDetails("call_old", "x".repeat(900), "d".repeat(8_000)),
-      makeToolResultWithDetails("call_new", "y".repeat(900), "d".repeat(8_000)),
+      makeUser("u".repeat(50_000)),
+      makeToolResult("call_big", "x".repeat(5_000)),
     ];
 
-    const transformed = (await agent.transformContext?.(
-      contextForNextCall,
-      new AbortController().signal,
-    )) as AgentMessage[];
-
-    const oldResult = transformed[1] as {
-      details?: unknown;
-    };
-    const newResult = transformed[2] as {
-      details?: unknown;
-    };
-    const oldResultText = getToolResultText(transformed[1]);
-    const newResultText = getToolResultText(transformed[2]);
-
-    expectReadableToolSlice(oldResultText, "x");
-    expectReadableToolSlice(newResultText, "y");
-    expect(oldResult.details).toBeUndefined();
-    expect(newResult.details).toBeUndefined();
+    await expect(applyGuardToContext(agent, contextForNextCall)).rejects.toThrow(
+      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+    );
+    expect(getToolResultText(contextForNextCall[1])).toBe("x".repeat(5_000));
   });
 
-  it("throws overflow instead of compacting the latest read result during aggregate compaction", async () => {
+  it("throws instead of rewriting older tool results under aggregate pressure", async () => {
     const agent = makeGuardableAgent();
-
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
-
     const contextForNextCall = [
-      makeUser("u".repeat(2_600)),
-      makeToolResult("call_old", "x".repeat(300)),
+      makeUser("u".repeat(50_000)),
+      makeToolResult("call_1", "a".repeat(500)),
+      makeToolResult("call_2", "b".repeat(500)),
+      makeToolResult("call_3", "c".repeat(500)),
+    ];
+
+    await expect(applyGuardToContext(agent, contextForNextCall)).rejects.toThrow(
+      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+    );
+    expect(getToolResultText(contextForNextCall[1])).toBe("a".repeat(500));
+    expect(getToolResultText(contextForNextCall[2])).toBe("b".repeat(500));
+    expect(getToolResultText(contextForNextCall[3])).toBe("c".repeat(500));
+  });
+
+  it("does not special-case the latest read result before throwing under aggregate pressure", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("u".repeat(50_000)),
+      makeToolResult("call_old", "x".repeat(400)),
       makeReadToolResult("call_new", "y".repeat(500)),
     ];
 
-    await expect(
-      agent.transformContext?.(contextForNextCall, new AbortController().signal),
-    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
-
-    expect(getToolResultText(contextForNextCall[1])).toBe("x".repeat(300));
+    await expect(applyGuardToContext(agent, contextForNextCall)).rejects.toThrow(
+      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+    );
+    expect(getToolResultText(contextForNextCall[1])).toBe("x".repeat(400));
     expect(getToolResultText(contextForNextCall[2])).toBe("y".repeat(500));
   });
 
-  it("keeps the latest read result when older outputs absorb the aggregate overflow", async () => {
+  it("supports model-window-specific truncation for large but otherwise valid tool results", async () => {
     const agent = makeGuardableAgent();
+    const contextForNextCall = [makeToolResult("call_big", "q".repeat(95_000))];
 
-    installToolResultContextGuard({
+    const transformed = (await applyGuardToContext(
       agent,
-      contextWindowTokens: 1_000,
-    });
-
-    const contextForNextCall = [
-      makeUser("u".repeat(1_400)),
-      makeToolResult("call_old_1", "a".repeat(350)),
-      makeToolResult("call_old_2", "b".repeat(350)),
-      makeReadToolResult("call_new", "c".repeat(500)),
-    ];
-
-    const transformed = (await agent.transformContext?.(
       contextForNextCall,
-      new AbortController().signal,
+      100_000,
     )) as AgentMessage[];
 
-    expect(getToolResultText(transformed[3])).toBe("c".repeat(500));
+    expectPiStyleTruncation(getToolResultText(transformed[0]));
+  });
+});
+
+type MockedEngine = ContextEngine & {
+  afterTurn: ReturnType<typeof vi.fn>;
+  assemble: ReturnType<typeof vi.fn>;
+  ingest: ReturnType<typeof vi.fn>;
+  ingestBatch?: ReturnType<typeof vi.fn>;
+};
+
+function makeMockEngine(
+  overrides: {
+    assemble?: (
+      params: Parameters<ContextEngine["assemble"]>[0],
+    ) => Promise<{ messages: AgentMessage[]; estimatedTokens: number }>;
+    afterTurn?: (params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => Promise<void>;
+    omitAfterTurn?: boolean;
+    ingest?: (params: Parameters<ContextEngine["ingest"]>[0]) => Promise<{ ingested: boolean }>;
+    ingestBatch?: (
+      params: Parameters<NonNullable<ContextEngine["ingestBatch"]>>[0],
+    ) => Promise<{ ingestedCount: number }>;
+    omitIngestBatch?: boolean;
+  } = {},
+): MockedEngine {
+  const defaultAfterTurn = vi.fn(async () => {});
+  const defaultAssemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+    messages: params.messages,
+    estimatedTokens: 0,
+  }));
+  const defaultIngest = vi.fn(async () => ({ ingested: true }));
+  const defaultIngestBatch = vi.fn(
+    async (params: Parameters<NonNullable<ContextEngine["ingestBatch"]>>[0]) => ({
+      ingestedCount: params.messages.length,
+    }),
+  );
+  const afterTurn = overrides.omitAfterTurn
+    ? undefined
+    : overrides.afterTurn
+      ? vi.fn(overrides.afterTurn)
+      : defaultAfterTurn;
+  const assemble = overrides.assemble ? vi.fn(overrides.assemble) : defaultAssemble;
+  const ingest = overrides.ingest ? vi.fn(overrides.ingest) : defaultIngest;
+  const ingestBatch = overrides.omitIngestBatch
+    ? undefined
+    : overrides.ingestBatch
+      ? vi.fn(overrides.ingestBatch)
+      : defaultIngestBatch;
+  const engine = {
+    info: {
+      id: "test-engine",
+      name: "Test Engine",
+      version: "0.0.1",
+      ownsCompaction: true,
+    },
+    ingest,
+    assemble,
+    ...(ingestBatch ? { ingestBatch } : {}),
+    ...(afterTurn ? { afterTurn } : {}),
+  } as unknown as MockedEngine;
+  return engine;
+}
+
+async function callTransform(
+  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
+  messages: AgentMessage[],
+) {
+  return await agent.transformContext?.(messages, new AbortController().signal);
+}
+
+describe("installContextEngineLoopHook", () => {
+  const sessionId = "test-session-id";
+  const sessionKey = "agent:main:subagent:test";
+  const sessionFile = "/tmp/test-session.jsonl";
+  const tokenBudget = 4096;
+  const modelId = "test-model";
+
+  function installHook(
+    agent: ReturnType<typeof makeGuardableAgent>,
+    engine: MockedEngine,
+    prePromptCount?: number,
+  ): () => void {
+    return installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      ...(prePromptCount !== undefined ? { getPrePromptMessageCount: () => prePromptCount } : {}),
+    });
+  }
+
+  it("returns early when the current messages match the pre-prompt baseline", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 2);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    const transformed = await callTransform(agent, messages);
+
+    expect(transformed).toBe(messages);
+    expect(engine.afterTurn).not.toHaveBeenCalled();
+    expect(engine.assemble).not.toHaveBeenCalled();
   });
 
-  it("throws preemptive context overflow when context exceeds 90% after tool-result compaction", async () => {
+  it("processes the first call when messages already exceed the pre-prompt baseline", async () => {
     const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 1);
 
-    installToolResultContextGuard({
-      agent,
-      // contextBudgetChars = 1000 * 4 * 0.75 = 3000
-      // preemptiveOverflowChars = 1000 * 4 * 0.9 = 3600
-      contextWindowTokens: 1_000,
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
+      prePromptMessageCount: 1,
+      messages,
     });
-
-    // Large user message (non-compactable) pushes context past 90% threshold.
-    const contextForNextCall = [makeUser("u".repeat(3_700)), makeToolResult("call_1", "small")];
-
-    await expect(
-      agent.transformContext?.(contextForNextCall, new AbortController().signal),
-    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
-  it("does not throw when context is under 90% after tool-result compaction", async () => {
+  it("calls afterTurn and assemble when new messages are appended after the first call", async () => {
     const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine);
 
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    await callTransform(agent, withNew);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
+      prePromptMessageCount: 2,
+      messages: withNew,
     });
-
-    // Context well under the 3600-char preemptive threshold.
-    const contextForNextCall = [makeUser("u".repeat(1_000)), makeToolResult("call_1", "small")];
-
-    await expect(
-      agent.transformContext?.(contextForNextCall, new AbortController().signal),
-    ).resolves.not.toThrow();
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
-  it("compacts tool results before checking the preemptive overflow threshold", async () => {
+  it("advances the fence across multiple iterations", async () => {
     const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine);
 
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
+    const batch0 = [makeUser("h1"), makeToolResult("c1", "r1")];
+    await callTransform(agent, batch0);
+
+    const batch1 = [...batch0, makeUser("h2"), makeToolResult("c2", "r2")];
+    await callTransform(agent, batch1);
+
+    const batch2 = [...batch1, makeUser("h3"), makeToolResult("c3", "r3")];
+    await callTransform(agent, batch2);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
+    expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(2);
+    expect(engine.afterTurn.mock.calls[1]?.[0]?.prePromptMessageCount).toBe(4);
+  });
+
+  it("skips afterTurn and assemble when messages have not changed", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+    await callTransform(agent, messages);
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).not.toHaveBeenCalled();
+    expect(engine.assemble).not.toHaveBeenCalled();
+  });
+
+  it("returns the assembled view when its length differs from the source", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
     });
+    installHook(agent, engine);
 
-    // Large user message + large tool result. The guard should compact the tool
-    // result first, then check the overflow threshold. Even after compaction the
-    // user content alone pushes past 90%, so the overflow error fires.
-    const contextForNextCall = [
-      makeUser("u".repeat(3_700)),
-      makeToolResult("call_old", "x".repeat(2_000)),
-    ];
+    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
+    await callTransform(agent, initial);
 
-    const guarded = agent.transformContext?.(contextForNextCall, new AbortController().signal);
-    await expect(guarded).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    const withNew = [...initial, makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
 
-    // Tool result should have been compacted before the overflow check.
-    const toolResultText = getToolResultText(contextForNextCall[1]);
-    expect(toolResultText).toBe("x".repeat(2_000));
+    expect(transformed).toBe(compactedView);
+  });
+
+  it("returns the assembled view when the engine rewrites content without changing count", async () => {
+    const agent = makeGuardableAgent();
+    const rewrittenView = [makeUser("rewritten-1"), makeUser("rewritten-2")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: rewrittenView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    // Same count (2) but different array reference — engine's view should be used
+    expect(transformed).toBe(rewrittenView);
+  });
+
+  it("returns the source when the engine returns the same array reference", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    expect(transformed).toBe(withNew);
+  });
+
+  it("does not mutate the source messages array", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
+
+    const sourceMessages = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const sourceCopy = [...sourceMessages];
+    await callTransform(agent, sourceMessages);
+
+    expect(sourceMessages).toEqual(sourceCopy);
+  });
+
+  it("ingests new messages in batches when afterTurn is absent", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({ omitAfterTurn: true });
+    installHook(agent, engine);
+
+    const batch0 = [makeUser("first"), makeToolResult("call_1", "r1")];
+    await callTransform(agent, batch0);
+
+    const batch1 = [...batch0, makeUser("second"), makeToolResult("call_2", "r2")];
+    await callTransform(agent, batch1);
+
+    const batch2 = [...batch1, makeUser("third"), makeToolResult("call_3", "r3")];
+    await callTransform(agent, batch2);
+
+    expect(engine.ingestBatch).toHaveBeenCalledTimes(2);
+    expect(engine.ingestBatch?.mock.calls[0]?.[0]?.messages).toEqual(batch1.slice(2));
+    expect(engine.ingestBatch?.mock.calls[1]?.[0]?.messages).toEqual(batch2.slice(4));
+    expect(engine.assemble).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to per-message ingest when ingestBatch is absent", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({ omitAfterTurn: true, omitIngestBatch: true });
+    installHook(agent, engine, 1);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "r1")];
+    await callTransform(agent, messages);
+
+    expect(engine.ingest).toHaveBeenCalledTimes(1);
+    expect(engine.ingest.mock.calls[0]?.[0]).toMatchObject({
+      sessionId,
+      sessionKey,
+      message: makeToolResult("call_1", "r1"),
+    });
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through to source messages when engine.afterTurn throws", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({
+      afterTurn: async () => {
+        throw new Error("engine afterTurn boom");
+      },
+    });
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    expect(transformed).toBe(withNew);
+  });
+
+  it("falls through to source messages when engine.assemble throws", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({
+      assemble: async () => {
+        throw new Error("engine assemble boom");
+      },
+    });
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    expect(transformed).toBe(withNew);
+  });
+
+  it("invokes any pre-existing transformContext before the engine sees messages", async () => {
+    const upstream = vi.fn(async (messages: AgentMessage[]) => [...messages, makeUser("appended")]);
+    const agent = makeGuardableAgent(upstream);
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    // First call: upstream runs (1 msg -> 2 msgs), fence set to 2, returns early
+    await callTransform(agent, [makeUser("first")]);
+    expect(upstream).toHaveBeenCalledTimes(1);
+
+    // Second call: upstream runs (2 msgs -> 3 msgs), hasNewMessages = true, assemble fires
+    const transformed = await callTransform(agent, [makeUser("first"), makeUser("second")]);
+    expect(upstream).toHaveBeenCalledTimes(2);
+    expect(transformed).toBe(compactedView);
+  });
+
+  it("restores the previous transformContext when the returned dispose is called", async () => {
+    const upstream = vi.fn(async (messages: AgentMessage[]) => messages);
+    const agent = makeGuardableAgent(upstream);
+    const engine = makeMockEngine();
+    const dispose = installHook(agent, engine);
+
+    dispose();
+
+    expect(agent.transformContext).toBe(upstream);
+  });
+
+  it("returns the cached assembled view on unchanged iterations instead of raw source", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeToolResult("call_2", "r2")];
+    const firstResult = await callTransform(agent, withNew);
+    expect(firstResult).toBe(compactedView);
+
+    // Retry with same messages: should return cached assembled view, not raw
+    const retryResult = await callTransform(agent, withNew);
+    expect(retryResult).toBe(compactedView);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 });

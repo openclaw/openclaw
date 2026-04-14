@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
@@ -5,7 +10,7 @@ const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
-  const text = String(value ?? "").trim();
+  const text = normalizeOptionalStringifiedId(value) ?? "";
   if (!/^\d+$/.test(text)) {
     return null;
   }
@@ -43,11 +48,11 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
     return text;
   }
   return text.replace(MENTION_CANDIDATE_PATTERN, (match, prefix, rawHandle) => {
-    const handle = String(rawHandle ?? "").trim();
+    const handle = normalizeOptionalString(rawHandle) ?? "";
     if (!handle) {
       return match;
     }
-    const lookup = handle.toLowerCase();
+    const lookup = normalizeLowercaseStringOrEmpty(handle);
     if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
       return match;
     }

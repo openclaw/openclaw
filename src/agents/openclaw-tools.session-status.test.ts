@@ -8,8 +8,12 @@ const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
-const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
-const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrupt" })));
+const buildStatusMessageMock = vi.hoisted(() =>
+  vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
+);
+const resolveQueueSettingsMock = vi.hoisted(() =>
+  vi.fn((_params?: unknown) => ({ mode: "interrupt" })),
+);
 const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
   vi.fn(
     (_: { relatedSessionKey: string; callerOwnerKey: string }) =>
@@ -170,6 +174,64 @@ function createProviderUsageModuleMock() {
   };
 }
 
+function createCommandsStatusRuntimeModuleMock() {
+  return {
+    buildStatusText: async (params: {
+      sessionKey: string;
+      sessionEntry: SessionEntry;
+      statusChannel: string;
+      provider?: string;
+      model: string;
+      primaryModelLabelOverride?: string;
+      includeTranscriptUsage?: boolean;
+      taskLineOverride?: string;
+      resolveDefaultThinkingLevel?: () => unknown;
+    }) => {
+      resolveQueueSettingsMock({
+        channel: params.statusChannel,
+        sessionEntry: params.sessionEntry,
+      });
+      const parsed = params.sessionKey.startsWith("agent:") ? params.sessionKey.split(":") : null;
+      const agentId = parsed?.[1] || "main";
+      const configuredAgent = Array.isArray(
+        (mockConfig as { agents?: { list?: Array<Record<string, unknown>> } }).agents?.list,
+      )
+        ? (mockConfig as { agents?: { list?: Array<Record<string, unknown>> } }).agents?.list?.find(
+            (entry) => entry.id === agentId,
+          )
+        : undefined;
+      const primary =
+        params.primaryModelLabelOverride ??
+        [params.provider, params.model].filter(Boolean).join("/") ??
+        params.model;
+      const customAuth = params.provider
+        ? resolveUsableCustomProviderApiKeyMock({ provider: params.provider })
+        : null;
+      const envAuth =
+        !customAuth && params.provider ? resolveEnvApiKeyMock(params.provider, process.env) : null;
+      const modelAuth = customAuth
+        ? `api-key (${customAuth.source})`
+        : envAuth
+          ? "api-key (env)"
+          : undefined;
+      buildStatusMessageMock({
+        agentId,
+        agent: {
+          model: { primary },
+          thinkingDefault:
+            configuredAgent?.thinkingDefault ?? (await params.resolveDefaultThinkingLevel?.()),
+        },
+        sessionEntry: params.sessionEntry,
+        modelAuth,
+        includeTranscriptUsage: params.includeTranscriptUsage,
+      });
+      return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
+        .filter(Boolean)
+        .join("\n");
+    },
+  };
+}
+
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
@@ -187,6 +249,7 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
+vi.mock("./tools/session-status.runtime.js", createCommandsStatusRuntimeModuleMock);
 vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));

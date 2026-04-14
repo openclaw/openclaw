@@ -27,7 +27,13 @@ describe("tlon doctor", () => {
     expect(result.config.channels?.tlon?.network).toEqual({
       dangerouslyAllowPrivateNetwork: true,
     });
-    expect(result.config.channels?.tlon?.accounts?.alt?.network).toEqual({
+    expect(
+      (
+        result.config.channels?.tlon?.accounts?.alt as
+          | { network?: Record<string, unknown> }
+          | undefined
+      )?.network,
+    ).toEqual({
       dangerouslyAllowPrivateNetwork: false,
     });
   });

@@ -12,7 +12,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../logging/diagnostic.js", () => ({
+vi.mock("../logging/diagnostic-runtime.js", () => ({
   logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
   logLaneDequeue: diagnosticMocks.logLaneDequeue,
   diagnosticLogger: diagnosticMocks.diag,
@@ -376,6 +376,42 @@ describe("command queue", () => {
     markGatewayDraining();
     resetAllLanes();
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("migrates legacy queue state missing activeTaskWaiters without crashing", async () => {
+    // Simulate a SIGUSR1 in-process restart where the globalThis singleton was
+    // created by an older code version (e.g. v2026.4.2) that did not include
+    // the `activeTaskWaiters` field.  The schema migration in getQueueState()
+    // must patch the missing field so resetAllLanes() and
+    // notifyActiveTaskWaiters() do not throw.
+    const key = Symbol.for("openclaw.commandQueueState");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const original = globalStore[key];
+
+    try {
+      // Plant a legacy-shaped state object (no activeTaskWaiters).
+      globalStore[key] = {
+        gatewayDraining: false,
+        lanes: new Map(),
+        nextTaskId: 1,
+      };
+
+      // resetAllLanes calls notifyActiveTaskWaiters → Array.from(state.activeTaskWaiters).
+      // Without the migration this would throw:
+      //   TypeError: undefined is not iterable
+      expect(() => resetAllLanes()).not.toThrow();
+
+      // waitForActiveTasks also accesses activeTaskWaiters.
+      await expect(waitForActiveTasks(0)).resolves.toEqual({ drained: true });
+    } finally {
+      // Restore original state so subsequent tests are not affected.
+      if (original !== undefined) {
+        globalStore[key] = original;
+      } else {
+        delete globalStore[key];
+      }
+      resetCommandQueueStateForTest();
+    }
   });
 
   it("shares lane state across distinct module instances", async () => {

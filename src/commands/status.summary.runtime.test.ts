@@ -92,4 +92,18 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
       model: "gpt-5.4",
     });
   });
+
+  it("prefers explicit overrides ahead of fallback runtime fields", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.4",
+        modelProvider: "amazon-bedrock",
+        model: "minimax.minimax-m2.5",
+      }),
+    ).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.4",
+    });
+  });
 });

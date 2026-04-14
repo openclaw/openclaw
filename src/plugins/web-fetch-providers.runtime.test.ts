@@ -133,6 +133,33 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not force a fresh snapshot load when the same web-provider load is already in flight", () => {
+    const inFlightSpy = vi
+      .spyOn(loaderModule, "isPluginRegistryLoadInFlight")
+      .mockReturnValue(true);
+    loadOpenClawPluginsMock.mockImplementation(() => {
+      throw new Error("resolvePluginWebFetchProviders should not bypass the in-flight guard");
+    });
+
+    const providers = resolvePluginWebFetchProviders({
+      config: createFirecrawlAllowConfig(),
+      bundledAllowlistCompat: true,
+      workspaceDir: DEFAULT_WORKSPACE,
+      env: createWebFetchEnv(),
+    });
+
+    expect(providers).toEqual([]);
+    expect(inFlightSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        cache: false,
+        onlyPluginIds: ["firecrawl"],
+        workspaceDir: DEFAULT_WORKSPACE,
+      }),
+    );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("reuses a compatible active registry for snapshot resolution when config is provided", () => {
     const env = createWebFetchEnv();
     const rawConfig = createFirecrawlAllowConfig();

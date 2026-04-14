@@ -1,35 +1,32 @@
+import type {
+  ChannelSetupAdapter,
+  ChannelSetupWizard,
+  ChannelSetupWizardTextInput,
+} from "openclaw/plugin-sdk/setup-runtime";
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
   mergeAllowFromEntries,
-  patchChannelConfigForAccount,
   parseSetupEntriesAllowingWildcard,
+  patchChannelConfigForAccount,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
-import type {
-  ChannelSetupAdapter,
-  ChannelSetupWizard,
-  ChannelSetupWizardTextInput,
-} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-} from "./accounts.js";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDefaultIMessageAccountId, resolveIMessageAccount } from "./accounts.js";
 import { normalizeIMessageHandle } from "./targets.js";
 
 const channel = "imessage" as const;
 
 export function parseIMessageAllowFromEntries(raw: string): { entries: string[]; error?: string } {
   return parseSetupEntriesAllowingWildcard(raw, (entry) => {
-    const lower = entry.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(entry);
     if (lower.startsWith("chat_id:")) {
       const id = entry.slice("chat_id:".length).trim();
       if (!/^\d+$/.test(id)) {

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
 import { CLIENT_ID_KEYS, CLIENT_SECRET_KEYS } from "./oauth.shared.js";
 
 type CredentialFs = {
@@ -96,7 +97,9 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
   for (const candidate of candidates) {
     for (const searchDir of resolveGeminiCliSearchDirs(candidate)) {
       const key =
-        process.platform === "win32" ? searchDir.replace(/\\/g, "/").toLowerCase() : searchDir;
+        process.platform === "win32"
+          ? lowercasePreservingWhitespace(searchDir.replace(/\\/g, "/"))
+          : searchDir;
       if (seen.has(key)) {
         continue;
       }

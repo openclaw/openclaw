@@ -3,39 +3,16 @@ import { normalizeXaiModelId } from "../model-id.js";
 import {
   buildXaiResponsesToolBody,
   extractXaiWebSearchContent,
-  resolveXaiResponseTextAndCitations,
+  resolveXaiResponseTextCitationsAndInline,
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
+import { isRecord } from "./tool-config-shared.js";
+import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
+export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 export const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
-
-export type XaiWebSearchResponse = {
-  output?: Array<{
-    type?: string;
-    text?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-      annotations?: Array<{
-        type?: string;
-        url?: string;
-      }>;
-    }>;
-    annotations?: Array<{
-      type?: string;
-      url?: string;
-    }>;
-  }>;
-  output_text?: string;
-  citations?: string[];
-  inline_citations?: Array<{
-    start_index: number;
-    end_index: number;
-    url: string;
-  }>;
-};
 
 type XaiWebSearchConfig = Record<string, unknown> & {
   model?: unknown;
@@ -74,14 +51,10 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 export function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): XaiWebSearchConfig {
-  return (asRecord(searchConfig?.grok) as XaiWebSearchConfig | undefined) ?? {};
+  return (
+    (isRecord(searchConfig?.grok) ? (searchConfig.grok as XaiWebSearchConfig) : undefined) ?? {}
+  );
 }
 
 export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>): string {
@@ -116,15 +89,7 @@ export async function requestXaiWebSearch(params: {
     },
     async (response) => {
       const data = (await response.json()) as XaiWebSearchResponse;
-      const { content, citations } = resolveXaiResponseTextAndCitations(data);
-      return {
-        content,
-        citations,
-        inlineCitations:
-          params.inlineCitations && Array.isArray(data.inline_citations)
-            ? data.inline_citations
-            : undefined,
-      };
+      return resolveXaiResponseTextCitationsAndInline(data, params.inlineCitations);
     },
   );
 }

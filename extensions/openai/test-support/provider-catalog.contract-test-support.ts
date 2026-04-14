@@ -34,6 +34,7 @@ vi.mock("../../../src/plugins/providers.js", () => ({
 }));
 
 vi.mock("../../../src/plugins/providers.runtime.js", () => ({
+  isPluginProvidersLoadInFlight: () => false,
   resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
 }));
 
