@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import {
   LEGACY_DAEMON_CLI_EXPORTS,
   resolveLegacyDaemonCliAccessors,
+  resolveLegacyDaemonCliRegisterAccessor,
+  resolveLegacyDaemonCliRunnerAccessors,
 } from "../src/cli/daemon-cli-compat.ts";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,12 +23,27 @@ const findCandidates = () =>
     return entry.endsWith(".js") || entry.endsWith(".mjs");
   });
 
+const findRunnerCandidates = () =>
+  fs.readdirSync(distDir).filter((entry) => {
+    const isRunnerBundle =
+      entry === "runners.js" || entry === "runners.mjs" || entry.startsWith("runners-");
+    if (!isRunnerBundle) {
+      return false;
+    }
+    return entry.endsWith(".js") || entry.endsWith(".mjs");
+  });
+
 // In rare cases, build output can land slightly after this script starts (depending on FS timing).
 // Retry briefly to avoid flaky builds.
 let candidates = findCandidates();
 for (let i = 0; i < 10 && candidates.length === 0; i++) {
   await new Promise((resolve) => setTimeout(resolve, 50));
   candidates = findCandidates();
+}
+let runnerCandidates = findRunnerCandidates();
+for (let i = 0; i < 10 && runnerCandidates.length === 0; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  runnerCandidates = findRunnerCandidates();
 }
 
 if (candidates.length === 0) {
@@ -41,22 +58,68 @@ const resolved = orderedCandidates
     return { entry, accessors };
   })
   .find((entry) => Boolean(entry.accessors));
+const orderedRunnerCandidates = runnerCandidates.toSorted();
 
-if (!resolved?.accessors) {
-  throw new Error(
-    `Could not resolve daemon-cli export aliases from dist bundles: ${orderedCandidates.join(", ")}`,
-  );
+let daemonTarget: string;
+let runnerTarget: string | null;
+let accessors: Partial<Record<(typeof LEGACY_DAEMON_CLI_EXPORTS)[number], string>>;
+let accessorSources: Partial<
+  Record<(typeof LEGACY_DAEMON_CLI_EXPORTS)[number], "daemonCli" | "daemonCliRunners">
+>;
+
+if (resolved?.accessors) {
+  daemonTarget = resolved.entry;
+  runnerTarget = null;
+  accessors = resolved.accessors;
+  accessorSources = Object.fromEntries(
+    Object.keys(resolved.accessors).map((key) => [key, "daemonCli"]),
+  ) as typeof accessorSources;
+} else {
+  const registerResolved = orderedCandidates
+    .map((entry) => {
+      const source = fs.readFileSync(path.join(distDir, entry), "utf8");
+      const accessor = resolveLegacyDaemonCliRegisterAccessor(source);
+      return { entry, accessor };
+    })
+    .find((entry) => Boolean(entry.accessor));
+  const runnerResolved = orderedRunnerCandidates
+    .map((entry) => {
+      const source = fs.readFileSync(path.join(distDir, entry), "utf8");
+      const accessor = resolveLegacyDaemonCliRunnerAccessors(source);
+      return { entry, accessor };
+    })
+    .find((entry) => Boolean(entry.accessor));
+
+  if (!registerResolved?.accessor || !runnerResolved?.accessor) {
+    throw new Error(
+      `Could not resolve daemon-cli export aliases from dist bundles: ${orderedCandidates.join(", ")} | runners: ${orderedRunnerCandidates.join(", ")}`,
+    );
+  }
+
+  daemonTarget = registerResolved.entry;
+  runnerTarget = runnerResolved.entry;
+  accessors = {
+    registerDaemonCli: registerResolved.accessor,
+    ...runnerResolved.accessor,
+  };
+  accessorSources = {
+    registerDaemonCli: "daemonCli",
+    runDaemonInstall: runnerResolved.accessor.runDaemonInstall ? "daemonCliRunners" : undefined,
+    runDaemonRestart: "daemonCliRunners",
+    runDaemonStart: runnerResolved.accessor.runDaemonStart ? "daemonCliRunners" : undefined,
+    runDaemonStatus: runnerResolved.accessor.runDaemonStatus ? "daemonCliRunners" : undefined,
+    runDaemonStop: runnerResolved.accessor.runDaemonStop ? "daemonCliRunners" : undefined,
+    runDaemonUninstall: runnerResolved.accessor.runDaemonUninstall ? "daemonCliRunners" : undefined,
+  };
 }
 
-const target = resolved.entry;
-const relPath = `../${target}`;
-const { accessors } = resolved;
 const missingExportError = (name: string) =>
   `Legacy daemon CLI export "${name}" is unavailable in this build. Please upgrade OpenClaw.`;
 const buildExportLine = (name: (typeof LEGACY_DAEMON_CLI_EXPORTS)[number]) => {
   const accessor = accessors[name];
   if (accessor) {
-    return `export const ${name} = daemonCli.${accessor};`;
+    const sourceBinding = accessorSources[name] ?? "daemonCli";
+    return `export const ${name} = ${sourceBinding}.${accessor};`;
   }
   if (name === "registerDaemonCli") {
     return `export const ${name} = () => { throw new Error(${JSON.stringify(missingExportError(name))}); };`;
@@ -66,7 +129,10 @@ const buildExportLine = (name: (typeof LEGACY_DAEMON_CLI_EXPORTS)[number]) => {
 
 const contents =
   "// Legacy shim for pre-tsdown update-cli imports.\n" +
-  `import * as daemonCli from "${relPath}";\n` +
+  `import * as daemonCli from "../${daemonTarget}";\n` +
+  (runnerTarget && runnerTarget !== daemonTarget
+    ? `import * as daemonCliRunners from "../${runnerTarget}";\n`
+    : "") +
   LEGACY_DAEMON_CLI_EXPORTS.map(buildExportLine).join("\n") +
   "\n";
 

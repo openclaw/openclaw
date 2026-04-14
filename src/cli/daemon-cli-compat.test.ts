@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveLegacyDaemonCliAccessors } from "./daemon-cli-compat.js";
+import {
+  resolveLegacyDaemonCliAccessors,
+  resolveLegacyDaemonCliRegisterAccessor,
+  resolveLegacyDaemonCliRunnerAccessors,
+} from "./daemon-cli-compat.js";
 
 describe("resolveLegacyDaemonCliAccessors", () => {
   it("resolves aliased daemon-cli exports from a bundled chunk", () => {
@@ -38,5 +42,25 @@ describe("resolveLegacyDaemonCliAccessors", () => {
     `;
 
     expect(resolveLegacyDaemonCliAccessors(bundle)).toBeNull();
+  });
+
+  it("resolves split register and runner bundles", () => {
+    const daemonBundle = `
+      var daemon_cli_exports = /* @__PURE__ */ __exportAll({ registerDaemonCli: () => registerDaemonCli });
+      export { addGatewayServiceCommands as n, daemon_cli_exports as t };
+    `;
+    const runnerBundle = `
+      export { runDaemonInstall as a, runDaemonUninstall as i, runDaemonStart as n, runDaemonStop as r, runDaemonRestart as t, runDaemonStatus as u };
+    `;
+
+    expect(resolveLegacyDaemonCliRegisterAccessor(daemonBundle)).toBe("t.registerDaemonCli");
+    expect(resolveLegacyDaemonCliRunnerAccessors(runnerBundle)).toEqual({
+      runDaemonInstall: "a",
+      runDaemonRestart: "t",
+      runDaemonStart: "n",
+      runDaemonStatus: "u",
+      runDaemonStop: "r",
+      runDaemonUninstall: "i",
+    });
   });
 });
