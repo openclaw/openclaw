@@ -17,15 +17,14 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import { CODEX_CLI_PROFILE_ID, readOpenAICodexCliOAuthProfile } from "./openai-codex-cli-auth.js";
-import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
+  buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
   cloneFirstTemplateModel,
   findCatalogTemplate,
@@ -33,10 +32,6 @@ import {
   isOpenAICodexBaseUrl,
   matchesExactOrPrefix,
 } from "./shared.js";
-import {
-  resolveOpenAITransportTurnState,
-  resolveOpenAIWebSocketSessionPolicy,
-} from "./transport-policy.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -100,8 +95,6 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
-const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
-
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
   const lowerModelId = normalizeLowercaseStringOrEmpty(model.id);
   const canonicalModelId =
@@ -335,20 +328,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       const id = ctx.modelId.trim().toLowerCase();
       return id === OPENAI_CODEX_GPT_54_MODEL_ID || id === OPENAI_CODEX_GPT_54_PRO_MODEL_ID;
     },
-    buildReplayPolicy: buildOpenAIReplayPolicy,
-    prepareExtraParams: (ctx) => {
-      const transport = ctx.extraParams?.transport;
-      if (transport === "auto" || transport === "sse" || transport === "websocket") {
-        return ctx.extraParams;
-      }
-      return {
-        ...ctx.extraParams,
-        transport: "auto",
-      };
-    },
-    ...OPENAI_RESPONSES_STREAM_HOOKS,
-    resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
-    resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
+    ...buildOpenAIResponsesProviderHooks(),
     resolveReasoningOutputMode: () => "native",
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {

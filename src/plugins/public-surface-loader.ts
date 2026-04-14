@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
 import {
   buildPluginLoaderAliasMap,
@@ -28,8 +29,8 @@ const publicSurfaceLocations = new Map<
     boundaryRoot: string;
   } | null
 >();
-const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
-const sharedBundledPublicSurfaceJitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
+const sharedBundledPublicSurfaceJitiLoaders: PluginJitiLoaderCache = new Map();
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
@@ -95,7 +96,7 @@ function resolvePublicSurfaceLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+  const { tryNative } = resolvePluginLoaderJitiConfig({
     modulePath,
     argv1: process.argv[1],
     moduleUrl: import.meta.url,
@@ -105,15 +106,13 @@ function getJiti(modulePath: string) {
   if (sharedLoader) {
     return sharedLoader;
   }
-  const cached = jitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
+  const loader = getCachedPluginJitiLoader({
+    cache: jitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    preferBuiltDist: true,
+    jitiFilename: import.meta.url,
   });
-  jitiLoaders.set(cacheKey, loader);
   return loader;
 }
 
@@ -130,10 +129,7 @@ function loadPublicSurfaceModule(modulePath: string): unknown {
   return getJiti(modulePath)(modulePath);
 }
 
-function getSharedBundledPublicSurfaceJiti(
-  modulePath: string,
-  tryNative: boolean,
-): ReturnType<typeof createJiti> | null {
+function getSharedBundledPublicSurfaceJiti(modulePath: string, tryNative: boolean) {
   const bundledPluginsDir = resolveBundledPluginsDir();
   if (
     !isBundledPluginExtensionPath({

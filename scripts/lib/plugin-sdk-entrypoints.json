@@ -221,6 +221,7 @@
   "provider-http",
   "provider-model-types",
   "provider-model-shared",
+  "opencode",
   "volc-model-catalog-shared",
   "provider-onboard",
   "provider-stream-family",

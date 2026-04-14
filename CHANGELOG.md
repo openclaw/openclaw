@@ -12,6 +12,8 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Video generation/live tests: bound provider polling for live video smoke, default to the fast non-FAL text-to-video path, and use a one-second lobster prompt so release validation no longer waits indefinitely on slow provider queues.
+- Memory-core/QMD `memory_get`: reject reads of arbitrary workspace markdown paths and only allow canonical memory files (`MEMORY.md`, `memory.md`, `DREAMS.md`, `dreams.md`, `memory/**`) plus exact paths of active indexed QMD workspace documents, so the QMD memory backend can no longer be used as a generic workspace-file read shim that bypasses `read` tool-policy denials. (#66026) Thanks @eleqtrizit.
+- Cron/agents: forward embedded-run tool policy and internal event params into the attempt layer so `--tools` allowlists, cron-owned message-tool suppression, explicit message targeting, and command-path internal events all take effect at runtime again. (#62675) Thanks @hexsprite.
 
 ## 2026.4.14
 
@@ -89,6 +91,7 @@ Docs: https://docs.openclaw.ai
 - Hooks/session-memory: pass the resolved agent workspace into gateway `/new` and `/reset` session-memory hooks so reset snapshots stay scoped to the right agent workspace instead of leaking into the default workspace. (#64735) Thanks @suboss87 and @vincentkoc.
 - CLI/approvals: raise the default `openclaw approvals get` gateway timeout and report config-load timeouts explicitly, so slow hosts stop showing a misleading `Config unavailable.` note when the approvals snapshot succeeds but the follow-up config RPC needs more time. (#66239) Thanks @neeravmakwana.
 - Media/store: honor configured agent media limits when saving generated media and persisting outbound reply media, so the store no longer hard-stops those flows at 5 MB before the configured limit applies. (#66229) Thanks @neeravmakwana and @vincentkoc.
+- Plugins/setup-entry: preserve separate setup-entry secrets exports when loading bundled setup-runtime channels, so setup-mode flows keep the channel secret contract for split plugin + secrets entrypoints. (#66261) Thanks @hxy91819.
 
 ## 2026.4.12
 

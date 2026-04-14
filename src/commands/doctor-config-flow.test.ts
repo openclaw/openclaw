@@ -3,7 +3,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
+import {
+  getDoctorConfigInputForTest,
+  runDoctorConfigWithInput,
+} from "./doctor-config-flow.test-utils.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -534,14 +537,19 @@ vi.mock("./doctor-config-preflight.js", async () => {
 
   return {
     runDoctorConfigPreflight: vi.fn(async () => {
-      const configPath = resolveConfigPath();
-      let parsed: Record<string, unknown> = {};
-      let exists = false;
-      try {
-        parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-        exists = true;
-      } catch {
-        parsed = {};
+      const injected = getDoctorConfigInputForTest();
+      const configPath = injected?.path ?? resolveConfigPath();
+      let parsed: Record<string, unknown> = injected?.config
+        ? structuredClone(injected.config)
+        : {};
+      let exists = injected?.exists ?? false;
+      if (!injected) {
+        try {
+          parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+          exists = true;
+        } catch {
+          parsed = {};
+        }
       }
       const legacyIssues = findLegacyConfigIssues(
         parsed,
