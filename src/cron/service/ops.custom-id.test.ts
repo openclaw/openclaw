@@ -19,7 +19,7 @@ describe("cron service custom job ID", () => {
       nowMs: () => now,
       enqueueSystemEvent: () => {},
       requestHeartbeatNow: () => {},
-      runIsolatedAgentJob: async () => ({ ok: true, ran: true }),
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
 
     const customId = "daily-brief";
@@ -30,6 +30,7 @@ describe("cron service custom job ID", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Generate daily brief" },
+      enabled: true,
     });
 
     expect(job.id).toBe(customId);
@@ -47,7 +48,7 @@ describe("cron service custom job ID", () => {
       nowMs: () => now,
       enqueueSystemEvent: () => {},
       requestHeartbeatNow: () => {},
-      runIsolatedAgentJob: async () => ({ ok: true, ran: true }),
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
 
     const job = await add(state, {
@@ -56,6 +57,7 @@ describe("cron service custom job ID", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Generate daily brief" },
+      enabled: true,
     });
 
     expect(job.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -73,7 +75,7 @@ describe("cron service custom job ID", () => {
       nowMs: () => now,
       enqueueSystemEvent: () => {},
       requestHeartbeatNow: () => {},
-      runIsolatedAgentJob: async () => ({ ok: true, ran: true }),
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
 
     const customId = "daily-brief";
@@ -86,6 +88,7 @@ describe("cron service custom job ID", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Generate daily brief" },
+      enabled: true,
     });
 
     // Try to create second job with same ID - should fail
@@ -97,6 +100,7 @@ describe("cron service custom job ID", () => {
         sessionTarget: "isolated",
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "Generate another brief" },
+        enabled: true,
       }),
     ).rejects.toThrow(`Job with id "${customId}" already exists`);
   });
@@ -112,7 +116,7 @@ describe("cron service custom job ID", () => {
       nowMs: () => now,
       enqueueSystemEvent: () => {},
       requestHeartbeatNow: () => {},
-      runIsolatedAgentJob: async () => ({ ok: true, ran: true }),
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
 
     const job1 = await add(state, {
@@ -122,6 +126,7 @@ describe("cron service custom job ID", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Generate daily brief" },
+      enabled: true,
     });
 
     const job2 = await add(state, {
@@ -131,6 +136,7 @@ describe("cron service custom job ID", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Generate weekly report" },
+      enabled: true,
     });
 
     expect(job1.id).toBe("daily-brief");
@@ -153,7 +159,7 @@ describe("cron service custom job ID", () => {
       nowMs: () => now,
       enqueueSystemEvent: () => {},
       requestHeartbeatNow: () => {},
-      runIsolatedAgentJob: async () => ({ ok: true, ran: true }),
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
 
     const validIds = [
@@ -171,6 +177,7 @@ describe("cron service custom job ID", () => {
         sessionTarget: "isolated",
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "Test" },
+        enabled: true,
       });
 
       expect(job.id).toBe(id);
