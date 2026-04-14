@@ -2,6 +2,18 @@
 
 Telegraph style. Root rules only. Read scoped `AGENTS.md` before touching a subtree.
 
+## QC / Collaboration
+
+- Repo-specific QC overlay: this file.
+- Shared QC authority: `../Shared Repo Resources/docs/jobapp/*` and the corresponding shared scripts in `../Shared Repo Resources/scripts/`.
+- Shared Codex handoff contract: `../Shared Repo Resources/docs/jobapp/codex-model-handoff-contract.md` and `../Shared Repo Resources/docs/jobapp/codex-model-handoff-contract.v1.json`.
+- Keep repo-local QC details here, but do not redefine shared gates, closeout contracts, or remaining-work rules.
+- Apply the canonical `Model for Codex:` final line only when a covered openclaw response newly issues a live ChatGPT-to-Codex execution handoff; do not emit it on summaries, quoted prompts, documentation examples, or Codex-to-ChatGPT follow-ups.
+- Before generating any Codex prompt, complete every direct repo action you can still perform yourself.
+- Any handoff prompt must reflect the updated repository state after your own actions are complete and must contain only remaining work.
+- Exclude already-completed work and anything ChatGPT could still perform directly.
+- If the remaining task is fully solvable directly, finish it yourself instead of drafting a prompt.
+
 ## Start
 
 - Repo: `https://github.com/openclaw/openclaw`

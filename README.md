@@ -129,6 +129,15 @@ Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run 
 
 Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models). Auth profile rotation + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover).
 
+## QC / Collaboration
+
+- Repo-specific QC overlay: [AGENTS.md](./AGENTS.md)
+- Shared QC authority: `../Shared Repo Resources/docs/jobapp/*` and the corresponding shared scripts in `../Shared Repo Resources/scripts/`
+- Shared Codex handoff contract: `../Shared Repo Resources/docs/jobapp/codex-model-handoff-contract.md`
+- Local validation gates: `pnpm test`, `pnpm build`, `pnpm tsgo`, and `pnpm check`
+- Release/closeout guidance: [docs/reference/RELEASING.md](./docs/reference/RELEASING.md)
+- If a covered openclaw response newly issues a live ChatGPT-to-Codex execution handoff, the final non-empty line must be the exact shared `Model for Codex:` line; otherwise that line must be absent.
+
 ## Security defaults (DM access)
 
 OpenClaw connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
