@@ -28,18 +28,31 @@ function listPackageRoots(): string[] {
 
 function listBundledExtensionPackageJsonPaths(): string[] {
   for (const packageRoot of listPackageRoots()) {
-    const extensionsRoot = path.join(packageRoot, "extensions");
-    if (!fs.existsSync(extensionsRoot)) {
-      continue;
-    }
-    try {
-      return fs
-        .readdirSync(extensionsRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.join(extensionsRoot, entry.name, "package.json"))
-        .filter((entry) => fs.existsSync(entry));
-    } catch {
-      continue;
+    // Match src/plugins/bundled-dir.ts candidate order. Published tarballs
+    // omit source extensions/ (only dist/ is packaged), so dist/extensions
+    // is the real source of bundled plugin metadata at runtime. dist-runtime
+    // covers locally staged runtime trees for parity with the plugin loader.
+    const candidates = [
+      path.join(packageRoot, "dist-runtime", "extensions"),
+      path.join(packageRoot, "dist", "extensions"),
+      path.join(packageRoot, "extensions"),
+    ];
+    for (const extensionsRoot of candidates) {
+      if (!fs.existsSync(extensionsRoot)) {
+        continue;
+      }
+      try {
+        const found = fs
+          .readdirSync(extensionsRoot, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => path.join(extensionsRoot, entry.name, "package.json"))
+          .filter((entry) => fs.existsSync(entry));
+        if (found.length > 0) {
+          return found;
+        }
+      } catch {
+        continue;
+      }
     }
   }
   return [];
