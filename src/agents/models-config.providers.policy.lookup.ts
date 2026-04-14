@@ -22,7 +22,8 @@ export function resolveProviderPluginLookupKey(
     return "google";
   }
   if (
-    provider?.models?.some((model) => normalizeOptionalString(model.api) === "google-generative-ai")
+    Array.isArray(provider?.models) &&
+    provider.models.some((model) => normalizeOptionalString(model.api) === "google-generative-ai")
   ) {
     return "google";
   }
