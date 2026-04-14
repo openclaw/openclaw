@@ -84,13 +84,19 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0) {
+
+  if (params.cfg === undefined && activeProviders.length > 0) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
+
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
   const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const registry = resolveRuntimePluginRegistry(loadOptions);
-  return (registry?.[params.key] ?? []).map(
-    (entry) => entry.provider,
-  ) as CapabilityProviderForKey<K>[];
+  const resolvedProviders = registry?.[params.key] ?? [];
+
+  if (resolvedProviders.length > 0) {
+    return resolvedProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  }
+
+  return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
 }

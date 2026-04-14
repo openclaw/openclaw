@@ -201,7 +201,7 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   });
 
-  it("keeps active capability providers even when cfg is passed", () => {
+  it("keeps active capability providers even when cfg is passed and the active registry is compatible", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({
       pluginId: "microsoft",
@@ -220,8 +220,16 @@ describe("resolvePluginCapabilityProviders", () => {
         }),
       },
     } as never);
+    const compatConfig = {
+      messages: { tts: { provider: "edge" } },
+      plugins: { entries: { microsoft: { enabled: true } } },
+    } as OpenClawConfig;
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(compatConfig);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(compatConfig);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
-      params === undefined ? active : createEmptyPluginRegistry(),
+      params === undefined || JSON.stringify(params) === JSON.stringify({ config: compatConfig })
+        ? active
+        : createEmptyPluginRegistry(),
     );
 
     const providers = resolvePluginCapabilityProviders({
@@ -231,9 +239,68 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
-    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalledWith({
-      config: expect.anything(),
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({ config: compatConfig });
+  });
+
+  it("prefers cfg-compatible capability resolution over a partial active registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "openai",
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    } as never);
+
+    const compatConfig = {
+      messages: { tts: { provider: "microsoft" } },
+      plugins: { entries: { microsoft: { enabled: true } } },
+    } as OpenClawConfig;
+    const compatRegistry = createEmptyPluginRegistry();
+    compatRegistry.speechProviders.push({
+      pluginId: "microsoft",
+      pluginName: "microsoft",
+      source: "test",
+      provider: {
+        id: "microsoft",
+        label: "microsoft",
+        aliases: ["edge"],
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    } as never);
+    setBundledCapabilityFixture("speechProviders");
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(compatConfig);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(compatConfig);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined
+        ? active
+        : JSON.stringify(params) === JSON.stringify({ config: compatConfig })
+          ? compatRegistry
+          : createEmptyPluginRegistry(),
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "speechProviders",
+      cfg: { messages: { tts: { provider: "microsoft" } } } as OpenClawConfig,
     });
+
+    expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({ config: compatConfig });
   });
 
   it.each([

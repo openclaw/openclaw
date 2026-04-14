@@ -126,6 +126,38 @@ describe("speech provider registry", () => {
     });
   });
 
+  it("uses cfg-compatible speech providers when the active registry is partial", () => {
+    resolveRuntimePluginRegistryMock.mockImplementation((params?: unknown) =>
+      params === undefined
+        ? {
+            ...createEmptyPluginRegistry(),
+            speechProviders: [
+              {
+                pluginId: "test-openai",
+                source: "test",
+                provider: createSpeechProvider("openai"),
+              },
+            ],
+          }
+        : {
+            ...createEmptyPluginRegistry(),
+            speechProviders: [
+              {
+                pluginId: "test-microsoft",
+                source: "test",
+                provider: createSpeechProvider("microsoft", ["edge"]),
+              },
+            ],
+          },
+    );
+
+    const cfg = { messages: { tts: { provider: "microsoft" } } } as OpenClawConfig;
+
+    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["microsoft"]);
+    expect(getSpeechProvider("microsoft", cfg)?.id).toBe("microsoft");
+    expect(getSpeechProvider("edge", cfg)?.id).toBe("microsoft");
+  });
+
   it("returns no providers when neither plugins nor active registry provide speech support", () => {
     expect(listSpeechProviders()).toEqual([]);
     expect(getSpeechProvider("demo-speech")).toBeUndefined();
