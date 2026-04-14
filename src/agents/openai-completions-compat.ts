@@ -61,12 +61,18 @@ export function resolveOpenAICompletionsCompatDefaults(
     (isDefaultRoute &&
       isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
   const isOpenRouterLike = input.provider === "openrouter" || endpointClass === "openrouter";
-  const usesMaxTokens =
-    endpointClass === "chutes-native" ||
-    endpointClass === "mistral-public" ||
-    knownProviderFamily === "mistral" ||
-    (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
   const isOllamaCompatProvider = provider === "ollama";
+  // max_completion_tokens is only supported by OpenAI-native and Azure OpenAI
+  // endpoints. All other providers (Ollama, vLLM, custom OpenAI-compat, etc.)
+  // should receive max_tokens instead, otherwise they reject the request with
+  // "unknown parameter" errors.
+  const usesMaxTokens =
+    isNonStandard ||
+    isOllamaCompatProvider ||
+    usesConfiguredNonOpenAIEndpoint ||
+    usesExplicitProxyLikeEndpoint ||
+    isMoonshotLike ||
+    knownProviderFamily === "mistral";
 
   return {
     supportsStore:
