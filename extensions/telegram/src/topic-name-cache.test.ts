@@ -63,10 +63,9 @@ describe("topic-name-cache", () => {
     expect(topicNameCacheSize()).toBe(0);
   });
 
-  it("updates timestamps on write", async () => {
+  it("updates timestamps on write", () => {
     updateTopicName(-100123, 42, { name: "A" });
     const t1 = getTopicEntry(-100123, 42)?.updatedAt ?? 0;
-    await new Promise((r) => setTimeout(r, 10));
     updateTopicName(-100123, 42, { name: "B" });
     const t2 = getTopicEntry(-100123, 42)?.updatedAt ?? 0;
     expect(t2).toBeGreaterThan(t1);
@@ -86,9 +85,8 @@ describe("topic-name-cache", () => {
     expect(getTopicName(-100000, 2048)).toBe("Topic 2048");
   });
 
-  it("refreshes recency on read so active topics survive eviction", async () => {
+  it("refreshes recency on read so active topics survive eviction", () => {
     updateTopicName(-100000, 1, { name: "Active" });
-    await new Promise((r) => setTimeout(r, 10));
     for (let i = 2; i <= 2048; i++) {
       updateTopicName(-100000, i, { name: `Topic ${i}` });
     }
