@@ -97,14 +97,10 @@ export function createWhatsAppOutboundBase({
         mediaLocalRoots,
         mediaReadFile,
         accountId,
-        deps,
+        deps: _deps,
         gifPlayback,
       }) => {
-        const send =
-          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp", {
-            legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
-          }) ?? sendMessageWhatsApp;
-        return await send(to, normalizeText(text), {
+        return await sendMessageWhatsApp(to, normalizeText(text), {
           verbose: false,
           cfg,
           mediaUrl,

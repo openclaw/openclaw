@@ -54,6 +54,45 @@ describe("createWhatsAppOutboundBase", () => {
     expect(result).toMatchObject({ channel: "whatsapp", messageId: "msg-1" });
   });
 
+  it("bypasses legacy outbound deps for media sends", async () => {
+    const sendMessageWhatsApp = vi.fn(async () => ({
+      messageId: "msg-runtime",
+      toJid: "15551234567@s.whatsapp.net",
+    }));
+    const legacySendWhatsApp = vi.fn(async () => ({
+      messageId: "msg-legacy",
+      toJid: "15551234567@s.whatsapp.net",
+    }));
+    const outbound = createWhatsAppOutboundBase({
+      chunker: (text) => [text],
+      sendMessageWhatsApp,
+      sendPollWhatsApp: vi.fn(),
+      shouldLogVerbose: () => false,
+      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
+    });
+
+    const result = await outbound.sendMedia!({
+      cfg: {} as never,
+      to: "whatsapp:+15551234567",
+      text: "photo",
+      mediaUrl: "/tmp/workspace/photo.png",
+      accountId: "default",
+      deps: { sendWhatsApp: legacySendWhatsApp },
+      gifPlayback: false,
+    });
+
+    expect(legacySendWhatsApp).not.toHaveBeenCalled();
+    expect(sendMessageWhatsApp).toHaveBeenCalledWith(
+      "whatsapp:+15551234567",
+      "photo",
+      expect.objectContaining({
+        mediaUrl: "/tmp/workspace/photo.png",
+        accountId: "default",
+      }),
+    );
+    expect(result).toMatchObject({ channel: "whatsapp", messageId: "msg-runtime" });
+  });
+
   it("threads cfg into sendPollWhatsApp call", async () => {
     const sendPollWhatsApp = vi.fn(async () => ({
       messageId: "wa-poll-1",
