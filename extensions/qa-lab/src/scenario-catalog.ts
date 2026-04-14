@@ -51,6 +51,10 @@ const qaScenarioExecutionSchema = z.object({
   config: qaScenarioConfigSchema.optional(),
 });
 
+const qaScenarioGatewayRuntimeSchema = z.object({
+  forwardHostHome: z.boolean().optional(),
+});
+
 const qaFlowCallActionSchema = z.object({
   call: z.string().trim().min(1),
   args: z.array(z.unknown()).optional(),
@@ -135,6 +139,9 @@ const qaSeedScenarioSchema = z.object({
   surface: z.string().trim().min(1),
   objective: z.string().trim().min(1),
   successCriteria: z.array(z.string().trim().min(1)).min(1),
+  plugins: z.array(z.string().trim().min(1)).optional(),
+  gatewayConfigPatch: z.record(z.string(), z.unknown()).optional(),
+  gatewayRuntime: qaScenarioGatewayRuntimeSchema.optional(),
   docsRefs: z.array(z.string().trim().min(1)).optional(),
   codeRefs: z.array(z.string().trim().min(1)).optional(),
   execution: qaScenarioExecutionSchema.optional(),
@@ -278,7 +285,15 @@ export function readQaScenarioPackMarkdown(): string {
 export function readQaScenarioPack(): QaScenarioPack {
   const packMarkdown = readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim();
   if (!packMarkdown) {
-    throw new Error(`qa scenario pack not found: ${QA_SCENARIO_PACK_INDEX_PATH}`);
+    // The QA scenario pack is optional in npm distributions.  Return an empty
+    // pack so completion cache updates and other consumers don't crash when
+    // the qa/scenarios/ directory is not shipped with the package.
+    return {
+      version: 1,
+      agent: { identityMarkdown: DEFAULT_QA_AGENT_IDENTITY_MARKDOWN },
+      kickoffTask: "QA scenarios not available in this distribution.",
+      scenarios: [],
+    };
   }
   const parsedPack = parseQaYamlWithContext(
     qaScenarioPackSchema,
@@ -335,7 +350,7 @@ export function readQaBootstrapScenarioCatalog(): QaBootstrapScenarioCatalog {
   };
 }
 
-export function readQaScenarioById(id: string): QaSeedScenario {
+export function readQaScenarioById(id: string): QaSeedScenarioWithSource {
   const scenario = readQaScenarioPack().scenarios.find((candidate) => candidate.id === id);
   if (!scenario) {
     throw new Error(`unknown qa scenario: ${id}`);
@@ -344,7 +359,7 @@ export function readQaScenarioById(id: string): QaSeedScenario {
 }
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
-  return readQaScenarioById(id).execution?.config;
+  return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
 }
 
 export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {

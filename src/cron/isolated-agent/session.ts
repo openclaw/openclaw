@@ -4,8 +4,8 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
-} from "../../config/sessions/reset.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
+} from "../../config/sessions/reset-policy.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -83,6 +83,7 @@ export function resolveCronSession(params: {
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      sessionFile: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };
