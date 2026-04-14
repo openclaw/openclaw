@@ -332,8 +332,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     const isSameSession = isSameSessionKey(evt.sessionKey, state.currentSessionKey);
     if (!sessionRuns.has(evt.runId) && !finalizedRuns.has(evt.runId) && isSameSession) {
       noteSessionRun(evt.runId);
-      if (!state.activeChatRunId) {
+      if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
         state.activeChatRunId = evt.runId;
+        if (state.pendingOptimisticUserMessage) {
+          noteLocalRunId?.(evt.runId);
+          state.pendingOptimisticUserMessage = false;
+        }
       }
     }
     const isActiveRun = evt.runId === state.activeChatRunId;
