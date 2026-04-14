@@ -10,13 +10,13 @@ import {
   type PluginJitiLoaderFactory,
 } from "../plugins/jiti-loader-cache.js";
 import {
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
   resolveBundledPluginPublicSurfacePath,
 } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 
 const nodeRequire = createRequire(import.meta.url);
 const jitiLoaders: PluginJitiLoaderCache = new Map();

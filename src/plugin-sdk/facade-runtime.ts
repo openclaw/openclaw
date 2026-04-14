@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
   resolveBundledPluginPublicSurfacePath,
 } from "../plugins/public-surface-runtime.js";
@@ -27,7 +28,6 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
 const cachedFacadeModuleLocationsByKey = new Map<
   string,

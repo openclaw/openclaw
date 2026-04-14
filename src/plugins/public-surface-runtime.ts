@@ -2,7 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
+export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
+  ".ts",
+  ".mts",
+  ".js",
+  ".mjs",
+  ".cts",
+  ".cjs",
+] as const;
 
 export function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
   if (

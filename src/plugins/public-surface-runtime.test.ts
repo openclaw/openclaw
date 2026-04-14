@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { normalizeBundledPluginArtifactSubpath } from "./public-surface-runtime.js";
+import {
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+  normalizeBundledPluginArtifactSubpath,
+} from "./public-surface-runtime.js";
 
 describe("bundled plugin public surface runtime", () => {
+  it("exports the canonical public surface source extension list", () => {
+    expect(PUBLIC_SURFACE_SOURCE_EXTENSIONS).toEqual([
+      ".ts",
+      ".mts",
+      ".js",
+      ".mjs",
+      ".cts",
+      ".cjs",
+    ]);
+  });
+
   it("allows plugin-local nested artifact paths", () => {
     expect(normalizeBundledPluginArtifactSubpath("src/outbound-adapter.js")).toBe(
       "src/outbound-adapter.js",
