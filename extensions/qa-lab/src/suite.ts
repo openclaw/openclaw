@@ -40,7 +40,6 @@ import type {
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import {
-  defaultQaModelForMode,
   isQaFastModeEnabled,
   normalizeQaProviderMode,
   type QaProviderMode,
@@ -63,12 +62,13 @@ import {
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
+import { defaultQaModelForMode } from "./run-config.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
 import {
-  closeAllQaWebSessions,
+  closeQaWebSessions,
   qaWebEvaluate,
   qaWebOpenPage,
   qaWebSnapshot,
@@ -98,6 +98,7 @@ type QaSuiteEnvironment = {
   providerMode: "mock-openai" | "live-frontier";
   primaryModel: string;
   alternateModel: string;
+  webSessionIds: Set<string>;
 };
 
 export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
@@ -338,6 +339,12 @@ function collectQaSuiteGatewayRuntimeOptions(
     }
   }
   return forwardHostHome ? { forwardHostHome: true } : undefined;
+}
+
+function scenarioRequiresControlUi(
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+) {
+  return normalizeLowercaseStringOrEmpty(scenario.surface) === "control-ui";
 }
 
 function liveTurnTimeoutMs(env: QaSuiteEnvironment, fallbackMs: number) {
@@ -1268,7 +1275,11 @@ function createScenarioFlowApi(
       browserOpenTab: qaBrowserOpenTab,
       browserSnapshot: qaBrowserSnapshot,
       browserAct: qaBrowserAct,
-      webOpenPage: qaWebOpenPage,
+      webOpenPage: async (params: Parameters<typeof qaWebOpenPage>[0]) => {
+        const opened = await qaWebOpenPage(params);
+        env.webSessionIds.add(opened.pageId);
+        return opened;
+      },
       webWait: qaWebWait,
       webType: qaWebType,
       webSnapshot: qaWebSnapshot,
@@ -1330,6 +1341,7 @@ export const qaSuiteTesting = {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
   scenarioMatchesLiveLane,
+  scenarioRequiresControlUi,
   selectQaSuiteScenarios,
   readTransportTranscript,
   formatTransportTranscript,
@@ -1495,8 +1507,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   const providerMode = normalizeQaProviderMode(params?.providerMode ?? "live-frontier");
   const transportId = normalizeQaTransportId(params?.transportId);
   const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel =
-    params?.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
   const fastMode =
     typeof params?.fastMode === "boolean"
       ? params.fastMode
@@ -1576,10 +1587,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               scenarioIds: [scenario.id],
               concurrency: 1,
               startLab,
-              // Isolated workers do not need their own Control UI proxy. The
-              // outer lab already owns the watch surface, so skip per-worker
-              // Control UI asset resolution and startup overhead.
-              controlUiEnabled: false,
+              // Most isolated workers do not need their own Control UI proxy.
+              // Control UI scenarios do, because they open the worker's
+              // gateway-backed app directly.
+              controlUiEnabled: scenarioRequiresControlUi(scenario),
             });
             const scenarioResult: QaSuiteScenarioResult =
               result.scenarios[0] ??
@@ -1741,6 +1752,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     providerMode,
     primaryModel,
     alternateModel,
+    webSessionIds: new Set(),
   };
 
   let preserveGatewayRuntimeDir: string | undefined;
@@ -1850,7 +1862,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     throw error;
   } finally {
-    await closeAllQaWebSessions();
+    await closeQaWebSessions(env.webSessionIds);
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
     await gateway.stop({
       keepTemp,

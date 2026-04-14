@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
@@ -13,6 +14,7 @@ type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type ResolvePluginProvidersRuntime =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
@@ -26,7 +28,7 @@ const resolvePluginProvidersRuntime = vi.hoisted(() =>
 );
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
-const promptDefaultModel = vi.hoisted(() => vi.fn(async () => ({ config: null, model: null })));
+const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
 const configureGatewayForSetup = vi.hoisted(() =>
   vi.fn(async (args) => ({
@@ -77,6 +79,18 @@ const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+
+function providerPluginStub(
+  overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
+): ProviderPlugin {
+  const { id, ...rest } = overrides;
+  return {
+    id,
+    label: id || "provider",
+    auth: [],
+    ...rest,
+  };
+}
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
@@ -127,6 +141,10 @@ vi.mock("../commands/onboard-skills.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore,
+}));
+
+vi.mock("../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore,
 }));
 
@@ -273,6 +291,68 @@ describe("runSetupWizard", () => {
     return dir;
   }
 
+  it("does not crash when preferred-provider lookup sees a provider without an id", async () => {
+    setupChannels.mockClear();
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    resolvePreferredProviderForAuthChoice.mockResolvedValueOnce("demo-provider");
+    resolvePluginProvidersRuntime.mockReturnValueOnce([
+      providerPluginStub({ id: "" }),
+      providerPluginStub({ id: "demo-provider", wizard: { setup: {} } }),
+    ]);
+
+    const caseDir = await makeCaseDir("provider-missing-id-");
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
+      if (message === "Select setup mode") {
+        return "quickstart";
+      }
+      if (message === "Select channel (QuickStart)") {
+        return "__skip__";
+      }
+      if (message === "How do you want to hatch your bot?") {
+        return "skip";
+      }
+      return "skip";
+    }) as unknown as WizardPrompter["select"];
+    const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
+    const prompter = buildWizardPrompter({ select, confirm });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "ollama",
+          installDaemon: false,
+          skipProviders: false,
+          skipSkills: true,
+          skipSearch: true,
+          skipChannels: false,
+          skipUi: true,
+          workspace: caseDir,
+        },
+        runtime,
+        prompter,
+      ),
+    ).resolves.toBeUndefined();
+    expect(resolvePreferredProviderForAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({ choice: "ollama" }),
+    );
+    expect(resolvePluginProvidersRuntime).toHaveBeenCalled();
+    setupChannels.mockClear();
+  });
+
   it("exits when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
@@ -322,6 +402,7 @@ describe("runSetupWizard", () => {
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
     const prompter = buildWizardPrompter({ select, multiselect });
     const runtime = createRuntime({ throwsOnExit: true });
+    ensureAuthProfileStore.mockClear();
 
     await runSetupWizard(
       {
@@ -340,6 +421,7 @@ describe("runSetupWizard", () => {
     );
 
     expect(select).not.toHaveBeenCalled();
+    expect(ensureAuthProfileStore).not.toHaveBeenCalled();
     expect(setupChannels).not.toHaveBeenCalled();
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();

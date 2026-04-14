@@ -588,6 +588,33 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("maps minimal shared reasoning to low for OpenAI Responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "minimal",
+      } as never,
+    ) as { reasoning?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
   it.each([
     {
       label: "openai",
@@ -1061,6 +1088,33 @@ describe("openai transport stream", () => {
     expect(params.reasoning_effort).toBe("medium");
   });
 
+  it("maps minimal shared reasoning to low for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "minimal",
+      } as never,
+    ) as { reasoning_effort?: unknown };
+
+    expect(params.reasoning_effort).toBe("low");
+  });
+
   it("defaults OpenAI completions reasoning effort to high when unset", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1127,6 +1181,33 @@ describe("openai transport stream", () => {
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
+    expect(params.stream_options).toMatchObject({ include_usage: true });
+  });
+
+  it("enables streaming usage compat for Ollama OpenAI-compat endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen2.5:7b",
+        name: "Qwen 2.5 7B",
+        api: "openai-completions",
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
         maxTokens: 8192,
       } satisfies Model<"openai-completions">,
       {

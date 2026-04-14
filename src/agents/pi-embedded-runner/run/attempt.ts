@@ -111,6 +111,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
+import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
@@ -160,7 +161,10 @@ import {
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
-import { installToolResultContextGuard } from "../tool-result-context-guard.js";
+import {
+  installContextEngineLoopHook,
+  installToolResultContextGuard,
+} from "../tool-result-context-guard.js";
 import { truncateOversizedToolResultsInSessionManager } from "../tool-result-truncation.js";
 import {
   logProviderToolSchemaDiagnostics,
@@ -279,6 +283,16 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
+export function resolveUnknownToolGuardThreshold(loopDetection?: {
+  enabled?: boolean;
+  unknownToolThreshold?: number;
+}): number | undefined {
+  if (loopDetection?.enabled !== true) {
+    return undefined;
+  }
+  return loopDetection.unknownToolThreshold ?? UNKNOWN_TOOL_THRESHOLD;
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -350,7 +364,7 @@ export async function runEmbeddedAttempt(
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
   ensureGlobalUndiciEnvProxyDispatcher();
-  ensureGlobalUndiciStreamTimeouts();
+  ensureGlobalUndiciStreamTimeouts({ timeoutMs: params.timeoutMs });
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
@@ -899,6 +913,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        contextTokenBudget: params.contextTokenBudget,
       });
       applyPiAutoCompactionGuard({
         settingsManager,
@@ -977,21 +992,35 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      let prePromptMessageCount = activeSession.messages.length;
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
-      removeToolResultContextGuard = installToolResultContextGuard({
-        agent: activeSession.agent,
-        contextWindowTokens: Math.max(
-          1,
-          Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+      if (params.contextEngine?.info?.ownsCompaction !== true) {
+        removeToolResultContextGuard = installToolResultContextGuard({
+          agent: activeSession.agent,
+          contextWindowTokens: Math.max(
+            1,
+            Math.floor(
+              params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            ),
           ),
-        ),
-      });
+        });
+      } else {
+        removeToolResultContextGuard = installContextEngineLoopHook({
+          agent: activeSession.agent,
+          contextEngine: params.contextEngine,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          tokenBudget: params.contextTokenBudget,
+          modelId: params.modelId,
+          getPrePromptMessageCount: () => prePromptMessageCount,
+        });
+      }
       const cacheTrace = createCacheTrace({
         cfg: params.config,
         env: process.env,
@@ -1236,6 +1265,9 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
         allowedToolNames,
+        {
+          unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+        },
       );
 
       if (
@@ -1534,6 +1566,7 @@ export async function runEmbeddedAttempt(
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
+      let finalPromptText: string | undefined;
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
@@ -1632,7 +1665,6 @@ export async function runEmbeddedAttempt(
       let promptError: unknown = null;
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
       let promptErrorSource: "prompt" | "compaction" | "precheck" | null = null;
-      let prePromptMessageCount = activeSession.messages.length;
       let skipPromptSubmission = false;
       try {
         const promptStartedAt = Date.now();
@@ -1885,13 +1917,24 @@ export async function runEmbeddedAttempt(
 
           const reserveTokens = settingsManager.getCompactionReserveTokens();
           const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
-          const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
-            messages: activeSession.messages,
-            systemPrompt: systemPromptText,
-            prompt: effectivePrompt,
-            contextTokenBudget,
-            reserveTokens,
-          });
+          const preemptiveCompaction =
+            params.contextEngine?.info?.ownsCompaction === true
+              ? {
+                  route: "fits" as const,
+                  shouldCompact: false,
+                  estimatedPromptTokens: 0,
+                  promptBudgetBeforeReserve: 0,
+                  overflowTokens: 0,
+                  toolResultReducibleChars: 0,
+                  effectiveReserveTokens: reserveTokens,
+                }
+              : shouldPreemptivelyCompactBeforePrompt({
+                  messages: activeSession.messages,
+                  systemPrompt: systemPromptText,
+                  prompt: effectivePrompt,
+                  contextTokenBudget,
+                  reserveTokens,
+                });
           if (preemptiveCompaction.route === "truncate_tool_results_only") {
             const truncationResult = truncateOversizedToolResultsInSessionManager({
               sessionManager,
@@ -1954,6 +1997,7 @@ export async function runEmbeddedAttempt(
           }
 
           if (!skipPromptSubmission) {
+            finalPromptText = effectivePrompt;
             const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
@@ -2374,6 +2418,7 @@ export async function runEmbeddedAttempt(
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
+        finalPromptText,
         messagesSnapshot,
         assistantTexts,
         toolMetas: toolMetasNormalized,

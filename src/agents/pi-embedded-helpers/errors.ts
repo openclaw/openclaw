@@ -668,6 +668,10 @@ function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): bool
   );
 }
 
+function isExactUnknownNoDetailsError(raw: string): boolean {
+  return normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)";
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -736,6 +740,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return toReasonClassification("format");
+  }
+  if (isExactUnknownNoDetailsError(raw)) {
+    return toReasonClassification("unknown");
   }
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");

@@ -74,8 +74,10 @@ OpenClaw has three public release lanes:
   - real npm publish must pass a successful npm `preflight_run_id`
   - stable npm releases default to `beta`
   - stable npm publish can target `latest` explicitly via workflow input
-  - stable npm promotion from `beta` to `latest` is still available as an explicit manual mode on the trusted `OpenClaw NPM Release` workflow
-  - that promotion mode still needs a valid `NPM_TOKEN` in the `npm-release` environment because npm `dist-tag` management is separate from trusted publishing
+  - token-based npm dist-tag mutation now lives in
+    `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
+    for security, because `npm dist-tag add` still needs `NPM_TOKEN` while the
+    public repo keeps OIDC-only publish
   - public `macOS Release` is validation-only
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
@@ -88,6 +90,9 @@ OpenClaw has three public release lanes:
 - npm release preflight fails closed unless the tarball includes both
   `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
   so we do not ship an empty browser dashboard again
+- `pnpm test:install:smoke` also enforces the npm pack `unpackedSize` budget on
+  the candidate update tarball, so installer e2e catches accidental pack bloat
+  before the release publish path
 - If the release work touched CI planning, extension timing manifests, or
   extension test matrices, regenerate and review the planner-owned
   `checks-node-extensions` workflow matrix outputs from `.github/workflows/ci.yml`
@@ -111,8 +116,6 @@ OpenClaw has three public release lanes:
 - `preflight_run_id`: required on the real publish path so the workflow reuses
   the prepared tarball from the successful preflight run
 - `npm_dist_tag`: npm target tag for the publish path; defaults to `beta`
-- `promote_beta_to_latest`: `true` to skip publish and move an already-published
-  stable `beta` build onto `latest`
 
 `OpenClaw Release Checks` accepts these operator-controlled inputs:
 
@@ -127,10 +130,6 @@ Rules:
 - Release checks commit-SHA mode also requires the current `origin/main` HEAD
 - The real publish path must use the same `npm_dist_tag` used during preflight;
   the workflow verifies that metadata before publish continues
-- Promotion mode must use a stable or correction tag, `preflight_only=false`,
-  an empty `preflight_run_id`, and `npm_dist_tag=beta`
-- Promotion mode also requires a valid `NPM_TOKEN` in the `npm-release`
-  environment because `npm dist-tag add` still needs regular npm auth
 
 ## Stable npm release sequence
 
@@ -148,13 +147,16 @@ When cutting a stable npm release:
 4. Save the successful `preflight_run_id`
 5. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
    `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
-6. If the release landed on `beta`, run `OpenClaw NPM Release` later with the
-   same stable `tag`, `promote_beta_to_latest=true`, `preflight_only=false`,
-   `preflight_run_id` empty, and `npm_dist_tag=beta` when you want to move that
-   published build to `latest`
+6. If the release landed on `beta`, use the private
+   `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
+   workflow to promote that stable version from `beta` to `latest`
+7. If the release intentionally published directly to `latest` and `beta`
+   should follow the same stable build immediately, use that same private
+   workflow to point both dist-tags at the stable version, or let its scheduled
+   self-healing sync move `beta` later
 
-The promotion mode still requires the `npm-release` environment approval and a
-valid `NPM_TOKEN` in that environment.
+The dist-tag mutation lives in the private repo for security because it still
+requires `NPM_TOKEN`, while the public repo keeps OIDC-only publish.
 
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.

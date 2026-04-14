@@ -12,16 +12,23 @@ import {
 } from "./lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import {
+  collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectBundledPluginRuntimeDependencySpecs,
   collectRootDistBundledRuntimeMirrors,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
+import {
+  runInstalledWorkspaceBootstrapSmoke,
+  WORKSPACE_TEMPLATE_PACK_PATHS,
+} from "./lib/workspace-bootstrap-smoke.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 export {
+  collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectRootDistBundledRuntimeMirrors,
   packageNameFromSpecifier,
@@ -36,6 +43,7 @@ const requiredPathGroups = [
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs(),
+  ...WORKSPACE_TEMPLATE_PACK_PATHS,
   ...listRequiredQaScenarioPackPaths(),
   "scripts/npm-runner.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
@@ -51,11 +59,6 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
 ];
-// 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
-// startup/doctor OOM reports. Keep enough headroom for the current pack with
-// restored bundled upgrade surfaces and Control UI assets while still catching
-// regressions quickly.
-const npmPackUnpackedSizeBudgetBytes = 191 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -108,7 +111,10 @@ function checkBundledExtensionMetadata() {
     requiredRootMirrors,
     rootPackageJson: rootPackage,
   });
-  const errors = [...manifestErrors, ...rootMirrorErrors];
+  const builtArtifactErrors = collectBuiltBundledPluginStagedRuntimeDependencyErrors({
+    bundledPluginsDir: resolve("dist/extensions"),
+  });
+  const errors = [...manifestErrors, ...rootMirrorErrors, ...builtArtifactErrors];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
     for (const error of errors) {
@@ -234,6 +240,8 @@ function runPackedBundledChannelEntrySmoke(): void {
     if (completionFiles.length === 0) {
       throw new Error("release-check: packed completion smoke produced no completion files.");
     }
+
+    runInstalledWorkspaceBootstrapSmoke({ packageRoot });
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -263,49 +271,7 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function formatMiB(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-function resolvePackResultLabel(entry: PackResult, index: number): string {
-  return entry.filename?.trim() || `pack result #${index + 1}`;
-}
-
-function formatPackUnpackedSizeBudgetError(params: {
-  label: string;
-  unpackedSize: number;
-}): string {
-  return [
-    `${params.label} unpackedSize ${params.unpackedSize} bytes (${formatMiB(params.unpackedSize)}) exceeds budget ${npmPackUnpackedSizeBudgetBytes} bytes (${formatMiB(npmPackUnpackedSizeBudgetBytes)}).`,
-    "Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
-  ].join(" ");
-}
-
-export function collectPackUnpackedSizeErrors(results: Iterable<PackResult>): string[] {
-  const entries = Array.from(results);
-  const errors: string[] = [];
-  let checkedCount = 0;
-
-  for (const [index, entry] of entries.entries()) {
-    if (typeof entry.unpackedSize !== "number" || !Number.isFinite(entry.unpackedSize)) {
-      continue;
-    }
-    checkedCount += 1;
-    if (entry.unpackedSize <= npmPackUnpackedSizeBudgetBytes) {
-      continue;
-    }
-    const label = resolvePackResultLabel(entry, index);
-    errors.push(formatPackUnpackedSizeBudgetError({ label, unpackedSize: entry.unpackedSize }));
-  }
-
-  if (entries.length > 0 && checkedCount === 0) {
-    errors.push(
-      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
-    );
-  }
-
-  return errors;
-}
+export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -480,7 +446,7 @@ async function main() {
     })
     .toSorted((left, right) => left.localeCompare(right));
   const forbidden = collectForbiddenPackPaths(paths);
-  const sizeErrors = collectPackUnpackedSizeErrors(results);
+  const sizeErrors = collectNpmPackUnpackedSizeErrors(results);
 
   if (missing.length > 0 || forbidden.length > 0 || sizeErrors.length > 0) {
     if (missing.length > 0) {
