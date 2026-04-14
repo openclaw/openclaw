@@ -356,8 +356,8 @@ function loadSkillEntries(
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config);
   const allowExternalSkillsIn = opts?.config?.skills?.allowExternalSkillsIn
-    ?.map((p) => tryRealpath(resolveUserPath(p)) ?? path.resolve(p))
-    .filter(Boolean);
+    ?.filter((p) => p.trim().length > 0)
+    .map((p) => tryRealpath(resolveUserPath(p)) ?? path.resolve(p));
 
   const loadSkills = (params: { dir: string; source: string }): Skill[] => {
     const rootDir = path.resolve(params.dir);

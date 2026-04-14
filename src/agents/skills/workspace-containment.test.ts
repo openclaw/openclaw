@@ -97,4 +97,22 @@ describe("allowExternalSkillsIn", () => {
     const names = entries.map((e) => e.skill.name);
     expect(names).toContain("my-ext-skill");
   });
+
+  it("ignores empty-string entries in allowExternalSkillsIn", async () => {
+    const { workspaceDir, extraSkillsDir } = await setupSymlinkedSkill();
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          allowExternalSkillsIn: ["", "  "],
+          load: { extraDirs: [extraSkillsDir] },
+        },
+      },
+      bundledSkillsDir: "__nonexistent__",
+      managedSkillsDir: "__nonexistent__",
+    });
+
+    const names = entries.map((e) => e.skill.name);
+    expect(names).not.toContain("my-ext-skill");
+  });
 });
