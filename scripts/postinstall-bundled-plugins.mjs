@@ -295,7 +295,8 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
           BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_AWAITS_RE.test(patchedText)));
     const encryptedStreamPatchable = patchedText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE);
 
-    if (!encryptedStreamAlreadyPatched && encryptedStreamPatchable) {
+    let encryptedStreamResolved = encryptedStreamAlreadyPatched;
+    if (!encryptedStreamResolved && encryptedStreamPatchable) {
       if (!BAILEYS_MEDIA_ONCE_IMPORT_RE.test(patchedText)) {
         return { applied: false, reason: "missing_once_import", targetPath };
       }
@@ -307,6 +308,7 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
         BAILEYS_MEDIA_HOTFIX_REPLACEMENT,
       );
       applied = true;
+      encryptedStreamResolved = true;
     }
 
     const dispatcherAlreadyPatched = patchedText.includes(
@@ -315,8 +317,9 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
     const dispatcherPatchable =
       patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE) &&
       patchedText.includes(BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE);
+    let dispatcherResolved = dispatcherAlreadyPatched;
 
-    if (!dispatcherAlreadyPatched && dispatcherPatchable) {
+    if (!dispatcherResolved && dispatcherPatchable) {
       patchedText = patchedText
         .replace(BAILEYS_MEDIA_DISPATCHER_NEEDLE, BAILEYS_MEDIA_DISPATCHER_REPLACEMENT)
         .replace(
@@ -324,15 +327,14 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
           BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT,
         );
       applied = true;
+      dispatcherResolved = true;
+    }
+
+    if (!dispatcherResolved) {
+      return { applied: false, reason: "unexpected_content" };
     }
 
     if (!applied) {
-      if (
-        (!encryptedStreamAlreadyPatched && !encryptedStreamPatchable) ||
-        (!dispatcherAlreadyPatched && !dispatcherPatchable)
-      ) {
-        return { applied: false, reason: "unexpected_content" };
-      }
       return { applied: false, reason: "already_patched" };
     }
     const tempPath = createTempPath(targetPath);

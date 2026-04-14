@@ -65,6 +65,7 @@ function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
 
 function createBaileysMessagesMediaSource(params?: {
   dispatcherPatched?: boolean;
+  dispatcherHeaderDrifted?: boolean;
   encryptedStreamPatched?: boolean;
   encryptedStreamPatchedSequentially?: boolean;
   encryptedStreamPatchedSequentiallyWithComments?: boolean;
@@ -137,18 +138,31 @@ function createBaileysMessagesMediaSource(params?: {
         "                    duplex: 'half',",
         "                });",
       ]
-    : [
-        "                const response = await fetch(url, {",
-        "                    dispatcher: fetchAgent,",
-        "                    method: 'POST',",
-        "                    body: stream,",
-        "                    headers: {",
-        "                        'Content-Type': 'application/octet-stream',",
-        "                        Origin: DEFAULT_ORIGIN",
-        "                    },",
-        "                    duplex: 'half',",
-        "                });",
-      ];
+    : params?.dispatcherHeaderDrifted
+      ? [
+          "                const response = await fetch(url, {",
+          "                    dispatcher: fetchAgent,",
+          "                    method: 'POST',",
+          "                    body: stream,",
+          "                    headers: {",
+          "                        Origin: DEFAULT_ORIGIN,",
+          "                        'Content-Type': 'application/octet-stream'",
+          "                    },",
+          "                    duplex: 'half',",
+          "                });",
+        ]
+      : [
+          "                const response = await fetch(url, {",
+          "                    dispatcher: fetchAgent,",
+          "                    method: 'POST',",
+          "                    body: stream,",
+          "                    headers: {",
+          "                        'Content-Type': 'application/octet-stream',",
+          "                        Origin: DEFAULT_ORIGIN",
+          "                    },",
+          "                    duplex: 'half',",
+          "                });",
+        ];
   return [
     "import { once } from 'events';",
     "const encryptedStream = async () => {",
@@ -392,6 +406,34 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
       "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
     );
+  });
+
+  it("fails when the dispatcher block drifts even if encryptedStream is patchable", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-hotfix-dispatcher-drifted-");
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    writeRepoFile(
+      repoRoot,
+      "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
+      createBaileysMessagesMediaSource({ dispatcherHeaderDrifted: true }),
+    );
+
+    const originalText = fs.readFileSync(targetPath, "utf8");
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({ packageRoot: repoRoot });
+
+    expect(result).toEqual({
+      applied: false,
+      reason: "unexpected_content",
+    });
+    expect(fs.readFileSync(targetPath, "utf8")).toBe(originalText);
   });
 
   it("patches the Baileys dispatcher guard when sequential awaits include comments", async () => {
