@@ -194,3 +194,4 @@ export function resolveFirecrawlSearchTimeoutSeconds(override?: number): number 
   }
   return DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS;
 }
+// Fix for issue #65510: resolve SecretRef (op://) in configuration
