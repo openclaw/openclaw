@@ -123,9 +123,9 @@ async function expectWsRejected(
   });
 }
 
-async function expectWsConnected(url: string): Promise<void> {
+async function expectWsConnected(url: string, headers?: Record<string, string>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(url, headers ? { headers } : undefined);
     let settled = false;
     const finish = (fn: () => void) => {
       if (settled) {
@@ -207,6 +207,7 @@ const allowCanvasHostHttp: CanvasHostHandler["handleHttpRequest"] = async (req, 
 };
 async function withCanvasGatewayHarness(params: {
   resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth?: () => ResolvedGatewayAuth;
   listenHost?: string;
   rateLimiter?: ReturnType<typeof createAuthRateLimiter>;
   handleHttpRequest: CanvasHostHandler["handleHttpRequest"];
@@ -241,6 +242,7 @@ async function withCanvasGatewayHarness(params: {
     openResponsesEnabled: false,
     handleHooksRequest: async () => false,
     resolvedAuth: params.resolvedAuth,
+    getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
   });
 
@@ -252,6 +254,7 @@ async function withCanvasGatewayHarness(params: {
     clients,
     preauthConnectionBudget: createPreauthConnectionBudget(8),
     resolvedAuth: params.resolvedAuth,
+    getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
   });
 
@@ -420,6 +423,35 @@ describe("gateway canvas host auth", () => {
         expect(a2ui.status).toBe(401);
 
         await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
+      },
+    });
+  }, 60_000);
+
+  test("re-resolves canvas bearer auth on each upgrade after shared auth rotation", async () => {
+    let currentAuth = tokenResolvedAuth;
+
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      getResolvedAuth: () => currentAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener }) => {
+        const url = `ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`;
+
+        await expectWsConnected(url, {
+          authorization: "Bearer test-token",
+        });
+
+        currentAuth = {
+          ...tokenResolvedAuth,
+          token: "rotated-token",
+        };
+
+        await expectWsRejected(url, {
+          authorization: "Bearer test-token",
+        });
+        await expectWsConnected(url, {
+          authorization: "Bearer rotated-token",
+        });
       },
     });
   }, 60_000);
