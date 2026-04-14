@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const editSlackMessageMock = vi.fn();
 
@@ -24,10 +24,12 @@ function createClient(overrides?: {
 }
 
 describe("finalizeSlackPreviewEdit", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    editSlackMessageMock.mockReset();
+  beforeAll(async () => {
     ({ finalizeSlackPreviewEdit, __testing } = await import("./preview-finalize.js"));
+  });
+
+  beforeEach(() => {
+    editSlackMessageMock.mockReset();
   });
 
   it("treats a thrown edit as success when history readback already matches", async () => {

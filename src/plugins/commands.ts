@@ -5,14 +5,16 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
-import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
   listPluginInvocationKeys,
+  listProviderPluginCommandSpecs,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
@@ -27,6 +29,7 @@ import {
   getCurrentPluginConversationBinding,
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
+import { getActivePluginChannelRegistry } from "./runtime.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -40,6 +43,7 @@ export {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
@@ -66,12 +70,24 @@ export function matchPluginCommand(
   const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
   const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
 
-  const key = commandName.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(commandName);
+  const alternateKeys = [key];
+  if (key.includes("_")) {
+    alternateKeys.push(key.replace(/_/g, "-"));
+  }
+  if (key.includes("-")) {
+    alternateKeys.push(key.replace(/-/g, "_"));
+  }
   const command =
-    pluginCommands.get(key) ??
-    Array.from(pluginCommands.values()).find((candidate) =>
-      listPluginInvocationNames(candidate).includes(key),
-    );
+    alternateKeys
+      .map(
+        (candidateKey) =>
+          pluginCommands.get(candidateKey) ??
+          Array.from(pluginCommands.values()).find((candidate) =>
+            listPluginInvocationNames(candidate).includes(candidateKey),
+          ),
+      )
+      .find(Boolean) ?? null;
 
   if (!command) {
     return null;
@@ -111,38 +127,10 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   return sanitized;
 }
 
-function stripPrefix(raw: string | undefined, prefix: string): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
-}
-
-function parseDiscordBindingTarget(raw: string | undefined): {
-  conversationId: string;
-} | null {
-  if (!raw) {
-    return null;
-  }
-  if (raw.startsWith("slash:")) {
-    return null;
-  }
-  const normalized = raw.startsWith("discord:") ? raw.slice("discord:".length) : raw;
-  if (!normalized) {
-    return null;
-  }
-  if (normalized.startsWith("channel:")) {
-    const id = normalized.slice("channel:".length).trim();
-    return id ? { conversationId: `channel:${id}` } : null;
-  }
-  if (normalized.startsWith("user:")) {
-    const id = normalized.slice("user:".length).trim();
-    return id ? { conversationId: `user:${id}` } : null;
-  }
-  return /^\d+$/.test(normalized.trim()) ? { conversationId: `user:${normalized.trim()}` } : null;
-}
 function resolveBindingConversationFromCommand(params: {
+  config?: OpenClawConfig;
   channel: string;
+  senderId?: string;
   from?: string;
   to?: string;
   accountId?: string;
@@ -155,54 +143,23 @@ function resolveBindingConversationFromCommand(params: {
   parentConversationId?: string;
   threadId?: string | number;
 } | null {
-  const accountId = params.accountId?.trim() || "default";
-  if (params.channel === "telegram") {
-    // Native Telegram slash commands use a synthetic `To: slash:<senderId>` value.
-    // Prefer `from` so binding resolution parses the real chat/topic peer.
-    const rawTarget =
-      params.to && params.to.startsWith("slash:")
-        ? (params.from ?? params.to)
-        : (params.to ?? params.from);
-    if (!rawTarget) {
-      return null;
-    }
-    const target = parseExplicitTargetForChannel("telegram", rawTarget);
-    if (!target) {
-      return null;
-    }
-    return {
-      channel: "telegram",
-      accountId,
-      conversationId: target.to,
-      threadId: params.messageThreadId ?? target.threadId,
-    };
+  const channelPlugin = getActivePluginChannelRegistry()?.channels.find(
+    (entry) => entry.plugin.id === params.channel,
+  )?.plugin;
+  if (!channelPlugin?.bindings?.resolveCommandConversation) {
+    return null;
   }
-  if (params.channel === "discord") {
-    const source =
-      params.to?.startsWith("slash:") || !params.to?.trim()
-        ? (params.from ?? params.to)
-        : params.to;
-    const rawTarget = source?.startsWith("discord:") ? stripPrefix(source, "discord:") : source;
-    if (!rawTarget || rawTarget.startsWith("slash:")) {
-      return null;
-    }
-    const target =
-      parseExplicitTargetForChannel("discord", rawTarget) ?? parseDiscordBindingTarget(rawTarget);
-    if (!target) {
-      return null;
-    }
-    return {
-      channel: "discord",
-      accountId,
-      conversationId:
-        "conversationId" in target
-          ? target.conversationId
-          : `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
-      parentConversationId: params.threadParentId?.trim() || undefined,
-      threadId: params.messageThreadId,
-    };
-  }
-  return null;
+  return resolveConversationBindingContext({
+    cfg: params.config ?? ({} as OpenClawConfig),
+    channel: params.channel,
+    accountId: params.accountId,
+    threadId: params.messageThreadId,
+    threadParentId: params.threadParentId,
+    senderId: params.senderId,
+    originatingTo: params.from,
+    commandTo: params.to,
+    fallbackTo: params.to ?? params.from,
+  });
 }
 
 /**
@@ -219,6 +176,9 @@ export async function executePluginCommand(params: {
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
+  sessionKey?: PluginCommandContext["sessionKey"];
+  sessionId?: PluginCommandContext["sessionId"];
+  sessionFile?: PluginCommandContext["sessionFile"];
   commandBody: string;
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
@@ -241,13 +201,16 @@ export async function executePluginCommand(params: {
   // Sanitize args before passing to handler
   const sanitizedArgs = sanitizeArgs(args);
   const bindingConversation = resolveBindingConversationFromCommand({
+    config,
     channel,
+    senderId,
     from: params.from,
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
   });
+  const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
 
   const ctx: PluginCommandContext = {
     senderId,
@@ -255,12 +218,15 @@ export async function executePluginCommand(params: {
     channelId: params.channelId,
     isAuthorizedSender,
     gatewayClientScopes: params.gatewayClientScopes,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    sessionFile: params.sessionFile,
     args: sanitizedArgs,
     commandBody,
     config,
     from: params.from,
     to: params.to,
-    accountId: params.accountId,
+    accountId: effectiveAccountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     requestConversationBinding: async (bindingParams) => {
@@ -325,11 +291,13 @@ export function listPluginCommands(): Array<{
   name: string;
   description: string;
   pluginId: string;
+  acceptsArgs: boolean;
 }> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: cmd.name,
     description: cmd.description,
     pluginId: cmd.pluginId,
+    acceptsArgs: cmd.acceptsArgs ?? false,
   }));
 }
 

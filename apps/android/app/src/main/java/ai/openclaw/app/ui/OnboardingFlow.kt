@@ -566,12 +566,17 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     if (contents.isEmpty()) {
                       return@addOnSuccessListener
                     }
-                    val scannedSetupCode = resolveScannedSetupCode(contents)
-                    if (scannedSetupCode == null) {
-                      gatewayError = "QR code did not contain a valid setup code."
+                    val scannedSetupCode = resolveScannedSetupCodeResult(contents)
+                    if (scannedSetupCode.setupCode == null) {
+                      gatewayError =
+                        gatewayEndpointValidationMessage(
+                          scannedSetupCode.error ?: GatewayEndpointValidationError.INVALID_URL,
+                          GatewayEndpointInputSource.QR_SCAN,
+                        )
                       return@addOnSuccessListener
                     }
-                    setupCode = scannedSetupCode
+                    setupCode = scannedSetupCode.setupCode
+                    viewModel.resetGatewaySetupAuth()
                     gatewayInputMode = GatewayInputMode.SetupCode
                     gatewayError = null
                     attemptedConnect = false
@@ -733,6 +738,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             )
           OnboardingStep.FinalCheck ->
             FinalStep(
+              viewModel = viewModel,
               parsedGateway = parseGatewayEndpoint(gatewayUrl),
               statusText = statusText,
               isConnected = canFinishOnboarding,
@@ -799,11 +805,16 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     gatewayError = "Scan QR code first, or use Advanced setup."
                     return@Button
                   }
-                  val parsedGateway = parseGatewayEndpoint(parsedSetup.url)
-                  if (parsedGateway == null) {
-                    gatewayError = "Setup code has invalid gateway URL."
+                  val parsedGateway = parseGatewayEndpointResult(parsedSetup.url)
+                  if (parsedGateway.config == null) {
+                    gatewayError =
+                      gatewayEndpointValidationMessage(
+                        parsedGateway.error ?: GatewayEndpointValidationError.INVALID_URL,
+                        GatewayEndpointInputSource.SETUP_CODE,
+                      )
                     return@Button
                   }
+                  viewModel.resetGatewaySetupAuth()
                   gatewayUrl = parsedSetup.url
                   viewModel.setGatewayBootstrapToken(parsedSetup.bootstrapToken.orEmpty())
                   val sharedToken = parsedSetup.token.orEmpty().trim()
@@ -819,12 +830,16 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   }
                 } else {
                   val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls)
-                  val parsedGateway = manualUrl?.let(::parseGatewayEndpoint)
-                  if (parsedGateway == null) {
-                    gatewayError = "Manual endpoint is invalid."
+                  val parsedGateway = manualUrl?.let(::parseGatewayEndpointResult)
+                  if (parsedGateway?.config == null) {
+                    gatewayError =
+                      gatewayEndpointValidationMessage(
+                        parsedGateway?.error ?: GatewayEndpointValidationError.INVALID_URL,
+                        GatewayEndpointInputSource.MANUAL,
+                      )
                     return@Button
                   }
-                  gatewayUrl = parsedGateway.displayUrl
+                  gatewayUrl = parsedGateway.config.displayUrl
                   viewModel.setGatewayBootstrapToken("")
                 }
                 step = OnboardingStep.Permissions
@@ -863,21 +878,34 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             } else {
               Button(
                 onClick = {
-                  val parsed = parseGatewayEndpoint(gatewayUrl)
-                  if (parsed == null) {
+                  val parsed = parseGatewayEndpointResult(gatewayUrl)
+                  if (parsed.config == null) {
                     step = OnboardingStep.Gateway
-                    gatewayError = "Invalid gateway URL."
+                    gatewayError =
+                      gatewayEndpointValidationMessage(
+                        parsed.error ?: GatewayEndpointValidationError.INVALID_URL,
+                        GatewayEndpointInputSource.MANUAL,
+                      )
                     return@Button
                   }
                   val token = persistedGatewayToken.trim()
                   val password = gatewayPassword.trim()
+                  val bootstrapToken =
+                    if (gatewayInputMode == GatewayInputMode.SetupCode) {
+                      decodeGatewaySetupCode(setupCode)?.bootstrapToken?.trim()?.ifEmpty { null }
+                    } else {
+                      null
+                    }
                   attemptedConnect = true
                   viewModel.setManualEnabled(true)
-                  viewModel.setManualHost(parsed.host)
-                  viewModel.setManualPort(parsed.port)
-                  viewModel.setManualTls(parsed.tls)
+                  viewModel.setManualHost(parsed.config.host)
+                  viewModel.setManualPort(parsed.config.port)
+                  viewModel.setManualTls(parsed.config.tls)
                   if (gatewayInputMode == GatewayInputMode.Manual) {
                     viewModel.setGatewayBootstrapToken("")
+                  } else {
+                    viewModel.resetGatewaySetupAuth()
+                    viewModel.setGatewayBootstrapToken(bootstrapToken.orEmpty())
                   }
                   if (token.isNotEmpty()) {
                     viewModel.setGatewayToken(token)
@@ -886,14 +914,9 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   }
                   viewModel.setGatewayPassword(password)
                   viewModel.connect(
-                    GatewayEndpoint.manual(host = parsed.host, port = parsed.port),
+                    GatewayEndpoint.manual(host = parsed.config.host, port = parsed.config.port),
                     token = token.ifEmpty { null },
-                    bootstrapToken =
-                      if (gatewayInputMode == GatewayInputMode.SetupCode) {
-                        decodeGatewaySetupCode(setupCode)?.bootstrapToken?.trim()?.ifEmpty { null }
-                      } else {
-                        null
-                      },
+                    bootstrapToken = bootstrapToken,
                     password = password.ifEmpty { null },
                   )
                 },
@@ -1040,7 +1063,7 @@ private fun GatewayStep(
 
   StepShell(title = "Gateway Connection") {
     Text(
-      "Run `openclaw qr` on your gateway host, then scan the code with this device.",
+      "Run `openclaw qr` on your gateway host, then scan the code with this device. For Tailscale or public hosts, use wss:// or Tailscale Serve.",
       style = onboardingCalloutStyle,
       color = onboardingTextSecondary,
     )
@@ -1072,7 +1095,7 @@ private fun GatewayStep(
       ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
           Text("Advanced setup", style = onboardingHeadlineStyle, color = onboardingText)
-          Text("Paste setup code or enter host/port manually.", style = onboardingCaption1Style, color = onboardingTextSecondary)
+          Text("Paste setup code or enter host/port manually. Private LAN ws:// is supported; Tailscale/public hosts need wss://.", style = onboardingCaption1Style, color = onboardingTextSecondary)
         }
         Icon(
           imageVector = if (advancedOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -1132,11 +1155,15 @@ private fun GatewayStep(
               onboardingTextFieldColors(),
           )
 
-          Text("PORT", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          Text(
+            if (manualTls) "PORT (optional, defaults to 443)" else "PORT",
+            style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp),
+            color = onboardingTextSecondary,
+          )
           OutlinedTextField(
             value = manualPort,
             onValueChange = onManualPortChange,
-            placeholder = { Text("18789", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            placeholder = { Text(if (manualTls) "443" else "18789", color = onboardingTextTertiary, style = onboardingBodyStyle) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -1153,7 +1180,11 @@ private fun GatewayStep(
           ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
               Text("Use TLS", style = onboardingHeadlineStyle, color = onboardingText)
-              Text("Switch to secure websocket (`wss`).", style = onboardingCalloutStyle.copy(lineHeight = 18.sp), color = onboardingTextSecondary)
+              Text(
+                "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
+                style = onboardingCalloutStyle.copy(lineHeight = 18.sp),
+                color = onboardingTextSecondary,
+              )
             }
             Switch(
               checked = manualTls,
@@ -1542,6 +1573,7 @@ private fun PermissionToggleRow(
 
 @Composable
 private fun FinalStep(
+  viewModel: MainViewModel,
   parsedGateway: GatewayEndpointConfig?,
   statusText: String,
   isConnected: Boolean,
@@ -1556,6 +1588,10 @@ private fun FinalStep(
   val statusLabel = gatewayStatusForDisplay(statusText)
   val showDiagnostics = gatewayStatusHasDiagnostics(statusText)
   val pairingRequired = gatewayStatusLooksLikePairing(statusText)
+
+  PairingAutoRetryEffect(enabled = pairingRequired && attemptedConnect) {
+    viewModel.refreshGatewayConnection()
+  }
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Text("Review", style = onboardingTitle1Style, color = onboardingText)
@@ -1737,7 +1773,11 @@ private fun FinalStep(
           if (pairingRequired) {
             CommandBlock("openclaw devices list")
             CommandBlock("openclaw devices approve <requestId>")
-            Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+            Text(
+              "OpenClaw retries automatically while this screen stays open.",
+              style = onboardingCalloutStyle,
+              color = onboardingTextSecondary,
+            )
           }
         }
       }

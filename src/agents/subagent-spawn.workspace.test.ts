@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -93,7 +93,7 @@ async function expectAcceptedWorkspace(params: { agentId: string; expectedWorksp
 }
 
 describe("spawnSubagentDirect workspace inheritance", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       loadConfig: () => hoisted.configOverride,
@@ -101,7 +101,11 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       hookRunner: hoisted.hookRunner,
       resolveAgentConfig: resolveTestAgentConfig,
       resolveAgentWorkspaceDir: resolveTestAgentWorkspace,
+      resetModules: false,
     }));
+  });
+
+  beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
@@ -142,6 +146,42 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       agentId: "main",
       expectedWorkspaceDir: "/tmp/requester-workspace",
     });
+  });
+
+  async function spawnAndReadAgentParams(task: { task: string; lightContext?: boolean }) {
+    await spawnSubagentDirect(task, {
+      agentSessionKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentAccountId: "123",
+      agentTo: "456",
+      workspaceDir: "/tmp/requester-workspace",
+    });
+
+    const agentCall = hoisted.callGatewayMock.mock.calls.find(
+      ([request]) => (request as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    return agentCall?.params;
+  }
+
+  it("passes lightweight bootstrap context flags for lightContext subagent spawns", async () => {
+    const agentParams = await spawnAndReadAgentParams({
+      task: "inspect workspace",
+      lightContext: true,
+    });
+
+    expect(agentParams).toMatchObject({
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "default",
+    });
+  });
+
+  it("omits bootstrap context flags for default subagent spawns", async () => {
+    const agentParams = await spawnAndReadAgentParams({
+      task: "inspect workspace",
+    });
+
+    expect(agentParams).not.toHaveProperty("bootstrapContextMode");
+    expect(agentParams).not.toHaveProperty("bootstrapContextRunKind");
   });
 
   it("deletes the provisional child session when a non-thread subagent start fails", async () => {

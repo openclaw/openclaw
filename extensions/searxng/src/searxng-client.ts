@@ -93,7 +93,7 @@ async function validateSearxngBaseUrl(baseUrl: string, lookupFn?: LookupFn): Pro
 
   if (parsed.protocol === "http:") {
     await assertHttpUrlTargetsPrivateNetwork(parsed.toString(), {
-      allowPrivateNetwork: true,
+      dangerouslyAllowPrivateNetwork: true,
       lookupFn,
       errorMessage:
         "SearXNG HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.",

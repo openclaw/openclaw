@@ -1,21 +1,15 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
+import { captureEnv } from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import {
   buildKilocodeModelDefinition,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MODEL_ID,
-} from "openclaw/plugin-sdk/kilocode";
-import {
-  resolveApiKeyForProvider,
-  resolveEnvApiKey,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
-import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import { describe, expect, it } from "vitest";
-import { captureEnv } from "../../test/helpers/plugins/env.js";
+} from "./api.js";
 import {
   applyKilocodeProviderConfig,
   applyKilocodeConfig,
@@ -168,25 +162,6 @@ describe("Kilo Gateway provider config", () => {
       try {
         const result = resolveEnvApiKey("kilocode");
         expect(result).toBeNull();
-      } finally {
-        envSnapshot.restore();
-      }
-    });
-
-    it("resolves the kilocode api key via resolveApiKeyForProvider", async () => {
-      const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-      const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "kilo-provider-test-key";
-
-      try {
-        const auth = await resolveApiKeyForProvider({
-          provider: "kilocode",
-          agentDir,
-        });
-
-        expect(auth.apiKey).toBe("kilo-provider-test-key");
-        expect(auth.mode).toBe("api-key");
-        expect(auth.source).toContain("KILOCODE_API_KEY");
       } finally {
         envSnapshot.restore();
       }

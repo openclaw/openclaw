@@ -8,20 +8,7 @@ import {
   trimToUndefined,
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/speech";
-
-const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
-
-function isValidVoiceId(voiceId: string): boolean {
-  return /^[a-zA-Z0-9]{10,40}$/.test(voiceId);
-}
-
-function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return DEFAULT_ELEVENLABS_BASE_URL;
-  }
-  return trimmed.replace(/\/+$/, "");
-}
+import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 
 function formatElevenLabsErrorPayload(payload: unknown): string | undefined {
   const root = asObject(payload);
@@ -85,6 +72,7 @@ export async function elevenLabsTTS(params: {
   seed?: number;
   applyTextNormalization?: "auto" | "on" | "off";
   languageCode?: string;
+  latencyTier?: number;
   voiceSettings: {
     stability: number;
     similarityBoost: number;
@@ -104,10 +92,11 @@ export async function elevenLabsTTS(params: {
     seed,
     applyTextNormalization,
     languageCode,
+    latencyTier,
     voiceSettings,
     timeoutMs,
   } = params;
-  if (!isValidVoiceId(voiceId)) {
+  if (!isValidElevenLabsVoiceId(voiceId)) {
     throw new Error("Invalid voiceId format");
   }
   assertElevenLabsVoiceSettings(voiceSettings);
@@ -137,6 +126,7 @@ export async function elevenLabsTTS(params: {
         seed: normalizedSeed,
         apply_text_normalization: normalizedNormalization,
         language_code: normalizedLanguage,
+        latency_optimization_level: latencyTier,
         voice_settings: {
           stability: voiceSettings.stability,
           similarity_boost: voiceSettings.similarityBoost,

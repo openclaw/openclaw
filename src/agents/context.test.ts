@@ -7,6 +7,18 @@ import {
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
+function testModelContextWindow(id: string, contextWindow: number) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: 4096,
+  };
+}
+
 describe("applyDiscoveredContextWindows", () => {
   it("keeps the smallest context window when the same bare model id appears under multiple providers", () => {
     const cache = new Map<string, number>();
@@ -37,6 +49,16 @@ describe("applyDiscoveredContextWindows", () => {
 
     expect(cache.get("github-copilot/gemini-3.1-pro-preview")).toBe(128_000);
     expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
+  });
+
+  it("prefers discovered contextTokens over contextWindow", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
+    });
+
+    expect(cache.get("gpt-5.4")).toBe(272_000);
   });
 });
 
@@ -107,6 +129,22 @@ describe("applyConfiguredContextWindows", () => {
     expect(cache.get("custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
   });
+
+  it("prefers configured contextTokens over contextWindow", () => {
+    const cache = new Map<string, number>();
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          openrouter: {
+            models: [{ id: "custom/model", contextWindow: 1_050_000, contextTokens: 200_000 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("custom/model")).toBe(200_000);
+  });
 });
 
 describe("createSessionManagerRuntimeRegistry", () => {
@@ -133,6 +171,14 @@ describe("resolveContextTokensForModel", () => {
   it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
     const result = resolveContextTokensForModel({
       cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
+            },
+          },
+        },
         agents: {
           defaults: {
             models: {
@@ -146,6 +192,7 @@ describe("resolveContextTokensForModel", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
     });
 
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
@@ -154,6 +201,14 @@ describe("resolveContextTokensForModel", () => {
   it("does not force 1M context when context1m is not enabled", () => {
     const result = resolveContextTokensForModel({
       cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
+            },
+          },
+        },
         agents: {
           defaults: {
             models: {
@@ -167,6 +222,7 @@ describe("resolveContextTokensForModel", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
     });
 
     expect(result).toBe(200_000);
@@ -175,6 +231,14 @@ describe("resolveContextTokensForModel", () => {
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {
     const result = resolveContextTokensForModel({
       cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-haiku-3-5", 200_000)],
+            },
+          },
+        },
         agents: {
           defaults: {
             models: {
@@ -188,8 +252,40 @@ describe("resolveContextTokensForModel", () => {
       provider: "anthropic",
       model: "claude-haiku-3-5",
       fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
     });
 
     expect(result).toBe(200_000);
+  });
+
+  it("prefers per-model contextTokens config over contextWindow", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "gpt-5.4",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_050_000,
+                  contextTokens: 160_000,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      fallbackContextTokens: 272_000,
+    });
+
+    expect(result).toBe(160_000);
   });
 });

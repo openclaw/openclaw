@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
   CHROME_MCP_ATTACH_READY_WINDOW_MS,
@@ -26,6 +27,10 @@ import {
   CDP_READY_AFTER_LAUNCH_POLL_MS,
   CDP_READY_AFTER_LAUNCH_WINDOW_MS,
 } from "./server-context.constants.js";
+import {
+  closePlaywrightBrowserConnectionForProfile,
+  resolveIdleProfileStopOutcome,
+} from "./server-context.lifecycle.js";
 import type {
   BrowserServerState,
   ContextOptions,
@@ -58,10 +63,14 @@ export function createProfileAvailability({
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
       profileIsLoopback: profile.cdpIsLoopback,
+      attachOnly: profile.attachOnly,
       timeoutMs,
       remoteHttpTimeoutMs: state().resolved.remoteCdpTimeoutMs,
       remoteHandshakeTimeoutMs: state().resolved.remoteCdpHandshakeTimeoutMs,
     });
+
+  const getCdpReachabilityPolicy = () =>
+    resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
 
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
@@ -74,7 +83,7 @@ export function createProfileAvailability({
       profile.cdpUrl,
       httpTimeoutMs,
       wsTimeoutMs,
-      state().resolved.ssrfPolicy,
+      getCdpReachabilityPolicy(),
     );
   };
 
@@ -83,7 +92,7 @@ export function createProfileAvailability({
       return await isReachable(timeoutMs);
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, state().resolved.ssrfPolicy);
+    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, getCdpReachabilityPolicy());
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
@@ -98,15 +107,6 @@ export function createProfileAvailability({
         setProfileRunning(null);
       }
     });
-  };
-
-  const closePlaywrightBrowserConnectionForProfile = async (cdpUrl?: string): Promise<void> => {
-    try {
-      const mod = await import("./pw-ai.js");
-      await mod.closePlaywrightBrowserConnection(cdpUrl ? { cdpUrl } : undefined);
-    } catch {
-      // ignore
-    }
   };
 
   const reconcileProfileRuntime = async (): Promise<void> => {
@@ -241,6 +241,9 @@ export function createProfileAvailability({
           return;
         }
       }
+      if (remoteCdp && (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))) {
+        return;
+      }
       throw new BrowserProfileUnavailableError(
         remoteCdp
           ? `Remote CDP websocket for profile "${profile.name}" is not reachable.`
@@ -277,7 +280,13 @@ export function createProfileAvailability({
     }
     const profileState = getProfileState();
     if (!profileState.running) {
-      return { stopped: false };
+      const idleStop = resolveIdleProfileStopOutcome(profile);
+      if (idleStop.closePlaywright) {
+        // No process was launched for attachOnly/remote profiles, but a cached
+        // Playwright CDP connection may still be active and holding emulation state.
+        await closePlaywrightBrowserConnectionForProfile(profile.cdpUrl);
+      }
+      return { stopped: idleStop.stopped };
     }
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);

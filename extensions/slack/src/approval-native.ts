@@ -1,9 +1,20 @@
 import {
-  createApproverRestrictedNativeApprovalAdapter,
-  resolveApprovalRequestOriginTarget,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+  createApproverRestrictedNativeApprovalCapability,
+  splitChannelApprovalCapability,
+} from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+  resolveApprovalRequestSessionConversation,
+} from "openclaw/plugin-sdk/approval-native-runtime";
+import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { listSlackAccountIds } from "./accounts.js";
 import { isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 import {
@@ -25,11 +36,12 @@ function extractSlackSessionKind(
     return null;
   }
   const match = sessionKey.match(/slack:(direct|channel|group):/i);
-  return match?.[1] ? (match[1].toLowerCase() as "direct" | "channel" | "group") : null;
+  const kind = normalizeLowercaseStringOrEmpty(match?.[1]);
+  return kind ? (kind as "direct" | "channel" | "group") : null;
 }
 
 function normalizeComparableTarget(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function normalizeSlackThreadMatchKey(threadId?: string): string {
@@ -42,8 +54,8 @@ function normalizeSlackThreadMatchKey(threadId?: string): string {
 }
 
 function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
-  const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
-  const turnSourceTo = request.request.turnSourceTo?.trim() || "";
+  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
+  const turnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
   if (turnSourceChannel !== "slack" || !turnSourceTo) {
     return null;
   }
@@ -56,7 +68,7 @@ function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOrig
   }
   const threadId =
     typeof request.request.turnSourceThreadId === "string"
-      ? request.request.turnSourceThreadId.trim() || undefined
+      ? normalizeOptionalString(request.request.turnSourceThreadId)
       : typeof request.request.turnSourceThreadId === "number"
         ? String(request.request.turnSourceThreadId)
         : undefined;
@@ -74,10 +86,31 @@ function resolveSessionSlackOriginTarget(sessionTarget: {
     to: sessionTarget.to,
     threadId:
       typeof sessionTarget.threadId === "string"
-        ? sessionTarget.threadId
+        ? normalizeOptionalString(sessionTarget.threadId)
         : typeof sessionTarget.threadId === "number"
           ? String(sessionTarget.threadId)
           : undefined,
+  };
+}
+
+function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
+  const sessionTarget = resolveApprovalRequestSessionConversation({
+    request,
+    channel: "slack",
+    bundledFallback: false,
+  });
+  if (!sessionTarget) {
+    return null;
+  }
+  const parsed = parseSlackTarget(sessionTarget.id.toUpperCase(), {
+    defaultKind: "channel",
+  });
+  if (!parsed) {
+    return null;
+  }
+  return {
+    to: `${parsed.kind}:${parsed.id}`,
+    threadId: sessionTarget.threadId,
   };
 }
 
@@ -88,42 +121,43 @@ function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean 
   );
 }
 
-function resolveSlackOriginTarget(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  request: ApprovalRequest;
-}) {
-  if (!shouldHandleSlackExecApprovalRequest(params)) {
-    return null;
-  }
-  return resolveApprovalRequestOriginTarget({
-    cfg: params.cfg,
-    request: params.request,
-    channel: "slack",
-    accountId: params.accountId,
-    resolveTurnSourceTarget: resolveTurnSourceSlackOriginTarget,
-    resolveSessionTarget: resolveSessionSlackOriginTarget,
-    targetsMatch: slackTargetsMatch,
-  });
-}
+const resolveSlackOriginTarget = createChannelNativeOriginTargetResolver({
+  channel: "slack",
+  shouldHandleRequest: ({ cfg, accountId, request }) =>
+    shouldHandleSlackExecApprovalRequest({
+      cfg,
+      accountId,
+      request,
+    }),
+  resolveTurnSourceTarget: resolveTurnSourceSlackOriginTarget,
+  resolveSessionTarget: resolveSessionSlackOriginTarget,
+  targetsMatch: slackTargetsMatch,
+  resolveFallbackTarget: resolveSlackFallbackOriginTarget,
+});
 
-function resolveSlackApproverDmTargets(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  request: ApprovalRequest;
-}) {
-  if (!shouldHandleSlackExecApprovalRequest(params)) {
-    return [];
-  }
-  return getSlackExecApprovalApprovers({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).map((approver) => ({ to: `user:${approver}` }));
-}
+const resolveSlackApproverDmTargets = createChannelApproverDmTargetResolver({
+  shouldHandleRequest: ({ cfg, accountId, request }) =>
+    shouldHandleSlackExecApprovalRequest({
+      cfg,
+      accountId,
+      request,
+    }),
+  resolveApprovers: getSlackExecApprovalApprovers,
+  mapApprover: (approver) => ({ to: `user:${approver}` }),
+});
 
-export const slackNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
+export const slackApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "slack",
   channelLabel: "Slack",
+  describeExecApprovalSetup: ({
+    accountId,
+  }: Parameters<NonNullable<ChannelApprovalCapability["describeExecApprovalSetup"]>>[0]) => {
+    const prefix =
+      accountId && accountId !== "default"
+        ? `channels.slack.accounts.${accountId}`
+        : "channels.slack";
+    return `Approve it from the Web UI or terminal UI for now. Slack supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+  },
   listAccountIds: listSlackAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     getSlackExecApprovalApprovers({ cfg, accountId }).length > 0,
@@ -137,10 +171,28 @@ export const slackNativeApprovalAdapter = createApproverRestrictedNativeApproval
     resolveSlackExecApprovalTarget({ cfg, accountId }),
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId: ({ target, request }) =>
-    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
-  resolveOriginTarget: ({ cfg, accountId, request }) =>
-    accountId ? resolveSlackOriginTarget({ cfg, accountId, request }) : null,
-  resolveApproverDmTargets: ({ cfg, accountId, request }) =>
-    resolveSlackApproverDmTargets({ cfg, accountId, request }),
+    normalizeOptionalString(target.accountId) ??
+    normalizeOptionalString(request.request.turnSourceAccountId),
+  resolveOriginTarget: resolveSlackOriginTarget,
+  resolveApproverDmTargets: resolveSlackApproverDmTargets,
   notifyOriginWhenDmOnly: true,
+  nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    eventKinds: ["exec"],
+    isConfigured: ({ cfg, accountId }) =>
+      isSlackExecApprovalClientEnabled({
+        cfg,
+        accountId,
+      }),
+    shouldHandle: ({ cfg, accountId, request }) =>
+      shouldHandleSlackExecApprovalRequest({
+        cfg,
+        accountId,
+        request,
+      }),
+    load: async () =>
+      (await import("./approval-handler.runtime.js"))
+        .slackApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+  }),
 });
+
+export const slackNativeApprovalAdapter = splitChannelApprovalCapability(slackApprovalCapability);

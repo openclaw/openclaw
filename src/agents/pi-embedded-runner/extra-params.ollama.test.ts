@@ -3,8 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as extraParamsTesting } from "./extra-params.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  prepareProviderExtraParams: ({
+    context,
+  }: {
+    context: { extraParams: Record<string, unknown> };
+  }) => context.extraParams,
+  wrapProviderStreamFn: () => undefined,
+}));
+
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     streamSimple: vi.fn(() => ({

@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
-  DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
   isInboundPathAllowed,
   isValidInboundPathRootPattern,
   mergeInboundPathRoots,
-  resolveIMessageAttachmentRoots,
-  resolveIMessageRemoteAttachmentRoots,
 } from "./inbound-path-policy.js";
 
 describe("inbound-path-policy", () => {
@@ -18,10 +14,6 @@ describe("inbound-path-policy", () => {
     expect(
       isInboundPathAllowed({ filePath, roots: ["/Users/*/Library/Messages/Attachments"] }),
     ).toBe(expected);
-  }
-
-  function expectResolvedIMessageRootsCase(resolve: () => string[], expected: readonly string[]) {
-    expect(resolve()).toEqual(expected);
   }
 
   function expectMergedInboundPathRootsCase(params: {
@@ -54,21 +46,6 @@ describe("inbound-path-policy", () => {
     expectInboundPathAllowedCase(filePath, expected);
   });
 
-  const accountOverrideCfg = {
-    channels: {
-      imessage: {
-        attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
-        remoteAttachmentRoots: ["/Volumes/shared/imessage"],
-        accounts: {
-          work: {
-            attachmentRoots: ["/Users/work/Library/Messages/Attachments"],
-            remoteAttachmentRoots: ["/srv/work/attachments"],
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
-
   it.each([
     {
       name: "normalizes and de-duplicates merged roots",
@@ -82,63 +59,7 @@ describe("inbound-path-policy", () => {
           expected: ["/Users/*/Library/Messages/Attachments", "/Volumes/relay/attachments"],
         }),
     },
-    {
-      name: "resolves configured attachment roots with account overrides",
-      run: () =>
-        expectResolvedIMessageRootsCase(
-          () => resolveIMessageAttachmentRoots({ cfg: accountOverrideCfg, accountId: "work" }),
-          ["/Users/work/Library/Messages/Attachments", "/Users/*/Library/Messages/Attachments"],
-        ),
-    },
-    {
-      name: "resolves configured remote attachment roots with account overrides",
-      run: () =>
-        expectResolvedIMessageRootsCase(
-          () =>
-            resolveIMessageRemoteAttachmentRoots({ cfg: accountOverrideCfg, accountId: "work" }),
-          [
-            "/srv/work/attachments",
-            "/Volumes/shared/imessage",
-            "/Users/work/Library/Messages/Attachments",
-            "/Users/*/Library/Messages/Attachments",
-          ],
-        ),
-    },
   ] as const)("$name", ({ run }) => {
     run();
-  });
-
-  it.each([
-    {
-      name: "matches iMessage account ids case-insensitively for attachment roots",
-      resolve: () => {
-        const cfg = {
-          channels: {
-            imessage: {
-              accounts: {
-                Work: {
-                  attachmentRoots: ["/Users/work/Library/Messages/Attachments"],
-                },
-              },
-            },
-          },
-        } as OpenClawConfig;
-
-        return resolveIMessageAttachmentRoots({ cfg, accountId: "work" });
-      },
-      expected: ["/Users/work/Library/Messages/Attachments", ...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS],
-    },
-    {
-      name: "falls back to default iMessage attachment roots",
-      resolve: () => resolveIMessageAttachmentRoots({ cfg: {} as OpenClawConfig }),
-      expected: [...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS],
-    },
-    {
-      name: "falls back to default iMessage remote attachment roots",
-      resolve: () => resolveIMessageRemoteAttachmentRoots({ cfg: {} as OpenClawConfig }),
-      expected: [...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS],
-    },
-  ] as const)("$name", ({ resolve, expected }) => {
-    expectResolvedIMessageRootsCase(resolve, expected);
   });
 });

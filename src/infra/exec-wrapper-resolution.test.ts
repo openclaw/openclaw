@@ -1,13 +1,16 @@
 import { describe, expect, test } from "vitest";
 import {
   basenameLower,
+  extractEnvAssignmentKeysFromDispatchWrappers,
   extractShellWrapperCommand,
   extractShellWrapperInlineCommand,
   hasEnvManipulationBeforeShellWrapper,
   isDispatchWrapperExecutable,
   isShellWrapperExecutable,
+  isShellWrapperInvocation,
   normalizeExecutableToken,
   resolveDispatchWrapperTrustPlan,
+  resolveShellWrapperTransportArgv,
   unwrapEnvInvocation,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
@@ -379,6 +382,71 @@ describe("hasEnvManipulationBeforeShellWrapper", () => {
     },
   ])("detects env manipulation before shell wrappers for %j", ({ argv, expected }) => {
     expect(hasEnvManipulationBeforeShellWrapper(argv)).toBe(expected);
+  });
+});
+
+describe("resolveShellWrapperTransportArgv", () => {
+  test.each([
+    {
+      argv: ["env", "cmd.exe", "/d", "/s", "/c", "echo hi"],
+      expected: ["cmd.exe", "/d", "/s", "/c", "echo hi"],
+    },
+    {
+      argv: ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c", "echo hi"],
+      expected: ["cmd.exe", "/d", "/s", "/c", "echo hi"],
+    },
+    {
+      argv: ["bash", "script.sh"],
+      expected: null,
+    },
+  ])("resolves wrapper transport argv for %j", ({ argv, expected }) => {
+    expect(resolveShellWrapperTransportArgv(argv)).toEqual(expected);
+  });
+});
+
+describe("isShellWrapperInvocation", () => {
+  test.each([
+    {
+      argv: ["bash", "script.sh"],
+      expected: true,
+    },
+    {
+      argv: ["/usr/bin/env", "SHELLOPTS=xtrace", "bash", "-lc", "echo hi"],
+      expected: true,
+    },
+    {
+      argv: ["busybox", "sh", "script.sh"],
+      expected: true,
+    },
+    {
+      argv: ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"],
+      expected: false,
+    },
+  ])("detects shell-wrapper executable invocations for %j", ({ argv, expected }) => {
+    expect(isShellWrapperInvocation(argv)).toBe(expected);
+  });
+});
+
+describe("extractEnvAssignmentKeysFromDispatchWrappers", () => {
+  test.each([
+    {
+      argv: ["env", "FOO=bar", "BAR=baz", "bash", "-lc", "echo hi"],
+      expected: ["BAR", "FOO"],
+    },
+    {
+      argv: ["nice", "-n", "5", "env", "-u", "PATH", "TERM=xterm", "bash", "-lc", "echo hi"],
+      expected: ["TERM"],
+    },
+    {
+      argv: ["env", "--split-string", "FOO=bar", "bash", "-lc", "echo hi"],
+      expected: [],
+    },
+    {
+      argv: ["env", "--", "bash", "-lc", "echo hi"],
+      expected: [],
+    },
+  ])("extracts env assignment prelude keys for %j", ({ argv, expected }) => {
+    expect(extractEnvAssignmentKeysFromDispatchWrappers(argv)).toEqual(expected);
   });
 });
 

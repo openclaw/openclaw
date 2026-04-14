@@ -4,6 +4,7 @@ import {
   resolveLoggerBackedRuntime,
   safeParseJsonWithSchema,
 } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "zod";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -15,7 +16,7 @@ import {
 } from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
-import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
+import { createNextcloudTalkReplayGuard, type NextcloudTalkReplayGuard } from "./replay-guard.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type {
@@ -30,7 +31,6 @@ const DEFAULT_WEBHOOK_PORT = 8788;
 const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
@@ -64,6 +64,57 @@ const WEBHOOK_ERRORS = {
   internalServerError: "Internal server error",
 } as const;
 
+export class NextcloudTalkRetryableWebhookError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "NextcloudTalkRetryableWebhookError";
+  }
+}
+
+export async function processNextcloudTalkReplayGuardedMessage(params: {
+  replayGuard: NextcloudTalkReplayGuard;
+  accountId: string;
+  message: NextcloudTalkInboundMessage;
+  handleMessage: () => Promise<void>;
+}): Promise<"processed" | "duplicate"> {
+  const claim = await params.replayGuard.claimMessage({
+    accountId: params.accountId,
+    roomToken: params.message.roomToken,
+    messageId: params.message.messageId,
+  });
+  if (claim !== "claimed") {
+    return "duplicate";
+  }
+
+  try {
+    await params.handleMessage();
+    await params.replayGuard.commitMessage({
+      accountId: params.accountId,
+      roomToken: params.message.roomToken,
+      messageId: params.message.messageId,
+    });
+    return "processed";
+  } catch (error) {
+    if (error instanceof NextcloudTalkRetryableWebhookError) {
+      params.replayGuard.releaseMessage({
+        accountId: params.accountId,
+        roomToken: params.message.roomToken,
+        messageId: params.message.messageId,
+        error,
+      });
+    } else {
+      // Generic failures are treated as non-retryable because the handler may already
+      // have produced a visible side effect, and replaying the webhook would duplicate it.
+      await params.replayGuard.commitMessage({
+        accountId: params.accountId,
+        roomToken: params.message.roomToken,
+        messageId: params.message.messageId,
+      });
+    }
+    throw error;
+  }
+}
+
 function formatError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -73,7 +124,7 @@ function formatError(err: unknown): string {
 
 function normalizeOrigin(value: string): string | null {
   try {
-    return new URL(value).origin.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(new URL(value).origin);
   } catch {
     return null;
   }
@@ -171,7 +222,7 @@ function payloadToInboundMessage(
   const isGroupChat = true;
 
   return {
-    messageId: String(payload.object.id),
+    messageId: payload.object.id,
     roomToken: payload.target.id,
     roomName: payload.target.name,
     senderId: payload.actor.id,
@@ -210,6 +261,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const readBody = opts.readBody ?? readNextcloudTalkWebhookBody;
   const isBackendAllowed = opts.isBackendAllowed;
   const shouldProcessMessage = opts.shouldProcessMessage;
+  const processMessage = opts.processMessage;
   const webhookAuthRateLimiter = createAuthRateLimiter({
     maxAttempts: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
@@ -275,6 +327,16 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       }
 
       const message = decoded.message;
+      if (processMessage) {
+        writeJsonResponse(res, 200);
+        try {
+          await processMessage(message);
+        } catch (err) {
+          onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        }
+        return;
+      }
+
       if (shouldProcessMessage) {
         const shouldProcess = await shouldProcessMessage(message);
         if (!shouldProcess) {
@@ -392,38 +454,39 @@ export async function monitorNextcloudTalkProvider(
       const backendOrigin = normalizeOrigin(backend);
       return backendOrigin === expectedBackendOrigin;
     },
-    shouldProcessMessage: async (message) => {
-      const shouldProcess = await replayGuard.shouldProcessMessage({
+    processMessage: async (message) => {
+      const result = await processNextcloudTalkReplayGuardedMessage({
+        replayGuard,
         accountId: account.accountId,
-        roomToken: message.roomToken,
-        messageId: message.messageId,
+        message,
+        handleMessage: async () => {
+          core.channel.activity.record({
+            channel: "nextcloud-talk",
+            accountId: account.accountId,
+            direction: "inbound",
+            at: message.timestamp,
+          });
+          if (opts.onMessage) {
+            await opts.onMessage(message);
+          } else {
+            await handleNextcloudTalkInbound({
+              message,
+              account,
+              config: cfg,
+              runtime,
+              statusSink: opts.statusSink,
+            });
+          }
+        },
       });
-      if (!shouldProcess) {
+      if (result === "duplicate") {
         logger.warn(
           `[nextcloud-talk:${account.accountId}] replayed webhook ignored room=${message.roomToken} messageId=${message.messageId}`,
         );
-      }
-      return shouldProcess;
-    },
-    onMessage: async (message) => {
-      core.channel.activity.record({
-        channel: "nextcloud-talk",
-        accountId: account.accountId,
-        direction: "inbound",
-        at: message.timestamp,
-      });
-      if (opts.onMessage) {
-        await opts.onMessage(message);
         return;
       }
-      await handleNextcloudTalkInbound({
-        message,
-        account,
-        config: cfg,
-        runtime,
-        statusSink: opts.statusSink,
-      });
     },
+    onMessage: async () => {},
     onError: (error) => {
       logger.error(`[nextcloud-talk:${account.accountId}] webhook error: ${error.message}`);
     },

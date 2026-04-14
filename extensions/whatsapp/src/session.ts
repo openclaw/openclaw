@@ -1,18 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  makeWASocket,
-  useMultiFileAuthState,
-} from "@whiskeysockets/baileys";
+import type { Agent } from "node:https";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
-import qrcode from "qrcode-terminal";
 import {
   maybeRestoreCredsFromBackup,
   readCredsJsonRaw,
@@ -21,6 +15,13 @@ import {
   resolveWebCredsPath,
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
+import {
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  makeWASocket,
+  useMultiFileAuthState,
+} from "./session.runtime.js";
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
@@ -34,6 +35,11 @@ export {
 } from "./auth-store.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+
+async function loadQrTerminal() {
+  const mod = await import("qrcode-terminal");
+  return mod.default ?? mod;
+}
 
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
@@ -50,7 +56,9 @@ function enqueueSaveCreds(
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
     })
     .finally(() => {
-      if (credsSaveQueues.get(authDir) === next) credsSaveQueues.delete(authDir);
+      if (credsSaveQueues.get(authDir) === next) {
+        credsSaveQueues.delete(authDir);
+      }
     });
   credsSaveQueues.set(authDir, next);
 }
@@ -116,6 +124,7 @@ export async function createWaSocket(
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
+  const agent = await resolveEnvProxyAgent(sessionLogger);
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -127,18 +136,21 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    agent,
+    fetchAgent: agent,
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
   sock.ev.on(
     "connection.update",
-    (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
+    async (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
       try {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
           opts.onQr?.(qr);
           if (printQr) {
             console.log("Scan this QR in WhatsApp (Linked Devices):");
+            const qrcode = await loadQrTerminal();
             qrcode.generate(qr, { small: true });
           }
         }
@@ -169,6 +181,22 @@ export async function createWaSocket(
   }
 
   return sock;
+}
+
+async function resolveEnvProxyAgent(
+  logger: ReturnType<typeof getChildLogger>,
+): Promise<Agent | undefined> {
+  return resolveAmbientNodeProxyAgent<Agent>({
+    onError: (err) => {
+      logger.warn(
+        { error: String(err) },
+        "Failed to initialize env proxy agent for WhatsApp WebSocket connection",
+      );
+    },
+    onUsingProxy: () => {
+      logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
+    },
+  });
 }
 
 export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {

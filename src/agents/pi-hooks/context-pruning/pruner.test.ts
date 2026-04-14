@@ -10,6 +10,9 @@ type AssistantContentBlock = AssistantMessage["content"][number];
 const CONTEXT_WINDOW_1M = {
   model: { contextWindow: 1_000_000 },
 } as unknown as ExtensionContext;
+const CONTEXT_WINDOW_5K = {
+  model: { contextWindow: 5_000 },
+} as unknown as ExtensionContext;
 
 function makeUser(text: string): AgentMessage {
   return {
@@ -56,6 +59,48 @@ function makeToolResult(
     content,
     timestamp: Date.now(),
   } as AgentMessage;
+}
+
+function pruneWithOversizedAssistantThinking(params: {
+  assistantBlock: AssistantContentBlock;
+  dropThinkingBlocksForEstimate?: boolean;
+}) {
+  return pruneContextMessages({
+    messages: [
+      makeUser("hello"),
+      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
+      makeAssistant([params.assistantBlock, { type: "text", text: "done" }]),
+    ],
+    settings: {
+      ...buildToolTrimSettings(),
+    },
+    ctx: CONTEXT_WINDOW_5K,
+    isToolPrunable: () => true,
+    ...(params.dropThinkingBlocksForEstimate ? { dropThinkingBlocksForEstimate: true } : {}),
+  });
+}
+
+function buildToolTrimSettings() {
+  return {
+    mode: DEFAULT_CONTEXT_PRUNING_SETTINGS.mode,
+    ttlMs: DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs,
+    keepLastAssistants: 1,
+    softTrimRatio: 0.5,
+    hardClearRatio: DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClearRatio,
+    minPrunableToolChars: DEFAULT_CONTEXT_PRUNING_SETTINGS.minPrunableToolChars,
+    tools: DEFAULT_CONTEXT_PRUNING_SETTINGS.tools,
+    softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+    hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+  };
+}
+
+function expectToolResultWasTrimmed(result: AgentMessage[]) {
+  const toolResult = result.find((message) => message.role === "toolResult") as Extract<
+    AgentMessage,
+    { role: "toolResult" }
+  >;
+  const textBlock = toolResult.content[0] as { type: "text"; text: string };
+  expect(textBlock.text).toContain("[Tool result trimmed:");
 }
 
 describe("pruneContextMessages", () => {
@@ -121,6 +166,59 @@ describe("pruneContextMessages", () => {
       ctx: CONTEXT_WINDOW_1M,
     });
     expect(result).toHaveLength(2);
+  });
+
+  it("counts thinkingSignature bytes when estimating assistant message size", () => {
+    const result = pruneWithOversizedAssistantThinking({
+      assistantBlock: {
+        type: "thinking",
+        thinking: "[redacted]",
+        thinkingSignature: "S".repeat(40_000),
+        redacted: true,
+      } as unknown as AssistantContentBlock,
+    });
+    expectToolResultWasTrimmed(result);
+  });
+
+  it("counts redacted_thinking data bytes when estimating assistant message size", () => {
+    const result = pruneWithOversizedAssistantThinking({
+      assistantBlock: {
+        type: "redacted_thinking",
+        data: "D".repeat(40_000),
+        thinkingSignature: "sig",
+      } as unknown as AssistantContentBlock,
+    });
+    expectToolResultWasTrimmed(result);
+  });
+
+  it("ignores non-latest thinking signatures that will be dropped before send", () => {
+    const messages: AgentMessage[] = [
+      makeUser("first"),
+      makeAssistant([
+        {
+          type: "thinking",
+          thinking: "internal",
+          thinkingSignature: "S".repeat(40_000),
+        } as unknown as AssistantContentBlock,
+        { type: "text", text: "older reply" },
+      ]),
+      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
+      makeUser("latest"),
+      makeAssistant([{ type: "text", text: "latest reply" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        ...buildToolTrimSettings(),
+      },
+      ctx: CONTEXT_WINDOW_5K,
+      isToolPrunable: () => true,
+      dropThinkingBlocksForEstimate: true,
+    });
+
+    expect(result).toBe(messages);
   });
 
   it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {

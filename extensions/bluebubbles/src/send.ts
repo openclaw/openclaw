@@ -1,11 +1,17 @@
 import crypto from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { stripMarkdown } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
@@ -62,10 +68,10 @@ const EFFECT_MAP: Record<string, string> = {
 };
 
 function resolveEffectId(raw?: string): string | undefined {
-  if (!raw) {
+  const trimmed = normalizeOptionalLowercaseString(raw);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
   if (EFFECT_MAP[trimmed]) {
     return EFFECT_MAP[trimmed];
   }
@@ -137,8 +143,9 @@ function extractChatGuid(chat: BlueBubblesChatRecord): string | null {
     chat.chat_identifier,
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
+    const value = normalizeOptionalString(candidate);
+    if (value) {
+      return value;
     }
   }
   return null;
@@ -159,8 +166,7 @@ function extractChatIdentifierFromChatGuid(chatGuid: string): string | null {
   if (parts.length < 3) {
     return null;
   }
-  const identifier = parts[2]?.trim();
-  return identifier ? identifier : null;
+  return normalizeOptionalString(parts[2]) ?? null;
 }
 
 function extractParticipantAddresses(chat: BlueBubblesChatRecord): string[] {
@@ -360,7 +366,7 @@ export async function createChatForHandle(params: {
     if (
       res.status === 400 ||
       res.status === 403 ||
-      errorText.toLowerCase().includes("private api")
+      normalizeLowercaseStringOrEmpty(errorText).includes("private api")
     ) {
       throw new Error(
         `BlueBubbles send failed: Cannot create new chat - Private API must be enabled. Original error: ${errorText || res.status}`,
@@ -451,7 +457,7 @@ export async function sendMessageBlueBubbles(
     serverUrl: opts.serverUrl,
     password: opts.password,
   });
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -479,8 +485,27 @@ export async function sendMessageBlueBubbles(
     );
   }
   const effectId = resolveEffectId(opts.effectId);
-  const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
+  const wantsReplyThread = normalizeOptionalString(opts.replyToMessageGuid) !== undefined;
   const wantsEffect = Boolean(effectId);
+
+  // Lazy refresh: when the cache has expired and Private API features are needed,
+  // fetch server info before making the decision. This prevents silent degradation
+  // of reply threading and effects after the 10-minute cache TTL expires. (#43764)
+  if (privateApiStatus === null && (wantsReplyThread || wantsEffect)) {
+    try {
+      await fetchBlueBubblesServerInfo({
+        baseUrl,
+        password,
+        accountId,
+        timeoutMs: opts.timeoutMs ?? 5000,
+        allowPrivateNetwork,
+      });
+      privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+    } catch {
+      // Refresh failed — proceed with null status (existing graceful degradation)
+    }
+  }
+
   const privateApiDecision = resolvePrivateApiDecision({
     privateApiStatus,
     wantsReplyThread,

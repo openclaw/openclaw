@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
+import { buildCommandContext } from "./commands-context.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { buildCommandContext } from "./commands.js";
-import { parseInlineDirectives } from "./directive-handling.js";
+import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 export function buildCommandTestParams(
   commandBody: string,

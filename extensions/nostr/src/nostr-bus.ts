@@ -7,6 +7,7 @@ import {
   type Event,
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
@@ -504,15 +505,24 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
       inflight.add(event.id);
 
+      const markSeen = () => {
+        seen.add(event.id);
+        metrics.emit("memory.seen_tracker_size", seen.size());
+      };
+      const rejectAndMarkSeen = (metric: Parameters<typeof metrics.emit>[0]) => {
+        markSeen();
+        metrics.emit(metric);
+      };
+
       // Self-message loop prevention: skip our own messages
       if (event.pubkey === pk) {
-        metrics.emit("event.rejected.self_message");
+        rejectAndMarkSeen("event.rejected.self_message");
         return;
       }
 
       // Skip events older than our `since` (relay may ignore filter)
       if (event.created_at < since) {
-        metrics.emit("event.rejected.stale");
+        rejectAndMarkSeen("event.rejected.stale");
         return;
       }
 
@@ -522,7 +532,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
 
       if (!guardPolicy.allowedKinds.includes(event.kind)) {
-        metrics.emit("event.rejected.wrong_kind");
+        rejectAndMarkSeen("event.rejected.wrong_kind");
         return;
       }
 
@@ -535,7 +545,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         }
       }
       if (!targetsUs) {
-        metrics.emit("event.rejected.wrong_kind");
+        rejectAndMarkSeen("event.rejected.wrong_kind");
         return;
       }
 
@@ -577,16 +587,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return false;
       };
 
-      const markSeen = () => {
-        seen.add(event.id);
-        metrics.emit("memory.seen_tracker_size", seen.size());
-      };
-
       if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
         if (rejectIfGlobalRateLimited()) {
           return;
         }
-        metrics.emit("event.rejected.oversized_ciphertext");
+        rejectAndMarkSeen("event.rejected.oversized_ciphertext");
         return;
       }
 
@@ -596,7 +601,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
       // Verify signature (must pass before we trust the event)
       if (!verifyEvent(event)) {
-        metrics.emit("event.rejected.invalid_signature");
+        rejectAndMarkSeen("event.rejected.invalid_signature");
         onError?.(new Error("Invalid signature"), `event ${event.id}`);
         return;
       }
@@ -616,15 +621,13 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         }
       }
 
-      // Mark seen AFTER verify (don't cache invalid IDs)
-      markSeen();
-
       // Decrypt the message
       let plaintext: string;
       try {
         plaintext = decrypt(sk, event.pubkey, event.content);
         metrics.emit("decrypt.success");
       } catch (err) {
+        markSeen();
         metrics.emit("decrypt.failure");
         metrics.emit("event.rejected.decrypt_failed");
         onError?.(err as Error, `decrypt from ${event.pubkey}`);
@@ -632,6 +635,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
 
       if (Buffer.byteLength(plaintext, "utf8") > guardPolicy.maxPlaintextBytes) {
+        markSeen();
         metrics.emit("event.rejected.oversized_plaintext");
         return;
       }
@@ -641,6 +645,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         eventId: event.id,
         createdAt: event.created_at,
       });
+
+      // Only cache successful deliveries so handler failures can retry.
+      markSeen();
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -800,8 +807,11 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      // oxlint-disable-next-line typescript/await-thenable typesciript/no-floating-promises
-      await pool.publish([relay], reply);
+      const [publishPromise] = pool.publish([relay], reply);
+      if (!publishPromise) {
+        throw new Error(`Failed to create publish promise for relay ${relay}`);
+      }
+      await publishPromise;
       const latency = Date.now() - startTime;
 
       // Record success
@@ -874,7 +884,7 @@ export function normalizePubkey(input: string): string {
   if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
     throw new Error("Pubkey must be 64 hex characters or npub format");
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 /**

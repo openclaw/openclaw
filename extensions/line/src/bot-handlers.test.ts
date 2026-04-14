@@ -1,34 +1,197 @@
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
+
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    danger: (text: string) => text,
-    logVerbose: () => {},
-    shouldLogVerbose: () => false,
-  };
-});
+vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+  buildMentionRegexes: () => [],
+  matchesMentionPatterns: () => false,
+  resolveInboundMentionDecision: (params: {
+    facts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      hasAnyMention?: boolean;
+    };
+    policy?: {
+      isGroup: boolean;
+      requireMention: boolean;
+      allowTextCommands: boolean;
+      hasControlCommand: boolean;
+      commandAuthorized: boolean;
+    };
+    isGroup?: boolean;
+    requireMention?: boolean;
+    canDetectMention?: boolean;
+    wasMentioned?: boolean;
+    hasAnyMention?: boolean;
+    allowTextCommands?: boolean;
+    hasControlCommand?: boolean;
+    commandAuthorized?: boolean;
+  }) => {
+    const facts =
+      "facts" in params && params.facts
+        ? params.facts
+        : {
+            canDetectMention: Boolean(params.canDetectMention),
+            wasMentioned: Boolean(params.wasMentioned),
+            hasAnyMention: params.hasAnyMention,
+          };
+    const policy =
+      "policy" in params && params.policy
+        ? params.policy
+        : {
+            isGroup: Boolean(params.isGroup),
+            requireMention: Boolean(params.requireMention),
+            allowTextCommands: Boolean(params.allowTextCommands),
+            hasControlCommand: Boolean(params.hasControlCommand),
+            commandAuthorized: Boolean(params.commandAuthorized),
+          };
+    return {
+      effectiveWasMentioned:
+        facts.wasMentioned ||
+        (policy.allowTextCommands &&
+          policy.hasControlCommand &&
+          policy.commandAuthorized &&
+          !facts.hasAnyMention),
+      shouldSkip:
+        policy.isGroup &&
+        policy.requireMention &&
+        facts.canDetectMention &&
+        !facts.wasMentioned &&
+        !(
+          policy.allowTextCommands &&
+          policy.hasControlCommand &&
+          policy.commandAuthorized &&
+          !facts.hasAnyMention
+        ),
+      shouldBypassMention:
+        policy.isGroup &&
+        policy.requireMention &&
+        !facts.wasMentioned &&
+        !facts.hasAnyMention &&
+        policy.allowTextCommands &&
+        policy.hasControlCommand &&
+        policy.commandAuthorized,
+      implicitMention: false,
+      matchedImplicitMentionKinds: [],
+    };
+  },
+}));
+vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
+  createChannelPairingChallengeIssuer:
+    ({ upsertPairingRequest }: { upsertPairingRequest: (args: unknown) => Promise<unknown> }) =>
+    async ({ senderId, onCreated }: { senderId: string; onCreated?: () => void }) => {
+      await upsertPairingRequest({ id: senderId, meta: {} });
+      onCreated?.();
+    },
+}));
+vi.mock("openclaw/plugin-sdk/command-auth", () => ({
+  hasControlCommand: (text: string) => text.trim().startsWith("!"),
+  resolveControlCommandGate: ({
+    hasControlCommand,
+    authorizers,
+  }: {
+    hasControlCommand: boolean;
+    authorizers: Array<{ configured: boolean; allowed: boolean }>;
+  }) => ({
+    commandAuthorized:
+      hasControlCommand && authorizers.some((entry) => entry.allowed || !entry.configured),
+  }),
+}));
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  resolveAllowlistProviderRuntimeGroupPolicy: ({
+    groupPolicy,
+    defaultGroupPolicy,
+  }: {
+    groupPolicy?: string;
+    defaultGroupPolicy: string;
+  }) => ({
+    groupPolicy: groupPolicy ?? defaultGroupPolicy,
+    providerMissingFallbackApplied: false,
+  }),
+  resolveDefaultGroupPolicy: (cfg: { channels?: { line?: { groupPolicy?: string } } }) =>
+    cfg.channels?.line?.groupPolicy ?? "open",
+  warnMissingProviderGroupPolicyFallbackOnce: () => {},
+}));
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  danger: (text: string) => text,
+  logVerbose: () => {},
+}));
+vi.mock("openclaw/plugin-sdk/group-access", () => ({
+  evaluateMatchedGroupAccessForPolicy: ({
+    groupPolicy,
+    hasMatchInput,
+    allowlistConfigured,
+    allowlistMatched,
+  }: {
+    groupPolicy: string;
+    hasMatchInput: boolean;
+    allowlistConfigured: boolean;
+    allowlistMatched: boolean;
+  }) => {
+    if (groupPolicy === "disabled") {
+      return { allowed: false, reason: "disabled" };
+    }
+    if (groupPolicy !== "allowlist") {
+      return { allowed: true, reason: null };
+    }
+    if (!hasMatchInput) {
+      return { allowed: false, reason: "missing_match_input" };
+    }
+    if (!allowlistConfigured) {
+      return { allowed: false, reason: "empty_allowlist" };
+    }
+    if (!allowlistMatched) {
+      return { allowed: false, reason: "not_allowlisted" };
+    }
+    return { allowed: true, reason: null };
+  },
+}));
+vi.mock("openclaw/plugin-sdk/reply-history", () => ({
+  DEFAULT_GROUP_HISTORY_LIMIT: 20,
+  clearHistoryEntriesIfEnabled: ({
+    historyMap,
+    historyKey,
+  }: {
+    historyMap: Map<string, HistoryEntry[]>;
+    historyKey: string;
+  }) => {
+    historyMap.delete(historyKey);
+  },
+  recordPendingHistoryEntryIfEnabled: ({
+    historyMap,
+    historyKey,
+    limit,
+    entry,
+  }: {
+    historyMap: Map<string, HistoryEntry[]>;
+    historyKey: string;
+    limit: number;
+    entry: HistoryEntry;
+  }) => {
+    const existing = historyMap.get(historyKey) ?? [];
+    historyMap.set(historyKey, [...existing, entry].slice(-limit));
+  },
+}));
+vi.mock("openclaw/plugin-sdk/routing", () => ({
+  resolveAgentRoute: () => ({ agentId: "default" }),
+}));
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
   upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    resolvePairingIdLabel: () => "lineUserId",
-    readChannelAllowFromStore: readAllowFromStoreMock,
-    upsertChannelPairingRequest: upsertPairingRequestMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
+  resolvePairingIdLabel: () => "lineUserId",
+  readChannelAllowFromStore: readAllowFromStoreMock,
+  upsertChannelPairingRequest: upsertPairingRequestMock,
+}));
 
 vi.mock("./download.js", () => ({
   downloadLineMedia: async () => {
@@ -74,19 +237,10 @@ vi.mock("./bot-message-context.js", () => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
+let LineRetryableWebhookError: typeof import("./bot-handlers.js").LineRetryableWebhookError;
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
-
-function buildDefaultLineMessageContext() {
-  return {
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  };
-}
 
 function createReplayMessageEvent(params: {
   messageId: string;
@@ -214,8 +368,8 @@ async function startInflightReplayDuplicate(params: {
 
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
-    vi.resetModules();
-    ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
+    ({ handleLineWebhookEvents, createLineWebhookReplayCache, LineRetryableWebhookError } =
+      await import("./bot-handlers.js"));
   });
 
   beforeEach(() => {
@@ -581,7 +735,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("mirrors in-flight replay failures so concurrent duplicates also fail", async () => {
+  it("mirrors in-flight retryable replay failures so concurrent duplicates also fail", async () => {
     let rejectFirst: ((err: Error) => void) | undefined;
     const firstDone = new Promise<void>((_, reject) => {
       rejectFirst = reject;
@@ -599,7 +753,7 @@ describe("handleLineWebhookEvents", () => {
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
     const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
     const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
-    rejectFirst?.(new Error("transient inflight failure"));
+    rejectFirst?.(new LineRetryableWebhookError("transient inflight failure"));
 
     await Promise.all([firstFailure, secondFailure]);
     expect(processMessage).toHaveBeenCalledTimes(1);
@@ -887,7 +1041,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
   });
 
-  it("does not mark replay cache when event processing fails", async () => {
+  it("keeps replay cache committed after a non-retryable event failure", async () => {
     const processMessage = vi
       .fn()
       .mockRejectedValueOnce(new Error("transient failure"))
@@ -904,10 +1058,31 @@ describe("handleLineWebhookEvents", () => {
     await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("transient failure");
     await handleLineWebhookEvents([event], context);
 
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(2);
-    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
     expect(context.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("line: event handler failed: Error: transient failure"),
     );
+  });
+
+  it("reopens replay after an explicit retryable event failure", async () => {
+    const processMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new LineRetryableWebhookError("retry me"))
+      .mockResolvedValueOnce(undefined);
+    const event = createReplayMessageEvent({
+      messageId: "m-fail-then-retryable",
+      groupId: "group-retry",
+      userId: "user-retry",
+      webhookEventId: "evt-fail-then-retryable",
+      isRedelivery: false,
+    });
+    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
+
+    await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("retry me");
+    await handleLineWebhookEvents([event], context);
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(2);
+    expect(processMessage).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,8 +1,8 @@
-import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
-import { normalizeChannelId } from "../channels/plugins/index.js";
-import type { CliDeps } from "../cli/deps.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
+import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
@@ -15,12 +15,22 @@ import {
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
-const OUTBOUND_RETRY_DELAY_MS = 750;
-const OUTBOUND_MAX_ATTEMPTS = 2;
+const OUTBOUND_RETRY_DELAY_MS = 1_000;
+const OUTBOUND_MAX_ATTEMPTS = 45;
+
+function hasRoutableDeliveryContext(context?: {
+  channel?: string;
+  to?: string;
+}): context is { channel: string; to: string } {
+  return Boolean(context?.channel && context?.to);
+}
 
 function enqueueRestartSentinelWake(
   message: string,
@@ -105,11 +115,9 @@ async function deliverRestartSentinelNotice(params: {
       });
       if (!retrying) {
         if (queueId) {
-          await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
-            () => {
-              // Best-effort queue bookkeeping.
-            },
-          );
+          await failDelivery(queueId, formatErrorMessage(err)).catch(() => {
+            // Best-effort queue bookkeeping.
+          });
         }
         return;
       }
@@ -140,26 +148,29 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     return;
   }
 
-  enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
-
   const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
   const { cfg, entry } = loadSessionEntry(sessionKey);
-  const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey ?? sessionKey);
 
   // Prefer delivery context from sentinel (captured at restart) over session store
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
   let sessionDeliveryContext = deliveryContextFromSession(entry);
-  if (!sessionDeliveryContext && baseSessionKey && baseSessionKey !== sessionKey) {
+  if (
+    !hasRoutableDeliveryContext(sessionDeliveryContext) &&
+    baseSessionKey &&
+    baseSessionKey !== sessionKey
+  ) {
     const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-    sessionDeliveryContext = deliveryContextFromSession(baseEntry);
+    sessionDeliveryContext = mergeDeliveryContext(
+      sessionDeliveryContext,
+      deliveryContextFromSession(baseEntry),
+    );
   }
 
-  const origin = mergeDeliveryContext(
-    sentinelContext,
-    mergeDeliveryContext(sessionDeliveryContext, parsedTarget ?? undefined),
-  );
+  const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
+
+  enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
 
   const channelRaw = origin?.channel;
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
@@ -181,17 +192,22 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
 
   const threadId =
     payload.threadId ??
-    parsedTarget?.threadId ?? // From resolveAnnounceTargetFromKey (extracts :topic:N)
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 
-  // Slack uses replyToId (thread_ts) for threading, not threadId.
-  // The reply path does this mapping but deliverOutboundPayloads does not,
-  // so we must convert here to ensure post-restart notifications land in
-  // the originating Slack thread. See #17716.
-  const isSlack = channel === "slack";
-  const replyToId = isSlack && threadId != null && threadId !== "" ? String(threadId) : undefined;
-  const resolvedThreadId = isSlack ? undefined : threadId;
+  const replyTransport =
+    getChannelPlugin(channel)?.threading?.resolveReplyTransport?.({
+      cfg,
+      accountId: origin?.accountId,
+      threadId,
+    }) ?? null;
+  const replyToId = replyTransport?.replyToId ?? undefined;
+  const resolvedThreadId =
+    replyTransport && Object.hasOwn(replyTransport, "threadId")
+      ? replyTransport.threadId != null
+        ? String(replyTransport.threadId)
+        : undefined
+      : threadId;
   const outboundSession = buildOutboundSessionContext({
     cfg,
     sessionKey,

@@ -72,6 +72,7 @@ describe("isPathInside", () => {
   it.each([
     ["/workspace/root", "/workspace/root", true],
     ["/workspace/root", "/workspace/root/nested/file.txt", true],
+    ["/workspace/root", "/workspace/root/..file.txt", true],
     ["/workspace/root", "/workspace/root/../escape.txt", false],
   ])("checks posix containment %s -> %s", (basePath, targetPath, expected) => {
     expect(isPathInside(basePath, targetPath)).toBe(expected);
@@ -83,6 +84,7 @@ describe("isPathInside", () => {
     for (const [basePath, targetPath, expected] of [
       [String.raw`C:\workspace\root`, String.raw`C:\workspace\root`, true],
       [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\Nested\File.txt`, true],
+      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..file.txt`, true],
       [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..\escape.txt`, false],
       [String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`, false],
     ] as const) {

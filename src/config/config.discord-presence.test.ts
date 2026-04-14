@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { DiscordConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("config discord presence", () => {
   it.each([
@@ -26,7 +26,7 @@ describe("config discord presence", () => {
       },
     },
   ] as const)("accepts $name", ({ config }) => {
-    expect(validateConfigObject({ channels: config }).ok).toBe(true);
+    expect(DiscordConfigSchema.safeParse(config.discord).success).toBe(true);
   });
 
   it.each([
@@ -51,6 +51,6 @@ describe("config discord presence", () => {
       },
     },
   ] as const)("rejects $name", ({ config }) => {
-    expect(validateConfigObject({ channels: config }).ok).toBe(false);
+    expect(DiscordConfigSchema.safeParse(config.discord).success).toBe(false);
   });
 });

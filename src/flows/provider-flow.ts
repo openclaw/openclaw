@@ -1,13 +1,13 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveProviderModelPickerEntries,
   resolveProviderWizardOptions,
 } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FlowContribution, FlowOption } from "./types.js";
-import { mergeFlowContributions, sortFlowContributionsByLabel } from "./types.js";
+import { sortFlowContributionsByLabel } from "./types.js";
 
 export type ProviderFlowScope = "text-inference" | "image-generation";
 
@@ -26,7 +26,7 @@ export type ProviderSetupFlowContribution = FlowContribution & {
   pluginId?: string;
   option: ProviderSetupFlowOption;
   onboardingScopes?: ProviderFlowScope[];
-  source: "manifest" | "runtime";
+  source: "runtime";
 };
 
 export type ProviderModelPickerFlowContribution = FlowContribution & {
@@ -54,103 +54,13 @@ function resolveProviderDocsById(params?: {
       config: params?.config,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      mode: "setup",
     })
       .filter((provider): provider is ProviderPlugin & { docsPath: string } =>
-        Boolean(provider.docsPath?.trim()),
+        Boolean(normalizeOptionalString(provider.docsPath)),
       )
-      .map((provider) => [provider.id, provider.docsPath.trim()]),
+      .map((provider) => [provider.id, normalizeOptionalString(provider.docsPath)!]),
   );
-}
-
-export function resolveManifestProviderSetupFlowOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  scope?: ProviderFlowScope;
-}): ProviderSetupFlowOption[] {
-  return resolveManifestProviderSetupFlowContributions(params).map(
-    (contribution) => contribution.option,
-  );
-}
-
-export function resolveManifestProviderSetupFlowContributions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  scope?: ProviderFlowScope;
-}): ProviderSetupFlowContribution[] {
-  const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
-  const docsByProvider = resolveProviderDocsById(params ?? {});
-  return resolveManifestProviderAuthChoices(params)
-    .filter((choice) => includesProviderFlowScope(choice.onboardingScopes, scope))
-    .map((choice) => ({
-      id: `provider:setup:${choice.choiceId}`,
-      kind: "provider" as const,
-      surface: "setup" as const,
-      providerId: choice.providerId,
-      pluginId: choice.pluginId,
-      option: {
-        value: choice.choiceId,
-        label: choice.choiceLabel,
-        ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
-        ...(choice.groupId && choice.groupLabel
-          ? {
-              group: {
-                id: choice.groupId,
-                label: choice.groupLabel,
-                ...(choice.groupHint ? { hint: choice.groupHint } : {}),
-              },
-            }
-          : {}),
-        ...(docsByProvider.get(choice.providerId)
-          ? { docs: { path: docsByProvider.get(choice.providerId)! } }
-          : {}),
-      },
-      ...(choice.onboardingScopes ? { onboardingScopes: [...choice.onboardingScopes] } : {}),
-      source: "manifest" as const,
-    }));
-}
-
-export function resolveRuntimeFallbackProviderSetupFlowOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  scope?: ProviderFlowScope;
-}): ProviderSetupFlowOption[] {
-  return resolveRuntimeFallbackProviderSetupFlowContributions(params).map(
-    (contribution) => contribution.option,
-  );
-}
-
-export function resolveRuntimeFallbackProviderSetupFlowContributions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  scope?: ProviderFlowScope;
-}): ProviderSetupFlowContribution[] {
-  const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
-  return resolveProviderWizardOptions(params ?? {})
-    .filter((option) => includesProviderFlowScope(option.onboardingScopes, scope))
-    .map((option) => ({
-      id: `provider:setup:${option.value}`,
-      kind: "provider" as const,
-      surface: "setup" as const,
-      providerId: option.groupId,
-      option: {
-        value: option.value,
-        label: option.label,
-        ...(option.hint ? { hint: option.hint } : {}),
-        group: {
-          id: option.groupId,
-          label: option.groupLabel,
-          ...(option.groupHint ? { hint: option.groupHint } : {}),
-        },
-      },
-      ...(option.onboardingScopes ? { onboardingScopes: [...option.onboardingScopes] } : {}),
-      source: "runtime" as const,
-    }));
 }
 
 export function resolveProviderSetupFlowOptions(params?: {
@@ -168,11 +78,38 @@ export function resolveProviderSetupFlowContributions(params?: {
   env?: NodeJS.ProcessEnv;
   scope?: ProviderFlowScope;
 }): ProviderSetupFlowContribution[] {
+  const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
+  const docsByProvider = resolveProviderDocsById(params ?? {});
   return sortFlowContributionsByLabel(
-    mergeFlowContributions({
-      primary: resolveManifestProviderSetupFlowContributions(params),
-      fallbacks: resolveRuntimeFallbackProviderSetupFlowContributions(params),
-    }),
+    resolveProviderWizardOptions(params ?? {})
+      .filter((option) => includesProviderFlowScope(option.onboardingScopes, scope))
+      .map((option) => ({
+        id: `provider:setup:${option.value}`,
+        kind: "provider" as const,
+        surface: "setup" as const,
+        providerId: option.groupId,
+        option: {
+          value: option.value,
+          label: option.label,
+          ...(option.hint ? { hint: option.hint } : {}),
+          ...(option.assistantPriority !== undefined
+            ? { assistantPriority: option.assistantPriority }
+            : {}),
+          ...(option.assistantVisibility
+            ? { assistantVisibility: option.assistantVisibility }
+            : {}),
+          group: {
+            id: option.groupId,
+            label: option.groupLabel,
+            ...(option.groupHint ? { hint: option.groupHint } : {}),
+          },
+          ...(docsByProvider.get(option.groupId)
+            ? { docs: { path: docsByProvider.get(option.groupId)! } }
+            : {}),
+        },
+        ...(option.onboardingScopes ? { onboardingScopes: [...option.onboardingScopes] } : {}),
+        source: "runtime" as const,
+      })),
   );
 }
 
