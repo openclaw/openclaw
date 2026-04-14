@@ -5,6 +5,7 @@ import {
   createBackspaceDeduper,
   drainAndStopTuiSafely,
   isIgnorableTuiStopError,
+  resolveCodexCliBin,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
@@ -54,6 +55,11 @@ describe("tui slash commands", () => {
     const commands = getSlashCommands({});
     expect(commands.some((command) => command.name === "context")).toBe(true);
     expect(commands.some((command) => command.name === "commands")).toBe(true);
+  });
+
+  it("includes /auth in local embedded mode", () => {
+    const commands = getSlashCommands({ local: true });
+    expect(commands.some((command) => command.name === "auth")).toBe(true);
   });
 });
 
@@ -308,5 +314,24 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+});
+
+describe("resolveCodexCliBin", () => {
+  it("returns a string path when codex CLI is installed", () => {
+    const result = resolveCodexCliBin();
+    // In this test environment codex is installed; verify it returns a non-empty path
+    if (result !== null) {
+      expect(typeof result).toBe("string");
+      expect(result.length).toBeGreaterThan(0);
+      expect(result).toContain("codex");
+    }
+  });
+
+  it("returns null or a valid path (never throws)", () => {
+    // The function should never throw regardless of environment
+    expect(() => resolveCodexCliBin()).not.toThrow();
+    const result = resolveCodexCliBin();
+    expect(result === null || typeof result === "string").toBe(true);
   });
 });

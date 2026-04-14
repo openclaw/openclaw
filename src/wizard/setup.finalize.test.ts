@@ -341,12 +341,9 @@ describe("finalizeSetupWizard", () => {
     );
     expect(launchTuiCli).toHaveBeenCalledWith(
       {
+        local: true,
         deliver: false,
         message: undefined,
-      },
-      {
-        authSource: "config",
-        gatewayUrl: "ws://127.0.0.1:18789",
       },
     );
   });
