@@ -27,6 +27,11 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
           dreaming: {
             enabled: true,
             timezone: "UTC",
+            // The existing tests in this file were written when "inline" was the
+            // default storage mode and assert against `memory/<day>.md` directly.
+            // Pin the storage mode explicitly so they keep covering inline mode
+            // after the default flipped to "separate" in #66328.
+            storage: { mode: "inline", separateReports: false },
             phases: {
               light: {
                 enabled: true,
@@ -305,6 +310,10 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  // This test asserts inline-mode side effects on the daily
+                  // file; pin storage explicitly after the default flipped to
+                  // "separate" in #66328.
+                  storage: { mode: "inline", separateReports: false },
                   phases: {
                     light: {
                       enabled: true,
