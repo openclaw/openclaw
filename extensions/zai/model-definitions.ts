@@ -27,7 +27,7 @@ const ZAI_MODEL_CATALOG = {
   "glm-5.1": {
     name: "GLM-5.1",
     reasoning: true,
-    input: ["text"],
+    input: ["text", "image"],
     contextWindow: 202800,
     maxTokens: 131100,
     cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
@@ -35,7 +35,7 @@ const ZAI_MODEL_CATALOG = {
   "glm-5": {
     name: "GLM-5",
     reasoning: true,
-    input: ["text"],
+    input: ["text", "image"],
     contextWindow: 202800,
     maxTokens: 131100,
     cost: ZAI_DEFAULT_COST,
