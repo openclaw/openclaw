@@ -71,6 +71,15 @@ function isAllowedAbsoluteReplyMediaPath(params: {
   if (isManagedGlobalReplyMediaPath(params.candidate)) {
     return true;
   }
+  // Allow paths anywhere inside the workspace dir or sandbox root — the agent
+  // can legitimately create files in subdirectories like exports/, output/, etc.
+  // without placing them under the narrower .openclaw/media/ tree (#66635).
+  if (isPathInside(params.workspaceDir, params.candidate)) {
+    return true;
+  }
+  if (params.sandboxRoot && isPathInside(params.sandboxRoot, params.candidate)) {
+    return true;
+  }
   return buildVolatileReplyMediaRoots(params).some((root) => isPathInside(root, params.candidate));
 }
 

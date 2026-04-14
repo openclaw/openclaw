@@ -254,4 +254,59 @@ describe("createReplyMediaPathNormalizer", () => {
     });
     expect(saveMediaSource).not.toHaveBeenCalled();
   });
+
+  it("allows absolute paths inside the workspace directory (#66635)", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/home/user/.openclaw/workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/home/user/.openclaw/workspace/exports/images/chart.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/home/user/.openclaw/workspace/exports/images/chart.png",
+      mediaUrls: ["/home/user/.openclaw/workspace/exports/images/chart.png"],
+    });
+  });
+
+  it("allows absolute paths inside the sandbox root (#66635)", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/tmp/sandboxes/session-1/output/generated-chart.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/tmp/sandboxes/session-1/output/generated-chart.png",
+      mediaUrls: ["/tmp/sandboxes/session-1/output/generated-chart.png"],
+    });
+  });
+
+  it("still drops absolute paths outside workspace and all allowed roots", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/home/user/.openclaw/workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/etc/passwd"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
 });
