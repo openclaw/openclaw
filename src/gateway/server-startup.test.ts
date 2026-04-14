@@ -85,7 +85,7 @@ describe("gateway startup primary model warmup", () => {
 
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
     expect(resolveModelMock).toHaveBeenCalledWith("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
-      skipProviderRuntimeHooks: true,
+      skipProviderRuntimeHooks: false,
     });
   });
 
