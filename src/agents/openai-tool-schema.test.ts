@@ -73,4 +73,48 @@ describe("normalizeOpenAIStrictToolParameters", () => {
       required: [],
     });
   });
+
+  it("does not mutate literal object values under non-schema keywords", () => {
+    const literalObject = { type: "object", label: "literal" };
+
+    expect(
+      normalizeOpenAIStrictToolParameters(
+        {
+          type: "object",
+          properties: {
+            enumValue: {
+              enum: [literalObject],
+            },
+            constValue: {
+              const: literalObject,
+            },
+            defaultValue: {
+              default: literalObject,
+            },
+            examplesValue: {
+              examples: [literalObject],
+            },
+          },
+        },
+        false,
+      ),
+    ).toEqual({
+      type: "object",
+      properties: {
+        enumValue: {
+          enum: [literalObject],
+        },
+        constValue: {
+          const: literalObject,
+        },
+        defaultValue: {
+          default: literalObject,
+        },
+        examplesValue: {
+          examples: [literalObject],
+        },
+      },
+      required: [],
+    });
+  });
 });

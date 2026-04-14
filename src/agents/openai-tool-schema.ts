@@ -18,6 +18,47 @@ type ToolWithParameters = {
 
 const optionalString = readStringValue;
 
+const OPENAI_OBJECT_REQUIRED_ARRAY_SCHEMA_MAP_KEYS = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+const OPENAI_OBJECT_REQUIRED_ARRAY_NESTED_KEYS = new Set([
+  "additionalProperties",
+  "allOf",
+  "anyOf",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "not",
+  "oneOf",
+  "prefixItems",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
+function normalizeOpenAIObjectRequiredArraysSchemaMap(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return schema;
+  }
+
+  let changed = false;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    const next = normalizeOpenAIObjectRequiredArraysRecursive(value);
+    normalized[key] = next;
+    changed ||= next !== value;
+  }
+
+  return changed ? normalized : schema;
+}
+
 function normalizeOpenAIObjectRequiredArraysRecursive(schema: unknown): unknown {
   if (Array.isArray(schema)) {
     let changed = false;
@@ -36,7 +77,12 @@ function normalizeOpenAIObjectRequiredArraysRecursive(schema: unknown): unknown 
   let changed = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    const next = normalizeOpenAIObjectRequiredArraysRecursive(value);
+    let next = value;
+    if (OPENAI_OBJECT_REQUIRED_ARRAY_SCHEMA_MAP_KEYS.has(key)) {
+      next = normalizeOpenAIObjectRequiredArraysSchemaMap(value);
+    } else if (OPENAI_OBJECT_REQUIRED_ARRAY_NESTED_KEYS.has(key)) {
+      next = normalizeOpenAIObjectRequiredArraysRecursive(value);
+    }
     normalized[key] = next;
     changed ||= next !== value;
   }

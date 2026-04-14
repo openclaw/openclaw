@@ -403,6 +403,7 @@ describe("convertTools", () => {
     expect(result[0]?.parameters).toEqual({
       type: "object",
       properties: {},
+      required: [],
     });
   });
 
@@ -484,7 +485,7 @@ describe("convertTools", () => {
     ];
     const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
     expect(result[0]?.parameters).toEqual({
-      allOf: [{ type: "object", properties: { id: { type: "string" } } }],
+      allOf: [{ type: "object", properties: { id: { type: "string" } }, required: [] }],
     });
   });
 
@@ -500,6 +501,7 @@ describe("convertTools", () => {
     expect(result[0]?.parameters).toEqual({
       type: "object",
       properties: { cmd: { type: "string" } },
+      required: [],
     });
   });
 
@@ -553,6 +555,7 @@ describe("convertTools", () => {
         type: "object",
         properties: { path: { type: "string" } },
         additionalProperties: false,
+        required: [],
       },
       strict: false,
     });
