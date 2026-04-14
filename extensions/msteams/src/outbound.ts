@@ -139,6 +139,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
               to: ctx.to,
               text,
               mediaUrl,
+              mediaLocalRoots: ctx.mediaLocalRoots,
+              mediaReadFile: ctx.mediaReadFile,
             }),
           finalize: async () =>
             await sendAdaptiveCardMSTeams({
@@ -174,6 +176,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
             to: ctx.to,
             text,
             mediaUrl,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
           }),
         finalize: async () =>
           await sendAdaptiveCardMSTeams({ cfg: ctx.cfg, to: ctx.to, card }),
