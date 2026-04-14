@@ -37,7 +37,13 @@ export function resolveUninstallDirectoryTarget(params: {
   }
 
   if (params.installRecord?.source === "path") {
-    return null;
+    // For --link installs, installPath === sourcePath (both are the original path outside extensions).
+    // No files were copied to extensions, so nothing to delete.
+    // For normal path installs, installPath !== sourcePath (installPath is inside extensions).
+    // Files were copied, so we should delete them.
+    if (params.installRecord.installPath === params.installRecord.sourcePath) {
+      return null;
+    }
   }
 
   let defaultPath: string;
@@ -237,7 +243,12 @@ export async function uninstallPlugin(
   }
 
   const installRecord = config.plugins?.installs?.[pluginId];
-  const isLinked = installRecord?.source === "path";
+  // Linked installs (source === "path" AND installPath === sourcePath) never have their
+  // source directory deleted. Normal path installs (source === "path" AND installPath !== sourcePath)
+  // DO have their files deleted from extensions.
+  const isLinked =
+    installRecord?.source === "path" &&
+    installRecord?.installPath === installRecord?.sourcePath;
 
   // Remove from config
   const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId, {

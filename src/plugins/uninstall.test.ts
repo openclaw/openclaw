@@ -760,7 +760,7 @@ describe("uninstallPlugin", () => {
 });
 
 describe("resolveUninstallDirectoryTarget", () => {
-  it("returns null for linked plugins", () => {
+  it("returns null for linked plugins (source === 'path' AND installPath === sourcePath)", () => {
     expect(
       resolveUninstallDirectoryTarget({
         pluginId: "my-plugin",
@@ -772,6 +772,24 @@ describe("resolveUninstallDirectoryTarget", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("does NOT return null for path-based installs where installPath !== sourcePath (files were copied)", () => {
+    const extensionsDir = path.join(os.tmpdir(), "openclaw-uninstall-path-copy");
+    const target = resolveUninstallDirectoryTarget({
+      pluginId: "my-plugin",
+      hasInstall: true,
+      installRecord: {
+        source: "path",
+        sourcePath: "/external/source/plugin",
+        installPath: resolvePluginInstallDir("my-plugin", extensionsDir),
+      },
+      extensionsDir,
+    });
+
+    // installPath is inside extensions, so it's a normal path install (not linked)
+    // Should return the default path (where files were copied)
+    expect(target).toBe(resolvePluginInstallDir("my-plugin", extensionsDir));
   });
 
   it("falls back to default path when configured installPath is untrusted", () => {
