@@ -42,6 +42,145 @@ function ghGraphQL(query, options = {}) {
   return gh(["api", "graphql", "-f", `query=${query}`], options);
 }
 
+function escapeGraphQLString(value) {
+  return String(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n");
+}
+
+function formatGraphQLAfterClause(cursor) {
+  return cursor ? `, after: "${escapeGraphQLString(cursor)}"` : "";
+}
+
+function findDiscussionCommentNode(nodes, discussionCommentDbId) {
+  return (
+    nodes.find((node) => String(node.databaseId) === String(discussionCommentDbId)) || null
+  );
+}
+
+function fetchDiscussionReplyPage(commentNodeId, cursor) {
+  const afterClause = formatGraphQLAfterClause(cursor);
+  return ghGraphQL(`{
+    node(id: "${escapeGraphQLString(commentNodeId)}") {
+      ... on DiscussionComment {
+        replies(first: 100${afterClause}) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            databaseId
+            author { login }
+            body
+            url
+            replyTo { id }
+            userContentEdits(first: 50) {
+              totalCount
+            }
+          }
+        }
+      }
+    }
+  }}`);
+}
+
+function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
+  const [owner, name] = REPO.split("/");
+  let discussionId = null;
+  let cursor = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const afterClause = formatGraphQLAfterClause(cursor);
+    const gql = ghGraphQL(
+      `{
+        repository(owner: "${owner}", name: "${name}") {
+          discussion(number: ${discussionNumber}) {
+            id
+            comments(first: 50${afterClause}) {
+              pageInfo { hasNextPage endCursor }
+              nodes {
+                id
+                databaseId
+                author { login }
+                body
+                url
+                replyTo { id }
+                userContentEdits(first: 50) {
+                  totalCount
+                }
+                replies(first: 100) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes {
+                    id
+                    databaseId
+                    author { login }
+                    body
+                    url
+                    replyTo { id }
+                    userContentEdits(first: 50) {
+                      totalCount
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }`,
+      { allowFailure: true },
+    );
+
+    const discussion = gql?.data?.repository?.discussion;
+    if (!discussion)
+      fail(
+        `Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`,
+      );
+
+    discussionId = discussion.id;
+
+    for (const topLevelComment of discussion.comments.nodes) {
+      if (String(topLevelComment.databaseId) === String(discussionCommentDbId)) {
+        return { discussionId, comment: topLevelComment };
+      }
+
+      let reply = findDiscussionCommentNode(topLevelComment.replies.nodes, discussionCommentDbId);
+      let replyCursor = topLevelComment.replies.pageInfo.endCursor;
+      let hasMoreReplies = topLevelComment.replies.pageInfo.hasNextPage;
+
+      while (!reply && hasMoreReplies) {
+        const replyPage = fetchDiscussionReplyPage(topLevelComment.id, replyCursor);
+        const replies = replyPage?.data?.node?.replies;
+        if (!replies) fail(`Failed to paginate replies for discussion comment ${topLevelComment.id}`);
+
+        reply = findDiscussionCommentNode(replies.nodes, discussionCommentDbId);
+        hasMoreReplies = replies.pageInfo.hasNextPage;
+        replyCursor = replies.pageInfo.endCursor;
+      }
+
+      if (reply) return { discussionId, comment: reply };
+    }
+
+    hasNextPage = discussion.comments.pageInfo.hasNextPage;
+    cursor = discussion.comments.pageInfo.endCursor;
+  }
+
+  return { discussionId, comment: null };
+}
+
+function createDiscussionComment(discussionNodeId, body, replyToNodeId) {
+  const replyToClause = replyToNodeId
+    ? `, replyToId: "${escapeGraphQLString(replyToNodeId)}"`
+    : "";
+  const result = ghGraphQL(
+    `mutation { addDiscussionComment(input: { discussionId: "${escapeGraphQLString(discussionNodeId)}"${replyToClause}, body: "${escapeGraphQLString(body)}" }) { comment { id url } } }`,
+  );
+  if (result?.errors) {
+    fail(`Failed to create discussion comment: ${JSON.stringify(result.errors)}`);
+  }
+  return result?.data?.addDiscussionComment?.comment;
+}
+
 // ─── Commands ───────────────────────────────────────────────────────────────
 
 /**
@@ -94,62 +233,15 @@ function cmdFetchContent(locationJson) {
   const details = location.details;
 
   if (type === "discussion_comment") {
-    // Discussion comments can only be operated via GraphQL
     const commentUrl = details.discussion_comment_url;
     if (!commentUrl) fail("No discussion_comment_url in location details");
 
-    // Extract discussion number and comment id from URL
-    // Format: https://github.com/owner/repo/discussions/123#discussioncomment-456
     const urlMatch = commentUrl.match(/discussions\/(\d+)#discussioncomment-(\d+)/);
     if (!urlMatch) fail(`Cannot parse discussion comment URL: ${commentUrl}`);
     const discussionNumber = urlMatch[1];
     const discussionCommentDbId = urlMatch[2];
 
-    // Fetch discussion comment via GraphQL with pagination
-    const [owner, name] = REPO.split("/");
-    let comment = null;
-    let discussionId = null;
-    let cursor = null;
-    let hasNextPage = true;
-
-    while (hasNextPage && !comment) {
-      const afterClause = cursor ? `, after: "${cursor}"` : "";
-      const gql = ghGraphQL(
-        `{
-        repository(owner: "${owner}", name: "${name}") {
-          discussion(number: ${discussionNumber}) {
-            id
-            url
-            comments(first: 50${afterClause}) {
-              pageInfo { hasNextPage endCursor }
-              nodes {
-                id
-                databaseId
-                author { login }
-                body
-                url
-              }
-            }
-          }
-        }
-      }`,
-        { allowFailure: true },
-      );
-
-      const discussion = gql?.data?.repository?.discussion;
-      if (!discussion)
-        fail(
-          `Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`,
-        );
-
-      discussionId = discussion.id;
-      comment = discussion.comments.nodes.find(
-        (c) => String(c.databaseId) === discussionCommentDbId,
-      );
-      hasNextPage = discussion.comments.pageInfo.hasNextPage;
-      cursor = discussion.comments.pageInfo.endCursor;
-    }
-
+    const { discussionId, comment } = fetchDiscussionComment(discussionNumber, discussionCommentDbId);
     if (!comment)
       fail(
         `Discussion comment #${discussionCommentDbId} not found in discussion #${discussionNumber}`,
@@ -164,10 +256,12 @@ function cmdFetchContent(locationJson) {
           type,
           comment_node_id: comment.id,
           discussion_node_id: discussionId,
+          reply_to_node_id: comment.replyTo?.id ?? null,
           discussion_number: Number(discussionNumber),
           discussion_comment_db_id: Number(discussionCommentDbId),
           author: comment.author?.login,
           html_url: comment.url || commentUrl,
+          edit_history_count: comment.userContentEdits?.totalCount ?? 0,
           body_file: bodyFile,
         },
         null,
@@ -375,28 +469,16 @@ function cmdDeleteDiscussionComment(nodeId) {
 }
 
 /**
- * recreate-discussion-comment <discussion-node-id> <body-file>
+ * recreate-discussion-comment <discussion-node-id> <body-file> [reply-to-node-id]
  * Create a new discussion comment via GraphQL.
  */
-function cmdRecreateDiscussionComment(discussionNodeId, bodyFile) {
+function cmdRecreateDiscussionComment(discussionNodeId, bodyFile, replyToNodeId) {
   if (!discussionNodeId || !bodyFile)
-    fail("Usage: recreate-discussion-comment <discussion-node-id> <body-file>");
+    fail("Usage: recreate-discussion-comment <discussion-node-id> <body-file> [reply-to-node-id]");
   if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
 
   const body = fs.readFileSync(bodyFile, "utf8");
-  // Escape for GraphQL string literal
-  const escapedBody = body
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\r/g, "\\r")
-    .replace(/\n/g, "\\n");
-  const result = ghGraphQL(
-    `mutation { addDiscussionComment(input: { discussionId: "${discussionNodeId}", body: "${escapedBody}" }) { comment { id url } } }`,
-  );
-  if (result?.errors) {
-    fail(`Failed to create discussion comment: ${JSON.stringify(result.errors)}`);
-  }
-  const newComment = result?.data?.addDiscussionComment?.comment;
+  const newComment = createDiscussionComment(discussionNodeId, body, replyToNodeId);
   console.log(
     JSON.stringify({
       ok: true,
@@ -433,13 +515,15 @@ function cmdRecreateComment(issueNumber, bodyFile) {
 }
 
 /**
- * notify <target> <author> <location-type> <secret-types>
+ * notify <target> <author> <location-type> <secret-types> [reply-to-node-id]
  * Post a notification comment with the correct template for the location type.
  * target = issue/PR number for non-discussion types, discussion node ID for discussion_comment.
  */
-function cmdNotify(target, author, locationType, secretTypes) {
+function cmdNotify(target, author, locationType, secretTypes, replyToNodeId) {
   if (!target || !author || !locationType || !secretTypes) {
-    fail("Usage: notify <target> <author> <location-type> <secret-types-comma-sep>");
+    fail(
+      "Usage: notify <target> <author> <location-type> <secret-types-comma-sep> [reply-to-node-id]",
+    );
   }
 
   const types = secretTypes.split(",").map((s) => s.trim());
@@ -487,18 +571,7 @@ function cmdNotify(target, author, locationType, secretTypes) {
 
   // Discussion comments must be notified via GraphQL
   if (locationType === "discussion_comment") {
-    const escapedBody = body
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      .replace(/\r/g, "\\r")
-      .replace(/\n/g, "\\n");
-    const result = ghGraphQL(
-      `mutation { addDiscussionComment(input: { discussionId: "${target}", body: "${escapedBody}" }) { comment { id url } } }`,
-    );
-    if (result?.errors) {
-      fail(`Failed to post discussion notification: ${JSON.stringify(result.errors)}`);
-    }
-    const newComment = result?.data?.addDiscussionComment?.comment;
+    const newComment = createDiscussionComment(target, body, replyToNodeId);
     console.log(
       JSON.stringify({
         ok: true,
@@ -665,8 +738,8 @@ const commands = {
   "delete-comment": () => cmdDeleteComment(args[0]),
   "delete-discussion-comment": () => cmdDeleteDiscussionComment(args[0]),
   "recreate-comment": () => cmdRecreateComment(args[0], args[1]),
-  "recreate-discussion-comment": () => cmdRecreateDiscussionComment(args[0], args[1]),
-  notify: () => cmdNotify(args[0], args[1], args[2], args[3]),
+  "recreate-discussion-comment": () => cmdRecreateDiscussionComment(args[0], args[1], args[2]),
+  notify: () => cmdNotify(args[0], args[1], args[2], args[3], args[4]),
   resolve: () => cmdResolve(args[0], args[1], args[2]),
   "list-open": () => cmdListOpen(),
   summary: () => cmdSummary(args[0]),
@@ -684,8 +757,8 @@ if (!command || !commands[command]) {
       "  delete-comment <comment-id>       Delete a comment",
       "  delete-discussion-comment <node-id> Delete a discussion comment (GraphQL)",
       "  recreate-comment <issue-n> <file> Create replacement comment",
-      "  recreate-discussion-comment <disc-node-id> <file> Create discussion comment (GraphQL)",
-      "  notify <target> <author> <type> <types> Post notification",
+      "  recreate-discussion-comment <disc-node-id> <file> [reply-to-node-id] Create discussion comment (GraphQL)",
+      "  notify <target> <author> <type> <types> [reply-to-node-id] Post notification",
       "  resolve <n> [resolution] [comment] Close alert",
       "  list-open                          List open alerts",
       "  summary <json-file>               Print formatted summary",

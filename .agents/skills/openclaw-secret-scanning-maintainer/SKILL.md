@@ -61,6 +61,7 @@ The `fetch-content` output includes:
 - `issue_number` / `pr_number`: where it is
 - `edit_history_count`: number of existing edits
 - `type`: location type for routing
+- For `discussion_comment`, it also includes `comment_node_id`, `discussion_node_id`, and `reply_to_node_id` when the original comment was a reply.
 
 ### Location type routing
 
@@ -118,10 +119,10 @@ For discussion comments (uses GraphQL):
 node secret-scanning.mjs delete-discussion-comment <COMMENT_NODE_ID>
 
 # Recreate with redacted content
-node secret-scanning.mjs recreate-discussion-comment <DISCUSSION_NODE_ID> <body-file>
+node secret-scanning.mjs recreate-discussion-comment <DISCUSSION_NODE_ID> <body-file> [REPLY_TO_NODE_ID]
 ```
 
-The `fetch-content` output for `discussion_comment` includes `comment_node_id` and `discussion_node_id` for these commands.
+The `fetch-content` output for `discussion_comment` includes `comment_node_id` and `discussion_node_id` for these commands. When the original discussion comment was a reply, it also includes `reply_to_node_id`; pass that optional third argument so the redacted replacement stays in the original thread.
 
 The recreated comment should follow this format:
 
@@ -154,11 +155,12 @@ Cannot clean. Notify author to delete branch or force-push (for unmerged PRs).
 ## Step 5: Notify
 
 ```bash
-node secret-scanning.mjs notify <TARGET> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES>
+node secret-scanning.mjs notify <TARGET> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES> [REPLY_TO_NODE_ID]
 ```
 
 - For non-discussion types, `<TARGET>` is the issue/PR number.
 - For `discussion_comment`, `<TARGET>` is the `discussion_node_id` returned by `fetch-content`.
+- For reply-style `discussion_comment` locations, pass the optional `reply_to_node_id` from `fetch-content` so the notification stays in the same thread.
 
 Secret types are comma-separated: `"Discord Bot Token,Feishu App Secret"`
 
