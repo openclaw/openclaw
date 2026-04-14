@@ -32,9 +32,14 @@ export function buildCronEventPrompt(
     );
   }
   return (
-    "A scheduled reminder has been triggered. The reminder content is:\n\n" +
+    "A scheduled reminder has been triggered. The cron content is below.\n\n" +
     eventText +
-    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
+    "\n\nFollow the instructions above exactly. If they list steps to execute, execute them with the " +
+    "available tools. If they ask you to send a user-facing message, send it. " +
+    // WHY: heartbeat runner strips HEARTBEAT_OK (including with a configured responsePrefix);
+    // asking for NO_REPLY here would leak "<prefix> NO_REPLY" to users since the heartbeat
+    // path does not recognize the silent-reply token.
+    `Reply ${HEARTBEAT_TOKEN} when done unless the instructions say otherwise.`
   );
 }
 
