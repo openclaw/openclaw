@@ -198,6 +198,15 @@ describe("readModelsFile", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("strips UTF-8 BOM from file content", async () => {
+    const bom = "\uFEFF";
+    await fs.writeFile(path.join(tmpDir, "MODELS.md"), `${bom}## MODEL: bom-model\n\nBOM rules.\n`);
+    const result = await readModelsFile(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result!.charCodeAt(0)).not.toBe(0xfeff);
+    expect(extractSection(result!, "bom-model")).toContain("BOM rules.");
+  });
+
   it("reads a MODELS.md file from the workspace", async () => {
     await fs.writeFile(path.join(tmpDir, "MODELS.md"), "## MODEL: test\n\nTest rules.\n");
     const result = await readModelsFile(tmpDir);

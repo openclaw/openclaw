@@ -49,7 +49,10 @@ export async function readModelsFile(
       if (cached && fileInfo.mtimeMs === cached.mtimeMs) {
         return cached.content;
       }
-      const content = await fd.readFile("utf-8");
+      let content = await fd.readFile("utf-8");
+      if (content.charCodeAt(0) === 0xfeff) {
+        content = content.slice(1);
+      }
       if (fileCache.size >= MAX_CACHE_ENTRIES) {
         const oldest = fileCache.keys().next().value;
         if (oldest !== undefined) {
