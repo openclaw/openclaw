@@ -27,6 +27,8 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
     run: runQaMatrix,
   });
 
+export const qaRunnerCliRegistrations = [matrixQaCliRegistration] as const;
+
 export function registerMatrixQaCli(qa: Command) {
   matrixQaCliRegistration.register(qa);
 }

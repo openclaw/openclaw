@@ -13,16 +13,24 @@ const {
   runQaTelegramCommand: vi.fn(),
 }));
 
-const { isMatrixQaCliAvailable, registerMatrixQaCli } = vi.hoisted(() => ({
-  isMatrixQaCliAvailable: vi.fn(() => true),
-  registerMatrixQaCli: vi.fn((qa: Command) => {
-    qa.command("matrix").action(() => undefined);
-  }),
+const { listQaRunnerCliContributions } = vi.hoisted(() => ({
+  listQaRunnerCliContributions: vi.fn(() => [
+    {
+      pluginId: "qa-matrix",
+      commandName: "matrix",
+      status: "available" as const,
+      registration: {
+        commandName: "matrix",
+        register: vi.fn((qa: Command) => {
+          qa.command("matrix").action(() => undefined);
+        }),
+      },
+    },
+  ]),
 }));
 
-vi.mock("openclaw/plugin-sdk/qa-matrix", () => ({
-  isMatrixQaCliAvailable,
-  registerMatrixQaCli,
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+  listQaRunnerCliContributions,
 }));
 
 vi.mock("./live-transports/telegram/cli.runtime.js", () => ({
@@ -46,8 +54,19 @@ describe("qa cli registration", () => {
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
     runQaTelegramCommand.mockReset();
-    isMatrixQaCliAvailable.mockClear().mockReturnValue(true);
-    registerMatrixQaCli.mockClear();
+    listQaRunnerCliContributions.mockReset().mockReturnValue([
+      {
+        pluginId: "qa-matrix",
+        commandName: "matrix",
+        status: "available",
+        registration: {
+          commandName: "matrix",
+          register: vi.fn((qa: Command) => {
+            qa.command("matrix").action(() => undefined);
+          }),
+        },
+      },
+    ]);
     registerQaLabCli(program);
   });
 
@@ -63,20 +82,36 @@ describe("qa cli registration", () => {
     );
   });
 
-  it("delegates matrix command registration to the qa-matrix facade", () => {
-    expect(registerMatrixQaCli).toHaveBeenCalledTimes(1);
+  it("delegates discovered qa runner registration through the generic host seam", () => {
+    const [{ registration }] = listQaRunnerCliContributions.mock.results[0]?.value;
+    expect(registration.register).toHaveBeenCalledTimes(1);
   });
 
   it("shows an install hint when the matrix runner plugin is unavailable", async () => {
-    isMatrixQaCliAvailable.mockReset().mockReturnValue(false);
-    registerMatrixQaCli.mockReset();
+    listQaRunnerCliContributions.mockReset().mockReturnValue([]);
     const missingProgram = new Command();
     registerQaLabCli(missingProgram);
 
     await expect(missingProgram.parseAsync(["node", "openclaw", "qa", "matrix"])).rejects.toThrow(
       "openclaw plugins install @openclaw/qa-matrix",
     );
-    expect(registerMatrixQaCli).not.toHaveBeenCalled();
+  });
+
+  it("shows an enable hint when the matrix runner plugin is installed but blocked", async () => {
+    listQaRunnerCliContributions.mockReset().mockReturnValue([
+      {
+        pluginId: "qa-matrix",
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
+        status: "blocked",
+      },
+    ]);
+    const blockedProgram = new Command();
+    registerQaLabCli(blockedProgram);
+
+    await expect(blockedProgram.parseAsync(["node", "openclaw", "qa", "matrix"])).rejects.toThrow(
+      'Enable or allow plugin "qa-matrix"',
+    );
   });
 
   it("routes telegram CLI defaults into the lane runtime", async () => {

@@ -769,9 +769,9 @@
       "types": "./dist/plugin-sdk/qa-lab-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-lab-runtime.js"
     },
-    "./plugin-sdk/qa-matrix": {
-      "types": "./dist/plugin-sdk/qa-matrix.d.ts",
-      "default": "./dist/plugin-sdk/qa-matrix.js"
+    "./plugin-sdk/qa-runner-runtime": {
+      "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
+      "default": "./dist/plugin-sdk/qa-runner-runtime.js"
     },
     "./plugin-sdk/mattermost": {
       "types": "./dist/plugin-sdk/mattermost.d.ts",

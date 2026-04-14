@@ -204,6 +204,7 @@ The minimum adoption bar for a new channel is:
 2. Implement the transport runner on the shared `qa-lab` host seam.
 3. Keep transport-specific mechanics inside the runner plugin or channel harness.
 4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command.
+   Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export matching `qaRunnerCliRegistrations` from `runtime-api.ts`.
 5. Author or adapt markdown scenarios under `qa/scenarios/`.
 6. Use the generic scenario helpers for new scenarios.
 7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
