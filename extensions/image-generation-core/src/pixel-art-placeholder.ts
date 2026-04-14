@@ -171,7 +171,8 @@ function setPixel(image: Uint8Array, width: number, x: number, y: number, color:
   image[offset] = clampColor(color.r);
   image[offset + 1] = clampColor(color.g);
   image[offset + 2] = clampColor(color.b);
-  image[offset + 3] = clampColor((color.a ?? 1) * 255);
+  const alphaNormalized = Math.max(0, Math.min(1, color.a ?? 1));
+  image[offset + 3] = clampColor(alphaNormalized * 255);
 }
 
 function ensurePositiveInt(name: string, value: number): number {

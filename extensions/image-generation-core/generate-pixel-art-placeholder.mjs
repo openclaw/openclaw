@@ -10,7 +10,7 @@ function parseArgs(argv) {
     const key = arg.slice(2);
     const value = argv[index + 1];
     if (!value || value.startsWith("--")) {
-      parsed[key] = "true";
+      parsed[key] = true;
       continue;
     }
     parsed[key] = value;
@@ -20,8 +20,8 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-if (!args.prompt) {
-  console.error("Missing required --prompt argument");
+if (typeof args.prompt !== "string" || args.prompt.trim().length === 0) {
+  console.error("Missing required --prompt <value> argument");
   process.exit(1);
 }
 
