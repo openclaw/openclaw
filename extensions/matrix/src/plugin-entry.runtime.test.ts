@@ -246,6 +246,36 @@ it("builds scoped and unscoped plugin-sdk aliases for the wrapper jiti loader", 
   });
 }, 240_000);
 
+it("resolves extension-api aliases through the same source extension family", async () => {
+  const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-extension-api-");
+  const wrapperSource = fs.readFileSync(
+    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+    "utf8",
+  );
+
+  delete matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions;
+  writeOpenClawAliasFixture(fixtureRoot);
+  writeFixtureFile(fixtureRoot, "src/extensionAPI.mts", "export {};\n");
+  writeCapturingJitiFixture(fixtureRoot);
+  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/plugin-entry.handlers.runtime.js",
+    PACKAGED_RUNTIME_STUB,
+  );
+
+  const wrapperUrl = pathToFileURL(
+    path.join(fixtureRoot, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+  );
+  await import(`${wrapperUrl.href}?t=${Date.now()}`);
+
+  expect(matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions).toMatchObject({
+    alias: {
+      "openclaw/extension-api": path.join(fixtureRoot, "src", "extensionAPI.mts"),
+    },
+  });
+}, 240_000);
+
 it("keeps wrapper plugin-sdk aliases deterministic and ignores unsafe subpaths", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-alias-order-");
   const wrapperSource = fs.readFileSync(

@@ -122,8 +122,10 @@ function buildPluginSdkAliasMap(moduleUrl) {
   }
 
   const extensionApi =
-    resolveExistingFile(path.join(packageRoot, "src", "extensionAPI"), [".ts", ".js"]) ??
-    resolveExistingFile(path.join(packageRoot, "dist", "extensionAPI"), [".js"]);
+    resolveExistingFile(
+      path.join(packageRoot, "src", "extensionAPI"),
+      PLUGIN_SDK_SOURCE_EXTENSIONS,
+    ) ?? resolveExistingFile(path.join(packageRoot, "dist", "extensionAPI"), [".js"]);
   if (extensionApi) {
     aliasMap["openclaw/extension-api"] = extensionApi;
   }
