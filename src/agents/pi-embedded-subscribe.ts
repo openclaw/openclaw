@@ -586,8 +586,16 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         continue;
       }
       const isClose = match[1] === "/";
+      const isSelfClosing = !isClose && match[0].includes("/");
 
-      if (!inFinal && !isClose) {
+      if (isSelfClosing) {
+        // Self-closing <final/> — treat as close if already inside a block.
+        if (inFinal) {
+          result += processed.slice(lastFinalIndex, idx);
+          inFinal = false;
+        }
+        lastFinalIndex = idx + match[0].length;
+      } else if (!inFinal && !isClose) {
         // Found <final> start tag.
         inFinal = true;
         everInFinal = true;
