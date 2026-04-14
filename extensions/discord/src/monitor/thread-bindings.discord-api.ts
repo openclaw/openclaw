@@ -2,6 +2,15 @@ import { ChannelType, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
+/**
+ * Strip conversation-ID prefixes (channel:, user:) that come from
+ * OpenClaw's internal conversation refs but are not valid in Discord REST
+ * API calls, which expect bare numeric snowflake IDs.
+ */
+function stripConversationIdPrefix(value: string): string {
+  return value.replace(/^(channel:|user:)/i, "").trim();
+}
 import { createDiscordRestClient } from "../client.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
@@ -245,7 +254,11 @@ export async function resolveChannelIdForBinding(params: {
       },
       params.cfg,
     ).rest;
-    const channel = (await rest.get(Routes.channel(params.threadId))) as {
+    const numericThreadId = stripConversationIdPrefix(params.threadId);
+    if (!numericThreadId) {
+      return null;
+    }
+    const channel = (await rest.get(Routes.channel(numericThreadId))) as {
       id?: string;
       type?: number;
       parent_id?: string;
@@ -281,8 +294,12 @@ export async function createThreadForBinding(params: {
   threadName: string;
 }): Promise<string | null> {
   try {
+    const numericChannelId = stripConversationIdPrefix(params.channelId);
+    if (!numericChannelId) {
+      return null;
+    }
     const created = await createThreadDiscord(
-      params.channelId,
+      numericChannelId,
       {
         name: params.threadName,
         autoArchiveMinutes: 60,
