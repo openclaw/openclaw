@@ -7,11 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadQaLabRuntimeModule } from "openclaw/plugin-sdk/qa-lab-runtime";
 import type { QaReportCheck } from "../../report.js";
 import { renderQaMarkdownReport } from "../../report.js";
-import {
-  defaultQaModelForMode,
-  normalizeQaProviderMode,
-  type QaProviderModeInput,
-} from "../../run-config.js";
+import { type QaProviderModeInput } from "../../run-config.js";
 import {
   appendLiveLaneIssue,
   buildLiveLaneArtifactsError,
@@ -31,6 +27,7 @@ import {
   type MatrixQaCanaryArtifact,
   type MatrixQaScenarioArtifacts,
 } from "./scenarios.js";
+import { resolveMatrixQaModels } from "./model-selection.js";
 
 type MatrixQaGatewayChild = {
   call(
@@ -308,9 +305,11 @@ export async function runMatrixQaLive(params: {
     path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
 
-  const providerMode = normalizeQaProviderMode(params.providerMode ?? "live-frontier");
-  const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
-  const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
+  const { providerMode, primaryModel, alternateModel } = resolveMatrixQaModels({
+    providerMode: params.providerMode,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+  });
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findMatrixQaScenarios(params.scenarioIds);
   const observedEvents: MatrixQaObservedEvent[] = [];
@@ -592,5 +591,6 @@ export const __testing = {
   buildMatrixQaConfig,
   buildObservedEventsArtifact,
   isMatrixAccountReady,
+  resolveMatrixQaModels,
   waitForMatrixChannelReady,
 };

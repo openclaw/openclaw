@@ -1,6 +1,13 @@
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 type QaLabRuntimeSurface = {
+  defaultQaRuntimeModelForMode: (
+    mode: string,
+    options?: {
+      alternate?: boolean;
+      preferredLiveModel?: string;
+    },
+  ) => string;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
 };
 
