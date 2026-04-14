@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   buildProviderReplayFamilyHooks,
+  NATIVE_ANTHROPIC_REPLAY_HOOKS,
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
 } from "./provider-model-shared.js";
@@ -203,6 +205,29 @@ describe("buildProviderReplayFamilyHooks", () => {
         allowBase64Only: true,
         includeCamelCase: true,
       },
+    });
+
+    expect(
+      ANTHROPIC_BY_MODEL_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "amazon-bedrock",
+        modelApi: "bedrock-converse-stream",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toMatchObject({
+      validateAnthropicTurns: true,
+      repairToolUseResultPairing: true,
+    });
+
+    expect(
+      NATIVE_ANTHROPIC_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toMatchObject({
+      preserveNativeAnthropicToolUseIds: true,
+      preserveSignatures: true,
+      validateAnthropicTurns: true,
     });
   });
 });
