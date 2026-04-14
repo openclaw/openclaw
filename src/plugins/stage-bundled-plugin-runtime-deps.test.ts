@@ -63,6 +63,68 @@ function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
   fs.writeFileSync(fullPath, value, "utf8");
 }
 
+function createBaileysMessagesMediaSource(params?: {
+  dispatcherPatched?: boolean;
+  encryptedStreamPatched?: boolean;
+}) {
+  const encryptedLines = params?.encryptedStreamPatched
+    ? [
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await Promise.all([encFinishPromise, originalFinishPromise]);",
+        "        logger?.debug('encrypted data successfully');",
+      ]
+    : [
+        "        encFileWriteStream.write(mac);",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        logger?.debug('encrypted data successfully');",
+      ];
+  const dispatcherLines = params?.dispatcherPatched
+    ? [
+        "                const response = await fetch(url, {",
+        "                    method: 'POST',",
+        "                    body: stream,",
+        "                    headers: {",
+        "                        'Content-Type': 'application/octet-stream',",
+        "                        Origin: DEFAULT_ORIGIN",
+        "                    },",
+        "                    // Baileys passes a generic agent here in some runtimes. Undici's",
+        "                    // `dispatcher` only works with Dispatcher-compatible implementations,",
+        "                    // so only wire it through when the object actually implements",
+        "                    // `dispatch`.",
+        "                    ...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+        "                    duplex: 'half',",
+        "                });",
+      ]
+    : [
+        "                const response = await fetch(url, {",
+        "                    dispatcher: fetchAgent,",
+        "                    method: 'POST',",
+        "                    body: stream,",
+        "                    headers: {",
+        "                        'Content-Type': 'application/octet-stream',",
+        "                        Origin: DEFAULT_ORIGIN",
+        "                    },",
+        "                    duplex: 'half',",
+        "                });",
+      ];
+  return [
+    "import { once } from 'events';",
+    "const encryptedStream = async () => {",
+    ...encryptedLines,
+    "};",
+    "const upload = async () => {",
+    ...dispatcherLines,
+    "};",
+  ].join("\n");
+}
+
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -208,16 +270,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     writeRepoFile(
       repoRoot,
       "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
-      [
-        "import { once } from 'events';",
-        "const encryptedStream = async () => {",
-        "        encFileWriteStream.write(mac);",
-        "        encFileWriteStream.end();",
-        "        originalFileStream?.end?.();",
-        "        stream.destroy();",
-        "        logger?.debug('encrypted data successfully');",
-        "};",
-      ].join("\n"),
+      createBaileysMessagesMediaSource(),
     );
 
     const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
@@ -233,6 +286,43 @@ describe("stageBundledPluginRuntimeDeps", () => {
     );
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
       "await Promise.all([encFinishPromise, originalFinishPromise]);",
+    );
+    expect(fs.readFileSync(targetPath, "utf8")).toContain(
+      "...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+    );
+    expect(fs.readFileSync(targetPath, "utf8")).not.toContain("dispatcher: fetchAgent,");
+  });
+
+  it("patches the Baileys dispatcher guard when the flush hotfix is already present", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-hotfix-dispatcher-");
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    writeRepoFile(
+      repoRoot,
+      "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
+      createBaileysMessagesMediaSource({ encryptedStreamPatched: true }),
+    );
+
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({ packageRoot: repoRoot });
+
+    expect(result).toEqual({
+      applied: true,
+      reason: "patched",
+      targetPath,
+    });
+    expect(fs.readFileSync(targetPath, "utf8")).toContain(
+      "await Promise.all([encFinishPromise, originalFinishPromise]);",
+    );
+    expect(fs.readFileSync(targetPath, "utf8")).toContain(
+      "...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
     );
   });
 
@@ -250,16 +340,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     writeRepoFile(
       repoRoot,
       "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
-      [
-        "import { once } from 'events';",
-        "const encryptedStream = async () => {",
-        "        encFileWriteStream.write(mac);",
-        "        encFileWriteStream.end();",
-        "        originalFileStream?.end?.();",
-        "        stream.destroy();",
-        "        logger?.debug('encrypted data successfully');",
-        "};",
-      ].join("\n"),
+      createBaileysMessagesMediaSource(),
     );
     fs.chmodSync(targetPath, 0o644);
 
@@ -315,16 +396,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     writeRepoFile(
       repoRoot,
       "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
-      [
-        "import { once } from 'events';",
-        "const encryptedStream = async () => {",
-        "        encFileWriteStream.write(mac);",
-        "        encFileWriteStream.end();",
-        "        originalFileStream?.end?.();",
-        "        stream.destroy();",
-        "        logger?.debug('encrypted data successfully');",
-        "};",
-      ].join("\n"),
+      createBaileysMessagesMediaSource(),
     );
 
     const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
@@ -341,7 +413,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       targetPath,
       error: "read-only filesystem",
     });
-    expect(fs.readFileSync(targetPath, "utf8")).toContain("encFileWriteStream.end();");
+    expect(fs.readFileSync(targetPath, "utf8")).toContain("dispatcher: fetchAgent,");
   });
 
   it("refuses pre-created symlink temp paths instead of following them", async () => {
@@ -363,16 +435,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     writeRepoFile(
       repoRoot,
       "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
-      [
-        "import { once } from 'events';",
-        "const encryptedStream = async () => {",
-        "        encFileWriteStream.write(mac);",
-        "        encFileWriteStream.end();",
-        "        originalFileStream?.end?.();",
-        "        stream.destroy();",
-        "        logger?.debug('encrypted data successfully');",
-        "};",
-      ].join("\n"),
+      createBaileysMessagesMediaSource(),
     );
     writeRepoFile(repoRoot, "redirected-temp-target.js", "const untouched = true;\n");
     fs.symlinkSync(redirectedTarget, attackerTempPath);
@@ -389,6 +452,6 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(result.reason).toBe("error");
     expect(result.error).toContain("EEXIST");
     expect(fs.readFileSync(redirectedTarget, "utf8")).toBe("const untouched = true;\n");
-    expect(fs.readFileSync(targetPath, "utf8")).toContain("encFileWriteStream.end();");
+    expect(fs.readFileSync(targetPath, "utf8")).toContain("dispatcher: fetchAgent,");
   });
 });
