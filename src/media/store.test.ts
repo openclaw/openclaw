@@ -277,6 +277,19 @@ describe("media store", () => {
       },
     },
     {
+      name: "reports the effective source size limit in too-large errors",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const sourcePath = path.join(home, "too-large-source.bin");
+          await fs.writeFile(sourcePath, Buffer.alloc(7 * 1024 * 1024, 0x41));
+
+          await expect(
+            store.saveMediaSource(sourcePath, undefined, "outbound", 6 * 1024 * 1024),
+          ).rejects.toThrow("Media exceeds 6MB limit");
+        });
+      },
+    },
+    {
       name: "retries buffer writes when cleanup prunes the target directory",
       run: async () => {
         await expectRetryAfterPrunedWriteCase({

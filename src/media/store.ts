@@ -328,7 +328,10 @@ export class SaveMediaSourceError extends Error {
   }
 }
 
-function toSaveMediaSourceError(err: SafeOpenLikeError): SaveMediaSourceError {
+function toSaveMediaSourceError(
+  err: SafeOpenLikeError,
+  maxBytes = MAX_BYTES,
+): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
       return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
@@ -341,7 +344,11 @@ function toSaveMediaSourceError(err: SafeOpenLikeError): SaveMediaSourceError {
         cause: err,
       });
     case "too-large":
-      return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", { cause: err });
+      return new SaveMediaSourceError(
+        "too-large",
+        `Media exceeds ${formatMediaLimitMb(maxBytes)} limit`,
+        { cause: err },
+      );
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
     case "outside-workspace":
@@ -393,7 +400,7 @@ export async function saveMediaSource(
     return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
     if (isSafeOpenError(err)) {
-      throw toSaveMediaSourceError(err);
+      throw toSaveMediaSourceError(err, maxBytes);
     }
     throw err;
   }
