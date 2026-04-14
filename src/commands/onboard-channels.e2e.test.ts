@@ -772,6 +772,93 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
+  it("does not render undefined primer lines for malformed external setup plugins", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "external-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "external-chat",
+              label: "External Chat",
+              docsPath: "/channels/external-chat",
+            }),
+            meta: {
+              id: "external-chat",
+            },
+          },
+        },
+      ]),
+    );
+
+    const note = vi.fn(async (_message?: string, _title?: string) => {});
+    const select = vi.fn(async () => "__done__");
+    const { multiselect, text } = createUnexpectedPromptGuards();
+
+    const prompter = createPrompter({
+      note,
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter);
+
+    const primerMessage =
+      note.mock.calls.find(([, title]) => title === "How channels work")?.[0] ?? "";
+    expect(primerMessage).toContain("external-chat:");
+    expect(primerMessage).not.toContain("undefined: undefined");
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("keeps malformed external setup plugins selectable without undefined labels", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "external-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "external-chat",
+              label: "External Chat",
+              docsPath: "/channels/external-chat",
+            }),
+            meta: {
+              id: "external-chat",
+            },
+          },
+        },
+      ]),
+    );
+
+    const note = vi.fn(async (_message?: string, _title?: string) => {});
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        const external = (options as Array<{ value: string; label?: string; hint?: string }>).find(
+          (entry) => entry.value === "external-chat",
+        );
+        expect(external?.label).toBe("external-chat");
+        expect(external?.hint ?? "").not.toContain("undefined");
+        return "__done__";
+      }
+      return "__done__";
+    });
+
+    const prompter = createPrompter({
+      note,
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter);
+
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
   it("keeps configured external plugin channels visible when the active registry starts empty", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([createMSTeamsCatalogEntry()]);

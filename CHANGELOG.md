@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - Agents/OpenAI Responses: classify the exact `Unknown error (no error details in response)` transport failure as failover reason `unknown` so assistant/model fallback still runs for that no-details failure path. (#65254) Thanks @OpenCodeEngineer.
 - Models/probe: surface invalid-model probe failures as `format` instead of `unknown` in `models list --probe`, and lock the invalid-model fallback path in with regression coverage. (#50028) Thanks @xiwuqi.
 - Agents/failover: classify OpenAI-compatible `finish_reason: network_error` stream failures as timeout so model fallback retries continue instead of stopping with an unknown failover reason. (#61784) thanks @lawrence3699.
+- Onboarding/channels: normalize channel setup metadata before discovery and validation so malformed or mixed-shape channel plugin metadata no longer breaks setup and onboarding channel lists. (#66706) Thanks @darkamenosa.
 
 ## 2026.4.14
 

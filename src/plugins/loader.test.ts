@@ -2396,6 +2396,52 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
   });
 
+  it("repairs incomplete registered channel metadata before storing registry entries", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "channel-meta-repair",
+      filename: "channel-meta-repair.cjs",
+      body: `module.exports = { id: "channel-meta-repair", register(api) {
+  api.registerChannel({
+    plugin: {
+      id: "telegram",
+      meta: {
+        id: "telegram"
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" })
+      },
+      outbound: { deliveryMode: "direct" }
+    }
+  });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["channel-meta-repair"],
+      },
+    });
+
+    const telegram = registry.channels.find((entry) => entry.plugin.id === "telegram")?.plugin;
+    expect(telegram?.meta).toMatchObject({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+    });
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "warn" &&
+          diag.message ===
+            'channel "telegram" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+      ),
+    ).toBe(true);
+  });
+
   it("throws when strict plugin loading sees plugin errors", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
