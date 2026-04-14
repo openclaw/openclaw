@@ -29,8 +29,9 @@ function resolveStatusCommandControlLane(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  // Status-category slash commands are read-only inspection paths, so they can
-  // safely bypass the per-topic lane without changing ordinary message order.
+  // Only read-only status commands should bypass the per-topic lane. Commands
+  // like /export-session stay on the normal lane because they materialize
+  // session state to disk and should not interleave with an active turn.
   const normalizedBody = normalizeCommandBody(
     params.rawText?.trim() ?? "",
     params.botUsername ? { botUsername: params.botUsername } : undefined,
@@ -42,7 +43,7 @@ function resolveStatusCommandControlLane(params: {
   const command = listChatCommands().find((entry) =>
     entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
   );
-  return command?.category === "status";
+  return command?.category === "status" && command.key !== "export-session";
 }
 
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
