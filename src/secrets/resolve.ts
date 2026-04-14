@@ -570,10 +570,15 @@ function parseExecValues(params: {
 
   let parsed: unknown;
   if (!params.jsonOnly && params.ids.length === 1) {
+    const lastLine = trimmed.split(/\r?\n/u)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .at(-1) ?? "";
+
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      return { [params.ids[0]]: trimmed };
+      return { [params.ids[0]]: lastLine };
     }
   } else {
     try {
