@@ -112,7 +112,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
     expect(runtimeMocks.debug).not.toHaveBeenCalled();
   });
 
-  it("logs debug output through the runtime logger for other auth read failures", () => {
+  it("logs a sanitized code for invalid auth JSON", () => {
     vi.spyOn(fs, "readFileSync").mockReturnValue("{");
 
     const parsed = readOpenAICodexCliOAuthProfile({
@@ -121,7 +121,28 @@ describe("readOpenAICodexCliOAuthProfile", () => {
 
     expect(parsed).toBeNull();
     expect(runtimeMocks.debug).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to read auth file:"),
+      "Failed to read Codex CLI auth file (code=INVALID_JSON)",
+    );
+  });
+
+  it("does not leak auth file paths in debug logs for filesystem failures", () => {
+    const error = Object.assign(
+      new Error("EACCES: permission denied, open '/Users/alice/.codex/auth.json'"),
+      {
+        code: "EACCES",
+      },
+    );
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw error;
+    });
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(parsed).toBeNull();
+    expect(runtimeMocks.debug).toHaveBeenCalledWith(
+      "Failed to read Codex CLI auth file (code=EACCES)",
     );
   });
 });

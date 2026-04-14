@@ -45,15 +45,18 @@ function readCodexCliAuthFile(env: NodeJS.ProcessEnv): CodexCliAuthFile | null {
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? (parsed as CodexCliAuthFile) : null;
   } catch (error) {
-    if (error instanceof Error) {
-      const code = "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
-      if (code === "ENOENT") {
-        return null;
-      }
-      log.debug(`Failed to read auth file: ${error.message}`);
-    } else {
-      log.debug(`Failed to read auth file: ${String(error)}`);
+    const code =
+      error instanceof SyntaxError
+        ? "INVALID_JSON"
+        : error instanceof Error && "code" in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+    if (code === "ENOENT") {
+      return null;
     }
+    log.debug(
+      `Failed to read Codex CLI auth file (code=${typeof code === "string" ? code : "UNKNOWN"})`,
+    );
     return null;
   }
 }
