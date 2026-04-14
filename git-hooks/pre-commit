@@ -73,7 +73,14 @@ if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; the
       if [[ "$docs_only" == true ]]; then
         echo "Docs-only staged changes detected: skipping pnpm check in pre-commit hook."
       else
-        pnpm check
+        if command -v pnpm >/dev/null 2>&1; then
+          pnpm check
+        elif command -v corepack >/dev/null 2>&1; then
+          corepack pnpm check
+        else
+          echo "Neither pnpm nor corepack is available on PATH; cannot run pre-commit pnpm check." >&2
+          exit 1
+        fi
       fi
       ;;
   esac
