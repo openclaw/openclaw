@@ -116,6 +116,34 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
+  it("accepts unsigned plaintext url_verification challenges when the verification token matches", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "unsigned-challenge-with-token",
+        path: "/hook-e2e-unsigned-challenge-with-token",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            type: "url_verification",
+            challenge: "challenge-token",
+            token: "verify_token",
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ challenge: "challenge-token" });
+      },
+    );
+  });
+
   it("rejects malformed short signatures with 401", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
@@ -261,6 +289,39 @@ describe("Feishu webhook signed-request e2e", () => {
           }),
         };
         const response = await postSignedPayload(url, payload);
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          challenge: "encrypted-challenge-token",
+        });
+      },
+    );
+  });
+
+  it("accepts unsigned encrypted url_verification challenges when the verification token matches", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "unsigned-encrypted-challenge",
+        path: "/hook-e2e-unsigned-encrypted-challenge",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          encrypt: encryptFeishuPayload("encrypt_key", {
+            type: "url_verification",
+            challenge: "encrypted-challenge-token",
+            token: "verify_token",
+          }),
+        };
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({
