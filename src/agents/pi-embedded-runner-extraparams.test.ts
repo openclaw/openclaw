@@ -1317,40 +1317,34 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
-  it("drops non-positive maxTokens from configured extra params", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-    try {
-      const { calls, agent } = createOptionsCaptureAgent();
-      const cfg = {
-        agents: {
-          defaults: {
-            models: {
-              "anthropic/claude-haiku-4-5": {
-                params: {
-                  maxTokens: 0,
-                },
+  it("preserves maxTokens: 0 in shared extra params for providers that forward it", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5": {
+              params: {
+                maxTokens: 0,
               },
             },
           },
         },
-      };
+      },
+    };
 
-      applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-haiku-4-5");
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
 
-      const model = {
-        api: "anthropic-messages",
-        provider: "anthropic",
-        id: "claude-haiku-4-5",
-      } as Model<"anthropic-messages">;
-      const context: Context = { messages: [] };
-      void agent.streamFn?.(model, context, {});
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
 
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).not.toHaveProperty("maxTokens");
-      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid maxTokens param: 0");
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.maxTokens).toBe(0);
   });
 
   it("defaults Codex transport to auto (WebSocket-first)", () => {
