@@ -70,36 +70,37 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
   return channels;
 }
 
-const catalogCache = new Map<string, ExternalCatalogChannelEntry[] | null>();
-
-export function clearCatalogCache(): void {
-  catalogCache.clear();
-}
-
-function readCatalogEntries(resolved: string): ExternalCatalogChannelEntry[] | null {
-  const cached = catalogCache.get(resolved);
+function readCatalogEntries(
+  resolved: string,
+  cache: Map<string, ExternalCatalogChannelEntry[] | null>,
+): ExternalCatalogChannelEntry[] | null {
+  const cached = cache.get(resolved);
   if (cached !== undefined) {
     return cached;
   }
   if (!fs.existsSync(resolved)) {
-    catalogCache.set(resolved, null);
+    cache.set(resolved, null);
     return null;
   }
   try {
     const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
     const entries = parseExternalCatalogChannelEntries(payload);
-    catalogCache.set(resolved, entries);
+    cache.set(resolved, entries);
     return entries;
   } catch {
-    catalogCache.set(resolved, null);
+    cache.set(resolved, null);
     return null;
   }
 }
 
-function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.ProcessEnv): string[] {
+function resolveExternalCatalogPreferOver(
+  channelId: string,
+  env: NodeJS.ProcessEnv,
+  cache: Map<string, ExternalCatalogChannelEntry[] | null>,
+): string[] {
   for (const rawPath of resolveExternalCatalogPaths(env)) {
     const resolved = resolveUserPath(rawPath, env);
-    const entries = readCatalogEntries(resolved);
+    const entries = readCatalogEntries(resolved, cache);
     if (!entries) {
       continue;
     }
@@ -123,6 +124,7 @@ function resolvePreferredOverIds(
   candidate: PluginAutoEnableCandidate,
   env: NodeJS.ProcessEnv,
   registry: PluginManifestRegistry,
+  cache: Map<string, ExternalCatalogChannelEntry[] | null>,
 ): string[] {
   const channelId =
     candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
@@ -139,7 +141,7 @@ function resolvePreferredOverIds(
   if (builtInChannelPreferOver.length) {
     return [...builtInChannelPreferOver];
   }
-  return resolveExternalCatalogPreferOver(channelId, env);
+  return resolveExternalCatalogPreferOver(channelId, env, cache);
 }
 
 function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
@@ -156,17 +158,17 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
   preferOverCache: Map<string, string[]>;
 }): boolean {
+  const catalogCache = new Map<string, ExternalCatalogChannelEntry[] | null>();
   const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
     const cacheKey = getPluginAutoEnableCandidateCacheKey(candidate);
     const cached = params.preferOverCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    const resolved = resolvePreferredOverIds(candidate, params.env, params.registry);
+    const resolved = resolvePreferredOverIds(candidate, params.env, params.registry, catalogCache);
     params.preferOverCache.set(cacheKey, resolved);
     return resolved;
   };
-
   for (const other of params.configured) {
     if (other.pluginId === params.entry.pluginId) {
       continue;
