@@ -341,6 +341,20 @@ export const skillsHandlers: GatewayRequestHandlers = {
       skills,
     };
     await writeConfigFile(nextConfig);
-    respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+    // Redact secret-bearing fields from the response to avoid echoing
+    // apiKey and env secrets back to the client (Control UI, logs, etc).
+    const redacted: Record<string, unknown> = { ...current };
+    if ("apiKey" in redacted && typeof redacted.apiKey === "string") {
+      redacted.apiKey = "[REDACTED]";
+    }
+    if (redacted.env && typeof redacted.env === "object") {
+      const redactedEnv: Record<string, string> = {};
+      for (const [key, value] of Object.entries(redacted.env as Record<string, string>)) {
+        const secretPattern = /(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)/i;
+        redactedEnv[key] = secretPattern.test(key) ? "[REDACTED]" : value;
+      }
+      redacted.env = redactedEnv;
+    }
+    respond(true, { ok: true, skillKey: p.skillKey, config: redacted }, undefined);
   },
 };
