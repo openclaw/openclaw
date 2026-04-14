@@ -175,6 +175,7 @@ describe("applyPluginAutoEnable channels", () => {
         String(filePath).endsWith("plugins/catalog.json"),
       ),
     ).toHaveLength(2);
+    readFileSpy.mockRestore();
   });
 
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {
