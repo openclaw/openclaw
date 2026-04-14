@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONFIG_DIR } from "../../utils.js";
 
 const watchMock = vi.fn(() => ({
   on: vi.fn(),
@@ -35,24 +36,22 @@ describe("ensureSkillsWatcher", () => {
 
     expect(watchMock).toHaveBeenCalledTimes(1);
     const firstCall = (
-      watchMock.mock.calls as unknown as Array<[string[], { ignored?: unknown }]>
+      watchMock.mock.calls as unknown as Array<[string[], { ignored?: unknown; depth?: number }]>
     )[0];
     const targets = firstCall?.[0] ?? [];
     const opts = firstCall?.[1] ?? {};
 
     expect(opts.ignored).toBe(refreshModule.DEFAULT_SKILLS_WATCH_IGNORED);
-    const posix = (p: string) => p.replaceAll("\\", "/");
+    expect(opts.depth).toBe(2);
+    expect(targets.every((t) => typeof t === "string" && !t.includes("*"))).toBe(true);
     expect(targets).toEqual(
       expect.arrayContaining([
-        posix(path.join("/tmp/workspace", "skills", "SKILL.md")),
-        posix(path.join("/tmp/workspace", "skills", "*", "SKILL.md")),
-        posix(path.join("/tmp/workspace", ".agents", "skills", "SKILL.md")),
-        posix(path.join("/tmp/workspace", ".agents", "skills", "*", "SKILL.md")),
-        posix(path.join(os.homedir(), ".agents", "skills", "SKILL.md")),
-        posix(path.join(os.homedir(), ".agents", "skills", "*", "SKILL.md")),
+        path.resolve("/tmp/workspace", "skills"),
+        path.resolve("/tmp/workspace", ".agents", "skills"),
+        path.resolve(CONFIG_DIR, "skills"),
+        path.resolve(os.homedir(), ".agents", "skills"),
       ]),
     );
-    expect(targets.every((target) => target.includes("SKILL.md"))).toBe(true);
     const ignored = refreshModule.DEFAULT_SKILLS_WATCH_IGNORED;
 
     // Node/JS paths
@@ -84,5 +83,82 @@ describe("ensureSkillsWatcher", () => {
     // Should NOT ignore normal skill files
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
+  });
+
+  it("registers shallow directory watch handlers including unlinkDir", async () => {
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    const watcher = watchMock.mock.results[0]?.value as { on: ReturnType<typeof vi.fn> };
+    const on = watcher?.on;
+    expect(on).toHaveBeenCalledWith("unlinkDir", expect.any(Function));
+    expect(on).toHaveBeenCalledWith("addDir", expect.any(Function));
+  });
+});
+
+describe("shouldTriggerSkillsRefresh", () => {
+  beforeAll(async () => {
+    refreshModule = await import("./refresh.js");
+  });
+
+  const skillRoot = path.resolve("/ws/skills");
+  const roots = [skillRoot];
+
+  it("accepts change on root SKILL.md", () => {
+    expect(
+      refreshModule.shouldTriggerSkillsRefresh({
+        event: "change",
+        eventPath: path.join(skillRoot, "SKILL.md"),
+        roots,
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts unlink on nested SKILL.md", () => {
+    expect(
+      refreshModule.shouldTriggerSkillsRefresh({
+        event: "unlink",
+        eventPath: path.join(skillRoot, "demo-skill", "SKILL.md"),
+        roots,
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts unlinkDir for a skill directory (direct child of watch root)", () => {
+    expect(
+      refreshModule.shouldTriggerSkillsRefresh({
+        event: "unlinkDir",
+        eventPath: path.join(skillRoot, "demo-skill"),
+        roots,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects unlinkDir for nested directories under a skill", () => {
+    expect(
+      refreshModule.shouldTriggerSkillsRefresh({
+        event: "unlinkDir",
+        eventPath: path.join(skillRoot, "demo-skill", "nested"),
+        roots,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects non-SKILL.md files", () => {
+    expect(
+      refreshModule.shouldTriggerSkillsRefresh({
+        event: "change",
+        eventPath: path.join(skillRoot, "demo-skill", "README.md"),
+        roots,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects SKILL.md deeper than one skill directory", () => {
+    expect(
+      refreshModule.shouldTriggerSkillsRefresh({
+        event: "change",
+        eventPath: path.join(skillRoot, "a", "b", "SKILL.md"),
+        roots,
+      }),
+    ).toBe(false);
   });
 });

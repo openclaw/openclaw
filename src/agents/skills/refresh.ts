@@ -72,24 +72,62 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
   return paths;
 }
 
-function toWatchGlobRoot(raw: string): string {
-  // Chokidar treats globs as POSIX-ish patterns. Normalize Windows separators
-  // so `*` works consistently across platforms.
-  return raw.replaceAll("\\", "/").replace(/\/+$/, "");
+/** Max directory depth under each skill root (see chokidar `depth`). 2 covers `SKILL.md` and `<skill>/SKILL.md`. */
+const SKILLS_WATCH_TREE_DEPTH = 2;
+
+function resolveSkillWatchRootDirs(workspaceDir: string, config?: OpenClawConfig): string[] {
+  const seen = new Set<string>();
+  for (const raw of resolveWatchPaths(workspaceDir, config)) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    seen.add(path.resolve(trimmed));
+  }
+  return Array.from(seen).toSorted();
 }
 
-function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
-  // Skills are defined by SKILL.md; watch only those files to avoid traversing
-  // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
-  const targets = new Set<string>();
-  for (const root of resolveWatchPaths(workspaceDir, config)) {
-    const globRoot = toWatchGlobRoot(root);
-    // Some configs point directly at a skill folder.
-    targets.add(`${globRoot}/SKILL.md`);
-    // Standard layout: <skillsRoot>/<skillName>/SKILL.md
-    targets.add(`${globRoot}/*/SKILL.md`);
+export function shouldTriggerSkillsRefresh(params: {
+  event: "add" | "addDir" | "change" | "unlink" | "unlinkDir";
+  eventPath: string;
+  roots: string[];
+}): boolean {
+  const eventPath = path.resolve(params.eventPath);
+  for (const root of params.roots) {
+    const rootResolved = path.resolve(root);
+    if (eventPath === rootResolved) {
+      continue;
+    }
+    const rel = path.relative(rootResolved, eventPath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      continue;
+    }
+    const segments = rel.split(path.sep).filter(Boolean);
+
+    if (params.event === "unlinkDir") {
+      // Entire skill directory removed (macOS glob watches miss this; directory watch does not).
+      if (path.resolve(path.dirname(eventPath)) === rootResolved) {
+        return true;
+      }
+      continue;
+    }
+
+    if (params.event === "addDir") {
+      continue;
+    }
+
+    if (path.basename(eventPath) !== "SKILL.md") {
+      continue;
+    }
+    // `<root>/SKILL.md` or `<root>/<skill>/SKILL.md`
+    if (segments.length === 1 && segments[0] === "SKILL.md") {
+      return true;
+    }
+    if (segments.length === 2 && segments[1] === "SKILL.md") {
+      return true;
+    }
   }
-  return Array.from(targets).toSorted();
+  return false;
 }
 
 export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
@@ -116,8 +154,8 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     return;
   }
 
-  const watchTargets = resolveWatchTargets(workspaceDir, params.config);
-  const pathsKey = watchTargets.join("|");
+  const watchRoots = resolveSkillWatchRootDirs(workspaceDir, params.config);
+  const pathsKey = watchRoots.join("|");
   if (existing && existing.pathsKey === pathsKey && existing.debounceMs === debounceMs) {
     return;
   }
@@ -129,14 +167,15 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     void existing.watcher.close().catch(() => {});
   }
 
-  const watcher = chokidar.watch(watchTargets, {
+  const watcher = chokidar.watch(watchRoots, {
     ignoreInitial: true,
+    depth: SKILLS_WATCH_TREE_DEPTH,
     awaitWriteFinish: {
       stabilityThreshold: debounceMs,
       pollInterval: 100,
     },
-    // Avoid FD exhaustion on macOS when a workspace contains huge trees.
-    // This watcher only needs to react to SKILL.md changes.
+    // Watch each skill root shallowly (depth) and filter in code. Glob patterns
+    // like `<root>/*/SKILL.md` miss `unlinkDir` when a skill folder is deleted on macOS.
     ignored: DEFAULT_SKILLS_WATCH_IGNORED,
   });
 
@@ -159,9 +198,18 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     }, debounceMs);
   };
 
-  watcher.on("add", (p) => schedule(p));
-  watcher.on("change", (p) => schedule(p));
-  watcher.on("unlink", (p) => schedule(p));
+  const onFsEvent = (event: "add" | "addDir" | "change" | "unlink" | "unlinkDir", p: string) => {
+    if (!shouldTriggerSkillsRefresh({ event, eventPath: p, roots: watchRoots })) {
+      return;
+    }
+    schedule(p);
+  };
+
+  watcher.on("add", (p) => onFsEvent("add", p));
+  watcher.on("addDir", (p) => onFsEvent("addDir", p));
+  watcher.on("change", (p) => onFsEvent("change", p));
+  watcher.on("unlink", (p) => onFsEvent("unlink", p));
+  watcher.on("unlinkDir", (p) => onFsEvent("unlinkDir", p));
   watcher.on("error", (err) => {
     log.warn(`skills watcher error (${workspaceDir}): ${String(err)}`);
   });
