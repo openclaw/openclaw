@@ -297,25 +297,8 @@ function getExportDescriptor(prop) {
   };
 }
 
-const __rootAliasGetCounts = new Map();
-const __rootAliasGetReported = new Set();
-
 rootExports = new Proxy(target, {
   get(_target, prop, receiver) {
-    if (typeof prop === "string") {
-      const count = (__rootAliasGetCounts.get(prop) ?? 0) + 1;
-      __rootAliasGetCounts.set(prop, count);
-      if (count > 50 && !__rootAliasGetReported.has(prop)) {
-        __rootAliasGetReported.add(prop);
-        console.error(
-          "ROOT_ALIAS_GET",
-          prop,
-          "count=",
-          count,
-          new Error().stack,
-        );
-      }
-    }
     if (Reflect.has(target, prop)) {
       return Reflect.get(target, prop, receiver);
     }

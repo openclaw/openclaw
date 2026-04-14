@@ -305,22 +305,6 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
     return cached as T;
   }
 
-  const depthStore = ((globalThis as Record<string, unknown>).__OPENCLAW_FACADE_DEPTH__ ??= new Map<
-    string,
-    number
-  >()) as Map<string, number>;
-  const currentDepth = (depthStore.get(location.modulePath) ?? 0) + 1;
-  depthStore.set(location.modulePath, currentDepth);
-  if (currentDepth > 3) {
-    console.error(
-      "FACADE_DEPTH",
-      location.modulePath,
-      "depth=",
-      currentDepth,
-      new Error().stack,
-    );
-  }
-
   const opened = openBoundaryFileSync({
     absolutePath: location.modulePath,
     rootPath: location.boundaryRoot,
@@ -357,13 +341,6 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
   } catch (err) {
     loadedFacadeModules.delete(location.modulePath);
     throw err;
-  } finally {
-    const next = (depthStore.get(location.modulePath) ?? 1) - 1;
-    if (next <= 0) {
-      depthStore.delete(location.modulePath);
-    } else {
-      depthStore.set(location.modulePath, next);
-    }
   }
 
   return sentinel;
