@@ -180,13 +180,12 @@ export function createReplyMediaPathNormalizer(params: {
       !WINDOWS_DRIVE_RE.test(media);
     const sandboxRoot = await resolveSandboxRoot();
     if (sandboxRoot) {
+      let sandboxResolvedMedia: string;
       try {
-        return await persistLocalReplyMedia(
-          await resolveSandboxedMediaSource({
-            media,
-            sandboxRoot,
-          }),
-        );
+        sandboxResolvedMedia = await resolveSandboxedMediaSource({
+          media,
+          sandboxRoot,
+        });
       } catch (err) {
         if (!isLikelyLocalMediaSource(media)) {
           throw err;
@@ -202,6 +201,7 @@ export function createReplyMediaPathNormalizer(params: {
         }
         return await persistLocalReplyMedia(media);
       }
+      return await persistLocalReplyMedia(sandboxResolvedMedia);
     }
     if (isRelativeLocalMedia) {
       return await persistLocalReplyMedia(resolveWorkspaceRelativeMedia(media));

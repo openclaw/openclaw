@@ -94,6 +94,34 @@ describe("createReplyMediaPathNormalizer", () => {
     );
   });
 
+  it("drops sandbox-mapped media when staging fails instead of retrying the workspace fallback", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("media too large"));
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["./out/photo.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledTimes(1);
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
+      path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
+      5 * 1024 * 1024,
+      expect.any(Object),
+    );
+  });
+
   it("drops host file URLs when no sandbox mapping applies", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
