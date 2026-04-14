@@ -7,7 +7,7 @@ const MAX_FACE_EXT_BYTES = 64 * 1024;
 /** Replace QQ face tags with readable text labels. */
 export function parseFaceTags(text: string): string {
   if (!text) {
-    return text;
+    return "";
   }
 
   return text.replace(/<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g, (_match, ext: string) => {
@@ -28,7 +28,7 @@ export function parseFaceTags(text: string): string {
 /** Remove internal framework markers before sending text outward. */
 export function filterInternalMarkers(text: string): string {
   if (!text) {
-    return text;
+    return "";
   }
 
   let result = text.replace(/\[\[[a-z_]+:\s*[^\]]*\]\]/gi, "");
