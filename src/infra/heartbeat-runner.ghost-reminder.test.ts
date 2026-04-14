@@ -70,7 +70,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Provider).toBe("cron-event");
     expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
     expect(calledCtx?.Body).toContain(reminderText);
-    expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
+    // Body may reference HEARTBEAT_OK inside the model instructions; reject it
+    // only when it appears as a standalone event line (that would mean the
+    // heartbeat-ack filter failed to drop it from the event list).
+    expect(calledCtx?.Body).not.toMatch(/^HEARTBEAT_OK$/m);
     expect(calledCtx?.Body).not.toContain("heartbeat poll");
   };
 
