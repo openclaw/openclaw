@@ -67,8 +67,8 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Starts the Docker-backed QA site for operator-style QA work.
 - `pnpm openclaw qa matrix`
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
-  - Packaged OpenClaw installs require the optional Matrix runner plugin first:
-    `openclaw plugins install @openclaw/qa-matrix`.
+  - This QA host is repo/dev-only today. Packaged OpenClaw installs do not ship
+    `qa-lab`, so they do not expose `openclaw qa`.
   - Repo checkouts can link the in-tree plugin directly:
     `openclaw plugins install -l ./extensions/qa-matrix`.
   - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.

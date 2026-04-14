@@ -135,8 +135,8 @@ describe("bundled plugin metadata", () => {
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
       "dist/extensions/qa-channel/runtime-api.js",
     );
+    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
-    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).toContain("dist/extensions/qa-lab/runtime-api.js");
   });
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
