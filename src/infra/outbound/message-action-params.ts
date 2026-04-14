@@ -1,5 +1,6 @@
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringParam } from "../../agents/tools/common.js";
+import { resolveChannelMessageToolMediaSourceParamKeys } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
@@ -13,10 +14,11 @@ import {
 import { extensionForMime } from "../../media/mime.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
-const SANDBOX_MEDIA_PARAM_KEYS = [
+export const BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS = [
   "media",
   "path",
   "filePath",
@@ -25,11 +27,52 @@ const SANDBOX_MEDIA_PARAM_KEYS = [
   "image",
 ] as const;
 
-function readMediaParam(
-  args: Record<string, unknown>,
-  key: (typeof SANDBOX_MEDIA_PARAM_KEYS)[number],
-): string | undefined {
+function readMediaParam(args: Record<string, unknown>, key: string): string | undefined {
   return readStringParam(args, key, { trim: false });
+}
+
+function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): string[] {
+  const keys = new Set<string>(BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS);
+  extraParamKeys?.forEach((key) => keys.add(key));
+  return Array.from(keys);
+}
+
+export function resolveExtraActionMediaSourceParamKeys(params: {
+  cfg: OpenClawConfig;
+  action?: ChannelMessageActionName;
+  channel?: string;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
+}): string[] {
+  return resolveChannelMessageToolMediaSourceParamKeys({
+    cfg: params.cfg,
+    action: params.action,
+    channel: params.channel,
+    accountId: params.accountId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    requesterSenderId: params.requesterSenderId,
+    senderIsOwner: params.senderIsOwner,
+  });
+}
+
+export function collectActionMediaSourceHints(
+  args: Record<string, unknown>,
+  extraParamKeys?: readonly string[],
+): string[] {
+  const sources: string[] = [];
+  for (const key of buildActionMediaSourceParamKeys(extraParamKeys)) {
+    const source = typeof args[key] === "string" ? args[key] : undefined;
+    if (source && normalizeOptionalString(source)) {
+      sources.push(source);
+    }
+  }
+  return sources;
 }
 
 function readAttachmentMediaHint(args: Record<string, unknown>): string | undefined {
@@ -229,10 +272,11 @@ async function hydrateAttachmentPayload(params: {
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   mediaPolicy: AttachmentMediaPolicy;
+  extraParamKeys?: readonly string[];
 }): Promise<void> {
   const sandboxRoot =
     params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
-  for (const key of SANDBOX_MEDIA_PARAM_KEYS) {
+  for (const key of buildActionMediaSourceParamKeys(params.extraParamKeys)) {
     const raw = readMediaParam(params.args, key);
     if (!raw) {
       continue;
