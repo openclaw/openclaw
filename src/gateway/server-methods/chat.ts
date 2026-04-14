@@ -1622,7 +1622,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       provider: resolvedSessionModel.provider,
       localMessages,
     });
-    const hardMax = 1000;
+    const hardMax = 2000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
