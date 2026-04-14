@@ -265,9 +265,9 @@ The system must:
 
 ## Conformance across systems
 
-| System   | `live` mode                                      | `spawn` single                              | `spawn` multi                     |
-| -------- | ------------------------------------------------ | ------------------------------------------- | --------------------------------- |
-| OpenClaw | ✅ `liveModelSwitchPending` + session store      | ✅ `spawnSubagentDirect`                    | ✅ `Promise.all`                  |
-| zeroclaw | 🔧 Needs `pending_model_switch` in session state | 🔧 Needs inline `model` param on `delegate` | 🔧 Needs `spawns[]` on `delegate` |
+| System   | `live` mode                                   | `spawn` single                                    | `spawn` multi               |
+| -------- | --------------------------------------------- | ------------------------------------------------- | --------------------------- |
+| OpenClaw | ✅ `liveModelSwitchPending` + session store   | ✅ `spawnSubagentDirect`                          | ✅ `Promise.all`            |
+| zeroclaw | ✅ `MODEL_SWITCH_REQUEST` global + agent loop | ✅ `create_provider_with_options` + `simple_chat` | ✅ `futures_util::join_all` |
 
 See `ZEROCLAW_MODEL_SPAWN_DESIGN.md` in the InvestorClaw repo for the zeroclaw implementation spec.
