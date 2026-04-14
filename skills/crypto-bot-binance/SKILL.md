@@ -102,7 +102,8 @@ Only these flags are accepted by `save-settings`, and each must be `true` or `fa
 
 ## Notes
 
-- Control calls (`start/stop/pause/resume/sync/save-settings/test-connection`) require API enabled and valid token on the server.
+- Control calls (`start/stop/pause/resume/sync/save-settings/test-connection`) require API enabled and valid auth on the deployment.
+- Supported auth in this script: `Authorization: Bearer`, `X-OpenClaw-Token`, or HTTP Basic Auth.
 - If server enforces IP allowlist, run from an allowed host.
 - Treat this as a trading control plane. Always confirm environment (`paper/live`) before changing runtime state.
 - For endpoint details, check `references/openclaw-api-endpoints.md`.

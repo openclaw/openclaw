@@ -30,4 +30,5 @@ Auth rules (from backend implementation):
 - If `openclaw_shared_token` is set on server, token is required.
 - Monitoring endpoints require `openclaw_api_enabled`; token depends on server config.
 - Control endpoints require `openclaw_api_enabled` and configured token.
+- Some deployments additionally enforce HTTP Basic Auth at ingress/reverse-proxy level.
 - Optional IP allowlist can block requests by source IP.
