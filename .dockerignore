@@ -6,12 +6,17 @@
 .env
 .env.*
 
+# Local development files
 .bun-cache
 .bun
 .tmp
 **/.tmp
+
+# System and OS files
 .DS_Store
 **/.DS_Store
+
+# Media files (not needed in Docker build)
 *.png
 *.jpg
 *.jpeg
@@ -21,6 +26,8 @@
 *.mov
 *.wav
 *.mp3
+
+# Dependency caches
 node_modules
 **/node_modules
 .pnpm-store
