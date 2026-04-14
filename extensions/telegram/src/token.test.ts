@@ -229,11 +229,27 @@ describe("resolveTelegramToken", () => {
     expectNoTokenForUnknownAccount(createUnknownAccountConfig());
   });
 
-  it("throws when botToken is an unresolved SecretRef object", () => {
+  it("resolves env-backed SecretRefs from process.env", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "secretref-env-token");
     const cfg = {
       channels: {
         telegram: {
           botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramToken(cfg)).toEqual({
+      token: "secretref-env-token",
+      source: "config",
+    });
+  });
+
+  it("keeps strict runtime behavior for unresolved non-env SecretRefs", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "file", provider: "vault", id: "/telegram/bot-token" },
         },
       },
     } as unknown as OpenClawConfig;

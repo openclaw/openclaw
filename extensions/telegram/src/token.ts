@@ -4,13 +4,40 @@ import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  normalizeSecretInputString,
+  resolveSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 
 export type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
 export type TelegramTokenResolution = BaseTokenResolution & {
   source: TelegramTokenSource;
 };
+
+function resolveRuntimeTokenValue(params: { value: unknown; path: string }): string | undefined {
+  const resolved = resolveSecretInputString({
+    value: params.value,
+    path: params.path,
+    mode: "inspect",
+  });
+  if (resolved.status === "available") {
+    return resolved.value;
+  }
+  if (resolved.status !== "configured_unavailable") {
+    return undefined;
+  }
+  if (resolved.ref.source === "env") {
+    return normalizeSecretInputString(process.env[resolved.ref.id]);
+  }
+  // Runtime resolution stays strict for non-env SecretRefs.
+  resolveSecretInputString({
+    value: params.value,
+    path: params.path,
+    mode: "strict",
+  });
+  return undefined;
+}
 
 type ResolveTelegramTokenOpts = {
   envToken?: string | null;
@@ -79,7 +106,7 @@ export function resolveTelegramToken(
     return { token: "", source: "none" };
   }
 
-  const accountToken = normalizeResolvedSecretInputString({
+  const accountToken = resolveRuntimeTokenValue({
     value: accountCfg?.botToken,
     path: `channels.telegram.accounts.${accountId}.botToken`,
   });
@@ -100,7 +127,7 @@ export function resolveTelegramToken(
     return { token: "", source: "none" };
   }
 
-  const configToken = normalizeResolvedSecretInputString({
+  const configToken = resolveRuntimeTokenValue({
     value: telegramCfg?.botToken,
     path: "channels.telegram.botToken",
   });
