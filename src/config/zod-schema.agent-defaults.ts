@@ -130,8 +130,11 @@ export const AgentDefaultsSchema = z
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         provider: z.string().optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
+        reserveTokensShare: z.number().min(0.01).max(0.9).optional(),
         keepRecentTokens: z.number().int().positive().optional(),
+        keepRecentTokensShare: z.number().min(0.01).max(0.9).optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
+        reserveTokensFloorShare: z.number().min(0.01).max(0.9).optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
         customInstructions: z.string().optional(),
         identifierPolicy: z
@@ -154,6 +157,7 @@ export const AgentDefaultsSchema = z
           .object({
             enabled: z.boolean().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
+            softThresholdTokensShare: z.number().min(0.01).max(0.9).optional(),
             forceFlushTranscriptBytes: z
               .union([
                 z.number().int().nonnegative(),

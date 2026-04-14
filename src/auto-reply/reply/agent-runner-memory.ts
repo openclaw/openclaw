@@ -34,6 +34,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import {
+  applyMemoryFlushSharesToPlan,
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
   shouldRunMemoryFlush,
@@ -378,7 +379,14 @@ export async function runPreflightCompactionIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const rawMemoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = rawMemoryFlushPlan
+    ? applyMemoryFlushSharesToPlan({
+        plan: rawMemoryFlushPlan,
+        cfg: params.cfg,
+        contextWindowTokens,
+      })
+    : null;
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
@@ -518,8 +526,8 @@ export async function runMemoryFlushIfNeeded(params: {
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  if (!memoryFlushPlan) {
+  const rawMemoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  if (!rawMemoryFlushPlan) {
     return params.sessionEntry;
   }
 
@@ -548,6 +556,11 @@ export async function runMemoryFlushIfNeeded(params: {
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
+  });
+  const memoryFlushPlan = applyMemoryFlushSharesToPlan({
+    plan: rawMemoryFlushPlan,
+    cfg: params.cfg,
+    contextWindowTokens,
   });
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(

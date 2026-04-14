@@ -14,6 +14,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "./history.js";
 import {
+  applyMemoryFlushSharesToPlan,
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
   shouldRunMemoryFlush,
@@ -411,6 +412,176 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
         agentCfgContextTokens: 100_000,
       }),
     ).toBe(100_000);
+  });
+});
+
+describe("applyMemoryFlushSharesToPlan", () => {
+  const basePlan = {
+    softThresholdTokens: 4_000,
+    forceFlushTranscriptBytes: 2 * 1024 * 1024,
+    reserveTokensFloor: 20_000,
+    prompt: "p",
+    systemPrompt: "sp",
+    relativePath: "memory/today.md",
+  };
+
+  it("returns the plan unchanged when no shares are configured (backward compat)", () => {
+    const result = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      contextWindowTokens: 200_000,
+    });
+    expect(result.softThresholdTokens).toBe(4_000);
+    expect(result.reserveTokensFloor).toBe(20_000);
+    expect(result.forceFlushTranscriptBytes).toBe(basePlan.forceFlushTranscriptBytes);
+    expect(result.relativePath).toBe("memory/today.md");
+  });
+
+  it("computes softThresholdTokens from share against the context window", () => {
+    const result = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: { softThresholdTokensShare: 0.02 },
+            },
+          },
+        },
+      } as never,
+      contextWindowTokens: 1_000_000,
+    });
+    expect(result.softThresholdTokens).toBe(20_000); // 1M × 0.02
+  });
+
+  it("share wins over absolute softThresholdTokens", () => {
+    const result = applyMemoryFlushSharesToPlan({
+      plan: { ...basePlan, softThresholdTokens: 999_999 },
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                softThresholdTokens: 999_999,
+                softThresholdTokensShare: 0.02,
+              },
+            },
+          },
+        },
+      } as never,
+      contextWindowTokens: 200_000,
+    });
+    expect(result.softThresholdTokens).toBe(4_000); // 200k × 0.02
+  });
+
+  it("applies reserveTokensFloorShare from config", () => {
+    const result = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { reserveTokensFloorShare: 0.1 },
+          },
+        },
+      } as never,
+      contextWindowTokens: 200_000,
+    });
+    expect(result.reserveTokensFloor).toBe(20_000);
+  });
+
+  it("scales reasonably across heterogeneous context windows", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            reserveTokensFloorShare: 0.1,
+            memoryFlush: { softThresholdTokensShare: 0.02 },
+          },
+        },
+      },
+    } as never;
+
+    const big = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg,
+      contextWindowTokens: 1_000_000,
+    });
+    expect(big.reserveTokensFloor).toBe(100_000);
+    expect(big.softThresholdTokens).toBe(20_000);
+
+    const small = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg,
+      contextWindowTokens: 8_000,
+    });
+    expect(small.reserveTokensFloor).toBe(800);
+    expect(small.softThresholdTokens).toBe(160);
+  });
+
+  // Regression: a single agent runs sessions with different models. The share
+  // must be evaluated against the SESSION-active model's context window, not
+  // a value statically derived from the agent's default model. Two sessions
+  // of the same agent with different active models must yield different
+  // resolved budgets.
+  it("share resolves against the SESSION-active model, not the agent default model", () => {
+    // Same agent config: both share fields set, no absolute overrides.
+    const cfg = {
+      models: {
+        providers: {
+          glm: { models: [{ id: "glm-4.7", contextWindow: 200_000 }] },
+          moonshot: { models: [{ id: "kimi-k2", contextWindow: 1_000_000 }] },
+        },
+      },
+      agents: {
+        defaults: {
+          // Agent-level default model (would be used as a fallback when the
+          // session does not override).
+          model: { primary: "glm/glm-4.7" },
+          compaction: {
+            reserveTokensFloorShare: 0.1,
+            memoryFlush: { softThresholdTokensShare: 0.02 },
+          },
+        },
+      },
+    } as never;
+
+    // Session S1 inherits the agent default (glm-4.7, 200k window).
+    const sessionS1Window = resolveMemoryFlushContextWindowTokens({
+      cfg,
+      provider: "glm",
+      modelId: "glm-4.7",
+    });
+    expect(sessionS1Window).toBe(200_000);
+
+    const planS1 = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg,
+      contextWindowTokens: sessionS1Window,
+    });
+    expect(planS1.reserveTokensFloor).toBe(20_000); // 200k × 0.1
+    expect(planS1.softThresholdTokens).toBe(4_000); // 200k × 0.02
+
+    // Session S2 of the SAME agent overrides to kimi-k2 (1M window). The
+    // share must scale to the active session model, NOT stay locked at the
+    // agent default's 200k.
+    const sessionS2Window = resolveMemoryFlushContextWindowTokens({
+      cfg,
+      provider: "moonshot",
+      modelId: "kimi-k2",
+    });
+    expect(sessionS2Window).toBe(1_000_000);
+
+    const planS2 = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg,
+      contextWindowTokens: sessionS2Window,
+    });
+    expect(planS2.reserveTokensFloor).toBe(100_000); // 1M × 0.1
+    expect(planS2.softThresholdTokens).toBe(20_000); // 1M × 0.02
+
+    // Sanity: budgets really did differ between the two sessions even though
+    // the agent config is identical — proving the ratio is session-scoped.
+    expect(planS2.reserveTokensFloor).not.toBe(planS1.reserveTokensFloor);
+    expect(planS2.softThresholdTokens).not.toBe(planS1.softThresholdTokens);
   });
 });
 

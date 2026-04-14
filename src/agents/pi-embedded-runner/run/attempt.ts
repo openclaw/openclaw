@@ -913,6 +913,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        contextWindowTokens: params.model.contextWindow,
       });
       applyPiAutoCompactionGuard({
         settingsManager,
