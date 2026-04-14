@@ -18,7 +18,7 @@ export function startNodesPolling(host: PollingHost) {
   }
   host.nodesPollInterval = window.setInterval(
     () => void loadNodes(host as unknown as NodesState, { quiet: true }),
-    5000,
+    30_000,
   );
 }
 
@@ -39,7 +39,7 @@ export function startLogsPolling(host: PollingHost) {
       return;
     }
     void loadLogs(host as unknown as LogsState, { quiet: true });
-  }, 2000);
+  }, 15_000);
 }
 
 export function stopLogsPolling(host: PollingHost) {
@@ -59,7 +59,7 @@ export function startDebugPolling(host: PollingHost) {
       return;
     }
     void loadDebug(host as unknown as DebugState);
-  }, 3000);
+  }, 15_000);
 }
 
 export function stopDebugPolling(host: PollingHost) {
