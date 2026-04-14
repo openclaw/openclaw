@@ -245,7 +245,11 @@ function createStreamFnWithExtraParams(
     streamParams.temperature = extraParams.temperature;
   }
   if (typeof extraParams.maxTokens === "number") {
-    streamParams.maxTokens = extraParams.maxTokens;
+    if (Number.isFinite(extraParams.maxTokens) && extraParams.maxTokens > 0) {
+      streamParams.maxTokens = extraParams.maxTokens;
+    } else {
+      log.warn(`ignoring invalid maxTokens param: ${String(extraParams.maxTokens)}`);
+    }
   }
   const transport = resolveSupportedTransport(extraParams.transport);
   if (transport) {

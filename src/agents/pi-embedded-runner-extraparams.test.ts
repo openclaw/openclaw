@@ -1317,6 +1317,42 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
+  it("drops non-positive maxTokens from configured extra params", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const { calls, agent } = createOptionsCaptureAgent();
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-haiku-4-5": {
+                params: {
+                  maxTokens: 0,
+                },
+              },
+            },
+          },
+        },
+      };
+
+      applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-haiku-4-5");
+
+      const model = {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-haiku-4-5",
+      } as Model<"anthropic-messages">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).not.toHaveProperty("maxTokens");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid maxTokens param: 0");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("defaults Codex transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
