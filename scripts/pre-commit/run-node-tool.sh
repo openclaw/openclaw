@@ -17,7 +17,7 @@ if [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; then
   fi
   if command -v corepack >/dev/null 2>&1 && [[ -f "$ROOT_DIR/package.json" ]]; then
     package_manager="$(node -e "const p=require(process.argv[1]); process.stdout.write(typeof p.packageManager==='string' ? p.packageManager : '')" "$ROOT_DIR/package.json" 2>/dev/null || true)"
-    if [[ "$package_manager" == pnpm@* ]]; then
+    if [[ "$package_manager" == pnpm@* ]] && corepack pnpm --version >/dev/null 2>&1; then
       exec corepack pnpm exec "$tool" "$@"
     fi
   fi
