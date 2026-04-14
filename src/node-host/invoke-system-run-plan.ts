@@ -315,7 +315,7 @@ function isLikelyScriptLikePathSync(targetPath: string): boolean {
   try {
     stat = fs.statSync(targetPath);
   } catch {
-    return false;
+    return true;
   }
   if (!stat.isFile()) {
     return false;
