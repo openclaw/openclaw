@@ -68,6 +68,6 @@ describe("memory embedding provider runtime resolution", () => {
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
 
     expect(runtimeModule.getMemoryEmbeddingProvider("ollama")?.id).toBe("ollama");
-    expect(mocks.resolvePluginCapabilityProviders).not.toHaveBeenCalled();
+    expect(mocks.resolvePluginCapabilityProviders).not.toHaveBeenCalled(1);
   });
 });
