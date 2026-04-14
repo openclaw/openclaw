@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { composeProviderStreamWrappers as composeProviderStreamWrappersShared } from "./provider-stream-shared.js";
 import {
   buildProviderStreamFamilyHooks,
   composeProviderStreamWrappers,
@@ -24,6 +25,10 @@ function requireStreamFn(streamFn: StreamFn | null | undefined) {
 }
 
 describe("composeProviderStreamWrappers", () => {
+  it("re-exports the shared wrapper composer", () => {
+    expect(composeProviderStreamWrappers).toBe(composeProviderStreamWrappersShared);
+  });
+
   it("applies wrappers left to right", async () => {
     const order: string[] = [];
     const baseStreamFn: StreamFn = (_model, _context, _options) => {

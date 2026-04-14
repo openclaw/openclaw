@@ -1,4 +1,3 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
@@ -32,22 +31,10 @@ import {
 } from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
-
-export type ProviderStreamWrapperFactory =
-  | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
-  | null
-  | undefined
-  | false;
-
-export function composeProviderStreamWrappers(
-  baseStreamFn: StreamFn | undefined,
-  ...wrappers: ProviderStreamWrapperFactory[]
-): StreamFn | undefined {
-  return wrappers.reduce(
-    (streamFn, wrapper) => (wrapper ? wrapper(streamFn) : streamFn),
-    baseStreamFn,
-  );
-}
+export {
+  composeProviderStreamWrappers,
+  type ProviderStreamWrapperFactory,
+} from "./provider-stream-shared.js";
 
 export type ProviderStreamFamily =
   | "google-thinking"
