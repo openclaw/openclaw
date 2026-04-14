@@ -51,6 +51,15 @@ describe("cdp helpers", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("still enforces hostname allowlist for loopback CDP endpoints", async () => {
+    await expect(
+      assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
+        dangerouslyAllowPrivateNetwork: false,
+        hostnameAllowlist: ["*.corp.example"],
+      }),
+    ).rejects.toThrow("browser endpoint blocked by policy");
+  });
+
   it("releases guarded CDP fetches for bodyless requests", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -92,6 +101,36 @@ describe("cdp helpers", () => {
         url: "http://127.0.0.1:9222/json/version",
         policy: {
           dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        },
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves hostname allowlist while allowing exact loopback CDP fetches", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: {
+        ok: true,
+        status: 200,
+      },
+      release,
+    });
+
+    await expect(
+      fetchOk("http://127.0.0.1:9222/json/version", 250, undefined, {
+        dangerouslyAllowPrivateNetwork: false,
+        hostnameAllowlist: ["*.corp.example"],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:9222/json/version",
+        policy: {
+          dangerouslyAllowPrivateNetwork: false,
+          hostnameAllowlist: ["*.corp.example"],
           allowedHostnames: ["127.0.0.1"],
         },
       }),

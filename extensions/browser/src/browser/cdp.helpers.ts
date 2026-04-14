@@ -68,14 +68,17 @@ export async function assertCdpEndpointAllowed(
   if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
     throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
   }
-  // Loopback CDP endpoints are internal browser-control hops, not
-  // agent-controlled navigation targets.
-  if (isLoopbackHost(parsed.hostname)) {
-    return;
-  }
   try {
+    const policy = isLoopbackHost(parsed.hostname)
+      ? {
+          ...ssrfPolicy,
+          allowedHostnames: Array.from(
+            new Set([...(ssrfPolicy?.allowedHostnames ?? []), parsed.hostname]),
+          ),
+        }
+      : ssrfPolicy;
     await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-      policy: ssrfPolicy,
+      policy,
     });
   } catch (error) {
     throw new BrowserCdpEndpointBlockedError({ cause: error });
