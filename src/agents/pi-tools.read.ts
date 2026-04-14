@@ -543,33 +543,48 @@ export function createOpenClawReadTool(
                   type: "base64",
                   media_type: mimeType,
                   data: fileBuffer.toString("base64"),
-               },
-             },
-             { type: "text", text: `📷 [${fileName}](${mediaUrl})` },
-           ],
+                },
+              },
+              { type: "text", text: `📷 [${fileName}](${mediaUrl})` },
+            ],
             details: { path: inputPath, size: fileBuffer.length },
           };
         }
 
         if (AUDIO_EXTENSIONS.has(ext)) {
+          const mimeType = ext === "mp3" ? "audio/mpeg" : 
+                           ext === "wav" ? "audio/wav" :
+                           ext === "ogg" ? "audio/ogg" :
+                           ext === "m4a" ? "audio/mp4" :
+                           ext === "flac" ? "audio/flac" :
+                           ext === "aac" ? "audio/aac" : "audio/mpeg";
+          
           return {
             toolCallId,
             content: [{
               type: "audio",
               url: mediaUrl,
               filename: fileName,
+              mimeType: mimeType,
             } as any],
             details: { path: inputPath, size: stats.size },
           };
         }
 
         if (VIDEO_EXTENSIONS.has(ext)) {
+          const mimeType = ext === "mp4" ? "video/mp4" :
+                           ext === "webm" ? "video/webm" :
+                           ext === "mov" ? "video/quicktime" :
+                           ext === "avi" ? "video/x-msvideo" :
+                           ext === "mkv" ? "video/x-matroska" : "video/mp4";
+          
           return {
             toolCallId,
             content: [{
               type: "video",
               url: mediaUrl,
               filename: fileName,
+              mimeType: mimeType,
             } as any],
             details: { path: inputPath, size: stats.size },
           };
