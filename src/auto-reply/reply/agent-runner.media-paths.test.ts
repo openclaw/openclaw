@@ -16,6 +16,9 @@ const waitForEmbeddedPiRunEndMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 const scheduleFollowupDrainMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
+const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() =>
+  vi.fn(() => "/private/tmp/openclaw-test"),
+);
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -46,6 +49,10 @@ vi.mock("./queue.js", () => ({
   scheduleFollowupDrain: scheduleFollowupDrainMock,
 }));
 
+vi.mock("../../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
+}));
+
 let runReplyAgent: typeof import("./agent-runner.js").runReplyAgent;
 
 describe("runReplyAgent media path normalization", () => {
@@ -66,6 +73,8 @@ describe("runReplyAgent media path normalization", () => {
     enqueueFollowupRunMock.mockReset();
     scheduleFollowupDrainMock.mockReset();
     refreshQueuedFollowupSessionMock.mockReset();
+    resolvePreferredOpenClawTmpDirMock.mockReset();
+    resolvePreferredOpenClawTmpDirMock.mockReturnValue("/private/tmp/openclaw-test");
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     runWithModelFallbackMock.mockImplementation(
       async ({
@@ -139,6 +148,64 @@ describe("runReplyAgent media path normalization", () => {
     expect(result).toMatchObject({
       mediaUrl: path.join("/tmp/workspace", "out", "generated.png"),
       mediaUrls: [path.join("/tmp/workspace", "out", "generated.png")],
+    });
+  });
+
+  it("keeps final MEDIA replies under the preferred OpenClaw tmp root", async () => {
+    const audioPath = path.join(
+      resolvePreferredOpenClawTmpDirMock(),
+      "tts-q1w2e3",
+      "voice-1713042154000.opus",
+    );
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: `MEDIA:${audioPath}` }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "speak",
+      followupRun: createMockFollowupRun({
+        prompt: "speak",
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          messageProvider: "telegram",
+          workspaceDir: "/tmp/workspace",
+        },
+      }) as unknown as FollowupRun,
+      queueKey: "main",
+      resolvedQueue: { mode: "interrupt" } as QueueSettings,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: createMockTypingController(),
+      sessionCtx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        To: "chat-1",
+        OriginatingTo: "chat-1",
+        AccountId: "default",
+        MessageSid: "msg-1",
+      } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: audioPath,
+      mediaUrls: [audioPath],
     });
   });
 });

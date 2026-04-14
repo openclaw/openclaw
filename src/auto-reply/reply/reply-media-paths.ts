@@ -20,7 +20,6 @@ const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
 const AGENT_STATE_MEDIA_DIRNAME = path.join(".openclaw", "media");
 const MANAGED_GLOBAL_MEDIA_SUBDIRS = new Set(["outbound"]);
-let cachedPreferredTmpRoot: string | null | undefined;
 
 function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -37,41 +36,58 @@ function isManagedGlobalReplyMediaPath(candidate: string): boolean {
   return MANAGED_GLOBAL_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
 }
 
-function resolvePreferredReplyMediaTmpRoot(): string | undefined {
-  if (cachedPreferredTmpRoot !== undefined) {
-    return cachedPreferredTmpRoot ?? undefined;
-  }
-  try {
-    cachedPreferredTmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
-  } catch {
-    cachedPreferredTmpRoot = null;
-  }
-  return cachedPreferredTmpRoot ?? undefined;
-}
-
-function buildVolatileReplyMediaRoots(params: {
+function buildAgentStateMediaRoots(params: {
   workspaceDir: string;
   sandboxRoot?: string;
 }): string[] {
-  const roots = [params.workspaceDir, params.sandboxRoot]
+  return [params.workspaceDir, params.sandboxRoot]
     .filter((root): root is string => Boolean(root))
     .map((root) => path.join(path.resolve(root), AGENT_STATE_MEDIA_DIRNAME));
-  const preferredTmpRoot = resolvePreferredReplyMediaTmpRoot();
-  if (preferredTmpRoot) {
-    roots.push(preferredTmpRoot);
-  }
-  return roots;
 }
 
-function isAllowedAbsoluteReplyMediaPath(params: {
-  candidate: string;
-  workspaceDir: string;
-  sandboxRoot?: string;
-}): boolean {
-  if (isManagedGlobalReplyMediaPath(params.candidate)) {
-    return true;
+function hasPreferredOpenClawTtsReplyMediaShape(candidate: string): boolean {
+  const resolvedCandidate = path.resolve(candidate);
+  const fileName = path.basename(resolvedCandidate);
+  if (!fileName.startsWith("voice-")) {
+    return false;
   }
-  return buildVolatileReplyMediaRoots(params).some((root) => isPathInside(root, params.candidate));
+  const parentDirName = path.basename(path.dirname(resolvedCandidate));
+  return parentDirName.startsWith("tts-");
+}
+
+function isPreferredOpenClawTtsReplyMediaPath(
+  candidate: string,
+  preferredTmpRoot: string,
+): boolean {
+  if (!hasPreferredOpenClawTtsReplyMediaShape(candidate)) {
+    return false;
+  }
+  const resolvedCandidate = path.resolve(candidate);
+  const relative = path.relative(preferredTmpRoot, resolvedCandidate);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const segments = relative.split(path.sep).filter(Boolean);
+  if (segments.length !== 2) {
+    return false;
+  }
+  // Keep this narrow: the preferred tmp root also stores non-media artifacts.
+  return segments[0]?.startsWith("tts-") && segments[1]?.startsWith("voice-");
+}
+
+function resolvePreferredOpenClawTtsReplyMediaRoot(candidate: string): string | undefined {
+  if (!hasPreferredOpenClawTtsReplyMediaShape(candidate)) {
+    return undefined;
+  }
+  let preferredTmpRoot: string;
+  try {
+    preferredTmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+  } catch {
+    return undefined;
+  }
+  return isPreferredOpenClawTtsReplyMediaPath(candidate, preferredTmpRoot)
+    ? preferredTmpRoot
+    : undefined;
 }
 
 function isLikelyLocalMediaSource(media: string): boolean {
@@ -107,6 +123,7 @@ export function createReplyMediaPathNormalizer(params: {
   const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(params.cfg);
   let sandboxRootPromise: Promise<string | undefined> | undefined;
   const persistedMediaBySource = new Map<string, Promise<string>>();
+  const preferredTtsTmpRootByMedia = new Map<string, string>();
 
   const resolveSandboxRoot = async (): Promise<string | undefined> => {
     if (!sandboxRootPromise) {
@@ -119,16 +136,49 @@ export function createReplyMediaPathNormalizer(params: {
     return await sandboxRootPromise;
   };
 
+  const isVolatileReplyMediaPath = (input: {
+    candidate: string;
+    sandboxRoot?: string;
+  }): boolean => {
+    const volatileRoots = buildAgentStateMediaRoots({
+      workspaceDir: params.workspaceDir,
+      sandboxRoot: input.sandboxRoot,
+    });
+    if (volatileRoots.some((root) => isPathInside(root, input.candidate))) {
+      return true;
+    }
+    const cachedPreferredTmpRoot = preferredTtsTmpRootByMedia.get(input.candidate);
+    if (
+      cachedPreferredTmpRoot &&
+      isPreferredOpenClawTtsReplyMediaPath(input.candidate, cachedPreferredTmpRoot)
+    ) {
+      return true;
+    }
+    preferredTtsTmpRootByMedia.delete(input.candidate);
+    const preferredTmpRoot = resolvePreferredOpenClawTtsReplyMediaRoot(input.candidate);
+    if (!preferredTmpRoot) {
+      return false;
+    }
+    preferredTtsTmpRootByMedia.set(input.candidate, preferredTmpRoot);
+    return true;
+  };
+
+  const isAllowedAbsoluteReplyMediaPath = (input: {
+    candidate: string;
+    sandboxRoot?: string;
+  }): boolean => isManagedGlobalReplyMediaPath(input.candidate) || isVolatileReplyMediaPath(input);
+
   const persistVolatileReplyMedia = async (media: string): Promise<string> => {
     if (!path.isAbsolute(media)) {
       return media;
     }
     const sandboxRoot = await resolveSandboxRoot();
-    const volatileRoots = buildVolatileReplyMediaRoots({
-      workspaceDir: params.workspaceDir,
-      sandboxRoot,
-    });
-    if (!volatileRoots.some((root) => isPathInside(root, media))) {
+    if (
+      !isVolatileReplyMediaPath({
+        candidate: media,
+        sandboxRoot,
+      })
+    ) {
       return media;
     }
     const cached = persistedMediaBySource.get(media);
@@ -179,7 +229,6 @@ export function createReplyMediaPathNormalizer(params: {
         if (
           isAllowedAbsoluteReplyMediaPath({
             candidate: media,
-            workspaceDir: params.workspaceDir,
             sandboxRoot,
           })
         ) {
@@ -205,7 +254,6 @@ export function createReplyMediaPathNormalizer(params: {
     if (
       isAllowedAbsoluteReplyMediaPath({
         candidate: media,
-        workspaceDir: params.workspaceDir,
         sandboxRoot,
       })
     ) {

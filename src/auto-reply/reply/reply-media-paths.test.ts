@@ -214,6 +214,40 @@ describe("createReplyMediaPathNormalizer", () => {
     });
   });
 
+  it("accepts valid TTS media after the preferred tmp root changes", async () => {
+    resolvePreferredOpenClawTmpDir
+      .mockReturnValueOnce("/private/tmp/openclaw-501")
+      .mockReturnValueOnce("/private/tmp/openclaw-777");
+    saveMediaSource
+      .mockResolvedValueOnce({
+        path: "/Users/peter/.openclaw/media/outbound/tts-voice-a.opus",
+      })
+      .mockResolvedValueOnce({
+        path: "/Users/peter/.openclaw/media/outbound/tts-voice-b.opus",
+      });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const first = await normalize({
+      mediaUrls: ["/private/tmp/openclaw-501/tts-a1b2c3/voice-1713042154000.opus"],
+    });
+    const second = await normalize({
+      mediaUrls: ["/private/tmp/openclaw-777/tts-z9y8x7/voice-1713042155000.opus"],
+    });
+
+    expect(first).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/outbound/tts-voice-a.opus",
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/tts-voice-a.opus"],
+    });
+    expect(second).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/outbound/tts-voice-b.opus",
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/tts-voice-b.opus"],
+    });
+  });
+
   it("falls back to the original preferred tmp path when persisting TTS media fails", async () => {
     const tmpVoicePath = path.join(
       "/private/tmp/openclaw-501",
@@ -235,6 +269,25 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrl: tmpVoicePath,
       mediaUrls: [tmpVoicePath],
     });
+  });
+
+  it("keeps non-media temp artifacts under the preferred tmp root blocked", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/private/tmp/openclaw-501/openclaw-cli-system-prompt-123/prompt.txt"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
+    expect(saveMediaSource).not.toHaveBeenCalled();
   });
 
   it("drops host tmp paths outside the preferred OpenClaw temp directory", async () => {
