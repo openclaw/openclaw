@@ -5,7 +5,7 @@
 import type { ChannelId } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
-import { isSafeTableBreak, parseTableSpans } from "../markdown/tables.js";
+import { isSafeTableBreak, parseTableSpans } from "../markdown/table-spans.js";
 import { resolveChannelStreamingChunkMode } from "../plugin-sdk/channel-streaming.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";

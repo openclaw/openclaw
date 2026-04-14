@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { convertMarkdownTables, isSafeTableBreak, parseTableSpans } from "./tables.js";
+import { convertMarkdownTables } from "./tables.js";
+import { isSafeTableBreak, parseTableSpans } from "./table-spans.js";
 
 describe("convertMarkdownTables", () => {
   it("falls back to code rendering for block mode", () => {
