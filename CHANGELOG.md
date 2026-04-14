@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - Auto-reply/billing: classify pure billing cooldown fallback summaries from structured fallback reasons so users see billing guidance instead of the generic failure reply. (#66363) Thanks @Rohan5commit.
 - Agents/fallback: preserve the original prompt body on model fallback retries with session history so the retrying model keeps the active task instead of only seeing a generic continue message. (#66029) Thanks @WuKongAI-CMU.
 - Reply/secrets: resolve active reply channel/account SecretRefs before reply-run message-action discovery so channel token SecretRefs (for example Discord) do not degrade into discovery-time unresolved-secret failures. (#66796) Thanks @joshavant.
+<<<<<<< HEAD
 - Agents/Anthropic: ignore non-positive Anthropic Messages token overrides and fail locally when no positive token budget remains, so invalid `max_tokens` values no longer reach the provider API. (#66664) thanks @jalehman
 - Agents/context engines: preserve prompt-only token counts, not full request totals, when deferred maintenance reuses after-turn runtime context so background compaction bookkeeping matches the active prompt window. (#66820) thanks @jalehman.
 - BlueBubbles/inbound: add a persistent file-backed GUID dedupe so MessagePoller webhook replays after BB Server restart or reconnect no longer cause the agent to re-reply to already-handled messages. (#19176, #12053, #66816) Thanks @omarshahine.
@@ -79,6 +80,9 @@ Docs: https://docs.openclaw.ai
 - Gateway/security: enforce `localRoots` containment on the webchat audio embedding path. (#67298) Thanks @pgondhi987.
 - Webchat/security: reject remote-host `file://` URLs in the media embedding path. (#67293) Thanks @pgondhi987.
 - Dreaming/memory-core: use the ingestion day, not the source file day, for daily recall dedupe so repeat sweeps of the same daily note can increment `dailyCount` across days instead of stalling at `1`. (#67091) Thanks @Bartok9.
+=======
+- Agents/replay recovery: classify the provider wording `401 input item ID does not belong to this connection` as replay-invalid, so users get the existing `/new` session reset guidance instead of a raw 401-style failure. (#66475) Thanks @dallylee.
+>>>>>>> d9739e5c58 (fix: place replay recovery changelog in unreleased)
 
 ## 2026.4.14
 
