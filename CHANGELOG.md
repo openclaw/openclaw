@@ -17,13 +17,13 @@ Docs: https://docs.openclaw.ai
 - Telegram/forum topics: persist learned topic names to the Telegram session sidecar store so agent context can keep using human topic names after a restart instead of relearning from future service metadata. (#66107) Thanks @obviyus.
 - Doctor/systemd: keep `openclaw doctor --repair` and service reinstall from re-embedding dotenv-backed secrets in user systemd units, while preserving newer inline overrides over stale state-dir `.env` values. (#66249) Thanks @tmimmanuel.
 - Doctor/plugins: cache external `preferOver` catalog lookups within each plugin auto-enable pass so large `agents.list` configs no longer peg CPU and repeatedly reread plugin catalogs during doctor/plugins resolution. (#66246) Thanks @yfge.
+- GitHub Copilot/thinking: allow `github-copilot/gpt-5.4` to use `xhigh` reasoning so Copilot GPT-5.4 matches the rest of the GPT-5.4 family. (#50168) Thanks @jakepresent and @vincentkoc.
 - Agents/local models: clarify low-context preflight hints for self-hosted models, point config-backed caps at the relevant OpenClaw setting, and stop suggesting larger models when `agents.defaults.contextTokens` is the real limit. (#66236) Thanks @ImLukeF.
 - Browser/SSRF: restore hostname navigation under the default browser SSRF policy while keeping explicit strict mode reachable from config, and keep managed loopback CDP `/json/new` fallback requests on the local CDP control policy so browser follow-up fixes stop regressing normal navigation or self-blocking local CDP control. (#66386) Thanks @obviyus.
 - Browser/SSRF: preserve explicit strict browser navigation mode for legacy `browser.ssrfPolicy.allowPrivateNetwork: false` configs by normalizing the legacy alias to the canonical strict marker instead of silently widening those installs to the default non-strict hostname-navigation path.
 - Agents/subagents: emit the subagent registry lazy-runtime stub on the stable dist path that both source and bundled runtime imports resolve, so the follow-up dist fix no longer still fails with `ERR_MODULE_NOT_FOUND` at runtime. (#66420) Thanks @obviyus.
 - Browser: keep loopback CDP readiness checks reachable under strict SSRF defaults so OpenClaw can reconnect to locally started managed Chrome. (#66354) Thanks @hxy91819.
 - Agents/context engine: compact engine-owned sessions from the first tool-loop delta and preserve ingest fallback when `afterTurn` is absent, so long-running tool loops can stay bounded without dropping engine state. (#63555) Thanks @Bikkies.
-- GitHub Copilot/thinking: allow `github-copilot/gpt-5.4` to use `xhigh` reasoning so Copilot GPT-5.4 matches the rest of the GPT-5.4 family. (#50168) Thanks @jakepresent and @vincentkoc.
 
 ## 2026.4.14-beta.1
 
