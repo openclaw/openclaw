@@ -189,6 +189,78 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'transitive';\n");
   });
 
+  it("removes source maps from staged runtime dependencies", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 1;\n", "utf8");
+    fs.writeFileSync(path.join(directDir, "index.js.map"), '{ "version": 3 }\n', "utf8");
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(fs.existsSync(path.join(pluginDir, "node_modules", "direct", "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(pluginDir, "node_modules", "direct", "index.js.map"))).toBe(
+      false,
+    );
+  });
+
+  it("applies package-specific cargo prune rules after staging", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "rule-target": "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const depDir = path.join(repoRoot, "node_modules", "rule-target");
+    fs.mkdirSync(path.join(depDir, "docs"), { recursive: true });
+    fs.mkdirSync(path.join(depDir, "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(depDir, "package.json"),
+      '{ "name": "rule-target", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(depDir, "lib", "index.js"), "export {};\n", "utf8");
+    fs.writeFileSync(path.join(depDir, "lib", "index.d.ts"), "export {};\n", "utf8");
+    fs.writeFileSync(path.join(depDir, "docs", "guide.md"), "docs\n", "utf8");
+    fs.writeFileSync(path.join(depDir, "README.md"), "readme\n", "utf8");
+    fs.writeFileSync(path.join(depDir, "LICENSE"), "license\n", "utf8");
+
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      stagedRuntimeDepPruneRules: new Map([
+        ["rule-target", { paths: ["docs", "README.md"], suffixes: [".d.ts"] }],
+      ]),
+    });
+
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "rule-target", "lib", "index.js")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "rule-target", "lib", "index.d.ts")),
+    ).toBe(false);
+    expect(fs.existsSync(path.join(pluginDir, "node_modules", "rule-target", "docs"))).toBe(false);
+    expect(fs.existsSync(path.join(pluginDir, "node_modules", "rule-target", "README.md"))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(pluginDir, "node_modules", "rule-target", "LICENSE"))).toBe(
+      true,
+    );
+  });
+
   it("falls back to staging installs when the root dependency version is incompatible", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
