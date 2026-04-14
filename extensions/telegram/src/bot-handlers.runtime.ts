@@ -212,7 +212,7 @@ export const registerTelegramHandlers = ({
       entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
-      const text = entry.msg.text ?? entry.msg.caption ?? "";
+      const text = getTelegramTextParts(entry.msg).text;
       const hasDebounceableText = shouldDebounceTextInbound({
         text,
         cfg,
@@ -248,7 +248,7 @@ export const registerTelegramHandlers = ({
         return;
       }
       const combinedText = entries
-        .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
+        .map((entry) => getTelegramTextParts(entry.msg).text)
         .filter(Boolean)
         .join("\n");
       const combinedMedia = entries.flatMap((entry) => entry.allMedia);
@@ -836,7 +836,7 @@ export const registerTelegramHandlers = ({
       // for reactions, we cannot determine if the reaction came from a topic, so block all
       // reactions if requireTopic is enabled for this DM.
       if (!isGroup) {
-        const requireTopic = (eventAuthContext.groupConfig as TelegramDirectConfig | undefined)
+        const requireTopic = (eventAuthContext.groupConfig)
           ?.requireTopic;
         if (requireTopic === true) {
           logVerbose(
