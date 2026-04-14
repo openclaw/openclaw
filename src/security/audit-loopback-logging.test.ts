@@ -35,6 +35,22 @@ describe("security audit loopback and logging findings", () => {
             "warn",
             collectGatewayConfigFindings(cfg, cfg, process.env),
           ),
+        ).toBe(false);
+      })(),
+      (async () => {
+        const cfg: OpenClawConfig = {
+          gateway: {
+            bind: "lan",
+            controlUi: { enabled: true },
+            auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+          },
+        };
+        expect(
+          hasGatewayFinding(
+            "gateway.trusted_proxies_missing",
+            "warn",
+            collectGatewayConfigFindings(cfg, cfg, process.env),
+          ),
         ).toBe(true);
       })(),
       withEnvAsync(

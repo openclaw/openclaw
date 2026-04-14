@@ -410,17 +410,17 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && trustedProxies.length === 0) {
+  if (bind !== "loopback" && controlUiEnabled && trustedProxies.length === 0) {
     findings.push({
       checkId: "gateway.trusted_proxies_missing",
       severity: "warn",
       title: "Reverse proxy headers are not trusted",
       detail:
-        "gateway.bind is loopback and gateway.trustedProxies is empty. " +
+        `gateway.bind="${bind}" and gateway.trustedProxies is empty. ` +
         "If you expose the Control UI through a reverse proxy, configure trusted proxies " +
         "so local-client checks cannot be spoofed.",
       remediation:
-        "Set gateway.trustedProxies to your proxy IPs or keep the Control UI local-only.",
+        `Set gateway.trustedProxies to your proxy IPs, or bind to loopback if no reverse proxy is used.`,
     });
   }
 
