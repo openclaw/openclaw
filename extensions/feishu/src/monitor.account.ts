@@ -456,7 +456,7 @@ function registerEventHandlers(
   const resolveDebounceText = (event: FeishuMessageEvent): string => {
     const botOpenId = botOpenIds.get(accountId);
     const parsed = parseFeishuMessageEvent(event, botOpenId, botNames.get(accountId));
-    return parsed.content.trim();
+    return parsed.content?.trim() ?? "";
   };
   const recordSuppressedMessageIds = async (
     entries: FeishuMessageEvent[],
