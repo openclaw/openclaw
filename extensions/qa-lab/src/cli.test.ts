@@ -86,6 +86,16 @@ describe("qa cli registration", () => {
     expect(registration.register).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps Telegram credential flags on the shared host CLI", () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    const telegram = qa?.commands.find((command) => command.name() === "telegram");
+    const optionNames = telegram?.options.map((option) => option.long) ?? [];
+
+    expect(optionNames).toEqual(
+      expect.arrayContaining(["--credential-source", "--credential-role"]),
+    );
+  });
+
   it("shows an install hint when a discovered runner plugin is unavailable", async () => {
     listQaRunnerCliContributions.mockReset().mockReturnValue([
       {

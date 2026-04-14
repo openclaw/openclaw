@@ -1,4 +1,4 @@
-import { definePluginEntry } from "./runtime-api.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 export default definePluginEntry({
   id: "qa-matrix",

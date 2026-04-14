@@ -160,7 +160,7 @@ Those belong in your plugin code and `package.json`.
 | `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                |
 | `activation`                        | No       | `object`                         | Cheap activation hints for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                    |
 | `setup`                             | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                             |
-| `qaRunners`                         | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                              |
+| `qaRunners`                         | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                               |
 | `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
 | `channelConfigs`                    | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                   |
 | `skills`                            | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                      |
@@ -226,7 +226,8 @@ should activate it later.
 
 Use `qaRunners` when a plugin contributes one or more transport runners beneath
 the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
-runtime still owns actual CLI registration through `runtime-api.ts`.
+runtime still owns actual CLI registration through a lightweight
+`runtime-api.ts` surface that exports `qaRunnerCliRegistrations`.
 
 ```json
 {
@@ -239,9 +240,9 @@ runtime still owns actual CLI registration through `runtime-api.ts`.
 }
 ```
 
-| Field         | Required | Type     | What it means                                                     |
-| ------------- | -------- | -------- | ----------------------------------------------------------------- |
-| `commandName` | Yes      | `string` | Subcommand mounted beneath `openclaw qa`, for example `matrix`.   |
+| Field         | Required | Type     | What it means                                                      |
+| ------------- | -------- | -------- | ------------------------------------------------------------------ |
+| `commandName` | Yes      | `string` | Subcommand mounted beneath `openclaw qa`, for example `matrix`.    |
 | `description` | No       | `string` | Fallback help text used when the shared host needs a stub command. |
 
 This block is metadata only. It does not register runtime behavior, and it does

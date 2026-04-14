@@ -10,7 +10,6 @@ export type QaRunnerCliRegistration = {
 };
 
 type QaRunnerRuntimeSurface = {
-  listQaRunnerCliRegistrations?: () => readonly QaRunnerCliRegistration[];
   qaRunnerCliRegistrations?: readonly QaRunnerCliRegistration[];
 };
 
@@ -39,8 +38,8 @@ export type QaRunnerCliContribution =
 function listDeclaredQaRunnerPlugins(): Array<
   Pick<PluginManifestRecord, "id" | "qaRunners" | "rootDir">
 > {
-  return loadPluginManifestRegistry({ cache: true }).plugins
-    .filter(
+  return loadPluginManifestRegistry({ cache: true })
+    .plugins.filter(
       (
         plugin,
       ): plugin is Pick<PluginManifestRecord, "id" | "qaRunners" | "rootDir"> & {
@@ -56,25 +55,24 @@ function listDeclaredQaRunnerPlugins(): Array<
     });
 }
 
-function listRuntimeRegistrations(
+function indexRuntimeRegistrations(
   pluginId: string,
   surface: QaRunnerRuntimeSurface,
-): readonly QaRunnerCliRegistration[] {
-  const registrations =
-    surface.listQaRunnerCliRegistrations?.() ?? surface.qaRunnerCliRegistrations ?? [];
-  const seen = new Set<string>();
+): ReadonlyMap<string, QaRunnerCliRegistration> {
+  const registrations = surface.qaRunnerCliRegistrations ?? [];
+  const registrationByCommandName = new Map<string, QaRunnerCliRegistration>();
   for (const registration of registrations) {
     if (!registration?.commandName || typeof registration.register !== "function") {
       throw new Error(`QA runner plugin "${pluginId}" exported an invalid CLI registration`);
     }
-    if (seen.has(registration.commandName)) {
+    if (registrationByCommandName.has(registration.commandName)) {
       throw new Error(
         `QA runner plugin "${pluginId}" exported duplicate CLI registration "${registration.commandName}"`,
       );
     }
-    seen.add(registration.commandName);
+    registrationByCommandName.set(registration.commandName, registration);
   }
-  return registrations;
+  return registrationByCommandName;
 }
 
 function buildKnownQaRunnerCatalog(): readonly QaRunnerCliContribution[] {
@@ -106,14 +104,13 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
   }
 
   for (const plugin of listDeclaredQaRunnerPlugins()) {
-    const runtimeSurface = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>(
-      {
+    const runtimeSurface =
+      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
         dirName: plugin.id,
         artifactBasename: "runtime-api.js",
-      },
-    );
-    const runtimeRegistrations = runtimeSurface
-      ? listRuntimeRegistrations(plugin.id, runtimeSurface)
+      });
+    const runtimeRegistrationByCommandName = runtimeSurface
+      ? indexRuntimeRegistrations(plugin.id, runtimeSurface)
       : null;
     const declaredCommandNames = new Set(plugin.qaRunners.map((runner) => runner.commandName));
 
@@ -125,9 +122,7 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
         );
       }
 
-      const registration = runtimeRegistrations?.find(
-        (entry) => entry.commandName === runner.commandName,
-      );
+      const registration = runtimeRegistrationByCommandName?.get(runner.commandName);
       if (!runtimeSurface) {
         contributions.set(runner.commandName, {
           pluginId: plugin.id,
@@ -151,10 +146,10 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       });
     }
 
-    for (const registration of runtimeRegistrations ?? []) {
-      if (!declaredCommandNames.has(registration.commandName)) {
+    for (const commandName of runtimeRegistrationByCommandName?.keys() ?? []) {
+      if (!declaredCommandNames.has(commandName)) {
         throw new Error(
-          `QA runner plugin "${plugin.id}" exported "${registration.commandName}" from runtime-api.js but did not declare it in openclaw.plugin.json`,
+          `QA runner plugin "${plugin.id}" exported "${commandName}" from runtime-api.js but did not declare it in openclaw.plugin.json`,
         );
       }
     }

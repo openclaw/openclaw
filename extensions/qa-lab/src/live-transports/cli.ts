@@ -40,6 +40,28 @@ function createBlockedQaRunnerCliRegistration(params: {
   };
 }
 
+function createQaRunnerCliRegistration(
+  runner: ReturnType<typeof listQaRunnerCliContributions>[number],
+): LiveTransportQaCliRegistration {
+  if (runner.status === "available") {
+    return runner.registration;
+  }
+  if (runner.status === "blocked") {
+    return createBlockedQaRunnerCliRegistration({
+      commandName: runner.commandName,
+      description: runner.description,
+      pluginId: runner.pluginId,
+    });
+  }
+  return createMissingQaRunnerCliRegistration({
+    commandName: runner.commandName,
+    description:
+      runner.description ??
+      `Run the ${runner.commandName} live QA lane (install ${runner.npmSpec} first)`,
+    npmSpec: runner.npmSpec,
+  });
+}
+
 export const LIVE_TRANSPORT_QA_CLI_REGISTRATIONS: readonly LiveTransportQaCliRegistration[] = [
   telegramQaCliRegistration,
 ];
@@ -49,23 +71,7 @@ export function listLiveTransportQaCliRegistrations(): readonly LiveTransportQaC
   const discoveredRunners = listQaRunnerCliContributions();
 
   for (const runner of discoveredRunners) {
-    liveRegistrations.push(
-      runner.status === "available"
-        ? runner.registration
-        : runner.status === "blocked"
-          ? createBlockedQaRunnerCliRegistration({
-              commandName: runner.commandName,
-              description: runner.description,
-              pluginId: runner.pluginId,
-            })
-          : createMissingQaRunnerCliRegistration({
-              commandName: runner.commandName,
-              description:
-                runner.description ??
-                `Run the ${runner.commandName} live QA lane (install ${runner.npmSpec} first)`,
-              npmSpec: runner.npmSpec,
-            }),
-    );
+    liveRegistrations.push(createQaRunnerCliRegistration(runner));
   }
 
   return liveRegistrations;

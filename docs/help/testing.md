@@ -73,7 +73,7 @@ These commands sit beside the main test suites when you need QA-lab realism:
     `openclaw plugins install -l ./extensions/qa-matrix`.
   - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
-  - Matrix currently supports only `--credential-source env` because the lane provisions disposable users locally.
+  - Matrix does not expose shared credential-source flags because the lane provisions disposable users locally.
   - Writes a Matrix QA report, summary, and observed-events artifact under `.artifacts/qa-e2e/...`.
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
@@ -204,7 +204,8 @@ The minimum adoption bar for a new channel is:
 2. Implement the transport runner on the shared `qa-lab` host seam.
 3. Keep transport-specific mechanics inside the runner plugin or channel harness.
 4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command.
-   Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export matching `qaRunnerCliRegistrations` from `runtime-api.ts`.
+   Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`.
+   Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
 5. Author or adapt markdown scenarios under `qa/scenarios/`.
 6. Use the generic scenario helpers for new scenarios.
 7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
