@@ -8,6 +8,7 @@ import {
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
@@ -154,7 +155,7 @@ function getPluginBindingGlobalState(): PluginBindingGlobalState {
 }
 
 function resolveApprovalsPath(): string {
-  return expandHomePrefix(APPROVALS_PATH);
+  return path.join(resolveStateDir(), "plugin-binding-approvals.json");
 }
 
 function normalizeChannel(value: string): string {

@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
-  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalsPath,
   type ExecApprovalDecision,
   maxAsk,
   minSecurity,
@@ -231,7 +231,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
       ask: requestedAsk.value,
     },
   });
-  const hostPath = params.hostPath ?? DEFAULT_HOST_PATH;
+  const hostPath = params.hostPath ?? resolveExecApprovalsPath();
   const effectiveSecurity = minSecurity(requestedSecurity.value, resolved.agent.security);
   const effectiveAsk = maxAsk(requestedAsk.value, resolved.agent.ask);
   const effectiveAskFallback = minSecurity(effectiveSecurity, resolved.agent.askFallback);

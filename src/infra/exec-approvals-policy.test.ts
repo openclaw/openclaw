@@ -20,6 +20,7 @@ import {
   normalizeExecTarget,
   normalizeExecSecurity,
   requiresExecApproval,
+  resolveExecApprovalsPath,
 } from "./exec-approvals.js";
 
 describe("exec approvals policy helpers", () => {
@@ -614,5 +615,24 @@ describe("exec approvals policy helpers", () => {
       requested: "always",
       requestedSource: "agents.list.main.tools.exec.ask",
     });
+  it("respects OPENCLAW_STATE_DIR environment variable", () => {
+    const originalEnv = process.env.OPENCLAW_STATE_DIR;
+    const testStateDir = "/custom/state/dir";
+    
+    try {
+      process.env.OPENCLAW_STATE_DIR = testStateDir;
+      
+      // Re-import to pick up the env change (this is a simplification for the test)
+      const { resolveExecApprovalsPath } = require("./exec-approvals.js");
+      const path = resolveExecApprovalsPath();
+      
+      expect(path).toBe("/custom/state/dir/exec-approvals.json");
+    } finally {
+      if (originalEnv) {
+        process.env.OPENCLAW_STATE_DIR = originalEnv;
+      } else {
+        delete process.env.OPENCLAW_STATE_DIR;
+      }
+    }
   });
 });
