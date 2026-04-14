@@ -314,18 +314,24 @@ async function prepareModeSpecificBundleMcpConfig(params: {
  * These are "external" MCP servers configured by the user at the gateway level.
  */
 function extractExternalMcpConfig(config?: OpenClawConfig): BundleMcpConfig {
-  const servers = (config as Record<string, unknown> | undefined)?.mcp as
-    | Record<string, unknown>
-    | undefined;
-  const serverMap = servers?.servers as Record<string, Record<string, unknown>> | undefined;
-  if (!serverMap || typeof serverMap !== "object") {
+  const cfg = config as Record<string, unknown> | undefined;
+  const mcp = cfg?.mcp;
+  if (!isRecord(mcp)) {
+    return { mcpServers: {} };
+  }
+  const serverMap = mcp.servers;
+  if (!isRecord(serverMap)) {
     return { mcpServers: {} };
   }
   const result: Record<string, BundleMcpServerConfig> = {};
   for (const [name, server] of Object.entries(serverMap)) {
-    if (!server || typeof server !== "object") continue;
-    if ((server as Record<string, unknown>).enabled === false) continue;
-    const { enabled, ...rest } = server as Record<string, unknown>;
+    if (!isRecord(server)) {
+      continue;
+    }
+    if (server.enabled === false) {
+      continue;
+    }
+    const { enabled: _enabled, ...rest } = server;
     result[name] = rest;
   }
   return { mcpServers: result };
