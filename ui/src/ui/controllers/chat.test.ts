@@ -62,7 +62,7 @@ function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
 describe("handleChatEvent", () => {
   it("returns null when payload is missing", () => {
     const state = createState();
-    expect(handleChatEvent(state, undefined)).toBe(null);
+    expect(handleChatEvent(state)).toBe(null);
   });
 
   it("returns null when sessionKey does not match", () => {
@@ -710,6 +710,47 @@ describe("loadChatHistory", () => {
       expect(state.lastError).toBeNull();
 
       await vi.advanceTimersByTimeAsync(250);
+      await load;
+
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(state.chatMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "awake" }] },
+      ]);
+      expect(state.chatThinkingLevel).toBe("low");
+      expect(state.chatLoading).toBe(false);
+      expect(state.lastError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries startup unavailability when retryable is omitted but message matches startup", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "chat.history unavailable during gateway startup",
+            details: { method: "chat.history" },
+          }),
+        )
+        .mockResolvedValueOnce({
+          messages: [{ role: "assistant", content: [{ type: "text", text: "awake" }] }],
+          thinkingLevel: "low",
+        });
+      const state = createState({
+        connected: true,
+        client: { request } as unknown as ChatState["client"],
+      });
+
+      const load = loadChatHistory(state);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      expect(state.chatLoading).toBe(true);
+      expect(state.lastError).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(500);
       await load;
 
       expect(request).toHaveBeenCalledTimes(2);
