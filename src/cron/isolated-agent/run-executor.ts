@@ -356,7 +356,12 @@ export async function executeCronRun(params: {
         // is already true. Pushing an error payload makes the full chain work:
         // hasErrorPayload=true → hasFatalErrorPayload=true → status:"error".
         if (runResult?.payloads) {
-          (runResult.payloads as Array<Record<string, unknown>>).push({
+          // runResult is our own object post-execution; the payloads array is
+          // typed readonly at the boundary but we own it here. We cast once to
+          // append a typed sentinel entry rather than copying the whole array.
+          // Shape matches ReplyPayload (isError: boolean, text: string).
+          const payloads = runResult.payloads as Array<{ isError?: boolean; text?: string }>;
+          payloads.push({
             isError: true,
             text: "cron: agent failed to produce substantive output after continuation prompt",
           });
