@@ -26,16 +26,21 @@ function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | un
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
-  const fetchSite = normalizeOptionalLowercaseString(getHeader(req, "sec-fetch-site"));
-  if (fetchSite === "cross-site") {
-    return true;
-  }
-
   const origin = getHeader(req, "origin");
   if (!origin) {
+    // No Origin header → not a browser request. Native MCP clients
+    // (curl, codex CLI, scripted MCP clients) never set Origin; let
+    // them through to the bearer check.
     return false;
   }
 
+  // Defer to checkBrowserOrigin. It already treats loopback peers
+  // talking to a loopback Origin as `local-loopback`, which covers
+  // the legitimate `localhost`↔`127.0.0.1` mismatch that browsers
+  // flag as `Sec-Fetch-Site: cross-site` even though both ends are
+  // local. A blanket cross-site early-return here would block that
+  // flow even with a valid bearer; the helper's isLocalClient +
+  // isLoopbackHost gating is the authoritative check.
   return !checkBrowserOrigin({
     requestHost: getHeader(req, "host"),
     origin,
