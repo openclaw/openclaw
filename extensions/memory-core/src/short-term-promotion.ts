@@ -39,10 +39,6 @@ const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
 const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
-const DREAMING_CANDIDATE_LEAD_RE =
-  /^(?:[-*+>]\s+|@@\s*-\d+(?:,\d+)?\s+[-*+]\s+|[([]\s*)*Candidate:/i;
-const DREAMING_REFLECTION_LEAD_RE =
-  /^(?:[-*+>]\s+|@@\s*-\d+(?:,\d+)?\s+[-*+]\s+|[([]\s*)*Reflections?:/i;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
@@ -241,6 +237,40 @@ function normalizeSnippet(raw: string): string {
   return trimmed.replace(/\s+/g, " ");
 }
 
+function consumeDreamingLeadPrefix(snippet: string): string {
+  let index = 0;
+  while (index < snippet.length) {
+    const remaining = snippet.slice(index);
+    const diffMatch = /^@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/i.exec(remaining);
+    if (diffMatch) {
+      index += diffMatch[0].length;
+      continue;
+    }
+    const char = snippet[index];
+    if (char === "[" || char === "(") {
+      index += 1;
+      while (snippet[index] === " ") {
+        index += 1;
+      }
+      continue;
+    }
+    if (
+      (char === "-" || char === "*" || char === "+" || char === ">") &&
+      snippet[index + 1] === " "
+    ) {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return snippet.slice(index);
+}
+
+function hasDreamingNarrativeLead(snippet: string): boolean {
+  const withoutPrefix = consumeDreamingLeadPrefix(snippet);
+  return /^Candidate:/i.test(withoutPrefix) || /^Reflections?:/i.test(withoutPrefix);
+}
+
 function isContaminatedDreamingSnippet(raw: string): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
@@ -254,21 +284,20 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
     return true;
   }
 
-  const hasCandidateLead = DREAMING_CANDIDATE_LEAD_RE.test(snippet);
-  const hasReflectionLead = DREAMING_REFLECTION_LEAD_RE.test(snippet);
+  const hasNarrativeLead = hasDreamingNarrativeLead(snippet);
   const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
   const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
     snippet,
   );
   const hasStatus = /\bstatus:\s*staged\b/i.test(snippet);
   const hasRecalls = /\brecalls:\s*\d+\b/i.test(snippet);
-  if (hasEvidence && (hasCandidateLead || hasReflectionLead)) {
+  if (hasEvidence && hasNarrativeLead) {
     return true;
   }
   const structuredMarkers = [hasConfidence, hasEvidence, hasStatus, hasRecalls].filter(
     Boolean,
   ).length;
-  return (hasCandidateLead || hasReflectionLead) && structuredMarkers >= 2;
+  return hasNarrativeLead && structuredMarkers >= 2;
 }
 
 function normalizeMemoryPath(rawPath: string): string {

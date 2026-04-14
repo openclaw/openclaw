@@ -1055,6 +1055,14 @@ describe("short-term promotion", () => {
     ).toBe(true);
   });
 
+  it("treats bracket-prefixed dreaming snippets as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "([ Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+      ),
+    ).toBe(true);
+  });
+
   it("skips direct candidates that exceed maxAgeDays during apply", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const applied = await applyShortTermPromotions({
