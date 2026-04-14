@@ -179,7 +179,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
-    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    return jobs.toSorted((a, b) => (a.state?.nextRunAtMs ?? 0) - (b.state?.nextRunAtMs ?? 0));
   });
 }
 
@@ -201,8 +201,8 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
     } else if (sortBy === "updatedAtMs") {
       cmp = a.updatedAtMs - b.updatedAtMs;
     } else {
-      const aNext = a.state.nextRunAtMs;
-      const bNext = b.state.nextRunAtMs;
+      const aNext = a.state?.nextRunAtMs;
+      const bNext = b.state?.nextRunAtMs;
       if (typeof aNext === "number" && typeof bNext === "number") {
         cmp = aNext - bNext;
       } else if (typeof aNext === "number") {
