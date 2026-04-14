@@ -80,6 +80,17 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
     }
     const raw = await fs.readFile(credsPath, "utf-8");
     JSON.parse(raw);
+    // Warn when credentials are older than 30 days — they may need
+    // re-authentication if the WhatsApp session has expired.
+    const ageDays = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60 * 24);
+    if (ageDays > 30) {
+      const logger = getChildLogger({ module: "web-session" });
+      logger.warn(
+        { credsPath, ageDays: Math.round(ageDays) },
+        "WhatsApp credentials file is %d days old — consider re-authenticating if connection issues occur",
+        Math.round(ageDays),
+      );
+    }
     return true;
   } catch {
     return false;
