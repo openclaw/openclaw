@@ -20,8 +20,10 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 import {
+  DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
+  errorBackoffMs,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   nextWakeAtMs,
@@ -199,26 +201,6 @@ function tryFinishCronTaskRun(
     );
   }
 }
-/**
- * Exponential backoff delays (in ms) indexed by consecutive error count.
- * After the last entry the delay stays constant.
- */
-const DEFAULT_BACKOFF_SCHEDULE_MS = [
-  30_000, // 1st error  →  30 s
-  60_000, // 2nd error  →   1 min
-  5 * 60_000, // 3rd error  →   5 min
-  15 * 60_000, // 4th error  →  15 min
-  60 * 60_000, // 5th+ error →  60 min
-];
-
-function errorBackoffMs(
-  consecutiveErrors: number,
-  scheduleMs = DEFAULT_BACKOFF_SCHEDULE_MS,
-): number {
-  const idx = Math.min(consecutiveErrors - 1, scheduleMs.length - 1);
-  return scheduleMs[Math.max(0, idx)];
-}
-
 /** Default max retries for one-shot jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
 
@@ -269,7 +251,7 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
     backoffMs:
       Array.isArray(retry?.backoffMs) && retry.backoffMs.length > 0
         ? retry.backoffMs
-        : DEFAULT_BACKOFF_SCHEDULE_MS.slice(0, 3),
+        : DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, 3),
     retryOn: Array.isArray(retry?.retryOn) && retry.retryOn.length > 0 ? retry.retryOn : undefined,
   };
 }

@@ -722,6 +722,225 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     ]);
   });
 
+  it("counts the final unknown-tool retry when streamed messages omit the tool name", async () => {
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            message: { role: "assistant", content: [{ type: "toolCall", name: "" }] },
+          },
+        ],
+        resultMessage: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo retry" } }],
+        },
+      }),
+    );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 1,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    await firstStream.result();
+
+    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const _item of secondStream) {
+      // drain
+    }
+    const secondResult = (await secondStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+    };
+
+    expect(secondResult.role).toBe("assistant");
+    expect(secondResult.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"exec"'),
+      }),
+    ]);
+  });
+
+  it("resets a provisional streamed unknown-tool retry when later chunks resolve to an allowed tool", async () => {
+    const baseFn = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [
+            {
+              type: "toolcall_delta",
+              message: { role: "assistant", content: [{ type: "toolCall", name: " ex " }] },
+            },
+            {
+              type: "toolcall_delta",
+              message: { role: "assistant", content: [{ type: "toolCall", name: " exec " }] },
+            },
+          ],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo ok" } }],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " ex ", arguments: { command: "echo retry" } }],
+          },
+        }),
+      );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]), {
+      unknownToolThreshold: 1,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const _item of firstStream) {
+      // drain
+    }
+    await firstStream.result();
+
+    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    const secondResult = (await secondStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+    };
+
+    expect(secondResult.role).toBe("assistant");
+    expect(secondResult.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "ex",
+      }),
+    ]);
+  });
+
+  it("keeps processing later streamed messages after one streamed unknown-tool retry was counted", async () => {
+    const baseFn = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [
+            {
+              type: "toolcall_delta",
+              message: { role: "assistant", content: [{ type: "toolCall", name: " re " }] },
+            },
+            {
+              type: "toolcall_delta",
+              message: { role: "assistant", content: [{ type: "toolCall", name: " read " }] },
+            },
+          ],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "text", text: "resolved to allowed tool" }],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " re ", arguments: { command: "echo retry" } }],
+          },
+        }),
+      );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 1,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const _item of firstStream) {
+      // drain
+    }
+    await firstStream.result();
+
+    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    const secondResult = (await secondStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+    };
+
+    expect(secondResult.role).toBe("assistant");
+    expect(secondResult.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "re",
+      }),
+    ]);
+  });
+
+  it("resets a stale unknown-tool streak when a streamed message mixes allowed and unknown tools", async () => {
+    const baseFn = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " ex ", arguments: { command: "echo first" } }],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [
+            {
+              type: "toolcall_delta",
+              message: {
+                role: "assistant",
+                content: [
+                  { type: "toolCall", name: " exec ", arguments: { command: "echo allowed" } },
+                  { type: "toolCall", name: " ex ", arguments: { command: "echo provisional" } },
+                ],
+              },
+            },
+          ],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo ok" } }],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " ex ", arguments: { command: "echo retry" } }],
+          },
+        }),
+      );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]), {
+      unknownToolThreshold: 1,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    await firstStream.result();
+
+    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const _item of secondStream) {
+      // drain
+    }
+    await secondStream.result();
+
+    const thirdStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    const thirdResult = (await thirdStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+    };
+
+    expect(thirdResult.role).toBe("assistant");
+    expect(thirdResult.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "ex",
+      }),
+    ]);
+  });
+
   it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
     const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "" };
     const finalToolCallA = { type: "toolCall", id: "functionsread3", name: "" };
@@ -1506,11 +1725,9 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     );
 
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped(
-      { api: "google-gemini" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    const stream = wrapped({ api: "google-gemini" } as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);

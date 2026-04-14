@@ -1,10 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import {
-  hasAnyAuthProfileStoreSource,
-  loadAuthProfileStoreForSecretsRuntime,
-  type AuthProfileStore,
-} from "../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -34,15 +30,41 @@ export type GatewayInstallPlan = {
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
 
-function collectAuthProfileServiceEnvVars(params: {
+let daemonInstallAuthProfileSourceRuntimePromise:
+  | Promise<typeof import("./daemon-install-auth-profiles-source.runtime.js")>
+  | undefined;
+let daemonInstallAuthProfileStoreRuntimePromise:
+  | Promise<typeof import("./daemon-install-auth-profiles-store.runtime.js")>
+  | undefined;
+
+function loadDaemonInstallAuthProfileSourceRuntime() {
+  daemonInstallAuthProfileSourceRuntimePromise ??=
+    import("./daemon-install-auth-profiles-source.runtime.js");
+  return daemonInstallAuthProfileSourceRuntimePromise;
+}
+
+function loadDaemonInstallAuthProfileStoreRuntime() {
+  daemonInstallAuthProfileStoreRuntimePromise ??=
+    import("./daemon-install-auth-profiles-store.runtime.js");
+  return daemonInstallAuthProfileStoreRuntimePromise;
+}
+
+async function collectAuthProfileServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   authStore?: AuthProfileStore;
   warn?: DaemonInstallWarnFn;
-}): Record<string, string> {
-  const authStore =
-    params.authStore ??
+}): Promise<Record<string, string>> {
+  let authStore = params.authStore;
+  if (!authStore) {
     // Keep the daemon install cold path cheap when there is no auth store to read.
-    (hasAnyAuthProfileStoreSource() ? loadAuthProfileStoreForSecretsRuntime() : undefined);
+    const { hasAnyAuthProfileStoreSource } = await loadDaemonInstallAuthProfileSourceRuntime();
+    if (!hasAnyAuthProfileStoreSource()) {
+      return {};
+    }
+    const { loadAuthProfileStoreForSecretsRuntime } =
+      await loadDaemonInstallAuthProfileStoreRuntime();
+    authStore = loadAuthProfileStoreForSecretsRuntime();
+  }
   if (!authStore) {
     return {};
   }
@@ -190,24 +212,24 @@ function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
-function buildGatewayInstallEnvironment(params: {
+async function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
   warn?: DaemonInstallWarnFn;
   serviceEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
-}): Record<string, string | undefined> {
+}): Promise<Record<string, string | undefined>> {
   const managedEnvironment: Record<string, string | undefined> = {
     ...collectDurableServiceEnvVars({
       env: params.env,
       config: params.config,
     }),
-    ...collectAuthProfileServiceEnvVars({
+    ...(await collectAuthProfileServiceEnvVars({
       env: params.env,
       authStore: params.authStore,
       warn: params.warn,
-    }),
+    })),
   };
   const environment: Record<string, string | undefined> = {
     ...collectPreservedExistingServiceEnvVars(
@@ -277,7 +299,7 @@ export async function buildGatewayInstallPlan(params: {
   return {
     programArguments,
     workingDirectory,
-    environment: buildGatewayInstallEnvironment({
+    environment: await buildGatewayInstallEnvironment({
       env: params.env,
       config: params.config,
       authStore: params.authStore,
