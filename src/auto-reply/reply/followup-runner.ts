@@ -273,36 +273,37 @@ export function createFollowupRunner(params: {
             const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
             let attemptCompactionCount = 0;
             try {
-              if (isCliProvider(provider, queued.run.config)) {
+              if (isCliProvider(provider, runtimeConfig)) {
                 const cliSessionBinding = getCliSessionBinding(activeSessionEntry, provider);
                 const cliResult = await runCliAgent({
-                  sessionId: queued.run.sessionId,
-                  sessionKey: queued.run.sessionKey,
-                  agentId: queued.run.agentId,
-                  sessionFile: queued.run.sessionFile,
-                  workspaceDir: queued.run.workspaceDir,
-                  config: queued.run.config,
+                  sessionId: run.sessionId,
+                  sessionKey: run.sessionKey,
+                  agentId: run.agentId,
+                  sessionFile: run.sessionFile,
+                  workspaceDir: run.workspaceDir,
+                  config: runtimeConfig,
                   prompt: queued.prompt,
                   provider,
                   model,
-                  thinkLevel: queued.run.thinkLevel,
-                  timeoutMs: queued.run.timeoutMs,
+                  thinkLevel: run.thinkLevel,
+                  timeoutMs: run.timeoutMs,
                   runId,
                   abortSignal: replyOperation.abortSignal,
                   replyOperation,
-                  extraSystemPrompt: queued.run.extraSystemPrompt,
-                  ownerNumbers: queued.run.ownerNumbers,
+                  extraSystemPrompt: run.extraSystemPrompt,
+                  ownerNumbers: run.ownerNumbers,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding,
                   authProfileId: authProfile.authProfileId,
-                  skillsSnapshot: queued.run.skillsSnapshot,
+                  skillsSnapshot: run.skillsSnapshot,
                   bootstrapPromptWarningSignaturesSeen,
                   bootstrapPromptWarningSignature:
                     bootstrapPromptWarningSignaturesSeen[
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
-                  messageProvider: queued.run.messageProvider,
-                  agentAccountId: queued.run.agentAccountId,
+                  messageProvider: run.messageProvider,
+                  agentAccountId: run.agentAccountId,
+                  senderIsOwner: run.senderIsOwner,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   cliResult.meta?.systemPromptReport,
