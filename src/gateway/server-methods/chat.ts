@@ -1575,11 +1575,17 @@ function broadcastSideResult(params: {
 }
 
 function broadcastChatError(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<
+    GatewayRequestContext,
+    "broadcast" | "nodeSendToSession" | "agentRunSeq" | "chatTerminalSent"
+  >;
   runId: string;
   sessionKey: string;
   errorMessage?: string;
 }) {
+  // Mark the run so the lifecycle error grace timer in server-chat.ts
+  // skips the duplicate emitChatFinal call.
+  params.context.chatTerminalSent.add(params.runId);
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payload = {
     runId: params.runId,

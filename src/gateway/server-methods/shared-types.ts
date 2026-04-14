@@ -67,6 +67,10 @@ export type GatewayRequestContext = {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
+  /** Runs that already had a terminal chat event (error/final) broadcast.
+   *  Used to prevent duplicate error events between the chat.send .catch()
+   *  path and the lifecycle error grace timer in server-chat.ts. */
+  chatTerminalSent: Set<string>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,
