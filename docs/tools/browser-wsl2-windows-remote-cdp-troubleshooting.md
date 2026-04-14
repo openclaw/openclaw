@@ -120,6 +120,76 @@ If this fails:
 
 Fix that before touching OpenClaw config.
 
+### Layer 2b: Bridge Windows localhost CDP to WSL2
+
+Chrome binds CDP to `127.0.0.1` only. Modern Chrome (v110+) ignores the
+`--remote-debugging-address=0.0.0.0` flag, so WSL2 cannot reach the CDP
+endpoint directly — even over Tailscale or the WSL2 virtual NIC.
+
+The standard fix is **netsh portproxy**, a Windows kernel-level TCP forwarder
+that relays inbound connections on a public address to localhost:
+
+```powershell
+# Run in an elevated PowerShell on Windows
+
+# 1. Add the port proxy (persists across reboots)
+netsh interface portproxy add v4tov4 `
+  listenport=9222 listenaddress=0.0.0.0 `
+  connectport=9222 connectaddress=127.0.0.1
+
+# 2. Open the firewall
+New-NetFirewallRule `
+  -DisplayName "Chrome CDP" `
+  -Direction Inbound `
+  -LocalPort 9222 `
+  -Protocol TCP `
+  -Action Allow `
+  -Profile Any
+```
+
+**Why both steps are needed:**
+
+- `netsh portproxy` makes Windows accept TCP on `0.0.0.0:9222` and forward
+  each connection to `127.0.0.1:9222` (where Chrome is listening). The proxy
+  persists in the Windows registry and survives reboots.
+- The firewall rule allows inbound TCP on port 9222 from any network profile
+  (Private, Public, Domain). Without `-Profile Any`, Tailscale or the WSL2
+  virtual adapter may be on a profile that blocks the port.
+
+**Verify from WSL2:**
+
+```bash
+# Replace with your Windows Tailscale IP or WSL2 gateway IP
+curl http://100.114.41.9:9222/json/version
+```
+
+If you see a JSON response with `Browser` and `Protocol-Version`, the bridge
+is working. If the connection hangs or is refused:
+
+- Check the firewall rule exists: `Get-NetFirewallRule -DisplayName "Chrome CDP"`
+- Verify the portproxy: `netsh interface portproxy show all`
+- Ensure Chrome is running with `--remote-debugging-port=9222`
+- Try `-Profile Any` if you originally omitted it
+
+**Tailscale users:** use the Tailscale IP of the Windows host (e.g.
+`100.x.x.x`) as the `cdpUrl` target from WSL2. Tailscale's direct
+connectivity avoids the WSL2 virtual NIC overhead.
+
+**Auto-start Chrome with debugging:** place a `.bat` file in the Windows
+Startup folder:
+
+```bat
+@echo off
+taskkill /F /IM chrome.exe 2>nul
+timeout /t 2 /nobreak >nul
+start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+  --remote-debugging-port=9222 ^
+  --user-data-dir="%LOCALAPPDATA%\Google\Chrome\User Data"
+```
+
+This ensures Chrome launches with CDP enabled on every login without
+manual intervention.
+
 ### Layer 3: Configure the correct browser profile
 
 For raw remote CDP, point OpenClaw at the address that is reachable from WSL2:
@@ -181,6 +251,25 @@ Good result:
 - later actions (`snapshot`, `screenshot`, `navigate`) work from the same profile
 
 ## Common misleading errors
+
+### "Empty reply from server" on port 9222
+
+If `curl` connects but gets an empty reply, the portproxy is forwarding the
+TCP connection, but Chrome is closing it because the source IP is not
+`127.0.0.1`. This happens when:
+
+- The portproxy `connectaddress` is wrong (not `127.0.0.1`)
+- A third-party relay or proxy is inserting itself between portproxy and Chrome
+
+Fix: ensure the netsh portproxy targets `connectaddress=127.0.0.1` exactly.
+
+### Port 9223 (or other relay ports) blocked by firewall
+
+If you use a relay on a different port (e.g. 9223), you need a separate
+firewall rule for that port too. The simplest approach: use port 9222
+with netsh portproxy directly, avoiding the need for extra ports.
+
+## Common misleading errors (continued)
 
 Treat each message as a layer-specific clue:
 
