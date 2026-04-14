@@ -165,6 +165,33 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   sessionsCmd.enablePositionalOptions();
 
   sessionsCmd
+    .command("explain")
+    .description("Explain effective resolution for one stored session")
+    .argument("<key>", "Session key to inspect")
+    .option("--tool <id>", "Explain whether a specific tool is effectively available")
+    .option("--json", "Output as JSON", false)
+    .action(async (key: string, opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            verbose?: boolean;
+          }
+        | undefined;
+      setVerbose(Boolean(parentOpts?.verbose));
+      await sessionsCommand(
+        {
+          json: Boolean(opts.json),
+          store: parentOpts?.store,
+          agent: parentOpts?.agent,
+          explain: key,
+          tool: opts.tool as string | undefined,
+        },
+        defaultRuntime,
+      );
+    });
+
+  sessionsCmd
     .command("cleanup")
     .description("Run session-store maintenance now")
     .option("--store <path>", "Path to session store (default: resolved from config)")

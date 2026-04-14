@@ -1,12 +1,23 @@
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { buildDefaultToolPolicyPipelineSteps } from "../agents/tool-policy-pipeline.js";
+import { resolveEffectiveToolPolicy } from "../agents/pi-tools.policy.js";
+import { resolveStoredSubagentCapabilities } from "../agents/subagent-capabilities.js";
+import { resolveEffectiveToolInventory } from "../agents/tools-effective-inventory.js";
+import { resolveReplyToMode } from "../auto-reply/reply/reply-threading.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
-import { classifySessionKey } from "../gateway/session-utils.js";
+import {
+  classifySessionKey,
+  resolveGatewaySessionStoreTarget,
+  resolveSessionModelRef,
+} from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   formatSessionAgeCell,
@@ -85,7 +96,15 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 };
 
 export async function sessionsCommand(
-  opts: { json?: boolean; store?: string; active?: string; agent?: string; allAgents?: boolean },
+  opts: {
+    json?: boolean;
+    store?: string;
+    active?: string;
+    agent?: string;
+    allAgents?: boolean;
+    explain?: string;
+    tool?: string;
+  },
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
@@ -95,6 +114,275 @@ export async function sessionsCommand(
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(displayDefaults.model) ??
     DEFAULT_CONTEXT_TOKENS;
+  if (opts.explain) {
+    const initialStore = opts.store ? loadSessionStore(opts.store) : undefined;
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: opts.explain,
+      ...(initialStore ? { store: initialStore } : {}),
+    });
+    const resolvedStorePath = opts.store ?? target.storePath;
+    const store = initialStore ?? loadSessionStore(target.storePath);
+    const matchedKey = target.storeKeys.find((key) => store[key]);
+    const entry = matchedKey ? store[matchedKey] : undefined;
+    if (!entry) {
+      runtime.error(`Session not found: ${opts.explain}`);
+      runtime.exit(1);
+      return;
+    }
+
+    const defaults = resolveSessionModelRef(cfg, undefined, target.agentId);
+    const resolved = resolveSessionModelRef(cfg, entry, target.agentId);
+    const workspaceDir = entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, target.agentId);
+    const delivery = deliveryContextFromSession(entry);
+    const effectiveToolPolicy = resolveEffectiveToolPolicy({
+      config: cfg,
+      sessionKey: target.canonicalKey,
+      agentId: target.agentId,
+      modelProvider: resolved.provider,
+      modelId: resolved.model,
+    });
+    const subagentCapabilities = resolveStoredSubagentCapabilities(target.canonicalKey, { cfg });
+    const toolPolicySteps = buildDefaultToolPolicyPipelineSteps({
+      profilePolicy: effectiveToolPolicy.profile ? { allow: effectiveToolPolicy.profileAlsoAllow } : undefined,
+      profile: effectiveToolPolicy.profile,
+      providerProfilePolicy: effectiveToolPolicy.providerProfile
+        ? { allow: effectiveToolPolicy.providerProfileAlsoAllow }
+        : undefined,
+      providerProfile: effectiveToolPolicy.providerProfile,
+      globalPolicy: effectiveToolPolicy.globalPolicy,
+      globalProviderPolicy: effectiveToolPolicy.globalProviderPolicy,
+      agentPolicy: effectiveToolPolicy.agentPolicy,
+      agentProviderPolicy: effectiveToolPolicy.agentProviderPolicy,
+      agentId: target.agentId,
+    }).map((step) => ({
+      label: step.label,
+      active: Boolean(step.policy),
+    }));
+    const effectiveTools = resolveEffectiveToolInventory({
+      cfg,
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      workspaceDir,
+      messageProvider: delivery?.channel ?? entry.lastChannel ?? entry.channel ?? entry.origin?.provider,
+      modelProvider: resolved.provider,
+      modelId: resolved.model,
+      currentChannelId: delivery?.to,
+      currentThreadTs:
+        delivery?.threadId != null
+          ? String(delivery.threadId)
+          : entry.lastThreadId != null
+            ? String(entry.lastThreadId)
+            : entry.origin?.threadId != null
+              ? String(entry.origin.threadId)
+              : undefined,
+      accountId: delivery?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
+      groupId: entry.groupId,
+      groupChannel: entry.groupChannel,
+      groupSpace: entry.space,
+      replyToMode: resolveReplyToMode(
+        cfg,
+        delivery?.channel ?? entry.lastChannel ?? entry.channel ?? entry.origin?.provider,
+        delivery?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
+        entry.chatType ?? entry.origin?.chatType,
+      ),
+    });
+    const normalizedRequestedTool = opts.tool?.trim().toLowerCase() || null;
+    const allEffectiveToolIds = effectiveTools.groups.flatMap((group) => group.tools.map((tool) => tool.id));
+    const matchedGroup = normalizedRequestedTool
+      ? effectiveTools.groups.find((group) =>
+          group.tools.some((tool) => tool.id.toLowerCase() === normalizedRequestedTool),
+        )
+      : undefined;
+    const payload = {
+      key: target.canonicalKey,
+      agentId: target.agentId,
+      storePath: resolvedStorePath,
+      defaults,
+      input: {
+        providerOverride: entry.providerOverride ?? null,
+        modelOverride: entry.modelOverride ?? null,
+        runtimeProvider: entry.modelProvider ?? null,
+        runtimeModel: entry.model ?? null,
+        spawnedWorkspaceDir: entry.spawnedWorkspaceDir ?? null,
+      },
+      resolved: {
+        provider: resolved.provider,
+        model: resolved.model,
+        workspaceDir,
+      },
+      resolution: {
+        defaultModelRef: `${defaults.provider}/${defaults.model}`,
+        usesPersistedWorkspace: Boolean(entry.spawnedWorkspaceDir),
+        usesRuntimeModelRef: Boolean(entry.modelProvider || entry.model),
+        usesOverrides: Boolean(entry.providerOverride || entry.modelOverride),
+        modelReasonChain: [
+          "default-model-ref",
+          ...(entry.providerOverride ? ["explicit-provider-override"] : []),
+          ...(entry.modelOverride ? ["explicit-model-override"] : []),
+          ...(entry.modelProvider || entry.model ? ["persisted-runtime-model-ref"] : []),
+        ],
+        workspaceReasonChain: [
+          entry.spawnedWorkspaceDir ? "persisted-session-workspace" : "agent-default-workspace",
+        ],
+        toolsReasonChain: [
+          "runtime-effective-tool-inventory",
+          `tool-profile:${effectiveTools.profile}`,
+          ...(effectiveToolPolicy.globalPolicy ? ["global-tools-policy"] : []),
+          ...(effectiveToolPolicy.globalProviderPolicy ? ["global-provider-policy"] : []),
+          ...(effectiveToolPolicy.agentPolicy ? ["agent-tools-policy"] : []),
+          ...(effectiveToolPolicy.agentProviderPolicy ? ["agent-provider-policy"] : []),
+          ...(effectiveToolPolicy.profile ? ["profile-policy"] : []),
+          ...(effectiveToolPolicy.providerProfile ? ["provider-profile-policy"] : []),
+        ],
+      },
+      toolCheck: normalizedRequestedTool
+        ? {
+            requested: normalizedRequestedTool,
+            available: allEffectiveToolIds.some((id) => id.toLowerCase() === normalizedRequestedTool),
+            matchedGroup: matchedGroup?.id ?? null,
+            reasonChain: [
+              "runtime-effective-tool-inventory",
+              `tool-profile:${effectiveTools.profile}`,
+              ...(effectiveToolPolicy.globalPolicy ? ["global-tools-policy"] : []),
+              ...(effectiveToolPolicy.globalProviderPolicy ? ["global-provider-policy"] : []),
+              ...(effectiveToolPolicy.agentPolicy ? ["agent-tools-policy"] : []),
+              ...(effectiveToolPolicy.agentProviderPolicy ? ["agent-provider-policy"] : []),
+              ...(effectiveToolPolicy.profile ? ["profile-policy"] : []),
+              ...(effectiveToolPolicy.providerProfile ? ["provider-profile-policy"] : []),
+            ],
+          }
+        : null,
+      tools: {
+        profile: effectiveTools.profile,
+        policyProfile: effectiveToolPolicy.profile ?? null,
+        providerProfile: effectiveToolPolicy.providerProfile ?? null,
+        policySources: {
+          global: Boolean(effectiveToolPolicy.globalPolicy),
+          globalProvider: Boolean(effectiveToolPolicy.globalProviderPolicy),
+          agent: Boolean(effectiveToolPolicy.agentPolicy),
+          agentProvider: Boolean(effectiveToolPolicy.agentProviderPolicy),
+        },
+        policyPipeline: toolPolicySteps,
+        profileAlsoAllow: effectiveToolPolicy.profileAlsoAllow ?? [],
+        providerProfileAlsoAllow: effectiveToolPolicy.providerProfileAlsoAllow ?? [],
+        groups: effectiveTools.groups.map((group) => ({
+          id: group.id,
+          label: group.label,
+          count: group.tools.length,
+          tools: group.tools.slice(0, 8).map((tool) => tool.id),
+        })),
+      },
+      capabilities: {
+        subagent: subagentCapabilities,
+      },
+    };
+
+    if (opts.json) {
+      writeRuntimeJson(runtime, payload);
+      return;
+    }
+
+    const rich = isRich();
+    const label = (value: string) => (rich ? theme.accent(value.padEnd(24)) : value.padEnd(24));
+    const muted = (value: string) => (rich ? theme.muted(value) : value);
+    const infoLabel = (value: string) => (rich ? theme.info(value) : value);
+    const success = (value: string) => (rich ? theme.success(value) : value);
+
+    runtime.log(`${label("Session key")}${muted(": ")}${infoLabel(payload.key)}`);
+    runtime.log(`${label("Agent")}${muted(": ")}${infoLabel(payload.agentId)}`);
+    runtime.log(`${label("Store path")}${muted(": ")}${muted(payload.storePath)}`);
+    runtime.log(
+      `${label("Default resolved")}${muted(": ")}${infoLabel(`${payload.defaults.provider}/${payload.defaults.model}`)}`,
+    );
+    runtime.log(
+      `${label("Provider override")}${muted(": ")}${infoLabel(payload.input.providerOverride ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Model override")}${muted(": ")}${infoLabel(payload.input.modelOverride ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Runtime model ref")}${muted(": ")}${infoLabel(`${payload.input.runtimeProvider ?? "-"}/${payload.input.runtimeModel ?? "-"}`)}`,
+    );
+    runtime.log(
+      `${label("Persisted workspace")}${muted(": ")}${infoLabel(payload.input.spawnedWorkspaceDir ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Uses overrides")}${muted(": ")}${payload.resolution.usesOverrides ? success("yes") : muted("no")}`,
+    );
+    runtime.log(
+      `${label("Uses runtime ref")}${muted(": ")}${payload.resolution.usesRuntimeModelRef ? success("yes") : muted("no")}`,
+    );
+    runtime.log(
+      `${label("Uses persisted ws")}${muted(": ")}${payload.resolution.usesPersistedWorkspace ? success("yes") : muted("no")}`,
+    );
+    runtime.log(
+      `${label("Model reasons")}${muted(": ")}${infoLabel(payload.resolution.modelReasonChain.join(" -> "))}`,
+    );
+    runtime.log(
+      `${label("Workspace reasons")}${muted(": ")}${infoLabel(payload.resolution.workspaceReasonChain.join(" -> "))}`,
+    );
+    runtime.log(
+      `${label("Tools reasons")}${muted(": ")}${infoLabel(payload.resolution.toolsReasonChain.join(" -> "))}`,
+    );
+    runtime.log(
+      `${label("Final model")}${muted(": ")}${success(`${payload.resolved.provider}/${payload.resolved.model}`)}`,
+    );
+    runtime.log(`${label("Final workspace")}${muted(": ")}${success(payload.resolved.workspaceDir)}`);
+    runtime.log(`${label("Tools profile")}${muted(": ")}${infoLabel(payload.tools.profile)}`);
+    runtime.log(
+      `${label("Policy profile")}${muted(": ")}${infoLabel(payload.tools.policyProfile ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Provider profile")}${muted(": ")}${infoLabel(payload.tools.providerProfile ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Profile alsoAllow")}${muted(": ")}${infoLabel(payload.tools.profileAlsoAllow.join(", ") || "-")}`,
+    );
+    runtime.log(
+      `${label("Provider alsoAllow")}${muted(": ")}${infoLabel(payload.tools.providerProfileAlsoAllow.join(", ") || "-")}`,
+    );
+    runtime.log(
+      `${label("Policy sources")}${muted(": ")}${infoLabel(
+        Object.entries(payload.tools.policySources)
+          .filter(([, enabled]) => enabled)
+          .map(([name]) => name)
+          .join(", ") || "-",
+      )}`,
+    );
+    runtime.log(
+      `${label("Policy pipeline")}${muted(": ")}${infoLabel(
+        payload.tools.policyPipeline
+          .filter((step) => step.active)
+          .map((step) => step.label)
+          .join(" -> ") || "-",
+      )}`,
+    );
+    runtime.log(
+      `${label("Subagent role")}${muted(": ")}${infoLabel(payload.capabilities.subagent.role)}`,
+    );
+    runtime.log(
+      `${label("Subagent control")}${muted(": ")}${infoLabel(payload.capabilities.subagent.controlScope)}`,
+    );
+    if (payload.toolCheck) {
+      runtime.log(
+        `${label("Tool check")}${muted(": ")}${payload.toolCheck.available ? success("available") : theme.warn("not available")} ${infoLabel(payload.toolCheck.requested)}`,
+      );
+      runtime.log(
+        `${label("Tool group")}${muted(": ")}${infoLabel(payload.toolCheck.matchedGroup ?? "-")}`,
+      );
+      runtime.log(
+        `${label("Tool reasons")}${muted(": ")}${infoLabel(payload.toolCheck.reasonChain.join(" -> "))}`,
+      );
+    }
+    for (const group of payload.tools.groups) {
+      runtime.log(
+        `${label(`Tools ${group.id}`)}${muted(": ")}${infoLabel(`${group.count} [${group.tools.join(", ")}]`)}`,
+      );
+    }
+    return;
+  }
+
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
     opts: {

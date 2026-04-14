@@ -12,6 +12,24 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
+vi.mock("../agents/tools-effective-inventory.js", () => ({
+  resolveEffectiveToolInventory: vi.fn(() => ({
+    agentId: "main",
+    profile: "coding",
+    groups: [
+      {
+        id: "core",
+        label: "Built-in tools",
+        source: "core",
+        tools: [
+          { id: "exec", label: "Exec", description: "Run shell commands", rawDescription: "Run shell commands", source: "core" },
+          { id: "read", label: "Read", description: "Read files", rawDescription: "Read files", source: "core" },
+        ],
+      },
+    ],
+  })),
+}));
+
 import { sessionsCommand } from "./sessions.js";
 
 describe("sessionsCommand", () => {
@@ -147,5 +165,149 @@ describe("sessionsCommand", () => {
     expect(errors[0]).toContain("--active must be a positive integer");
 
     fs.rmSync(store);
+  });
+
+  it("explains effective resolution for a stored session in JSON", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 5 * 60_000,
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+          modelOverride: "gpt-5.4",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        },
+      },
+      "sessions-explain",
+    );
+
+    const payload = await runSessionsJson<{
+      key: string;
+      agentId: string;
+      defaults: { provider: string; model: string };
+      input: { runtimeProvider: string | null; spawnedWorkspaceDir: string | null };
+      resolved: { model: string; workspaceDir: string };
+      resolution: {
+        usesPersistedWorkspace: boolean;
+        modelReasonChain: string[];
+        workspaceReasonChain: string[];
+        toolsReasonChain: string[];
+      };
+      tools: {
+        profile: string;
+        policyProfile: string | null;
+        providerProfile: string | null;
+        policySources: {
+          global: boolean;
+          globalProvider: boolean;
+          agent: boolean;
+          agentProvider: boolean;
+        };
+        policyPipeline: Array<{ label: string; active: boolean }>;
+        profileAlsoAllow: string[];
+        providerProfileAlsoAllow: string[];
+        groups: Array<{ id: string; count: number; tools: string[] }>;
+      };
+      capabilities: { subagent: { role: string; controlScope: string } };
+      toolCheck: null | { requested: string; available: boolean; matchedGroup: string | null; reasonChain: string[] };
+    }>(sessionsCommand, store, { explain: "agent:main:main" });
+
+    expect(payload.key).toBe("agent:main:main");
+    expect(payload.agentId).toBe("main");
+    expect(payload.input.runtimeProvider).toBe("openai-codex");
+    expect(payload.input.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
+    expect(payload.resolved.model).toBe("gpt-5.4");
+    expect(payload.resolved.workspaceDir).toBe("/tmp/subagent-workspace");
+    expect(payload.resolution.usesPersistedWorkspace).toBe(true);
+    expect(payload.resolution.modelReasonChain).toContain("explicit-model-override");
+    expect(payload.resolution.workspaceReasonChain).toEqual(["persisted-session-workspace"]);
+    expect(payload.resolution.toolsReasonChain).toContain("runtime-effective-tool-inventory");
+    expect(payload.tools.profile).toBe("coding");
+    expect(payload.tools.policyProfile).toBeNull();
+    expect(payload.tools.providerProfile).toBeNull();
+    expect(payload.tools.policySources).toEqual({
+      global: false,
+      globalProvider: false,
+      agent: false,
+      agentProvider: false,
+    });
+    expect(payload.tools.policyPipeline.some((step) => step.label.includes("tools.profile"))).toBe(true);
+    expect(payload.capabilities.subagent.role).toBe("main");
+    expect(payload.capabilities.subagent.controlScope).toBe("children");
+    expect(payload.toolCheck).toBeNull();
+    expect(payload.tools.groups).toMatchObject([{ id: "core", count: 2, tools: ["exec", "read"] }]);
+  });
+
+  it("can explain whether a specific tool is effectively available", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-explain-tool",
+    );
+
+    const payload = await runSessionsJson<{
+      toolCheck: { requested: string; available: boolean; matchedGroup: string | null; reasonChain: string[] };
+    }>(sessionsCommand, store, { explain: "agent:main:main", tool: "exec" });
+
+    expect(payload.toolCheck.requested).toBe("exec");
+    expect(payload.toolCheck.available).toBe(true);
+    expect(payload.toolCheck.matchedGroup).toBe("core");
+    expect(payload.toolCheck.reasonChain).toContain("runtime-effective-tool-inventory");
+  });
+
+  it("renders a readable text explanation for one session", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 5 * 60_000,
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+          modelOverride: "gpt-5.4",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        },
+      },
+      "sessions-explain-text",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store, explain: "agent:main:main" }, runtime);
+    fs.rmSync(store);
+
+    expect(logs.find((line) => line.includes("Session key"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Model reasons"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Workspace reasons"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Tools reasons"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Final model"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Final workspace"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Tools profile"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Policy profile"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Policy sources"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Policy pipeline"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Subagent role"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Tools core"))).toBeTruthy();
+  });
+
+  it("allows explain with an explicit store even if agent resolution would fail", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-explain-invalid-agent",
+    );
+
+    const payload = await runSessionsJson<{ key: string }>(sessionsCommand, store, {
+      explain: "agent:main:main",
+    });
+
+    expect(payload.key).toBe("agent:main:main");
   });
 });
