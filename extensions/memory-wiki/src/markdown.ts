@@ -213,7 +213,26 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
   });
 }
 
-export function extractWikiLinks(markdown: string): string[] {
+function normalizeWikiLinkTarget(target: string): string {
+  return target.replace(/\\/g, "/").replace(/\.md$/i, "");
+}
+
+function resolveMarkdownLinkTarget(pageRelativePath: string, rawTarget: string): string {
+  const normalizedTarget = rawTarget.split("#")[0]?.split("?")[0]?.trim();
+  if (!normalizedTarget) {
+    return "";
+  }
+  const posixPagePath = pageRelativePath.split(path.sep).join("/");
+  if (normalizedTarget.startsWith("/")) {
+    return normalizeWikiLinkTarget(normalizedTarget.replace(/^\/+/, ""));
+  }
+  const resolved = path.posix.normalize(
+    path.posix.join(path.posix.dirname(posixPagePath), normalizedTarget.replace(/\\/g, "/")),
+  );
+  return normalizeWikiLinkTarget(resolved.replace(/^\.\//, ""));
+}
+
+export function extractWikiLinks(markdown: string, pageRelativePath = "index.md"): string[] {
   const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
@@ -227,7 +246,7 @@ export function extractWikiLinks(markdown: string): string[] {
     if (!rawTarget || rawTarget.startsWith("#") || /^[a-z]+:/i.test(rawTarget)) {
       continue;
     }
-    const target = rawTarget.split("#")[0]?.split("?")[0]?.replace(/\\/g, "/").trim();
+    const target = resolveMarkdownLinkTarget(pageRelativePath, rawTarget);
     if (target) {
       links.push(target);
     }
@@ -239,11 +258,19 @@ export function formatWikiLink(params: {
   renderMode: "native" | "obsidian";
   relativePath: string;
   title: string;
+  fromRelativePath?: string;
 }): string {
   const withoutExtension = params.relativePath.replace(/\.md$/i, "");
-  return params.renderMode === "obsidian"
-    ? `[[${withoutExtension}|${params.title}]]`
-    : `[${params.title}](${params.relativePath})`;
+  if (params.renderMode === "obsidian") {
+    return `[[${withoutExtension}|${params.title}]]`;
+  }
+  const targetPath = params.fromRelativePath
+    ? path.posix.relative(
+        path.posix.dirname(params.fromRelativePath.split(path.sep).join("/")),
+        params.relativePath.split(path.sep).join("/"),
+      ) || path.posix.basename(params.relativePath.split(path.sep).join("/"))
+    : params.relativePath;
+  return `[${params.title}](${targetPath})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {
@@ -298,7 +325,7 @@ export function toWikiPageSummary(params: {
     id: normalizeOptionalString(parsed.frontmatter.id),
     pageType: normalizeOptionalString(parsed.frontmatter.pageType),
     sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
-    linkTargets: extractWikiLinks(params.raw),
+    linkTargets: extractWikiLinks(params.raw, params.relativePath),
     claims: normalizeWikiClaims(parsed.frontmatter.claims),
     contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
     questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),

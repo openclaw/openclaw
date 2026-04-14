@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { compileMemoryWikiVault } from "./compile.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -8,6 +9,37 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("lintMemoryWikiVault", () => {
+  it("accepts compiled native markdown links with relative paths and .md extensions", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-native-",
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          questions: ["What changed after launch?"],
+          confidence: 0.3,
+        },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+    const result = await lintMemoryWikiVault(config);
+    const brokenLinkIssues = result.issues.filter((issue) => issue.code === "broken-wikilink");
+
+    expect(brokenLinkIssues).toEqual([]);
+    await expect(fs.readFile(path.join(rootDir, "reports", "open-questions.md"), "utf8")).resolves.toContain(
+      "[Alpha](../entities/alpha.md): What changed after launch?",
+    );
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",
