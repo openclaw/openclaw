@@ -11,6 +11,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Video generation/live tests: bound provider polling for live video smoke, default to the fast non-FAL text-to-video path, and use a one-second lobster prompt so release validation no longer waits indefinitely on slow provider queues.
+
 ## 2026.4.14
 
 ### Changes

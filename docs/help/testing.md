@@ -781,11 +781,13 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Harness: `pnpm test:live:media video`
 - Scope:
   - Exercises the shared bundled video-generation provider path
+  - Defaults to the release-safe smoke path: non-FAL providers, one text-to-video request per provider, one-second lobster prompt, and a per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS` (`180000` by default)
+  - Skips FAL by default because provider-side queue latency can dominate release time; pass `--video-providers fal` or `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="fal"` to run it explicitly
   - Loads provider env vars from your login shell (`~/.profile`) before probing
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
-  - Runs both declared runtime modes when available:
-    - `generate` with prompt-only input
+  - Runs only `generate` by default
+  - Set `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1` to also run declared transform modes when available:
     - `imageToVideo` when the provider declares `capabilities.imageToVideo.enabled` and the selected provider/model accepts buffer-backed local image input in the shared sweep
     - `videoToVideo` when the provider declares `capabilities.videoToVideo.enabled` and the selected provider/model accepts buffer-backed local video input in the shared sweep
   - Current declared-but-skipped `imageToVideo` providers in the shared sweep:
@@ -802,6 +804,8 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Optional narrowing:
   - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="google,openai,runway"`
   - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,openai/sora-2,runway/gen4_aleph"`
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS=""` to include every provider in the default sweep, including FAL
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=60000` to reduce each provider operation cap for an aggressive smoke run
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 
