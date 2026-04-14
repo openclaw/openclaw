@@ -149,7 +149,9 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   }
 
   return {
-    ...(resolvedAllowPrivateNetwork || dangerouslyAllowPrivateNetwork === false
+    ...(resolvedAllowPrivateNetwork ||
+    dangerouslyAllowPrivateNetwork === false ||
+    allowPrivateNetwork === false
       ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
       : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
