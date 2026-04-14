@@ -43,6 +43,17 @@ function formatProviderState(entry: ProviderAccountStatus): string {
   return parts.join(", ");
 }
 
+async function resolveReadOnlyAccount(params: {
+  plugin: ReturnType<typeof listChannelPlugins>[number];
+  cfg: OpenClawConfig;
+  accountId: string;
+}): Promise<unknown> {
+  if (params.plugin.config.inspectAccount) {
+    return await Promise.resolve(params.plugin.config.inspectAccount(params.cfg, params.accountId));
+  }
+  return params.plugin.config.resolveAccount(params.cfg, params.accountId);
+}
+
 export async function buildProviderStatusIndex(
   cfg: OpenClawConfig,
 ): Promise<Map<string, ProviderAccountStatus>> {
@@ -51,7 +62,15 @@ export async function buildProviderStatusIndex(
   for (const plugin of listChannelPlugins()) {
     const accountIds = plugin.config.listAccountIds(cfg);
     for (const accountId of accountIds) {
-      const account = plugin.config.resolveAccount(cfg, accountId);
+      let account: unknown;
+      try {
+        account = await resolveReadOnlyAccount({ plugin, cfg, accountId });
+      } catch {
+        continue;
+      }
+      if (!account) {
+        continue;
+      }
       const snapshot = plugin.config.describeAccount?.(account, cfg);
       const enabled = plugin.config.isEnabled
         ? plugin.config.isEnabled(account, cfg)
