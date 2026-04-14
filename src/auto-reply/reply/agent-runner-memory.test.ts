@@ -162,7 +162,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
       followupRun,
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude-opus-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       agentCfgContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
@@ -263,7 +263,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createFollowupRun({ extraSystemPrompt: "extra system" }),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude-opus-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       agentCfgContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
@@ -314,7 +314,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
       followupRun: createFollowupRun(),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude-opus-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       agentCfgContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
@@ -355,7 +355,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
       followupRun: createFollowupRun(),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude-opus-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       agentCfgContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
@@ -394,7 +394,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
       followupRun: createFollowupRun(),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude-opus-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       agentCfgContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
@@ -429,7 +429,7 @@ describe("resolveMemoryFlushModelOverride", () => {
         },
       },
       sessionProvider: "anthropic",
-      sessionModel: "claude-opus-4-6",
+      sessionModel: "claude-sonnet-4-6",
     });
     expect(result.provider).toBe("openrouter");
     expect(result.model).toBe("anthropic/claude-sonnet-4-6");
@@ -467,20 +467,20 @@ describe("resolveMemoryFlushModelOverride", () => {
         },
       },
       sessionProvider: "anthropic",
-      sessionModel: "claude-opus-4-6",
+      sessionModel: "claude-sonnet-4-6",
     });
     expect(result.provider).toBe("anthropic");
-    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.model).toBe("claude-sonnet-4-6");
   });
 
   it("falls back to session model when cfg is undefined", () => {
     const result = resolveMemoryFlushModelOverride({
       cfg: undefined,
       sessionProvider: "anthropic",
-      sessionModel: "claude-opus-4-6",
+      sessionModel: "claude-sonnet-4-6",
     });
     expect(result.provider).toBe("anthropic");
-    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.model).toBe("claude-sonnet-4-6");
   });
 
   it("falls back to session model when override is empty string", () => {
@@ -497,10 +497,10 @@ describe("resolveMemoryFlushModelOverride", () => {
         },
       },
       sessionProvider: "anthropic",
-      sessionModel: "claude-opus-4-6",
+      sessionModel: "claude-sonnet-4-6",
     });
     expect(result.provider).toBe("anthropic");
-    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.model).toBe("claude-sonnet-4-6");
   });
 
   it("falls back to session model for the model part when override has provider/ with empty model", () => {
@@ -517,9 +517,9 @@ describe("resolveMemoryFlushModelOverride", () => {
         },
       },
       sessionProvider: "anthropic",
-      sessionModel: "claude-opus-4-6",
+      sessionModel: "claude-sonnet-4-6",
     });
     expect(result.provider).toBe("openrouter");
-    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.model).toBe("claude-sonnet-4-6");
   });
 });

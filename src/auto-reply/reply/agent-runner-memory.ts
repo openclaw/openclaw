@@ -566,10 +566,17 @@ export async function runMemoryFlushIfNeeded(params: {
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  // Resolve the flush model override early so that contextWindowTokens reflects
+  // the actual model that will execute the flush turn.
+  const flushModelOverride = resolveMemoryFlushModelOverride({
+    cfg: params.cfg,
+    sessionProvider: params.followupRun.run.provider,
+    sessionModel: params.followupRun.run.model,
+  });
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
-    provider: params.followupRun.run.provider,
-    modelId: params.followupRun.run.model ?? params.defaultModel,
+    provider: flushModelOverride.provider,
+    modelId: flushModelOverride.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
 
@@ -758,11 +765,6 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
-  const flushModelOverride = resolveMemoryFlushModelOverride({
-    cfg: params.cfg,
-    sessionProvider: params.followupRun.run.provider,
-    sessionModel: params.followupRun.run.model,
-  });
   try {
     await memoryDeps.runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
