@@ -522,6 +522,7 @@ function createSetupEntryChannelPluginFixture(params: {
   setupBlurb: string;
   configured: boolean;
   startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
+  useBundledSetupEntryContract?: boolean;
 }) {
   useNoBundledPlugins();
   const pluginDir = makeTempDir();
@@ -597,7 +598,28 @@ module.exports = {
   );
   fs.writeFileSync(
     path.join(pluginDir, "setup-entry.cjs"),
-    `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+    params.useBundledSetupEntryContract
+      ? `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin: () => ({
+    id: ${JSON.stringify(params.id)},
+    meta: {
+      id: ${JSON.stringify(params.id)},
+      label: ${JSON.stringify(params.label)},
+      selectionLabel: ${JSON.stringify(params.label)},
+      docsPath: ${JSON.stringify(`/channels/${params.id}`)},
+      blurb: ${JSON.stringify(params.setupBlurb)},
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ${listAccountIds},
+      resolveAccount: () => ${resolveAccount},
+    },
+    outbound: { deliveryMode: "direct" },
+  }),
+};`
+      : `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
   plugin: {
     id: ${JSON.stringify(params.id)},
@@ -3161,6 +3183,31 @@ module.exports = {
             plugins: {
               load: { paths: [pluginDir] },
               allow: ["setup-runtime-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
+      expectedChannels: 1,
+    },
+    {
+      name: "uses package setupEntry bundled contract for setup-runtime channel loads",
+      fixture: {
+        id: "setup-runtime-bundled-contract-test",
+        label: "Setup Runtime Bundled Contract Test",
+        packageName: "@openclaw/setup-runtime-bundled-contract-test",
+        fullBlurb: "full entry should not run while unconfigured",
+        setupBlurb: "setup runtime bundled contract",
+        configured: false,
+        useBundledSetupEntryContract: true,
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          config: {
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-bundled-contract-test"],
             },
           },
         }),
