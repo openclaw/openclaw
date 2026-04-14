@@ -288,14 +288,28 @@ export async function acquireGatewayLock(
         payload.startTime = startTime;
       }
       await handle.writeFile(JSON.stringify(payload), "utf8");
+      let released = false;
+      const markReleased = () => {
+        if (released) {
+          return false;
+        }
+        released = true;
+        return true;
+      };
       return {
         lockPath,
         configPath,
         release: async () => {
+          if (!markReleased()) {
+            return;
+          }
           await handle.close().catch(() => undefined);
           await fs.rm(lockPath, { force: true });
         },
         releaseSync: () => {
+          if (!markReleased()) {
+            return;
+          }
           try {
             // Use synchronous close via the underlying file descriptor to
             // guarantee the handle is released before rmSync runs. The async

@@ -483,6 +483,52 @@ describe("runGatewayLoop", () => {
       );
     });
   });
+
+  it("releases lock synchronously before forced exit on shutdown timeout", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      vi.useFakeTimers();
+      const releaseSync = vi.fn();
+      acquireGatewayLock.mockResolvedValueOnce({
+        lockPath: "/tmp/test-gateway.lock",
+        release: vi.fn(async () => {}),
+        releaseSync,
+      });
+
+      const close = vi.fn(() => new Promise<void>(() => {}));
+      const { start, started } = createSignaledStart(close);
+      const exitCallOrder: string[] = [];
+      const { runtime } = createRuntimeWithExitSignal(exitCallOrder);
+      let resolveExit: (code: number) => void = () => {};
+      const exitPromise = new Promise<number>((resolve) => {
+        resolveExit = resolve;
+      });
+      runtime.exit = vi.fn((_code: number) => {
+        exitCallOrder.push("exit");
+        resolveExit(1);
+      });
+
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForStart(started);
+      const sigterm = captureSignal("SIGTERM");
+
+      sigterm();
+      await vi.advanceTimersByTimeAsync(25_000);
+
+      await expect(exitPromise).resolves.toBe(1);
+      expect(releaseSync).toHaveBeenCalledTimes(1);
+      expect(exitCallOrder).toEqual(["exit"]);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "shutdown timed out; exiting without full cleanup",
+      );
+      vi.useRealTimers();
+    });
+  });
 });
 
 describe("gateway discover routing helpers", () => {
