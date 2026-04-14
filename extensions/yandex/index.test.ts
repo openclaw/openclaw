@@ -13,11 +13,22 @@ describe("yandex provider plugin", () => {
 
     expect(provider.id).toBe("yandex");
     expect(provider.label).toBe("Yandex");
-    expect(provider.envVars).toEqual(["YANDEX_API_KEY"]);
-    expect(provider.auth).toHaveLength(1);
+    expect(provider.auth).toHaveLength(2);
     expect(resolved).not.toBeNull();
     expect(resolved?.provider.id).toBe("yandex");
     expect(resolved?.method.id).toBe("api-key");
+  });
+
+  it("registers Yandex with folder-id auth wizard metadata", () => {
+    const provider = registerSingleProviderPlugin(yandexPlugin);
+    const resolved = resolveProviderPluginChoice({
+      providers: [provider],
+      choice: "yandex-folder-id",
+    });
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.provider.id).toBe("yandex");
+    expect(resolved?.method.id).toBe("folder-id");
   });
 
   it("builds the static Yandex model catalog", async () => {
@@ -43,9 +54,9 @@ describe("yandex provider plugin", () => {
     expect(catalog.provider.api).toBe("openai-completions");
     expect(catalog.provider.baseUrl).toBe("https://llm.api.cloud.yandex.net/v1");
     expect(catalog.provider.models?.map((model) => model.id)).toEqual([
-      "yandexgpt/latest",
-      "yandexgpt/rc",
-      "yandexgpt-lite/latest",
+      "yandexgpt-5.1",
+      "yandexgpt-5-pro",
+      "yandexgpt-5-lite",
     ]);
   });
 
