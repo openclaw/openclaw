@@ -270,6 +270,76 @@ describe("runBlueBubblesCatchup", () => {
     expect(cursor?.lastSeenMs).toBe(5 * 60 * 1000); // unchanged
   });
 
+  it("does NOT advance cursor past a processMessage failure (retryable)", async () => {
+    const cursorBefore = 5 * 60 * 1000;
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", cursorBefore);
+    const summary = await runBlueBubblesCatchup(makeTarget(), {
+      now: () => now,
+      fetchMessages: async () => ({
+        resolved: true,
+        messages: [
+          makeBbMessage({ guid: "ok1", dateCreated: 6 * 60 * 1000 }),
+          makeBbMessage({ guid: "bad", dateCreated: 7 * 60 * 1000 }),
+          makeBbMessage({ guid: "ok2", dateCreated: 8 * 60 * 1000 }),
+        ],
+      }),
+      processMessageFn: async (m) => {
+        if (m.messageId === "bad") {
+          throw new Error("transient");
+        }
+      },
+    });
+    // Cursor is held just before the bad message's timestamp so the next
+    // sweep retries it (and re-queries ok1 which dedupe will drop).
+    expect(summary?.failed).toBe(1);
+    expect(summary?.cursorAfter).toBe(7 * 60 * 1000 - 1);
+    const cursorAfter = await loadBlueBubblesCatchupCursor("test-account");
+    expect(cursorAfter?.lastSeenMs).toBe(7 * 60 * 1000 - 1);
+  });
+
+  it("clamps held cursor to previous cursor when failure ts is below it", async () => {
+    // Pathological: failure timestamp is at or below the previous cursor
+    // (shouldn't happen with server-side `after:` but defense in depth).
+    // We must never regress the cursor.
+    const cursorBefore = 9 * 60 * 1000;
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", cursorBefore);
+    const summary = await runBlueBubblesCatchup(makeTarget(), {
+      now: () => now,
+      fetchMessages: async () => ({
+        resolved: true,
+        messages: [makeBbMessage({ guid: "bad", dateCreated: 1_000 })],
+      }),
+      processMessageFn: async () => {
+        throw new Error("transient");
+      },
+    });
+    // skippedPreCursor catches the bad record before processMessage runs,
+    // so no failure is recorded and cursor advances to nowMs normally.
+    expect(summary?.failed).toBe(0);
+    expect(summary?.skippedPreCursor).toBe(1);
+    expect(summary?.cursorAfter).toBe(now);
+  });
+
+  it("skips the rate-limit gate when stored cursor is in the future (clock skew)", async () => {
+    const now = 1_000_000;
+    const futureCursor = now + 60_000; // future-dated by clock correction
+    await saveBlueBubblesCatchupCursor("test-account", futureCursor);
+    let fetched = false;
+    const summary = await runBlueBubblesCatchup(makeTarget(), {
+      now: () => now,
+      fetchMessages: async () => {
+        fetched = true;
+        return { resolved: true, messages: [] };
+      },
+      processMessageFn: async () => {},
+    });
+    // Should NOT short-circuit on the MIN_INTERVAL_MS gate; should run.
+    expect(fetched).toBe(true);
+    expect(summary).not.toBeNull();
+  });
+
   it("isolates one failing message and keeps processing the rest", async () => {
     const now = 10_000;
     const processed: string[] = [];
