@@ -486,9 +486,16 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   stateDir: string;
   dotenvVars: Record<string, string>;
 }): Promise<string[]> {
-  const entries = Object.entries(params.dotenvVars).filter(([, value]) => !/[\r\n]/.test(value));
+  const entries = Object.entries(params.dotenvVars);
   if (entries.length === 0) {
     return [];
+  }
+  for (const [key, value] of entries) {
+    if (/[\r\n]/.test(value)) {
+      throw new Error(
+        `state-dir .env contains a multiline value for ${key}; systemd EnvironmentFile values must be single-line`,
+      );
+    }
   }
   const envFilePath = path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
   const content = entries.map(([key, value]) => `${key}=${value}`).join("\n");
