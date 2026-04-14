@@ -494,7 +494,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             runtime.error?.(
               `slack socket mode failed to start due to non-recoverable auth error — skipping channel (${formatUnknownError(err)})`,
             );
-            throw err;
+            return;
           }
           reconnectAttempts += 1;
           if (
