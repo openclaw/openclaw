@@ -331,6 +331,52 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.readFileSync(stampPath, "utf8")).toBe(firstStamp);
   });
 
+  it("dedupes cyclic dependency aliases by canonical root", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { a: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const rootNodeModulesDir = path.join(repoRoot, "node_modules");
+    const storeDir = path.join(repoRoot, ".store");
+    const aStoreDir = path.join(storeDir, "a");
+    const bStoreDir = path.join(storeDir, "b");
+    fs.mkdirSync(path.join(aStoreDir, "node_modules"), { recursive: true });
+    fs.mkdirSync(path.join(bStoreDir, "node_modules"), { recursive: true });
+    fs.writeFileSync(
+      path.join(aStoreDir, "package.json"),
+      '{ "name": "a", "version": "1.0.0", "dependencies": { "b": "1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(aStoreDir, "index.js"), "module.exports = 'a';\n", "utf8");
+    fs.writeFileSync(
+      path.join(bStoreDir, "package.json"),
+      '{ "name": "b", "version": "1.0.0", "dependencies": { "a": "1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(bStoreDir, "index.js"), "module.exports = 'b';\n", "utf8");
+    fs.mkdirSync(rootNodeModulesDir, { recursive: true });
+    fs.symlinkSync(aStoreDir, path.join(rootNodeModulesDir, "a"));
+    fs.symlinkSync(bStoreDir, path.join(rootNodeModulesDir, "b"));
+    fs.symlinkSync(bStoreDir, path.join(aStoreDir, "node_modules", "b"));
+    fs.symlinkSync(aStoreDir, path.join(bStoreDir, "node_modules", "a"));
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "a", "index.js"), "utf8")).toBe(
+      "module.exports = 'a';\n",
+    );
+    expect(
+      fs.readFileSync(
+        path.join(pluginDir, "node_modules", "a", "node_modules", "b", "index.js"),
+        "utf8",
+      ),
+    ).toBe("module.exports = 'b';\n");
+  });
+
   it("falls back to install when the root transitive closure is incomplete", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {

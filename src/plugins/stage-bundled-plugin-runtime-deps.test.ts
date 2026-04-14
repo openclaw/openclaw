@@ -68,23 +68,14 @@ function createBaileysMessagesMediaSource(params?: {
   encryptedStreamPatched?: boolean;
   encryptedStreamPatchedSequentially?: boolean;
   encryptedStreamPatchedSequentiallyWithComments?: boolean;
+  encryptedStreamUnrecognized?: boolean;
 }) {
-  const encryptedLines = params?.encryptedStreamPatchedSequentiallyWithComments
+  const encryptedLines = params?.encryptedStreamUnrecognized
     ? [
         "        encFileWriteStream.write(mac);",
-        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
-        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
-        "        encFileWriteStream.end();",
-        "        originalFileStream?.end?.();",
-        "        stream.destroy();",
-        "        // Wait for write streams to fully flush to disk before returning encFilePath.",
-        "        // Without this await, the caller may open a read stream on the file before",
-        "        // the OS has created it, causing a race-condition ENOENT crash.",
-        "        await encFinishPromise;",
-        "        await originalFinishPromise;",
-        "        logger?.debug('encrypted data successfully');",
+        "        logger?.debug('encrypted data changed upstream');",
       ]
-    : params?.encryptedStreamPatchedSequentially
+    : params?.encryptedStreamPatchedSequentiallyWithComments
       ? [
           "        encFileWriteStream.write(mac);",
           "        const encFinishPromise = once(encFileWriteStream, 'finish');",
@@ -92,11 +83,14 @@ function createBaileysMessagesMediaSource(params?: {
           "        encFileWriteStream.end();",
           "        originalFileStream?.end?.();",
           "        stream.destroy();",
+          "        // Wait for write streams to fully flush to disk before returning encFilePath.",
+          "        // Without this await, the caller may open a read stream on the file before",
+          "        // the OS has created it, causing a race-condition ENOENT crash.",
           "        await encFinishPromise;",
           "        await originalFinishPromise;",
           "        logger?.debug('encrypted data successfully');",
         ]
-      : params?.encryptedStreamPatched
+      : params?.encryptedStreamPatchedSequentially
         ? [
             "        encFileWriteStream.write(mac);",
             "        const encFinishPromise = once(encFileWriteStream, 'finish');",
@@ -104,16 +98,28 @@ function createBaileysMessagesMediaSource(params?: {
             "        encFileWriteStream.end();",
             "        originalFileStream?.end?.();",
             "        stream.destroy();",
-            "        await Promise.all([encFinishPromise, originalFinishPromise]);",
+            "        await encFinishPromise;",
+            "        await originalFinishPromise;",
             "        logger?.debug('encrypted data successfully');",
           ]
-        : [
-            "        encFileWriteStream.write(mac);",
-            "        encFileWriteStream.end();",
-            "        originalFileStream?.end?.();",
-            "        stream.destroy();",
-            "        logger?.debug('encrypted data successfully');",
-          ];
+        : params?.encryptedStreamPatched
+          ? [
+              "        encFileWriteStream.write(mac);",
+              "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+              "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+              "        encFileWriteStream.end();",
+              "        originalFileStream?.end?.();",
+              "        stream.destroy();",
+              "        await Promise.all([encFinishPromise, originalFinishPromise]);",
+              "        logger?.debug('encrypted data successfully');",
+            ]
+          : [
+              "        encFileWriteStream.write(mac);",
+              "        encFileWriteStream.end();",
+              "        originalFileStream?.end?.();",
+              "        stream.destroy();",
+              "        logger?.debug('encrypted data successfully');",
+            ];
   const dispatcherLines = params?.dispatcherPatched
     ? [
         "                const response = await fetch(url, {",
@@ -349,6 +355,39 @@ describe("stageBundledPluginRuntimeDeps", () => {
     });
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
       "await Promise.all([encFinishPromise, originalFinishPromise]);",
+    );
+    expect(fs.readFileSync(targetPath, "utf8")).toContain(
+      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
+    );
+  });
+
+  it("patches the Baileys dispatcher guard even when the encryptedStream block changed", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-hotfix-dispatcher-only-");
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    writeRepoFile(
+      repoRoot,
+      "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
+      createBaileysMessagesMediaSource({ encryptedStreamUnrecognized: true }),
+    );
+
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({ packageRoot: repoRoot });
+
+    expect(result).toEqual({
+      applied: true,
+      reason: "patched",
+      targetPath,
+    });
+    expect(fs.readFileSync(targetPath, "utf8")).toContain(
+      "logger?.debug('encrypted data changed upstream');",
     );
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
       "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",

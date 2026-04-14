@@ -171,8 +171,9 @@ function collectInstalledRuntimeDependencyRoots(rootNodeModulesDir, dependencySp
     if (depRoot === null) {
       return null;
     }
+    const canonicalDepRoot = fs.realpathSync(depRoot);
 
-    const seenKey = `${current.depName}\0${depRoot}`;
+    const seenKey = `${current.depName}\0${canonicalDepRoot}`;
     if (seen.has(seenKey)) {
       continue;
     }
@@ -184,8 +185,9 @@ function collectInstalledRuntimeDependencyRoots(rootNodeModulesDir, dependencySp
       directRoots.push(record);
     }
 
-    const packageJson = packageCache.get(depRoot) ?? readJson(path.join(depRoot, "package.json"));
-    packageCache.set(depRoot, packageJson);
+    const packageJson =
+      packageCache.get(canonicalDepRoot) ?? readJson(path.join(depRoot, "package.json"));
+    packageCache.set(canonicalDepRoot, packageJson);
     for (const [childName, childSpec] of Object.entries(packageJson.dependencies ?? {})) {
       queue.push({
         depName: childName,

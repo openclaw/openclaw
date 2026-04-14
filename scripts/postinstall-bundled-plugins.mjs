@@ -293,11 +293,9 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       (BAILEYS_MEDIA_HOTFIX_FINISH_PROMISES_RE.test(patchedText) &&
         (BAILEYS_MEDIA_HOTFIX_PROMISE_ALL_RE.test(patchedText) ||
           BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_AWAITS_RE.test(patchedText)));
+    const encryptedStreamPatchable = patchedText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE);
 
-    if (!encryptedStreamAlreadyPatched) {
-      if (!patchedText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE)) {
-        return { applied: false, reason: "unexpected_content" };
-      }
+    if (!encryptedStreamAlreadyPatched && encryptedStreamPatchable) {
       if (!BAILEYS_MEDIA_ONCE_IMPORT_RE.test(patchedText)) {
         return { applied: false, reason: "missing_once_import", targetPath };
       }
@@ -311,17 +309,14 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       applied = true;
     }
 
-    if (
-      !patchedText.includes(
-        "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
-      )
-    ) {
-      if (!patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE)) {
-        return { applied: false, reason: "unexpected_content" };
-      }
-      if (!patchedText.includes(BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE)) {
-        return { applied: false, reason: "unexpected_content" };
-      }
+    const dispatcherAlreadyPatched = patchedText.includes(
+      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
+    );
+    const dispatcherPatchable =
+      patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE) &&
+      patchedText.includes(BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE);
+
+    if (!dispatcherAlreadyPatched && dispatcherPatchable) {
       patchedText = patchedText
         .replace(BAILEYS_MEDIA_DISPATCHER_NEEDLE, BAILEYS_MEDIA_DISPATCHER_REPLACEMENT)
         .replace(
@@ -332,6 +327,12 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
     }
 
     if (!applied) {
+      if (
+        (!encryptedStreamAlreadyPatched && !encryptedStreamPatchable) ||
+        (!dispatcherAlreadyPatched && !dispatcherPatchable)
+      ) {
+        return { applied: false, reason: "unexpected_content" };
+      }
       return { applied: false, reason: "already_patched" };
     }
     const tempPath = createTempPath(targetPath);
