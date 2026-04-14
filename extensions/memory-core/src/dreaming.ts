@@ -109,6 +109,8 @@ export type ShortTermPromotionDreamingConfig = {
     mode: "inline" | "separate" | "both";
     separateReports: boolean;
   };
+  /** Optional model override for dreaming subagent calls. */
+  model?: string;
 };
 
 type ReconcileResult =
@@ -392,6 +394,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
+    ...(resolved.execution.model ? { model: resolved.execution.model } : {}),
   };
 }
 
@@ -628,6 +631,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           subagent: params.subagent,
           workspaceDir,
           data,
+          ...(params.config.model ? { model: params.config.model } : {}),
           nowMs: sweepNowMs,
           timezone: params.config.timezone,
           logger: params.logger,

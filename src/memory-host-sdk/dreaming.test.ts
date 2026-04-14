@@ -244,6 +244,42 @@ describe("memory dreaming host helpers", () => {
     });
   });
 
+  it("cascades dreaming.model to all phase execution configs", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          model: "google/gemini-2.5-flash",
+        },
+      },
+    });
+
+    expect(resolved.execution.defaults.model).toBe("google/gemini-2.5-flash");
+    expect(resolved.phases.light.execution.model).toBe("google/gemini-2.5-flash");
+    expect(resolved.phases.rem.execution.model).toBe("google/gemini-2.5-flash");
+    expect(resolved.phases.deep.execution.model).toBe("google/gemini-2.5-flash");
+  });
+
+  it("lets per-phase execution.model override dreaming.model", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          model: "google/gemini-2.5-flash",
+          phases: {
+            deep: {
+              execution: {
+                model: "anthropic/claude-opus-4-6",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.phases.light.execution.model).toBe("google/gemini-2.5-flash");
+    expect(resolved.phases.rem.execution.model).toBe("google/gemini-2.5-flash");
+    expect(resolved.phases.deep.execution.model).toBe("anthropic/claude-opus-4-6");
+  });
+
   it('falls back to memory-core when memory slot is "none" or blank', () => {
     expect(
       resolveMemoryDreamingPluginId({
