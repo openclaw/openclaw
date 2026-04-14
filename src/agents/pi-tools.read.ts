@@ -131,6 +131,7 @@ async function writeHostFile(absolutePath: string, data: string): Promise<void> 
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   await fs.writeFile(absolutePath, data, "utf-8");
 }
+
 async function readOptionalUtf8File(params: {
   absolutePath: string;
   relativePath: string;
@@ -420,13 +421,7 @@ export function createOpenClawReadTool(
         const fileName = path.basename(inputPath);
         
         const encodedSource = encodeURIComponent(inputPath);
-        let mediaUrl = `http://localhost:18791/__openclaw__/assistant-media?source=${encodedSource}`;
-        
-        // For audio and video, use direct path instead of the assistant-media endpoint
-        if (AUDIO_EXTENSIONS.has(ext) || VIDEO_EXTENSIONS.has(ext)) {
-            const relativePath = path.relative(rootDir, inputPath);
-            mediaUrl = `http://localhost:18791/${encodeURIComponent(relativePath)}`;
-        }
+        const mediaUrl = `http://localhost:18791/__openclaw__/assistant-media?source=${encodedSource}`;
 
         if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) throw new Error("Read operation aborted");
@@ -588,6 +583,24 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow edits anywhere on the host
+    return {
+      readFile: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        return await fs.readFile(resolved);
+      },
+      writeFile: writeHostFile,
+      access: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        await fs.access(resolved);
+      },
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: (relativePath: string) => 
       readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
