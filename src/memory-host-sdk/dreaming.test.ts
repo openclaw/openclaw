@@ -267,7 +267,7 @@ describe("memory dreaming host helpers", () => {
           phases: {
             deep: {
               execution: {
-                model: "anthropic/claude-opus-4-6",
+                model: "anthropic/claude-sonnet-4-6",
               },
             },
           },
@@ -277,7 +277,7 @@ describe("memory dreaming host helpers", () => {
 
     expect(resolved.phases.light.execution.model).toBe("google/gemini-2.5-flash");
     expect(resolved.phases.rem.execution.model).toBe("google/gemini-2.5-flash");
-    expect(resolved.phases.deep.execution.model).toBe("anthropic/claude-opus-4-6");
+    expect(resolved.phases.deep.execution.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it('falls back to memory-core when memory slot is "none" or blank', () => {

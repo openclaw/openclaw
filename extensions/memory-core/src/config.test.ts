@@ -74,7 +74,7 @@ describe("memory-core manifest config schema", () => {
           enabled: true,
           phases: {
             light: { execution: { model: "google/gemini-2.5-flash" } },
-            deep: { execution: { model: "anthropic/claude-opus-4-6" } },
+            deep: { execution: { model: "anthropic/claude-sonnet-4-6" } },
             rem: { execution: { model: "google/gemini-2.5-flash" } },
           },
         },
