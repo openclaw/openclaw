@@ -130,7 +130,7 @@ export function resolveEffectiveRuntimeModel(params: {
   });
   const runtimeBaseUrl =
     typeof (params.runtimeModel as { baseUrl?: unknown }).baseUrl === "string"
-      ? ((params.runtimeModel as { baseUrl?: string }).baseUrl ?? undefined)
+      ? (params.runtimeModel as { baseUrl: string }).baseUrl
       : undefined;
   if (ctxGuard.shouldWarn) {
     log.warn(

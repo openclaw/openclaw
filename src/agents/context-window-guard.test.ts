@@ -240,6 +240,21 @@ describe("context-window-guard", () => {
     ).toContain("local/self-hosted runs work best at 32000+ tokens");
   });
 
+  it("does not add local-model hints for generic custom endpoints", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 24_000, source: "model" },
+    });
+
+    expect(
+      formatContextWindowWarningMessage({
+        provider: "custom",
+        modelId: "hosted-proxy-model",
+        guard,
+        runtimeBaseUrl: "https://models.example.com/v1",
+      }),
+    ).toBe("low context window: custom/hosted-proxy-model ctx=24000 (warn<32000) source=model");
+  });
+
   it("adds a local-model hint to block messages for localhost endpoints", () => {
     const guard = evaluateContextWindowGuard({
       info: { tokens: 8_000, source: "model" },
@@ -251,6 +266,32 @@ describe("context-window-guard", () => {
         runtimeBaseUrl: "http://127.0.0.1:11434/v1",
       }),
     ).toContain("This looks like a local model endpoint.");
+  });
+
+  it("points config-backed block remediation at agents.defaults.contextTokens", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 8_000, source: "agentContextTokens" },
+    });
+
+    expect(
+      formatContextWindowBlockMessage({
+        guard,
+        runtimeBaseUrl: "http://127.0.0.1:11434/v1",
+      }),
+    ).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+  });
+
+  it("points model config block remediation at contextWindow/contextTokens", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 8_000, source: "modelsConfig" },
+    });
+
+    expect(
+      formatContextWindowBlockMessage({
+        guard,
+        runtimeBaseUrl: "http://127.0.0.1:11434/v1",
+      }),
+    ).toContain("Raise contextWindow/contextTokens or choose a larger model.");
   });
 
   it("keeps block messages concise for public providers", () => {

@@ -73,7 +73,7 @@ export function resolveContextWindowGuardHint(params: {
   const endpoint = resolveProviderEndpoint(params.runtimeBaseUrl ?? undefined);
   return {
     endpointClass: endpoint.endpointClass,
-    likelySelfHosted: endpoint.endpointClass === "local" || endpoint.endpointClass === "custom",
+    likelySelfHosted: endpoint.endpointClass === "local",
   };
 }
 
@@ -88,9 +88,21 @@ export function formatContextWindowWarningMessage(params: {
   if (!hint.likelySelfHosted) {
     return base;
   }
+  if (params.guard.source === "agentContextTokens") {
+    return (
+      `${base}; OpenClaw is capped by agents.defaults.contextTokens, so raise that cap ` +
+      `if you want to use more of the model context window`
+    );
+  }
+  if (params.guard.source === "modelsConfig") {
+    return (
+      `${base}; OpenClaw is using the configured model context limit for this model, ` +
+      `so raise contextWindow/contextTokens if it is set too low`
+    );
+  }
   return (
     `${base}; local/self-hosted runs work best at ` +
-    `${CONTEXT_WINDOW_WARN_BELOW_TOKENS}+ tokens and may show weaker tool use or more compaction until the server context limit is raised`
+    `${CONTEXT_WINDOW_WARN_BELOW_TOKENS}+ tokens and may show weaker tool use or more compaction until the server/model context limit is raised`
   );
 }
 
@@ -105,13 +117,22 @@ export function formatContextWindowBlockMessage(params: {
   if (!hint.likelySelfHosted) {
     return base;
   }
-  const endpointHint =
-    hint.endpointClass === "local"
-      ? "This looks like a local model endpoint."
-      : "This looks like a self-hosted model endpoint.";
+  if (params.guard.source === "agentContextTokens") {
+    return (
+      `${base} OpenClaw is capped by agents.defaults.contextTokens. ` +
+      `Raise that cap or choose a larger model.`
+    );
+  }
+  if (params.guard.source === "modelsConfig") {
+    return (
+      `${base} OpenClaw is using the configured model context limit for this model. ` +
+      `Raise contextWindow/contextTokens or choose a larger model.`
+    );
+  }
   return (
-    `${base} ${endpointHint} Raise the server/model context limit or choose a larger model. ` +
-    `OpenClaw local runs work best at ${CONTEXT_WINDOW_WARN_BELOW_TOKENS}+ tokens.`
+    `${base} This looks like a local model endpoint. ` +
+    `Raise the server/model context limit or choose a larger model. ` +
+    `OpenClaw local/self-hosted runs work best at ${CONTEXT_WINDOW_WARN_BELOW_TOKENS}+ tokens.`
   );
 }
 
