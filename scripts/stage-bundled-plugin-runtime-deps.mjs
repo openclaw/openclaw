@@ -15,6 +15,13 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function readOptionalUtf8(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  return fs.readFileSync(filePath, "utf8");
+}
+
 function removePathIfExists(targetPath) {
   fs.rmSync(targetPath, { recursive: true, force: true });
 }
@@ -147,6 +154,81 @@ function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
   return [...closure];
 }
 
+function resolveInstalledDirectDependencyNames(rootNodeModulesDir, dependencySpecs) {
+  const directDependencyNames = [];
+  for (const [depName, spec] of Object.entries(dependencySpecs)) {
+    const installedVersion = readInstalledDependencyVersion(rootNodeModulesDir, depName);
+    if (installedVersion === null || !dependencyVersionSatisfied(spec, installedVersion)) {
+      return null;
+    }
+    directDependencyNames.push(depName);
+  }
+  return directDependencyNames;
+}
+
+function appendDirectoryFingerprint(hash, rootDir, currentDir = rootDir) {
+  const entries = fs
+    .readdirSync(currentDir, { withFileTypes: true })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name);
+    const stat = fs.statSync(fullPath);
+    const relativePath = path.relative(rootDir, fullPath).replace(/\\/g, "/");
+    if (stat.isDirectory()) {
+      hash.update(`dir:${relativePath}\n`);
+      appendDirectoryFingerprint(hash, rootDir, fullPath);
+      continue;
+    }
+    if (!stat.isFile()) {
+      continue;
+    }
+    hash.update(`file:${relativePath}:${stat.size}\n`);
+    hash.update(fs.readFileSync(fullPath));
+  }
+}
+
+function createInstalledRuntimeClosureFingerprint(rootNodeModulesDir, dependencyNames) {
+  const hash = createHash("sha256");
+  for (const depName of [...dependencyNames].toSorted((left, right) => left.localeCompare(right))) {
+    const depRoot = dependencyNodeModulesPath(rootNodeModulesDir, depName);
+    if (!fs.existsSync(depRoot)) {
+      return null;
+    }
+    hash.update(`package:${depName}\n`);
+    appendDirectoryFingerprint(hash, depRoot);
+  }
+  return hash.digest("hex");
+}
+
+function resolveInstalledRuntimeClosureFingerprint(params) {
+  const dependencySpecs = {
+    ...params.packageJson.dependencies,
+    ...params.packageJson.optionalDependencies,
+  };
+  if (Object.keys(dependencySpecs).length === 0 || !fs.existsSync(params.rootNodeModulesDir)) {
+    return null;
+  }
+  const directDependencyNames = resolveInstalledDirectDependencyNames(
+    params.rootNodeModulesDir,
+    dependencySpecs,
+  );
+  if (directDependencyNames === null) {
+    return null;
+  }
+  const dependencyNames = new Set(directDependencyNames);
+  const transitiveClosure = collectInstalledRuntimeClosure(
+    params.rootNodeModulesDir,
+    dependencySpecs,
+  );
+  if (transitiveClosure !== null) {
+    for (const depName of transitiveClosure) {
+      dependencyNames.add(depName);
+    }
+  }
+  return createInstalledRuntimeClosureFingerprint(params.rootNodeModulesDir, dependencyNames);
+}
+
 function walkFiles(rootDir, visitFile) {
   if (!fs.existsSync(rootDir)) {
     return;
@@ -272,12 +354,21 @@ function resolveRuntimeDepsStampPath(pluginDir) {
   return path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
 }
 
-function createRuntimeDepsFingerprint(packageJson, pruneConfig) {
+function createRuntimeDepsFingerprint(packageJson, pruneConfig, params = {}) {
+  const repoRoot = params.repoRoot;
+  const lockfilePath =
+    typeof repoRoot === "string" && repoRoot.length > 0
+      ? path.join(repoRoot, "pnpm-lock.yaml")
+      : null;
+  const rootLockfile = lockfilePath ? readOptionalUtf8(lockfilePath) : null;
   return createHash("sha256")
     .update(
       JSON.stringify({
         globalPruneSuffixes: pruneConfig.globalPruneSuffixes,
         packageJson,
+        pruneRules: [...pruneConfig.pruneRules.entries()],
+        rootInstalledRuntimeFingerprint: params.rootInstalledRuntimeFingerprint ?? null,
+        rootLockfile,
         pruneRules: [...pruneConfig.pruneRules.entries()],
         version: runtimeDepsStagingVersion,
       }),
@@ -307,9 +398,19 @@ function stageInstalledRootRuntimeDeps(params) {
     return false;
   }
 
-  const dependencyNames = collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs);
-  if (dependencyNames === null) {
+  const directDependencyNames = resolveInstalledDirectDependencyNames(
+    rootNodeModulesDir,
+    dependencySpecs,
+  );
+  if (directDependencyNames === null) {
     return false;
+  }
+  const dependencyNames = new Set(directDependencyNames);
+  const transitiveClosure = collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs);
+  if (transitiveClosure !== null) {
+    for (const depName of transitiveClosure) {
+      dependencyNames.add(depName);
+    }
   }
 
   const nodeModulesDir = path.join(pluginDir, "node_modules");
@@ -323,7 +424,9 @@ function stageInstalledRootRuntimeDeps(params) {
   );
 
   try {
-    for (const depName of dependencyNames) {
+    for (const depName of [...dependencyNames].toSorted((left, right) =>
+      left.localeCompare(right),
+    )) {
       const sourcePath = dependencyNodeModulesPath(rootNodeModulesDir, depName);
       const targetPath = dependencyNodeModulesPath(stagedNodeModulesDir, depName);
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -435,7 +538,14 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       removePathIfExists(stampPath);
       continue;
     }
-    const fingerprint = createRuntimeDepsFingerprint(packageJson, pruneConfig);
+    const rootInstalledRuntimeFingerprint = resolveInstalledRuntimeClosureFingerprint({
+      packageJson,
+      rootNodeModulesDir: path.join(repoRoot, "node_modules"),
+    });
+    const fingerprint = createRuntimeDepsFingerprint(packageJson, pruneConfig, {
+      repoRoot,
+      rootInstalledRuntimeFingerprint,
+    });
     const stamp = readRuntimeDepsStamp(stampPath);
     if (fs.existsSync(nodeModulesDir) && stamp?.fingerprint === fingerprint) {
       continue;
