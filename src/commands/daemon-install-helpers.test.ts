@@ -14,8 +14,11 @@ const mocks = vi.hoisted(() => ({
   buildServiceEnvironment: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles.js", () => ({
+vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
   hasAnyAuthProfileStoreSource: mocks.hasAnyAuthProfileStoreSource,
+}));
+
+vi.mock("./daemon-install-auth-profiles-store.runtime.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 
@@ -299,6 +302,36 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+  });
+
+  it("uses the provided authStore without probing auth-profile runtime", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        OPENAI_API_KEY: "sk-openai-test",
+      },
+      port: 3000,
+      runtime: "node",
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+    expect(mocks.hasAnyAuthProfileStoreSource).not.toHaveBeenCalled();
+    expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
   });
 
   it("merges env-backed auth-profile refs into the service environment", async () => {

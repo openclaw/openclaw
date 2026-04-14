@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.12",
+  "version": "2026.4.14",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -482,6 +482,10 @@
       "types": "./dist/plugin-sdk/command-status.d.ts",
       "default": "./dist/plugin-sdk/command-status.js"
     },
+    "./plugin-sdk/command-status-runtime": {
+      "types": "./dist/plugin-sdk/command-status-runtime.d.ts",
+      "default": "./dist/plugin-sdk/command-status-runtime.js"
+    },
     "./plugin-sdk/command-detection": {
       "types": "./dist/plugin-sdk/command-detection.d.ts",
       "default": "./dist/plugin-sdk/command-detection.js"
@@ -929,6 +933,10 @@
     "./plugin-sdk/provider-model-shared": {
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
+    },
+    "./plugin-sdk/opencode": {
+      "types": "./dist/plugin-sdk/opencode.d.ts",
+      "default": "./dist/plugin-sdk/opencode.js"
     },
     "./plugin-sdk/volc-model-catalog-shared": {
       "types": "./dist/plugin-sdk/volc-model-catalog-shared.d.ts",
@@ -1380,6 +1388,7 @@
     "@sinclair/typebox": "0.34.49",
     "@slack/bolt": "^4.7.0",
     "@slack/web-api": "^7.15.0",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
@@ -1467,7 +1476,8 @@
     "openshell": "0.1.0"
   },
   "overrides": {
-    "axios": "1.15.0"
+    "axios": "1.15.0",
+    "follow-redirects": "1.16.0"
   },
   "engines": {
     "node": ">=22.14.0"
@@ -1479,6 +1489,7 @@
       "hono": "4.12.12",
       "@hono/node-server": "1.19.13",
       "axios": "1.15.0",
+      "follow-redirects": "1.16.0",
       "defu": "6.1.5",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
@@ -1518,6 +1529,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
+    },
+    "patchedDependencies": {
+      "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch"
     }
   }
 }

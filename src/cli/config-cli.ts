@@ -921,8 +921,13 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
   return { refsToResolve, skippedExecRefs };
 }
 
-function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRaw(config);
+function collectDryRunSchemaErrors(params: {
+  config: OpenClawConfig;
+  operations: ReadonlyArray<ConfigSetOperation>;
+}): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRaw(params.config, {
+    touchedPaths: params.operations.map((operation) => operation.setPath),
+  });
   if (validated.ok) {
     return [];
   }
@@ -1062,7 +1067,12 @@ export async function runConfigSet(opts: {
         );
       }
       if (requiresFullSchemaValidation) {
-        errors.push(...collectDryRunSchemaErrors(nextConfig));
+        errors.push(
+          ...collectDryRunSchemaErrors({
+            config: nextConfig,
+            operations,
+          }),
+        );
       }
       if (hasJsonMode || hasBuilderMode) {
         errors.push(

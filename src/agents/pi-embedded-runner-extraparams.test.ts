@@ -140,7 +140,7 @@ import {
 } from "./pi-embedded-runner/openai-stream-wrappers.js";
 
 type WrapProviderStreamFnParams = Parameters<
-  typeof import("../plugins/provider-runtime.js").wrapProviderStreamFn
+  typeof import("../plugins/provider-hook-runtime.js").wrapProviderStreamFn
 >[0];
 
 function createTestOpenAIProviderWrapper(

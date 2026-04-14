@@ -45,4 +45,10 @@ describe("tryResolveLoadedOutboundTarget", () => {
       }),
     ).toEqual({ ok: true, to: "123456789" });
   });
+
+  it("trims channel ids before reading the loaded registry", () => {
+    tryResolveLoadedOutboundTarget({ channel: " telegram " as never, to: "123" });
+
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
+  });
 });

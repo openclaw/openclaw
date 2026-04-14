@@ -26,6 +26,11 @@ import {
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
 describe("telegram thread bindings", () => {
   let stateDirOverride: string | undefined;
 
@@ -361,7 +366,7 @@ describe("telegram thread bindings", () => {
       manager.touchConversation("-100200300:topic:100");
 
       await __testing.resetTelegramThreadBindingsForTests();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await flushMicrotasks();
       expect(unhandled).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
