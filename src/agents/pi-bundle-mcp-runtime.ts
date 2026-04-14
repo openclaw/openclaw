@@ -244,7 +244,14 @@ export function createSessionMcpRuntime(params: {
       transportType: resolved.transportType,
       detachStderr: resolved.detachStderr,
     };
-    await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+    try {
+      await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+    } catch (err) {
+      // Clean up transport/child-process on connection failure (including timeouts)
+      // to avoid leaking stdio processes or open sockets across retries.
+      await disposeSession(session).catch(() => {});
+      throw err;
+    }
     // Guard: dispose() may have been called while we were connecting.
     // Close this session immediately to avoid leaking transports or child processes.
     if (disposed) {
