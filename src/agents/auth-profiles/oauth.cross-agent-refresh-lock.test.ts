@@ -148,9 +148,11 @@ describe("cross-agent OAuth refresh serialization", () => {
     });
 
     const operatorResolve = resolveFromAgent(operatorAgentDir, profileId);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await vi.waitFor(() => {
+      expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+      expect(releaseFirstRefresh).not.toBeNull();
+    });
     const selfAnalysisResolve = resolveFromAgent(selfAnalysisAgentDir, profileId);
-    await new Promise((resolve) => setTimeout(resolve, 25));
 
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
     expect(releaseFirstRefresh).not.toBeNull();
@@ -176,11 +178,21 @@ describe("cross-agent OAuth refresh serialization", () => {
     const mainStore = JSON.parse(
       await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
+    const operatorStore = JSON.parse(
+      await fs.readFile(path.join(operatorAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
     const selfAnalysisStore = JSON.parse(
       await fs.readFile(path.join(selfAnalysisAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
 
     expect(mainStore.profiles[profileId]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-access-token",
+      refresh: "fresh-refresh-token",
+      expires: refreshedAt,
+    });
+    expect(operatorStore.profiles[profileId]).toMatchObject({
       type: "oauth",
       provider: "openai-codex",
       access: "fresh-access-token",
