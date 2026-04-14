@@ -111,10 +111,51 @@ type ResolvedChannelMessageActionDiscovery = {
   mediaSourceParams: readonly string[];
 };
 
+type MessageToolMediaSourceParamMap = Partial<Record<ChannelMessageActionName, readonly string[]>>;
+
+function normalizeMessageToolMediaSourceParams(
+  mediaSourceParams: ChannelMessageToolDiscovery["mediaSourceParams"],
+  action?: ChannelMessageActionName,
+): readonly string[] {
+  if (Array.isArray(mediaSourceParams)) {
+    return mediaSourceParams;
+  }
+  if (!mediaSourceParams || typeof mediaSourceParams !== "object") {
+    return [];
+  }
+  const scopedMediaSourceParams = mediaSourceParams as MessageToolMediaSourceParamMap;
+  if (action) {
+    const scoped = scopedMediaSourceParams[action];
+    return Array.isArray(scoped) ? scoped : [];
+  }
+  return Object.values(scopedMediaSourceParams).flatMap((scoped) =>
+    Array.isArray(scoped) ? scoped : [],
+  );
+}
+
+function resolveCurrentChannelPluginActions(channel?: string): {
+  pluginId: string;
+  actions: ChannelActions;
+} | null {
+  const channelId = resolveMessageActionDiscoveryChannelId(channel);
+  if (!channelId) {
+    return null;
+  }
+  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
+  if (!plugin?.actions) {
+    return null;
+  }
+  return {
+    pluginId: plugin.id,
+    actions: plugin.actions,
+  };
+}
+
 export function resolveMessageActionDiscoveryForPlugin(params: {
   pluginId: string;
   actions?: ChannelActions;
   context: ChannelMessageActionDiscoveryContext;
+  action?: ChannelMessageActionName;
   includeActions?: boolean;
   includeCapabilities?: boolean;
   includeSchema?: boolean;
@@ -144,9 +185,10 @@ export function resolveMessageActionDiscoveryForPlugin(params: {
     schemaContributions: params.includeSchema
       ? normalizeToolSchemaContributions(described?.schema)
       : [],
-    mediaSourceParams: Array.isArray(described?.mediaSourceParams)
-      ? described.mediaSourceParams
-      : [],
+    mediaSourceParams: normalizeMessageToolMediaSourceParams(
+      described?.mediaSourceParams,
+      params.action,
+    ),
   };
 }
 
@@ -193,21 +235,18 @@ export function listChannelMessageCapabilitiesForChannel(params: {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
 }): ChannelMessageCapability[] {
-  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
-  if (!channelId) {
+  const pluginActions = resolveCurrentChannelPluginActions(params.channel);
+  if (!pluginActions) {
     return [];
   }
-  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions
-    ? Array.from(
-        resolveMessageActionDiscoveryForPlugin({
-          pluginId: plugin.id,
-          actions: plugin.actions,
-          context: createMessageActionDiscoveryContext(params),
-          includeCapabilities: true,
-        }).capabilities,
-      )
-    : [];
+  return Array.from(
+    resolveMessageActionDiscoveryForPlugin({
+      pluginId: pluginActions.pluginId,
+      actions: pluginActions.actions,
+      context: createMessageActionDiscoveryContext(params),
+      includeCapabilities: true,
+    }).capabilities,
+  );
 }
 
 function mergeToolSchemaProperties(
@@ -267,6 +306,7 @@ export function resolveChannelMessageToolSchemaProperties(params: {
 
 export function resolveChannelMessageToolMediaSourceParamKeys(params: {
   cfg: OpenClawConfig;
+  action?: ChannelMessageActionName;
   channel?: string;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
@@ -278,19 +318,15 @@ export function resolveChannelMessageToolMediaSourceParamKeys(params: {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
 }): string[] {
-  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
-  if (!channelId) {
+  const pluginActions = resolveCurrentChannelPluginActions(params.channel);
+  if (!pluginActions) {
     return [];
   }
-  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
-  if (!plugin?.actions) {
-    return [];
-  }
-
   const described = resolveMessageActionDiscoveryForPlugin({
-    pluginId: plugin.id,
-    actions: plugin.actions,
+    pluginId: pluginActions.pluginId,
+    actions: pluginActions.actions,
     context: createMessageActionDiscoveryContext(params),
+    action: params.action,
     includeSchema: false,
   });
   return Array.from(new Set(described.mediaSourceParams));

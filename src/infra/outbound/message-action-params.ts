@@ -39,6 +39,7 @@ function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): st
 
 export function resolveExtraActionMediaSourceParamKeys(params: {
   cfg: OpenClawConfig;
+  action?: ChannelMessageActionName;
   channel?: string;
   accountId?: string | null;
   sessionKey?: string | null;
@@ -49,6 +50,7 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
 }): string[] {
   return resolveChannelMessageToolMediaSourceParamKeys({
     cfg: params.cfg,
+    action: params.action,
     channel: params.channel,
     accountId: params.accountId,
     sessionKey: params.sessionKey,

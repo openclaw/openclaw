@@ -140,8 +140,8 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       capabilities: [],
       schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
       mediaSourceParams: listedActions.includes("set-profile")
-        ? MATRIX_PROFILE_MEDIA_SOURCE_PARAMS
-        : [],
+        ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
+        : null,
     };
   },
   supportsAction: ({ action }) => MATRIX_PLUGIN_HANDLED_ACTIONS.has(action),

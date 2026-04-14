@@ -200,7 +200,7 @@ describe("message action capability checks", () => {
     ).toHaveProperty("components");
   });
 
-  it("derives plugin-owned media-source params from message-tool discovery", () => {
+  it("derives plugin-owned media-source params for the current action", () => {
     const mediaPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id: "demo-media",
@@ -212,8 +212,10 @@ describe("message action capability checks", () => {
       }),
       actions: {
         describeMessageTool: () => ({
-          actions: ["set-profile"],
-          mediaSourceParams: ["avatarUrl", "avatarPath"],
+          actions: ["send", "set-profile"],
+          mediaSourceParams: {
+            "set-profile": ["avatarUrl", "avatarPath"],
+          },
           schema: {
             properties: {
               avatarUrl: Type.Optional(Type.String({ description: "Remote avatar URL" })),
@@ -231,7 +233,45 @@ describe("message action capability checks", () => {
     expect(
       resolveChannelMessageToolMediaSourceParamKeys({
         cfg: {} as OpenClawConfig,
+        action: "set-profile",
         channel: "demo-media",
+      }),
+    ).toEqual(["avatarUrl", "avatarPath"]);
+    expect(
+      resolveChannelMessageToolMediaSourceParamKeys({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        channel: "demo-media",
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps flat media-source param discovery for backward compatibility", () => {
+    const mediaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-media-flat",
+        label: "Demo Media Flat",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["set-profile"],
+          mediaSourceParams: ["avatarUrl", "avatarPath"],
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "demo-media-flat", source: "test", plugin: mediaPlugin }]),
+    );
+
+    expect(
+      resolveChannelMessageToolMediaSourceParamKeys({
+        cfg: {} as OpenClawConfig,
+        action: "set-profile",
+        channel: "demo-media-flat",
       }),
     ).toEqual(["avatarUrl", "avatarPath"]);
   });

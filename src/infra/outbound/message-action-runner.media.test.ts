@@ -536,10 +536,18 @@ describe("runMessageAction media behavior", () => {
           isConfigured: () => true,
         },
       }),
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "profile-demo-target" }),
+        sendText: async () => ({ channel: "profile-demo", messageId: "msg-test" }),
+        sendMedia: async () => ({ channel: "profile-demo", messageId: "msg-test" }),
+      },
       actions: {
         describeMessageTool: () => ({
-          actions: ["set-profile"],
-          mediaSourceParams: ["avatarPath", "avatarUrl"],
+          actions: ["send", "set-profile"],
+          mediaSourceParams: {
+            "set-profile": ["avatarPath", "avatarUrl"],
+          },
           schema: {
             properties: {
               avatarPath: Type.Optional(Type.String({ description: "Local avatar path" })),
@@ -548,7 +556,7 @@ describe("runMessageAction media behavior", () => {
             },
           },
         }),
-        supportsAction: ({ action }) => action === "set-profile",
+        supportsAction: ({ action }) => action === "set-profile" || action === "send",
         handleAction: async ({ params, mediaLocalRoots }) =>
           jsonResult({
             ok: true,
@@ -621,6 +629,29 @@ describe("runMessageAction media behavior", () => {
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
+    });
+
+    it("does not apply set-profile media params to send actions", async () => {
+      await withSandbox(async (sandboxDir) => {
+        const avatarUrl = "data:text/plain;base64,SGVsbG8=";
+        const result = await runMessageAction({
+          cfg: {} as OpenClawConfig,
+          action: "send",
+          dryRun: true,
+          params: {
+            channel: "profile-demo",
+            target: "@profile-demo",
+            message: "hi",
+            avatarUrl,
+          },
+          sandboxRoot: sandboxDir,
+        });
+
+        expect(result.kind).toBe("send");
+        expect(result.sendResult).toMatchObject({
+          channel: "profile-demo",
+        });
+      });
     });
   });
 
