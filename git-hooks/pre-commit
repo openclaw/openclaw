@@ -65,6 +65,9 @@ git add -- "${files[@]}"
 # exist. Only run the repo-wide validation gate inside a real checkout.
 if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; then
   cd "$ROOT_DIR"
+  if ! command -v pnpm >/dev/null 2>&1 && command -v corepack >/dev/null 2>&1; then
+    corepack enable >/dev/null 2>&1 || true
+  fi
   case "${FAST_COMMIT:-}" in
     1|true|TRUE|yes|YES|on|ON)
       echo "FAST_COMMIT enabled: skipping pnpm check in pre-commit hook."
