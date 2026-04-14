@@ -118,10 +118,7 @@ export function formatContextWindowBlockMessage(params: {
     return base;
   }
   if (params.guard.source === "agentContextTokens") {
-    return (
-      `${base} OpenClaw is capped by agents.defaults.contextTokens. ` +
-      `Raise that cap or choose a larger model.`
-    );
+    return `${base} OpenClaw is capped by agents.defaults.contextTokens. ` + `Raise that cap.`;
   }
   if (params.guard.source === "modelsConfig") {
     return (

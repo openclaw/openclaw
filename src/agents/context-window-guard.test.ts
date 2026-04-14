@@ -273,12 +273,13 @@ describe("context-window-guard", () => {
       info: { tokens: 8_000, source: "agentContextTokens" },
     });
 
-    expect(
-      formatContextWindowBlockMessage({
-        guard,
-        runtimeBaseUrl: "http://127.0.0.1:11434/v1",
-      }),
-    ).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+    const message = formatContextWindowBlockMessage({
+      guard,
+      runtimeBaseUrl: "http://127.0.0.1:11434/v1",
+    });
+
+    expect(message).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+    expect(message).not.toContain("choose a larger model");
   });
 
   it("points model config block remediation at contextWindow/contextTokens", () => {
