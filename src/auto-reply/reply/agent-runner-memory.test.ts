@@ -8,7 +8,11 @@ import {
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
-import { runMemoryFlushIfNeeded, setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.js";
+import {
+  runMemoryFlushIfNeeded,
+  runPreflightCompactionIfNeeded,
+  setAgentRunnerMemoryTestDeps,
+} from "./agent-runner-memory.js";
 import type { FollowupRun } from "./queue.js";
 
 const runWithModelFallbackMock = vi.fn();
@@ -286,5 +290,256 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.silentExpected).toBe(true);
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+});
+
+describe("runPreflightCompactionIfNeeded", () => {
+  const compactEmbeddedPiSessionMock = vi.fn();
+  const updateSessionStoreEntryMock = vi.fn();
+
+  beforeEach(() => {
+    compactEmbeddedPiSessionMock.mockReset();
+    updateSessionStoreEntryMock.mockReset();
+    setAgentRunnerMemoryTestDeps({
+      compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
+      runWithModelFallback: runWithModelFallbackMock as never,
+      runEmbeddedPiAgent: runEmbeddedPiAgentMock as never,
+      refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
+      incrementCompactionCount: incrementCompactionCountMock as never,
+      registerAgentRunContext: vi.fn() as never,
+      updateSessionStoreEntry: updateSessionStoreEntryMock as never,
+      randomUUID: () => "00000000-0000-0000-0000-000000000002",
+      now: () => 1_700_000_000_000,
+    });
+  });
+
+  afterEach(() => {
+    setAgentRunnerMemoryTestDeps();
+  });
+
+  function createReplyOperation() {
+    return {
+      abortSignal: new AbortController().signal,
+      setPhase: vi.fn(),
+      updateSessionId: vi.fn(),
+    } as never;
+  }
+
+  function createFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
+    return {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "whatsapp",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+        skipProviderRuntimeHints: true,
+        ...overrides,
+      },
+    } as unknown as FollowupRun;
+  }
+
+  it("triggers compaction when fresh totalTokens exceeds threshold (100% cache hit)", async () => {
+    // Simulates the bug from #66520: Anthropic prompt cache absorbs 305k tokens,
+    // totalTokens is fresh at 305k, context window is 200k. Compaction should fire.
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 305_000,
+      totalTokensFresh: true,
+    };
+    const sessionStore = { main: sessionEntry };
+    compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { tokensBefore: 305_000, tokensAfter: 50_000 },
+    });
+    incrementCompactionCountMock.mockResolvedValueOnce(1);
+
+    const result = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 30_000,
+            },
+          },
+        },
+      },
+      followupRun: createFollowupRun(),
+      defaultModel: "claude-sonnet-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // Compaction should have been triggered
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session",
+        trigger: "budget",
+      }),
+    );
+    // Note: incrementCompactionCount is called via direct module import (not
+    // memoryDeps), so it is not captured by the mock. The key assertion is that
+    // compactEmbeddedPiSession was invoked — verifying the threshold check
+    // now uses fresh totalTokens including cached tokens.
+    expect(result).toBeDefined();
+  });
+
+  it("skips compaction when fresh totalTokens is below threshold", async () => {
+    // Fresh tokens at 50k, context window 200k, threshold ~166k → no compaction
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+      totalTokensFresh: true,
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const result = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 30_000,
+            },
+          },
+        },
+      },
+      followupRun: createFollowupRun(),
+      defaultModel: "claude-sonnet-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // Compaction should NOT have been triggered
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(result).toBe(sessionEntry);
+  });
+
+  it("triggers compaction with partial cache hit when total exceeds threshold", async () => {
+    // Partial cache: totalTokens = 180k (> 166k threshold) → compaction fires
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 180_000,
+      totalTokensFresh: true,
+    };
+    const sessionStore = { main: sessionEntry };
+    compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { tokensBefore: 180_000, tokensAfter: 40_000 },
+    });
+    incrementCompactionCountMock.mockResolvedValueOnce(1);
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 30_000,
+            },
+          },
+        },
+      },
+      followupRun: createFollowupRun(),
+      defaultModel: "claude-sonnet-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves 0% cache hit behavior (stale tokens use transcript fallback)", async () => {
+    // When totalTokensFresh is false (no cache hit data, stale), the function
+    // falls through to the transcript-based estimation path.
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 305_000,
+      totalTokensFresh: false,
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const result = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 30_000,
+            },
+          },
+        },
+      },
+      followupRun: createFollowupRun(),
+      defaultModel: "claude-sonnet-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // With stale tokens and no transcript file, compaction falls through to
+    // the transcript estimation path but has no data → no compaction.
+    // The key is: this path is unchanged from before the fix.
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(result).toBe(sessionEntry);
+  });
+
+  it("skips compaction on heartbeat even with fresh tokens above threshold", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 305_000,
+      totalTokensFresh: true,
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const result = await runPreflightCompactionIfNeeded({
+      cfg: {},
+      followupRun: createFollowupRun(),
+      defaultModel: "claude-sonnet-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      isHeartbeat: true,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(result).toBe(sessionEntry);
   });
 });
