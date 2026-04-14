@@ -26,6 +26,8 @@ export type ResolvedSessionMaintenanceConfigRuntime = {
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
+  transcriptRotateBytes: number | null;
+  transcriptMaxLines: number | null;
 };
 
 export type SessionMaintenanceApplyReportRuntime = {

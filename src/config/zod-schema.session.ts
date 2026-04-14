@@ -81,6 +81,8 @@ export const SessionSchema = z
         resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number()]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
+        transcriptRotateBytes: z.union([z.string(), z.number()]).optional(),
+        transcriptMaxLines: z.number().int().positive().optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
@@ -145,6 +147,19 @@ export const SessionSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["highWaterBytes"],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
+        if (val.transcriptRotateBytes !== undefined) {
+          try {
+            parseByteSize(normalizeStringifiedOptionalString(val.transcriptRotateBytes) ?? "", {
+              defaultUnit: "b",
+            });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["transcriptRotateBytes"],
               message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }

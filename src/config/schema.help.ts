@@ -1363,6 +1363,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent sessions-directory disk budget (for example `500mb`). Use this to cap session storage per agent; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup.",
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
+  "session.maintenance.transcriptRotateBytes":
+    "Rotate individual transcript `.jsonl` files when they exceed this size (e.g. `10mb`). When exceeded, the older portion is archived and the most recent `transcriptMaxLines` lines are kept. Default: disabled (null).",
+  "session.maintenance.transcriptMaxLines":
+    "Maximum number of lines to keep per transcript `.jsonl` file after rotation. The most recent N lines are preserved; older lines are archived. Default: disabled (null).",
   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",

@@ -40,6 +40,7 @@ import {
   pruneStaleEntries,
   resolveMaintenanceConfig,
   rotateSessionFile,
+  rotateTranscriptFiles,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
@@ -171,6 +172,7 @@ export {
   pruneStaleEntries,
   resolveMaintenanceConfig,
   rotateSessionFile,
+  rotateTranscriptFiles,
 };
 export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
 
@@ -373,6 +375,9 @@ async function saveSessionStoreUnlocked(
 
       // Rotate the on-disk file if it exceeds the size threshold.
       await rotateSessionFile(storePath, maintenance.rotateBytes);
+
+      // Rotate oversized transcript .jsonl files.
+      await rotateTranscriptFiles({ storePath, maintenance });
 
       const diskBudget = await enforceSessionDiskBudget({
         store,

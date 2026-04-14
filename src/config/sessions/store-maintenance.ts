@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
 import { loadConfig } from "../config.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { formatSessionArchiveTimestamp, isPrimarySessionTranscriptFileName } from "./artifacts.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
@@ -34,6 +36,8 @@ export type ResolvedSessionMaintenanceConfig = {
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
+  transcriptRotateBytes: number | null;
+  transcriptMaxLines: number | null;
 };
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
@@ -129,6 +133,31 @@ function resolveHighWaterBytes(
   }
 }
 
+function resolveTranscriptRotateBytes(maintenance?: SessionMaintenanceConfig): number | null {
+  const raw = maintenance?.transcriptRotateBytes;
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
+    return null;
+  }
+  try {
+    return parseByteSize(normalized, { defaultUnit: "b" });
+  } catch {
+    return null;
+  }
+}
+
+function resolveTranscriptMaxLines(maintenance?: SessionMaintenanceConfig): number | null {
+  const raw = maintenance?.transcriptMaxLines;
+  if (raw == null) {
+    return null;
+  }
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 /**
  * Resolve maintenance settings from openclaw.json (`session.maintenance`).
  * Falls back to built-in defaults when config is missing or unset.
@@ -146,6 +175,8 @@ export function resolveMaintenanceConfigFromInput(
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
+    transcriptRotateBytes: resolveTranscriptRotateBytes(maintenance),
+    transcriptMaxLines: resolveTranscriptMaxLines(maintenance),
   };
 }
 
@@ -336,4 +367,152 @@ export async function rotateSessionFile(
   }
 
   return true;
+}
+
+/**
+ * Scan the sessions directory for `.jsonl` transcript files that exceed
+ * `transcriptRotateBytes` and rotate them. For each oversized file:
+ *
+ * 1. Archive the current file as `<name>.jsonl.bak.<timestamp>`
+ * 2. Keep only the last `transcriptMaxLines` lines (if configured) in the
+ *    replacement file; otherwise write an empty file with just the header line.
+ * 3. Clean up old `.bak.*` archives (keep 3 most recent per base name).
+ *
+ * Returns the number of transcript files rotated.
+ */
+export async function rotateTranscriptFiles(params: {
+  storePath: string;
+  maintenance: ResolvedSessionMaintenanceConfig;
+}): Promise<number> {
+  const { storePath, maintenance } = params;
+  const maxBytes = maintenance.transcriptRotateBytes;
+  if (maxBytes == null || maxBytes <= 0) {
+    return 0;
+  }
+
+  const sessionsDir = path.dirname(path.resolve(storePath));
+  let rotated = 0;
+  const maxBytesChecked = maxBytes; // Captured for closure (TS null narrowing)
+
+  // Walk all subdirectories under sessionsDir to find .jsonl files
+  async function walkDir(dir: string): Promise<void> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walkDir(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!isPrimarySessionTranscriptFileName(entry.name)) {
+        continue;
+      }
+
+      // Check file size
+      let stat: fs.Stats;
+      try {
+        stat = await fs.promises.stat(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.size <= maxBytesChecked) {
+        continue;
+      }
+
+      // Rotate: archive current file, write replacement with tail lines
+      const archiveTimestamp = formatSessionArchiveTimestamp();
+      const backupPath = `${fullPath}.bak.${archiveTimestamp}`;
+      try {
+        await fs.promises.rename(fullPath, backupPath);
+      } catch {
+        continue;
+      }
+
+      // Write replacement file with most recent lines (or empty if no maxLines)
+      const maxLines = maintenance.transcriptMaxLines;
+      try {
+        if (maxLines != null && maxLines > 0) {
+          // Read the last N lines from the archived file
+          const tailLines = await readLastNLines(backupPath, maxLines);
+          await fs.promises.writeFile(fullPath, tailLines.join("\n") + "\n", "utf-8");
+        } else {
+          // No maxLines configured — write empty replacement
+          await fs.promises.writeFile(fullPath, "", "utf-8");
+        }
+      } catch {
+        // Best-effort; the archive is safe even if replacement write fails.
+      }
+
+      log.info("rotated transcript file", {
+        file: path.relative(sessionsDir, fullPath),
+        sizeBytes: stat.size,
+        maxBytes: maxBytesChecked,
+        archiveTimestamp,
+      });
+      rotated++;
+
+      // Clean up old backups for this base name (keep 3 most recent)
+      await cleanupOldTranscriptBackups(fullPath, dir, entry.name);
+    }
+  }
+
+  await walkDir(sessionsDir);
+  return rotated;
+}
+
+/**
+ * Read the last N lines from a text file efficiently using readline.
+ * Returns lines in original order (oldest to newest within the tail).
+ */
+async function readLastNLines(filePath: string, n: number): Promise<string[]> {
+  const lines: string[] = [];
+  const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  for await (const line of rl) {
+    lines.push(line);
+    if (lines.length > n) {
+      lines.shift();
+    }
+  }
+  return lines;
+}
+
+/**
+ * Remove old `.bak.*` archives for a given transcript file, keeping only
+ * the 3 most recent.
+ */
+async function cleanupOldTranscriptBackups(
+  originalPath: string,
+  dir: string,
+  baseName: string,
+): Promise<void> {
+  try {
+    const files = await fs.promises.readdir(dir);
+    const backups = files
+      .filter((f) => f.startsWith(`${baseName}.bak.`))
+      .toSorted()
+      .toReversed();
+
+    const maxBackups = 3;
+    if (backups.length > maxBackups) {
+      const toDelete = backups.slice(maxBackups);
+      for (const old of toDelete) {
+        await fs.promises.unlink(path.join(dir, old)).catch(() => undefined);
+      }
+      log.info("cleaned up old transcript backups", {
+        file: baseName,
+        deleted: toDelete.length,
+      });
+    }
+  } catch {
+    // Best-effort cleanup.
+  }
 }

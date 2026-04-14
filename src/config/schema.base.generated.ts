@@ -19594,6 +19594,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
               },
+              transcriptRotateBytes: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "number",
+                  },
+                ],
+                title: "Transcript Rotate Size",
+                description:
+                  "Rotate individual transcript `.jsonl` files when they exceed this size (e.g. `10mb`). When exceeded, the older portion is archived and the most recent `transcriptMaxLines` lines are kept. Default: disabled (null).",
+              },
+              transcriptMaxLines: {
+                type: "number",
+                title: "Transcript Max Lines",
+                description:
+                  "Maximum number of lines to keep per transcript `.jsonl` file after rotation. The most recent N lines are preserved; older lines are archived. Default: disabled (null).",
+              },
             },
             additionalProperties: false,
             title: "Session Maintenance",
@@ -26189,6 +26208,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "session.maintenance.highWaterBytes": {
       label: "Session Disk High-water Target",
       help: "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
+      tags: ["storage"],
+    },
+    "session.maintenance.transcriptRotateBytes": {
+      label: "Transcript Rotate Size",
+      help: "Rotate individual transcript `.jsonl` files when they exceed this size (e.g. `10mb`). When exceeded, the older portion is archived and the most recent `transcriptMaxLines` lines are kept. Default: disabled (null).",
+      tags: ["storage"],
+    },
+    "session.maintenance.transcriptMaxLines": {
+      label: "Transcript Max Lines",
+      help: "Maximum number of lines to keep per transcript `.jsonl` file after rotation. The most recent N lines are preserved; older lines are archived. Default: disabled (null).",
       tags: ["storage"],
     },
     "cron.enabled": {

@@ -210,6 +210,20 @@ export type SessionMaintenanceConfig = {
    * Default: 80% of maxDiskBytes.
    */
   highWaterBytes?: number | string;
+  /**
+   * Rotate individual transcript `.jsonl` files when they exceed this size
+   * (e.g. "10mb"). When a file exceeds this threshold, the older portion is
+   * archived as `<name>.jsonl.bak.<timestamp>` and the tail (most recent
+   * `transcriptMaxLines` lines) is kept. Default: null (disabled).
+   */
+  transcriptRotateBytes?: number | string;
+  /**
+   * Maximum number of lines to keep per transcript `.jsonl` file after rotation.
+   * The most recent N lines are preserved; older lines are archived.
+   * Default: null (no line cap — entire file is archived on rotation,
+   * resulting in an empty replacement file with just the session header).
+   */
+  transcriptMaxLines?: number;
 };
 
 export type LoggingConfig = {
