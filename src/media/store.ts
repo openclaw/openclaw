@@ -206,7 +206,6 @@ async function downloadToFile(
     resolvePinnedHostnameImpl(parsedUrl.hostname)
       .then((pinned) => {
         const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
-          // Follow redirects
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
             const location = res.headers.location;
             if (!location || maxRedirects <= 0) {
@@ -390,7 +389,6 @@ export async function saveMediaSource(
     await fs.rename(tempDest, finalDest);
     return buildSavedMediaResult({ dir, id, size, contentType: mime });
   }
-  // local path
   try {
     const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes });
     const mime = await detectMime({ buffer, filePath: source });

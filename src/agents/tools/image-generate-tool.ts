@@ -460,9 +460,10 @@ export function createImageGenerateTool(options?: {
         modelOverride: model,
       });
       const count = resolveRequestedCount(params);
+      const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
-        maxBytes: resolveConfiguredMediaMaxBytes(effectiveCfg),
+        maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
@@ -535,7 +536,7 @@ export function createImageGenerateTool(options?: {
             image.buffer,
             image.mimeType,
             "tool-image-generation",
-            resolveConfiguredMediaMaxBytes(effectiveCfg),
+            configuredMediaMaxBytes,
             filename || image.fileName,
           ),
         ),
