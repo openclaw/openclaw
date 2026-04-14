@@ -561,18 +561,19 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
-  let entry =
-    params.sessionEntry ??
-    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
-  // Resolve the flush model override early so that contextWindowTokens reflects
-  // the actual model that will execute the flush turn.
+  // Resolve the flush model override early so that contextWindowTokens and
+  // the CLI eligibility check both reflect the actual flush model.
   const flushModelOverride = resolveMemoryFlushModelOverride({
     cfg: params.cfg,
     sessionProvider: params.followupRun.run.provider,
     sessionModel: params.followupRun.run.model,
   });
+  // Use the resolved flush provider for CLI eligibility, not the session provider.
+  const isCli = isCliProvider(flushModelOverride.provider, params.cfg);
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  let entry =
+    params.sessionEntry ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: flushModelOverride.provider,
