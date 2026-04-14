@@ -247,17 +247,27 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     await execFileAsync(ytDlpPath, ['--version'], { signal });
     
     // Verify integrity of existing binary
+    let integrityCheckPassed = false;
     try {
       const expectedHash = await getExpectedChecksum(signal);
       const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
       if (!isValid) {
         console.warn('Existing yt-dlp binary failed integrity check, will re-download');
-        throw new Error('Integrity check failed');
+        // Don't throw here - we'll handle this by re-downloading
+        integrityCheckPassed = false;
+      } else {
+        integrityCheckPassed = true;
       }
     } catch (checksumError) {
-      // If we can't verify (network issue, etc), assume existing binary is fine
+      // Network or parsing error - can't verify, assume existing binary is fine
       // but log warning
-      console.warn('Could not verify existing yt-dlp binary:', checksumError);
+      console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
+      integrityCheckPassed = true; // Assume binary is fine when verification is impossible
+    }
+    
+    // If integrity check failed (binary was corrupted), proceed to download fresh copy
+    if (!integrityCheckPassed) {
+      throw new Error('Integrity check failed - need fresh download');
     }
     
     return ytDlpPath;
