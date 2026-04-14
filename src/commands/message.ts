@@ -74,16 +74,27 @@ export async function messageCommand(
   const dryRun = opts.dryRun === true;
   const needsSpinner = !json && !dryRun && (action === "send" || action === "poll");
 
-  const result = needsSpinner
-    ? await withProgress(
-        {
-          label: action === "poll" ? "Sending poll..." : "Sending...",
-          indeterminate: true,
-          enabled: true,
-        },
-        run,
-      )
-    : await run();
+  let result;
+  if (dryRun) {
+    // Dry-run mode: return mock result without actually sending
+    result = {
+      channel: normalizeOptionalString(opts.channel) || "unknown",
+      messageId: "dry-run",
+      success: true,
+      dryRun: true,
+    };
+  } else {
+    result = needsSpinner
+      ? await withProgress(
+          {
+            label: action === "poll" ? "Sending poll..." : "Sending...",
+            indeterminate: true,
+            enabled: true,
+          },
+          run,
+        )
+      : await run();
+  }
 
   if (json) {
     writeRuntimeJson(runtime, buildMessageCliJson(result));

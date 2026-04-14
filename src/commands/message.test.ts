@@ -493,4 +493,51 @@ describe("messageCommand", () => {
       expect.any(Object),
     );
   });
+
+  it("skips sending when dry-run is enabled (issue #66549)", async () => {
+    // Test for issue #66549: --dry-run should not actually send the message
+    callGatewayMock.mockResolvedValueOnce({ messageId: "should-not-be-called" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createStubPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "gateway",
+            },
+          }),
+        },
+      ]),
+    );
+    const deps = makeDeps();
+    
+    // Mock the writeRuntimeJson to capture dry-run output
+    const writeRuntimeJsonSpy = vi.spyOn(runtime, "log");
+    
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456789",
+        message: "test message that should not be sent",
+        dryRun: true, // This should prevent actual sending
+      },
+      deps,
+      runtime,
+    );
+
+    // Verify that gateway was NOT called (message was not actually sent)
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    
+    // Verify that the output shows it was a dry run
+    expect(writeRuntimeJsonSpy).toHaveBeenCalled();
+    const logCalls = writeRuntimeJsonSpy.mock.calls.flat();
+    const hasChannelInfo = logCalls.some((call: unknown) => 
+      typeof call === "string" && call.includes("telegram")
+    );
+    expect(hasChannelInfo).toBe(true);
+  });
 });
