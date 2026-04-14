@@ -545,7 +545,8 @@ async function processAgentMessage(params: {
   );
 
   // Non-command sender gate: if dmPolicy is not "open" and sender not in allowlist, skip silently
-  if (!authz.shouldComputeAuth && authz.dmPolicy !== "open" && !authz.senderAllowed) {
+  // Only applies to DM — group messages are gated by groupPolicy below
+  if (!isGroup && !authz.shouldComputeAuth && authz.dmPolicy !== "open" && !authz.senderAllowed) {
     log?.(`[wecom-agent] sender ${fromUser} not allowed by dmPolicy=${authz.dmPolicy}, skipping`);
     return;
   }

@@ -417,7 +417,9 @@ export async function startAgentForStream(params: {
     rawBody,
     senderUserId: userid,
   });
+  // DM policy gate only applies to direct messages — group messages are gated by groupPolicy
   if (
+    chatType !== "group" &&
     !earlyAuthz.shouldComputeAuth &&
     earlyAuthz.dmPolicy !== "open" &&
     !earlyAuthz.senderAllowed
@@ -807,8 +809,13 @@ export async function startAgentForStream(params: {
     `[webhook] authz: dmPolicy=${authz.dmPolicy} shouldCompute=${authz.shouldComputeAuth} sender=${userid.toLowerCase()} senderAllowed=${authz.senderAllowed} authorizerConfigured=${authz.authorizerConfigured} commandAuthorized=${String(commandAuthorized)}`,
   );
 
-  // Non-command sender gate: if dmPolicy is not "open" and sender not in allowlist, skip silently
-  if (!authz.shouldComputeAuth && authz.dmPolicy !== "open" && !authz.senderAllowed) {
+  // Non-command sender gate: only applies to DM (group messages are gated by groupPolicy below)
+  if (
+    chatType !== "group" &&
+    !authz.shouldComputeAuth &&
+    authz.dmPolicy !== "open" &&
+    !authz.senderAllowed
+  ) {
     target.runtime.log?.(
       `[webhook] sender ${userid} not allowed by dmPolicy=${authz.dmPolicy}, skipping`,
     );
