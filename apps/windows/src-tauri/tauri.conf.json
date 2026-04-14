@@ -1,0 +1,64 @@
+{
+  "package": {
+    "productName": "OpenClaw",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": true,
+      "shell": {
+        "all": false,
+        "sidecar": true,
+        "scope": [
+          {
+            "name": "binaries/openclaw",
+            "sidecar": true,
+            "args": ["gateway", "run"]
+          }
+        ]
+      }
+    },
+    "bundle": {
+      "active": true,
+      "targets": ["msi", "nsis"],
+      "identifier": "com.openclaw.gateway",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.png",
+        "icons/icon.ico"
+      ],
+      "externalBin": ["binaries/openclaw"],
+      "windows": {
+        "wix": {
+          "language": "en-US",
+          "template": null
+        },
+        "nsis": {
+          "installMode": "perMachine"
+        }
+      }
+    },
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenClaw — Aliyev Ecosystem",
+        "url": "http://localhost:18789",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "decorations": true,
+        "visible": false
+      }
+    ],
+    "systemTray": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": false
+    }
+  }
+}

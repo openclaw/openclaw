@@ -1,0 +1,26 @@
+[package]
+name = "openclaw-desktop"
+version = "1.0.0"
+edition = "2021"
+description = "OpenClaw Windows wrapper"
+authors = ["Aliyev Ecosystem"]
+
+[dependencies]
+tauri = { version = "1.5", features = ["shell-open", "system-tray", "devtools", "notification"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5.0"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
