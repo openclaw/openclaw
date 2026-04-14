@@ -69,7 +69,9 @@ describe("createBlockReplyDeliveryHandler", () => {
 
     await handler({ text: "text only" });
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "text only" }),
+    );
     expect(directlySentBlockKeys.size).toBe(1);
   });
 
