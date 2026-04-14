@@ -3,11 +3,11 @@ import { parseFaceTags } from "./text-parsing.js";
 
 describe("parseFaceTags", () => {
   it("returns empty string when input is undefined", () => {
-    expect(parseFaceTags(undefined as unknown as string)).toBe("");
+    expect(parseFaceTags(undefined)).toBe("");
   });
 
   it("returns empty string when input is null", () => {
-    expect(parseFaceTags(null as unknown as string)).toBe("");
+    expect(parseFaceTags(null)).toBe("");
   });
 
   it("returns empty string when input is empty string", () => {
