@@ -1,17 +1,16 @@
 import path from "node:path";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolvePathFromInput } from "../../agents/path-policy.js";
+import { resolvePathFromInput, toRelativeWorkspacePath } from "../../agents/path-policy.js";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { readPathWithinRoot } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
-import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../../media/store.js";
+import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -19,6 +18,7 @@ const FILE_URL_RE = /^file:\/\//i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
+const AGENT_STATE_MEDIA_DIRNAME = path.join(".openclaw", "media");
 const MANAGED_GLOBAL_MEDIA_SUBDIRS = new Set(["outbound"]);
 let cachedPreferredTmpRoot: string | null | undefined;
 
@@ -49,8 +49,13 @@ function resolvePreferredReplyMediaTmpRoot(): string | undefined {
   return cachedPreferredTmpRoot ?? undefined;
 }
 
-function buildVolatileReplyMediaRoots(): string[] {
-  const roots: string[] = [];
+function buildVolatileReplyMediaRoots(params: {
+  workspaceDir: string;
+  sandboxRoot?: string;
+}): string[] {
+  const roots = [params.workspaceDir, params.sandboxRoot]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => path.join(path.resolve(root), AGENT_STATE_MEDIA_DIRNAME));
   const preferredTmpRoot = resolvePreferredReplyMediaTmpRoot();
   if (preferredTmpRoot) {
     roots.push(preferredTmpRoot);
@@ -58,29 +63,15 @@ function buildVolatileReplyMediaRoots(): string[] {
   return roots;
 }
 
-function resolveRootScopedReplyMediaBoundary(params: {
+function isAllowedAbsoluteReplyMediaPath(params: {
   candidate: string;
   workspaceDir: string;
   sandboxRoot?: string;
-}): string | undefined {
-  if (isPathInside(params.workspaceDir, params.candidate)) {
-    return path.resolve(params.workspaceDir);
-  }
-  if (params.sandboxRoot && isPathInside(params.sandboxRoot, params.candidate)) {
-    return path.resolve(params.sandboxRoot);
-  }
-  return undefined;
-}
-
-function isAllowedAbsoluteReplyMediaPath(params: { candidate: string }): boolean {
+}): boolean {
   if (isManagedGlobalReplyMediaPath(params.candidate)) {
     return true;
   }
-  const preferredTmpRoot = resolvePreferredReplyMediaTmpRoot();
-  if (preferredTmpRoot && isPathInside(preferredTmpRoot, params.candidate)) {
-    return true;
-  }
-  return false;
+  return buildVolatileReplyMediaRoots(params).some((root) => isPathInside(root, params.candidate));
 }
 
 function isLikelyLocalMediaSource(media: string): boolean {
@@ -114,7 +105,6 @@ export function createReplyMediaPathNormalizer(params: {
     agentId,
   });
   const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(params.cfg);
-  const rootScopedReadMaxBytes = configuredMediaMaxBytes ?? MEDIA_MAX_BYTES;
   let sandboxRootPromise: Promise<string | undefined> | undefined;
   const persistedMediaBySource = new Map<string, Promise<string>>();
 
@@ -134,39 +124,10 @@ export function createReplyMediaPathNormalizer(params: {
       return media;
     }
     const sandboxRoot = await resolveSandboxRoot();
-    const rootScopedBoundary = resolveRootScopedReplyMediaBoundary({
-      candidate: media,
+    const volatileRoots = buildVolatileReplyMediaRoots({
       workspaceDir: params.workspaceDir,
       sandboxRoot,
     });
-    if (rootScopedBoundary) {
-      const cached = persistedMediaBySource.get(media);
-      if (cached) {
-        return await cached;
-      }
-      const persistPromise = readPathWithinRoot({
-        rootDir: rootScopedBoundary,
-        filePath: media,
-        maxBytes: rootScopedReadMaxBytes,
-      })
-        .then(async ({ buffer }) => {
-          const saved = await saveMediaBuffer(
-            buffer,
-            undefined,
-            "outbound",
-            configuredMediaMaxBytes,
-            path.basename(media),
-          );
-          return saved.path;
-        })
-        .catch((err) => {
-          persistedMediaBySource.delete(media);
-          throw err;
-        });
-      persistedMediaBySource.set(media, persistPromise);
-      return await persistPromise;
-    }
-    const volatileRoots = buildVolatileReplyMediaRoots();
     if (!volatileRoots.some((root) => isPathInside(root, media))) {
       return media;
     }
@@ -213,14 +174,16 @@ export function createReplyMediaPathNormalizer(params: {
           throw err;
         }
         if (!path.isAbsolute(media)) {
-          return resolvePathFromInput(media, params.workspaceDir);
-        }
-        if (isPathInside(params.workspaceDir, media)) {
-          return media;
+          const relativeWorkspacePath = toRelativeWorkspacePath(params.workspaceDir, media, {
+            cwd: params.workspaceDir,
+          });
+          return resolvePathFromInput(relativeWorkspacePath, params.workspaceDir);
         }
         if (
           isAllowedAbsoluteReplyMediaPath({
             candidate: media,
+            workspaceDir: params.workspaceDir,
+            sandboxRoot,
           })
         ) {
           return media;
@@ -240,14 +203,16 @@ export function createReplyMediaPathNormalizer(params: {
       );
     }
     if (!path.isAbsolute(media)) {
-      return resolvePathFromInput(media, params.workspaceDir);
-    }
-    if (isPathInside(params.workspaceDir, media)) {
-      return media;
+      const relativeWorkspacePath = toRelativeWorkspacePath(params.workspaceDir, media, {
+        cwd: params.workspaceDir,
+      });
+      return resolvePathFromInput(relativeWorkspacePath, params.workspaceDir);
     }
     if (
       isAllowedAbsoluteReplyMediaPath({
         candidate: media,
+        workspaceDir: params.workspaceDir,
+        sandboxRoot,
       })
     ) {
       return media;
