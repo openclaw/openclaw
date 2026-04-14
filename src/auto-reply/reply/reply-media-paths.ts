@@ -12,7 +12,6 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
 import { saveMediaBuffer, saveMediaSource } from "../../media/store.js";
-import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
 
