@@ -34,6 +34,14 @@ describe("parseTableSpans", () => {
     expect(spans).toHaveLength(0);
   });
 
+  it("does not treat thematic break as table separator", () => {
+    // `---` alone is a thematic break (horizontal rule), not a table separator.
+    // Even when preceded by a line containing `|`, it should not form a table.
+    const text = "some | text\n---\nmore text";
+    const spans = parseTableSpans(text);
+    expect(spans).toHaveLength(0);
+  });
+
   it("detects multiple tables", () => {
     const text = [
       "| A | B |",

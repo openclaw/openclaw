@@ -70,7 +70,10 @@ export function convertMarkdownTables(
 // span logic).
 // ---------------------------------------------------------------------------
 
-const TABLE_SEPARATOR_RE = /^\|?[\s:]*-{3,}[\s:|-]*$/;
+// A table separator row must contain at least one `|` to distinguish it from a
+// thematic break (`---`). Example: `| --- | --- |` or `|:---:|---:|`.
+const TABLE_SEPARATOR_RE =
+  /^\|[\s:]*-{3,}[\s:|-]*$|^[\s:]*-{3,}[\s:|-]*\|[\s:|-]*$/;
 
 /**
  * Parse markdown table regions, returning sorted non-overlapping spans.
