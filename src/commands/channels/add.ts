@@ -4,10 +4,12 @@ import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
-import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
@@ -28,16 +30,18 @@ export type ChannelsAddOptions = {
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
   }
   const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
   return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
-    if (entry.id.toLowerCase() === trimmed) {
+    if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }
-    return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
+    return (entry.meta.aliases ?? []).some(
+      (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
+    );
   });
 }
 
@@ -192,7 +196,7 @@ export async function channelsAddCommand(
     return;
   }
 
-  const rawChannel = String(opts.channel ?? "");
+  const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
   let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
@@ -255,7 +259,7 @@ export async function channelsAddCommand(
   if (!channel) {
     const hint = catalogEntry
       ? `Plugin ${catalogEntry.meta.label} could not be loaded after install.`
-      : `Unknown channel: ${String(opts.channel ?? "")}`;
+      : `Unknown channel: ${rawChannel}`;
     runtime.error(hint);
     runtime.exit(1);
     return;

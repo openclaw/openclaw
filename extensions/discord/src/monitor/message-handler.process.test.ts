@@ -158,6 +158,9 @@ vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
   ) => configSessionsMocks.resolveStorePath(path, opts) as never) as never,
 );
 
+const clientModule = await import("../client.js");
+const createDiscordRestClientSpy = vi.spyOn(clientModule, "createDiscordRestClient");
+
 const BASE_CHANNEL_ROUTE = {
   agentId: "main",
   channel: "discord",
@@ -191,7 +194,6 @@ function createNoQueuedDispatchResult() {
 
 async function processStreamOffDiscordMessage() {
   const ctx = await createBaseContext({ discordConfig: { streamMode: "off" } });
-  // oxlint-disable-next-line typescript/no-explicit-any
   await processDiscordMessage(ctx as any);
 }
 
@@ -215,6 +217,7 @@ beforeEach(() => {
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
   resolveStorePath.mockClear();
+  createDiscordRestClientSpy.mockClear();
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
@@ -250,7 +253,6 @@ function getLastDispatchCtx():
 }
 
 async function runProcessDiscordMessage(ctx: unknown): Promise<void> {
-  // oxlint-disable-next-line typescript/no-explicit-any
   await processDiscordMessage(ctx as any);
 }
 
@@ -280,7 +282,7 @@ function expectAckReactionRuntimeOptions(params?: {
     messages.removeAckAfterReply = params.removeAckAfterReply;
   }
   return expect.objectContaining({
-    rest: {},
+    rest: expect.anything(),
     ...(Object.keys(messages).length > 0
       ? { cfg: expect.objectContaining({ messages: expect.objectContaining(messages) }) }
       : {}),
@@ -339,7 +341,7 @@ function expectSinglePreviewEdit() {
     "c1",
     "preview-1",
     { content: "Hello\nWorld" },
-    { rest: {} },
+    expect.objectContaining({ rest: expect.anything() }),
   );
   expect(deliverDiscordReply).not.toHaveBeenCalled();
 }
@@ -351,7 +353,6 @@ describe("processDiscordMessage ack reactions", () => {
       effectiveWasMentioned: false,
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
@@ -371,7 +372,6 @@ describe("processDiscordMessage ack reactions", () => {
       },
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expectReactAckCallAt(0, "👀", {
@@ -392,7 +392,6 @@ describe("processDiscordMessage ack reactions", () => {
       effectiveWasMentioned: true,
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expectReactAckCallAt(0, "👀", {
@@ -400,6 +399,39 @@ describe("processDiscordMessage ack reactions", () => {
       accountId: "default",
       ackReaction: "👀",
     });
+  });
+
+  it("uses separate REST clients for feedback and reply delivery", async () => {
+    const feedbackRest = { post: vi.fn(async () => undefined) };
+    const deliveryRest = { post: vi.fn(async () => undefined) };
+    createDiscordRestClientSpy
+      .mockReturnValueOnce({
+        token: "feedback-token",
+        rest: feedbackRest as never,
+        account: { config: {} } as never,
+      })
+      .mockReturnValueOnce({
+        token: "delivery-token",
+        rest: deliveryRest as never,
+        account: { config: {} } as never,
+      });
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "hello" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext();
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(sendMocks.reactMessageDiscord).toHaveBeenCalled();
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]?.[3]).toEqual(
+      expect.objectContaining({ rest: feedbackRest }),
+    );
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({ rest: deliveryRest }),
+    );
+    expect(feedbackRest).not.toBe(deliveryRest);
   });
 
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
@@ -411,7 +443,6 @@ describe("processDiscordMessage ack reactions", () => {
 
     const ctx = await createBaseContext();
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     const emojis = getReactionEmojis();
@@ -433,7 +464,6 @@ describe("processDiscordMessage ack reactions", () => {
     });
 
     const ctx = await createBaseContext();
-    // oxlint-disable-next-line typescript/no-explicit-any
     const runPromise = processDiscordMessage(ctx as any);
 
     await vi.advanceTimersByTimeAsync(30_001);
@@ -468,7 +498,6 @@ describe("processDiscordMessage ack reactions", () => {
       },
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     const emojis = getReactionEmojis();
@@ -522,7 +551,6 @@ describe("processDiscordMessage ack reactions", () => {
       },
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     const runPromise = processDiscordMessage(ctx as any);
     await vi.advanceTimersByTimeAsync(2_500);
     await vi.runAllTimersAsync();
@@ -551,7 +579,6 @@ describe("processDiscordMessage ack reactions", () => {
       },
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expectRemoveAckCallAt(0, "👀", {
@@ -599,7 +626,6 @@ describe("processDiscordMessage session routing", () => {
       messageChannelId: "dm1",
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(getLastRouteUpdate()).toEqual({
@@ -616,7 +642,6 @@ describe("processDiscordMessage session routing", () => {
       route: BASE_CHANNEL_ROUTE,
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(getLastRouteUpdate()).toEqual({
@@ -652,7 +677,6 @@ describe("processDiscordMessage session routing", () => {
       route: BASE_CHANNEL_ROUTE,
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(getLastDispatchCtx()).toMatchObject({
@@ -679,7 +703,6 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig,
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
   }
 
@@ -741,14 +764,13 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "partial" },
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(editMessageDiscord).toHaveBeenCalledWith(
       "c1",
       "preview-1",
       { content: longReply },
-      { rest: {} },
+      expect.objectContaining({ rest: expect.anything() }),
     );
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
@@ -768,7 +790,6 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
@@ -793,7 +814,6 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createBaseContext({ discordConfig: { streamMode: "off" } });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(deliverDiscordReply).not.toHaveBeenCalled();
@@ -817,7 +837,6 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createBlockModeContext();
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
@@ -838,7 +857,6 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "partial" },
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(draftStream.update).toHaveBeenCalledWith("Hello world");
@@ -855,7 +873,6 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createBlockModeContext();
 
-    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);

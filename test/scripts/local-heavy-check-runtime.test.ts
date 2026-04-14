@@ -1,26 +1,25 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
+  shouldAcquireLocalHeavyCheckLockForOxlint,
+  shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "../../scripts/lib/local-heavy-check-runtime.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function makeTempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-heavy-check-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const { createTempDir } = createScriptTestHarness();
+const GIB = 1024 ** 3;
+const CONSTRAINED_HOST = {
+  totalMemoryBytes: 16 * GIB,
+  logicalCpuCount: 8,
+};
+const ROOMY_HOST = {
+  totalMemoryBytes: 128 * GIB,
+  logicalCpuCount: 16,
+};
 
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return {
@@ -31,15 +30,30 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("local-heavy-check-runtime", () => {
-  it("tightens local tsgo runs to a single checker with a Go memory limit", () => {
-    const { args, env } = applyLocalTsgoPolicy([], makeEnv());
+  it("tightens local tsgo runs on constrained hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy([], makeEnv(), CONSTRAINED_HOST);
 
-    expect(args).toEqual(["--singleThreaded", "--checkers", "1"]);
+    expect(args).toEqual([
+      "--declaration",
+      "false",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/root.tsbuildinfo",
+      "--singleThreaded",
+      "--checkers",
+      "1",
+    ]);
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
 
-  it("keeps explicit tsgo flags and Go env overrides intact", () => {
+  it("skips declaration transforms for no-emit tsgo checks", () => {
+    const { args } = applyLocalTsgoPolicy([], makeEnv({ OPENCLAW_LOCAL_CHECK: "0" }), ROOMY_HOST);
+
+    expect(args).toEqual(["--declaration", "false"]);
+  });
+
+  it("keeps explicit tsgo flags and Go env overrides intact when throttled", () => {
     const { args, env } = applyLocalTsgoPolicy(
       ["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"],
       makeEnv({
@@ -47,21 +61,232 @@ describe("local-heavy-check-runtime", () => {
         GOMEMLIMIT: "5GiB",
         OPENCLAW_TSGO_PPROF_DIR: "/tmp/profile",
       }),
+      CONSTRAINED_HOST,
     );
 
-    expect(args).toEqual(["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"]);
+    expect(args).toEqual([
+      "--checkers",
+      "4",
+      "--singleThreaded",
+      "--pprofDir",
+      "/tmp/existing",
+      "--declaration",
+      "false",
+    ]);
     expect(env.GOGC).toBe("80");
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
-  it("serializes local oxlint runs onto one thread", () => {
-    const { args } = applyLocalOxlintPolicy([], makeEnv());
+  it("keeps explicit tsgo declaration flags intact", () => {
+    const env = makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" });
+    const longFlag = applyLocalTsgoPolicy(["--declaration"], env, ROOMY_HOST);
+    const shortFlag = applyLocalTsgoPolicy(["-d"], env, ROOMY_HOST);
 
-    expect(args).toEqual(["--type-aware", "--tsconfig", "tsconfig.oxlint.json", "--threads=1"]);
+    expect(longFlag.args).toEqual(["--declaration"]);
+    expect(shortFlag.args).toEqual(["-d"]);
+  });
+
+  it("defaults local tsgo to throttled mode on roomy hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy([], makeEnv(), ROOMY_HOST);
+
+    expect(args).toEqual([
+      "--declaration",
+      "false",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/root.tsbuildinfo",
+      "--singleThreaded",
+      "--checkers",
+      "1",
+    ]);
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("uses the configured local tsgo build info file", () => {
+    const { args } = applyLocalTsgoPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "full",
+        OPENCLAW_TSGO_BUILD_INFO_FILE: ".artifacts/custom/tsgo.tsbuildinfo",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args).toEqual([
+      "--declaration",
+      "false",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/custom/tsgo.tsbuildinfo",
+    ]);
+  });
+
+  it("avoids incremental cache reuse for ad hoc tsgo runs", () => {
+    const { args } = applyLocalTsgoPolicy(
+      ["--extendedDiagnostics"],
+      makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" }),
+      ROOMY_HOST,
+    );
+
+    expect(args).toEqual(["--extendedDiagnostics", "--declaration", "false"]);
+  });
+
+  it("allows forcing the throttled tsgo policy on roomy hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args).toEqual([
+      "--declaration",
+      "false",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/root.tsbuildinfo",
+      "--singleThreaded",
+      "--checkers",
+      "1",
+    ]);
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("allows forcing full-speed tsgo runs on roomy hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "full",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args).toEqual([
+      "--declaration",
+      "false",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/root.tsbuildinfo",
+    ]);
+    expect(env.GOGC).toBeUndefined();
+    expect(env.GOMEMLIMIT).toBeUndefined();
+  });
+
+  it("skips the heavy-check lock for tsgo metadata commands", () => {
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--help"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["-h"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--version"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["-v"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--init"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--showConfig"])).toBe(false);
+  });
+
+  it("keeps the heavy-check lock for real tsgo runs", () => {
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo([])).toBe(true);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--extendedDiagnostics"])).toBe(true);
+  });
+
+  it("allows forcing the tsgo lock back on", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLockForTsgo(
+        ["--help"],
+        makeEnv({ OPENCLAW_TSGO_FORCE_LOCK: "1" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("serializes local oxlint runs onto one thread on constrained hosts", () => {
+    const { args } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
+
+    expect(args).toEqual([
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+      "--threads=1",
+    ]);
+  });
+
+  it("defaults local oxlint to one thread on roomy hosts", () => {
+    const { args } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
+
+    expect(args).toEqual([
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+      "--threads=1",
+    ]);
+  });
+
+  it("allows forcing full-speed oxlint runs on roomy hosts", () => {
+    const { args } = applyLocalOxlintPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "full",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args).toEqual([
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+    ]);
+  });
+
+  it("skips the heavy-check lock for explicit oxlint file targets", () => {
+    const cwd = createTempDir("openclaw-oxlint-lock-skip-");
+    const target = path.join(cwd, "sample.ts");
+    fs.writeFileSync(target, "export const ok = true;\n", "utf8");
+
+    expect(
+      shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "sample.ts"], { cwd }),
+    ).toBe(false);
+  });
+
+  it("skips the heavy-check lock for oxlint metadata commands", () => {
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--help"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["-h"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--version"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["-V"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--rules"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--print-config"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--init"])).toBe(false);
+  });
+
+  it("keeps the heavy-check lock for directory targets and broad oxlint runs", () => {
+    const cwd = createTempDir("openclaw-oxlint-lock-keep-");
+    fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, "src", "sample.ts"), "export const ok = true;\n", "utf8");
+
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "src"], { cwd })).toBe(
+      true,
+    );
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware"], { cwd })).toBe(true);
+  });
+
+  it("allows forcing the oxlint lock back on", () => {
+    const cwd = createTempDir("openclaw-oxlint-lock-force-");
+    fs.writeFileSync(path.join(cwd, "sample.ts"), "export const ok = true;\n", "utf8");
+
+    expect(
+      shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "sample.ts"], {
+        cwd,
+        env: makeEnv({ OPENCLAW_OXLINT_FORCE_LOCK: "1" }),
+      }),
+    ).toBe(true);
   });
 
   it("reclaims stale local heavy-check locks from dead pids", () => {
-    const cwd = makeTempDir();
+    const cwd = createTempDir("openclaw-local-heavy-check-");
     const commonDir = path.join(cwd, ".git");
     const lockDir = path.join(commonDir, "openclaw-local-checks", "heavy-check.lock");
     fs.mkdirSync(lockDir, { recursive: true });
@@ -87,5 +312,35 @@ describe("local-heavy-check-runtime", () => {
 
     release();
     expect(fs.existsSync(lockDir)).toBe(false);
+  });
+
+  it("cleans up stale legacy test locks when acquiring the shared heavy-check lock", () => {
+    const cwd = createTempDir("openclaw-local-heavy-check-legacy-");
+    const commonDir = path.join(cwd, ".git");
+    const locksDir = path.join(commonDir, "openclaw-local-checks");
+    const legacyLockDir = path.join(locksDir, "test.lock");
+    const heavyCheckLockDir = path.join(locksDir, "heavy-check.lock");
+    fs.mkdirSync(legacyLockDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyLockDir, "owner.json"),
+      `${JSON.stringify({
+        pid: 999_999_999,
+        tool: "test",
+        cwd,
+      })}\n`,
+      "utf8",
+    );
+
+    const release = acquireLocalHeavyCheckLockSync({
+      cwd,
+      env: makeEnv(),
+      toolName: "oxlint",
+    });
+
+    expect(fs.existsSync(legacyLockDir)).toBe(false);
+    expect(fs.existsSync(heavyCheckLockDir)).toBe(true);
+
+    release();
+    expect(fs.existsSync(heavyCheckLockDir)).toBe(false);
   });
 });

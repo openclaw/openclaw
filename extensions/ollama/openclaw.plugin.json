@@ -2,6 +2,7 @@
   "id": "ollama",
   "enabledByDefault": true,
   "providers": ["ollama"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providerAuthEnvVars": {
     "ollama": ["OLLAMA_API_KEY"]
   },

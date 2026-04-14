@@ -47,7 +47,11 @@ describe("twitchMessageActions", () => {
         configured: true,
         availableAccountIds: ["default", "secondary"],
       }));
-    vi.mocked(twitchOutbound.sendText!).mockResolvedValue({
+    const sendText = twitchOutbound.sendText;
+    if (!sendText) {
+      throw new Error("twitchOutbound.sendText is unavailable");
+    }
+    vi.mocked(sendText).mockResolvedValue({
       channel: "twitch",
       messageId: "msg-1",
       timestamp: 1,

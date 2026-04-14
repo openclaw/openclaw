@@ -7,12 +7,13 @@ import {
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
-import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
+import type { LoggerSettings } from "./types.js";
+export type { LoggerSettings } from "./types.js";
 
 type ProcessWithBuiltinModule = NodeJS.Process & {
   getBuiltinModule?: (id: string) => unknown;
@@ -49,14 +50,6 @@ const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
-
-export type LoggerSettings = {
-  level?: LogLevel;
-  file?: string;
-  maxFileBytes?: number;
-  consoleLevel?: LogLevel;
-  consoleStyle?: ConsoleStyle;
-};
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -148,10 +141,13 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   if (!loggingState.cachedSettings) {
     loggingState.cachedSettings = settings;
   }
+  if (level === "silent") {
+    return false;
+  }
   if (settings.level === "silent") {
     return false;
   }
-  return levelToMinLevel(level) <= levelToMinLevel(settings.level);
+  return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
@@ -254,7 +250,7 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
+  const minLevel = opts?.level ? levelToMinLevel(opts.level) : base.settings.minLevel;
   const name = bindings ? JSON.stringify(bindings) : undefined;
   return base.getSubLogger({
     name,
@@ -269,6 +265,7 @@ export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): Pin
     toPinoLikeLogger(
       logger.getSubLogger({
         name: bindings ? JSON.stringify(bindings) : undefined,
+        minLevel: logger.settings.minLevel,
       }),
       level,
     );

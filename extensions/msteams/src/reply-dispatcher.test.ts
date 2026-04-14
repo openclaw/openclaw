@@ -10,6 +10,9 @@ const streamInstances = vi.hoisted(
   () =>
     [] as Array<{
       hasContent: boolean;
+      isFinalized: boolean;
+      isFailed: boolean;
+      streamedLength: number;
       sendInformativeUpdate: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
       finalize: ReturnType<typeof vi.fn>;
@@ -45,9 +48,14 @@ vi.mock("./revoked-context.js", () => ({
 vi.mock("./streaming-message.js", () => ({
   TeamsHttpStream: class {
     hasContent = false;
+    isFinalized = false;
+    isFailed = false;
+    streamedLength = 0;
     sendInformativeUpdate = vi.fn(async () => {});
     update = vi.fn();
-    finalize = vi.fn(async () => {});
+    finalize = vi.fn(async function (this: { isFinalized: boolean }) {
+      this.isFinalized = true;
+    });
 
     constructor() {
       streamInstances.push(this);
@@ -103,12 +111,17 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
   });
 
+  let lastCreatedDispatcher: ReturnType<typeof createMSTeamsReplyDispatcher> | undefined;
+  let lastContextSendActivity: ReturnType<typeof vi.fn> | undefined;
+
   function createDispatcher(
     conversationType: string = "personal",
     msteamsConfig: Record<string, unknown> = {},
     extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
   ) {
-    return createMSTeamsReplyDispatcher({
+    const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
+    lastContextSendActivity = contextSendActivity;
+    const dispatcher = createMSTeamsReplyDispatcher({
       cfg: { channels: { msteams: msteamsConfig } } as never,
       agentId: "agent",
       sessionKey: "agent:main:main",
@@ -129,12 +142,28 @@ describe("createMSTeamsReplyDispatcher", () => {
         serviceUrl: "https://service.example.com",
       } as never,
       context: {
-        sendActivity: vi.fn(async () => ({ id: "activity-1" })),
+        sendActivity: contextSendActivity,
       } as never,
       replyStyle: "thread",
       textLimit: 4000,
       ...extraParams,
     });
+    lastCreatedDispatcher = dispatcher;
+    return dispatcher;
+  }
+
+  function getContextSendActivity(): ReturnType<typeof vi.fn> {
+    if (!lastContextSendActivity) {
+      throw new Error("createDispatcher must be called first");
+    }
+    return lastContextSendActivity;
+  }
+
+  async function triggerPartialReply(text: string): Promise<void> {
+    if (!lastCreatedDispatcher) {
+      throw new Error("createDispatcher must be called first");
+    }
+    lastCreatedDispatcher.replyOptions.onPartialReply?.({ text });
   }
 
   it("sends an informative status update on reply start for personal chats", async () => {
@@ -145,7 +174,125 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     expect(streamInstances).toHaveLength(1);
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts the typing keepalive in personal chats so the TurnContext survives long tool chains", async () => {
+    createDispatcher("personal");
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.onReplyStart?.();
+
+    // In addition to the streaming card's informative update, the typing
+    // keepalive is now started on personal chats so Bot Framework proxies
+    // stay alive during long tool chains (#59731).
+    expect(typingCallbacks.onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the typing keepalive in personal chats when typingIndicator=false", async () => {
+    createDispatcher("personal", { typingIndicator: false });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.onReplyStart?.();
+
+    // Even though we still send the informative update, the opt-out
+    // disables the typing keepalive.
+    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(1);
     expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("passes a longer keepalive TTL so the loop survives long tool chains", () => {
+    createDispatcher("personal");
+
+    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    expect(pipelineArgs?.typing?.keepaliveIntervalMs).toBeGreaterThan(3_000);
+    expect(pipelineArgs?.typing?.keepaliveIntervalMs).toBeLessThanOrEqual(10_000);
+    // Issue #59731 reports 60s+ tool chains — the default 60s TTL is too
+    // tight so the dispatcher passes its own generous ceiling.
+    expect(pipelineArgs?.typing?.maxDurationMs).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("allows typing keepalive sends before any stream tokens arrive", async () => {
+    createDispatcher("personal");
+    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+
+    // No onPartialReply has been called yet, so the stream is not active.
+    // The typing keepalive should be allowed to warm the TurnContext.
+    const contextSendActivity = getContextSendActivity();
+    contextSendActivity.mockClear();
+    await sendTyping();
+    expect(contextSendActivity).toHaveBeenCalledWith({ type: "typing" });
+  });
+
+  it("suppresses typing keepalive sends while the stream card is actively chunking", async () => {
+    createDispatcher("personal");
+    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+
+    // Simulate the stream actively receiving a partial chunk. While the
+    // stream card is live we do not want a plain "..." typing indicator
+    // layered on top of it.
+    await triggerPartialReply("streaming content");
+
+    const contextSendActivity = getContextSendActivity();
+    contextSendActivity.mockClear();
+    await sendTyping();
+    expect(contextSendActivity).not.toHaveBeenCalled();
+  });
+
+  it("resumes typing keepalive sends once the stream finalizes between tool rounds", async () => {
+    createDispatcher("personal");
+    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+
+    // First segment: tokens flow, stream is active, typing is gated off.
+    await triggerPartialReply("first segment tokens");
+    const stream = streamInstances[0];
+    if (!stream) {
+      throw new Error("expected a Teams stream instance to be created");
+    }
+    const contextSendActivity = getContextSendActivity();
+    contextSendActivity.mockClear();
+    await sendTyping();
+    expect(contextSendActivity).not.toHaveBeenCalled();
+
+    // First segment complete: the stream is finalized ahead of the tool
+    // chain. Mirror what preparePayload does by flipping the mocked stream's
+    // finalized flag. The controller's isStreamActive check reads this via
+    // the real stream controller wired into the dispatcher.
+    stream.isFinalized = true;
+
+    // During the tool chain the loop should be allowed to fire again so
+    // the Bot Framework proxy stays warm. See #59731.
+    contextSendActivity.mockClear();
+    await sendTyping();
+    expect(contextSendActivity).toHaveBeenCalledWith({ type: "typing" });
+  });
+
+  it("fires native typing in group chats (no stream) because the gate never applies", async () => {
+    createDispatcher("groupchat");
+    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+
+    // In group chats we don't create a stream, so isStreamActive() always
+    // returns false and the typing indicator still fires normally.
+    const contextSendActivity = getContextSendActivity();
+    contextSendActivity.mockClear();
+    await sendTyping();
+    expect(contextSendActivity).toHaveBeenCalledWith({ type: "typing" });
+  });
+
+  it("is a no-op for channel conversations (typing unsupported)", async () => {
+    createDispatcher("channel");
+    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+
+    const contextSendActivity = getContextSendActivity();
+    contextSendActivity.mockClear();
+    await sendTyping();
+    // Teams channel conversations do not support the typing activity at
+    // all, so the start callback is a no-op regardless of stream state.
+    expect(contextSendActivity).not.toHaveBeenCalled();
   });
 
   it("sends native typing indicator for channel conversations by default", async () => {
@@ -180,7 +327,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   it("forwards partial replies into the Teams stream", async () => {
     const dispatcher = createDispatcher("personal");
 
-    await dispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
+    dispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
 
     expect(streamInstances[0]?.update).toHaveBeenCalledWith("partial response");
   });

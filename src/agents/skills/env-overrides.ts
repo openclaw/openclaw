@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -172,17 +172,17 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
-  const resolvedApiKey =
-    normalizeResolvedSecretInputString({
-      value: skillConfig.apiKey,
-      path: `skills.entries.${skillKey}.apiKey`,
-    }) ?? "";
   const canInjectPrimaryEnv =
     normalizedPrimaryEnv &&
     (process.env[normalizedPrimaryEnv] === undefined ||
       activeSkillEnvEntries.has(normalizedPrimaryEnv));
-  if (canInjectPrimaryEnv && resolvedApiKey) {
-    if (!pendingOverrides[normalizedPrimaryEnv]) {
+  if (canInjectPrimaryEnv && !pendingOverrides[normalizedPrimaryEnv]) {
+    const resolvedApiKey =
+      normalizeResolvedSecretInputString({
+        value: skillConfig.apiKey,
+        path: `skills.entries.${skillKey}.apiKey`,
+      }) ?? "";
+    if (resolvedApiKey) {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
     }
   }

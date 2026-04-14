@@ -59,7 +59,7 @@ describe("matrixMessageActions", () => {
     expect(describeMessageTool).toBeTypeOf("function");
     expect(supportsAction).toBeTypeOf("function");
 
-    const discovery = describeMessageTool!({
+    const discovery = describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
     } as never);
     if (!discovery) {
@@ -76,8 +76,9 @@ describe("matrixMessageActions", () => {
     const describeMessageTool = matrixMessageActions.describeMessageTool;
     const supportsAction = matrixMessageActions.supportsAction ?? (() => false);
 
-    const discovery = describeMessageTool!({
+    const discovery = describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
+      senderIsOwner: true,
     } as never);
     if (!discovery) {
       throw new Error("describeMessageTool returned null");
@@ -91,13 +92,41 @@ describe("matrixMessageActions", () => {
 
     expect(actions).toContain(profileAction);
     expect(supportsAction({ action: profileAction } as never)).toBe(true);
+    expect(discovery.mediaSourceParams).toEqual({
+      "set-profile": ["avatarUrl", "avatarPath"],
+    });
     expect(properties.displayName).toBeDefined();
     expect(properties.avatarUrl).toBeDefined();
     expect(properties.avatarPath).toBeDefined();
   });
 
+  it("hides self-profile updates for non-owner discovery", () => {
+    const discovery = matrixMessageActions.describeMessageTool({
+      cfg: createConfiguredMatrixConfig(),
+      senderIsOwner: false,
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+
+    expect(discovery.actions).not.toContain(profileAction);
+    expect(discovery.schema).toBeNull();
+  });
+
+  it("hides self-profile updates when owner status is unknown", () => {
+    const discovery = matrixMessageActions.describeMessageTool({
+      cfg: createConfiguredMatrixConfig(),
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+
+    expect(discovery.actions).not.toContain(profileAction);
+    expect(discovery.schema).toBeNull();
+  });
+
   it("hides gated actions when the default Matrix account disables them", () => {
-    const discovery = matrixMessageActions.describeMessageTool!({
+    const discovery = matrixMessageActions.describeMessageTool({
       cfg: {
         channels: {
           matrix: {
@@ -141,7 +170,7 @@ describe("matrixMessageActions", () => {
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
-    const discovery = matrixMessageActions.describeMessageTool!({
+    const discovery = matrixMessageActions.describeMessageTool({
       cfg: {
         channels: {
           matrix: {
