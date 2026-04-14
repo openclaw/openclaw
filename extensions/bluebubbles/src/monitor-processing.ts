@@ -585,8 +585,9 @@ function buildInboundHistorySnapshot(params: {
   return selected;
 }
 
-function sanitizeForLog(value: unknown): string {
-  return String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+function sanitizeForLog(value: unknown, maxLen = 200): string {
+  const cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
 }
 
 /**
