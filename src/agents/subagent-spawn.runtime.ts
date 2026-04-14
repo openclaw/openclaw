@@ -10,12 +10,12 @@ export {
 } from "../gateway/session-utils.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-export { normalizeDeliveryContext } from "../utils/delivery-context.js";
+export { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 export { resolveAgentConfig } from "./agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "./lanes.js";
 export { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-export { buildSubagentSystemPrompt } from "./subagent-announce.js";
+export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,

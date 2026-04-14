@@ -1,4 +1,5 @@
 import { readSnakeCaseParamRaw } from "./param-key.js";
+import { normalizeLowercaseStringOrEmpty } from "./shared/string-coerce.js";
 
 export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
 
@@ -87,7 +88,7 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       if (value === true) {
         return true;
       }
-      if (typeof value === "string" && value.trim().toLowerCase() === "true") {
+      if (typeof value === "string" && normalizeLowercaseStringOrEmpty(value) === "true") {
         return true;
       }
     }

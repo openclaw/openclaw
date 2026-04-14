@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ReplyRunKey = string;
 
@@ -103,16 +104,6 @@ export class ReplyRunAlreadyActiveError extends Error {
   }
 }
 
-function normalizeSessionKey(sessionKey: string | undefined): string | undefined {
-  const normalized = sessionKey?.trim();
-  return normalized || undefined;
-}
-
-function normalizeSessionId(sessionId: string | undefined): string | undefined {
-  const normalized = sessionId?.trim();
-  return normalized || undefined;
-}
-
 function createUserAbortError(): Error {
   const err = new Error("Reply operation aborted by user");
   err.name = "AbortError";
@@ -144,7 +135,7 @@ function notifyReplyRunEnded(sessionKey: string): void {
 }
 
 function resolveReplyRunForCurrentSessionId(sessionId: string): ReplyOperation | undefined {
-  const normalizedSessionId = normalizeSessionId(sessionId);
+  const normalizedSessionId = normalizeOptionalString(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
@@ -156,7 +147,7 @@ function resolveReplyRunForCurrentSessionId(sessionId: string): ReplyOperation |
 }
 
 function resolveReplyRunWaitKey(sessionId: string): string | undefined {
-  const normalizedSessionId = normalizeSessionId(sessionId);
+  const normalizedSessionId = normalizeOptionalString(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
@@ -203,8 +194,8 @@ export function createReplyOperation(params: {
   resetTriggered: boolean;
   upstreamAbortSignal?: AbortSignal;
 }): ReplyOperation {
-  const sessionKey = normalizeSessionKey(params.sessionKey);
-  const sessionId = normalizeSessionId(params.sessionId);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionKey) {
     throw new Error("Reply operations require a canonical sessionKey");
   }
@@ -294,7 +285,7 @@ export function createReplyOperation(params: {
       if (result) {
         return;
       }
-      const normalizedNextSessionId = normalizeSessionId(nextSessionId);
+      const normalizedNextSessionId = normalizeOptionalString(nextSessionId);
       if (!normalizedNextSessionId || normalizedNextSessionId === currentSessionId) {
         return;
       }
@@ -381,14 +372,14 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return createReplyOperation(params);
   },
   get(sessionKey) {
-    const normalizedSessionKey = normalizeSessionKey(sessionKey);
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey) {
       return undefined;
     }
     return replyRunState.activeRunsByKey.get(normalizedSessionKey);
   },
   isActive(sessionKey) {
-    const normalizedSessionKey = normalizeSessionKey(sessionKey);
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey) {
       return false;
     }
@@ -410,7 +401,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return true;
   },
   waitForIdle(sessionKey, timeoutMs = 15_000) {
-    const normalizedSessionKey = normalizeSessionKey(sessionKey);
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey || !replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
       return Promise.resolve(true);
     }
@@ -442,7 +433,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     });
   },
   resolveSessionId(sessionKey) {
-    const normalizedSessionKey = normalizeSessionKey(sessionKey);
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey) {
       return undefined;
     }

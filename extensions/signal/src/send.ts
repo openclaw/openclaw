@@ -2,6 +2,7 @@ import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runt
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
@@ -66,11 +67,11 @@ function parseTarget(raw: string): SignalTarget {
   if (!value) {
     throw new Error("Signal recipient is required");
   }
-  const lower = value.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(value);
   if (lower.startsWith("signal:")) {
     value = value.slice("signal:".length).trim();
   }
-  const normalized = value.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized.startsWith("group:")) {
     return { type: "group", groupId: value.slice("group:".length).trim() };
   }

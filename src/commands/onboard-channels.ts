@@ -1,4 +1,5 @@
 export {
+  createChannelOnboardingPostWriteHook,
   createChannelOnboardingPostWriteHookCollector,
   noteChannelStatus,
   runCollectedChannelOnboardingPostWriteHooks,

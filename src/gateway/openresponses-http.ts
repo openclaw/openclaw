@@ -11,6 +11,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -30,11 +31,10 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   getBearerToken,
@@ -54,6 +54,7 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 
@@ -68,13 +69,6 @@ type OpenResponsesHttpOptions = {
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
-
-function wrapUntrustedFileContent(content: string): string {
-  return wrapExternalContent(content, {
-    source: "unknown",
-    includeWarning: false,
-  });
-}
 
 // In-memory map from responseId -> sessionKey for previous_response_id continuity.
 // Entries are evicted after 30 minutes to bound memory usage.
@@ -406,7 +400,8 @@ async function runResponsesAgentCommand(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
-  deps: ReturnType<typeof createDefaultDeps>;
+  deps: CliDeps;
+  abortSignal?: AbortSignal;
 }) {
   return agentCommandFromIngress(
     {
@@ -423,6 +418,7 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
+      abortSignal: params.abortSignal,
     },
     defaultRuntime,
     params.deps,
@@ -675,12 +671,14 @@ export async function handleOpenResponsesHttpRequest(
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const abortController = new AbortController();
   const streamParams =
     typeof payload.max_output_tokens === "number"
       ? { maxTokens: payload.max_output_tokens }
       : undefined;
 
   if (!stream) {
+    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -694,7 +692,12 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        abortSignal: abortController.signal,
       });
+
+      if (abortController.signal.aborted) {
+        return true;
+      }
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
@@ -772,6 +775,9 @@ export async function handleOpenResponsesHttpRequest(
       rememberResponseSession();
       sendJson(res, 200, response);
     } catch (err) {
+      if (abortController.signal.aborted) {
+        return true;
+      }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
       const response = createResponseResource({
         id: responseId,
@@ -782,6 +788,8 @@ export async function handleOpenResponsesHttpRequest(
       });
       rememberResponseSession();
       sendJson(res, 500, response);
+    } finally {
+      stopWatchingDisconnect();
     }
     return true;
   }
@@ -796,6 +804,7 @@ export async function handleOpenResponsesHttpRequest(
   let sawAssistantDelta = false;
   let closed = false;
   let unsubscribe = () => {};
+  let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
@@ -812,6 +821,7 @@ export async function handleOpenResponsesHttpRequest(
     const usage = finalUsage;
 
     closed = true;
+    stopWatchingDisconnect();
     unsubscribe();
 
     writeSseEvent(res, {
@@ -940,7 +950,7 @@ export async function handleOpenResponsesHttpRequest(
     }
   });
 
-  req.on("close", () => {
+  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
   });
@@ -959,6 +969,7 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        abortSignal: abortController.signal,
       });
 
       finalUsage = extractUsageFromResult(result);
@@ -1046,6 +1057,7 @@ export async function handleOpenResponsesHttpRequest(
           usage,
         });
         closed = true;
+        stopWatchingDisconnect();
         unsubscribe();
         rememberResponseSession();
         writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
@@ -1083,10 +1095,10 @@ export async function handleOpenResponsesHttpRequest(
         });
       }
     } catch (err) {
-      logWarn(`openresponses: streaming response failed: ${String(err)}`);
-      if (closed) {
+      if (closed || abortController.signal.aborted) {
         return;
       }
+      logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
       const errorResponse = createResponseResource({

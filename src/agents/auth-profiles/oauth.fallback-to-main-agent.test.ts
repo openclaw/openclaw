@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "./types.js";
@@ -33,6 +33,17 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
     params.context?.access,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
 }));
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
+afterAll(() => {
+  vi.doUnmock("@mariozechner/pi-ai/oauth");
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("../../plugins/provider-runtime.js");
+});
 
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./store.js").clearRuntimeAuthProfileStoreSnapshots;
 let ensureAuthProfileStore: typeof import("./store.js").ensureAuthProfileStore;
@@ -152,7 +163,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   }
 
   it("falls back to main agent credentials when secondary agent token is expired and refresh fails", async () => {
-    const profileId = "anthropic:default";
+    const profileId = "anthropic:claude-cli";
     const now = Date.now();
     const expiredTime = now - 60 * 60 * 1000; // 1 hour ago
     const freshTime = now + 60 * 60 * 1000; // 1 hour from now
@@ -199,7 +210,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   });
 
   it("adopts newer OAuth token from main agent even when secondary token is still valid", async () => {
-    const profileId = "anthropic:default";
+    const profileId = "anthropic:claude-cli";
     const now = Date.now();
     const secondaryExpiry = now + 30 * 60 * 1000;
     const mainExpiry = now + 2 * 60 * 60 * 1000;
@@ -238,7 +249,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   });
 
   it("adopts main token when secondary expires is NaN/malformed", async () => {
-    const profileId = "anthropic:default";
+    const profileId = "anthropic:claude-cli";
     const now = Date.now();
     const mainExpiry = now + 2 * 60 * 60 * 1000;
 
@@ -312,7 +323,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   });
 
   it("throws error when both secondary and main agent credentials are expired", async () => {
-    const profileId = "anthropic:default";
+    const profileId = "anthropic:claude-cli";
     const now = Date.now();
     const expiredTime = now - 60 * 60 * 1000; // 1 hour ago
 

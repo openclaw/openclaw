@@ -120,7 +120,7 @@ export async function handleDiscordMessagingAction(
       : undefined;
   const withReactionRuntimeOptions = <T extends Record<string, unknown>>(extra?: T) => ({
     ...(reactionRuntimeOptions ?? cfgOptions),
-    ...(extra ?? {}),
+    ...extra,
   });
   const normalizeMessage = (message: unknown) => {
     if (!message || typeof message !== "object") {

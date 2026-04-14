@@ -1,5 +1,5 @@
 import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeE164, normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { looksLikeUuid } from "./uuid.js";
 
 export type SignalSender =
@@ -69,7 +69,7 @@ function parseSignalAllowEntry(entry: string): SignalAllowEntry | null {
   }
 
   const stripped = stripSignalPrefix(trimmed);
-  const lower = stripped.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(stripped);
   if (lower.startsWith("uuid:")) {
     const raw = stripped.slice("uuid:".length).trim();
     if (!raw) {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import {
   REDACTED_SENTINEL,
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
-import { redactSnapshotTestHints as mainSchemaHints } from "./redact-snapshot.test-hints.js";
 import type { ConfigUiHints } from "./schema.js";
 
 describe("restoreRedactedValues", () => {

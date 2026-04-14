@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
+const NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+
 function buildBundledDistArtifactPath(dirName: string, artifact: string): string {
   return ["dist", "extensions", dirName, artifact].join("/");
 }
@@ -9,7 +11,11 @@ function buildBundledDistArtifactPath(dirName: string, artifact: string): string
 export function collectBundledRuntimeSidecarPaths(params?: {
   rootDir?: string;
 }): readonly string[] {
-  return listBundledPluginMetadata(params)
+  return listBundledPluginMetadata({
+    rootDir: params?.rootDir,
+    includeChannelConfigs: false,
+  })
+    .filter((entry) => !NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS.has(entry.dirName))
     .flatMap((entry) =>
       (entry.runtimeSidecarArtifacts ?? []).map((artifact) =>
         buildBundledDistArtifactPath(entry.dirName, artifact),

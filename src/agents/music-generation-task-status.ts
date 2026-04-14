@@ -22,7 +22,9 @@ export function getMusicGenerationTaskProviderId(task: TaskRecord): string | und
   return getMediaGenerationTaskProviderId(task, MUSIC_GENERATION_SOURCE_PREFIX);
 }
 
-export function findActiveMusicGenerationTaskForSession(sessionKey?: string): TaskRecord | null {
+export function findActiveMusicGenerationTaskForSession(
+  sessionKey?: string,
+): TaskRecord | undefined {
   return findActiveMediaGenerationTaskForSession({
     sessionKey,
     taskKind: MUSIC_GENERATION_TASK_KIND,

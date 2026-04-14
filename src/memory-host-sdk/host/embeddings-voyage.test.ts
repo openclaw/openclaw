@@ -1,46 +1,18 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../../agents/model-auth.js";
-import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import {
+  createEmbeddingDataFetchMock,
+  createJsonResponseFetchMock,
+  installFetchMock,
+  mockResolvedProviderKey,
+  type JsonFetchMock,
+} from "./embeddings-provider.test-support.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
-
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    fetchImpl?: typeof fetch;
-  }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    if (!fetchImpl) {
-      throw new Error("fetch is not available");
-    }
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  },
-}));
 
 vi.mock("../../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../../test-utils/model-auth-mock.js");
   return createModelAuthMockModule();
 });
-
-const createFetchMock = () => {
-  const fetchMock = vi.fn<FetchMock>(
-    async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-  );
-  return withFetchPreconnect(fetchMock);
-};
-
-function installFetchMock(fetchMock: typeof globalThis.fetch) {
-  vi.stubGlobal("fetch", fetchMock);
-}
 
 let createVoyageEmbeddingProvider: typeof import("./embeddings-voyage.js").createVoyageEmbeddingProvider;
 let normalizeVoyageModel: typeof import("./embeddings-voyage.js").normalizeVoyageModel;
@@ -55,21 +27,10 @@ beforeEach(() => {
   vi.doUnmock("undici");
 });
 
-function mockVoyageApiKey() {
-  vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-    apiKey: "voyage-key-123",
-    mode: "api-key",
-    source: "test",
-  });
-}
-
-async function createDefaultVoyageProvider(
-  model: string,
-  fetchMock: ReturnType<typeof createFetchMock>,
-) {
+async function createDefaultVoyageProvider(model: string, fetchMock: JsonFetchMock) {
   installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
   mockPublicPinnedHostname();
-  mockVoyageApiKey();
+  mockResolvedProviderKey(authModule.resolveApiKeyForProvider, "voyage-key-123");
   return createVoyageEmbeddingProvider({
     config: {} as never,
     provider: "voyage",
@@ -86,7 +47,7 @@ describe("voyage embedding provider", () => {
   });
 
   it("configures client with correct defaults and headers", async () => {
-    const fetchMock = createFetchMock();
+    const fetchMock = createEmbeddingDataFetchMock();
     const result = await createDefaultVoyageProvider("voyage-4-large", fetchMock);
 
     await result.provider.embedQuery("test query");
@@ -113,7 +74,7 @@ describe("voyage embedding provider", () => {
   });
 
   it("respects remote overrides for baseUrl and apiKey", async () => {
-    const fetchMock = createFetchMock();
+    const fetchMock = createEmbeddingDataFetchMock();
     installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
 
@@ -142,17 +103,9 @@ describe("voyage embedding provider", () => {
   });
 
   it("passes input_type=document for embedBatch", async () => {
-    const fetchMock = withFetchPreconnect(
-      vi.fn<FetchMock>(
-        async (_input: RequestInfo | URL, _init?: RequestInit) =>
-          new Response(
-            JSON.stringify({
-              data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-      ),
-    );
+    const fetchMock = createJsonResponseFetchMock({
+      data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
+    });
     const result = await createDefaultVoyageProvider("voyage-4-large", fetchMock);
 
     await result.provider.embedBatch(["doc1", "doc2"]);

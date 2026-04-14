@@ -3,15 +3,8 @@ import type {
   SessionAcpIdentitySource,
   SessionAcpMeta,
 } from "../../config/sessions/types.js";
+import { normalizeText } from "../normalize-text.js";
 import type { AcpRuntimeHandle, AcpRuntimeStatus } from "./types.js";
-
-function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function normalizeIdentityState(value: unknown): SessionAcpIdentity["state"] | undefined {
   if (value !== "pending" && value !== "resolved") {

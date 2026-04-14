@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { formatErrorMessage } from "../src/infra/errors.ts";
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
@@ -1317,6 +1318,6 @@ async function main() {
 }
 
 await main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(formatErrorMessage(error));
   process.exit(1);
 });

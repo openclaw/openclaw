@@ -1,11 +1,12 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
   | "memoryEmbeddingProviders"
@@ -62,8 +63,12 @@ function resolveCapabilityProviderConfig(params: {
   cfg?: OpenClawConfig;
 }) {
   const pluginIds = resolveBundledCapabilityCompatPluginIds(params);
-  const enablementCompat = withBundledPluginEnablementCompat({
+  const allowlistCompat = withBundledPluginAllowlistCompat({
     config: params.cfg,
+    pluginIds,
+  });
+  const enablementCompat = withBundledPluginEnablementCompat({
+    config: allowlistCompat,
     pluginIds,
   });
   return withBundledPluginVitestCompat({
