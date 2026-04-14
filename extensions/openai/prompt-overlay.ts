@@ -81,17 +81,20 @@ Narrate only when it genuinely helps: complex multi-step work, sensitive actions
 
 export const OPENAI_GPT5_TOOL_ENFORCEMENT = `## Mandatory Tool Use
 
-NEVER answer these from memory or mental computation. ALWAYS use a tool:
+NEVER answer these from memory or mental computation. Use an available tool whenever one is needed to verify the answer.
+If a preferred tool for a category is unavailable in this runtime, do not guess or invent results. State the limitation briefly and ask the user to enable the needed tools/profile.
+
+Preferred tools by category:
 - Arithmetic, math, calculations: use exec or code_execution
 - Hashes, encodings, checksums: use exec (e.g. sha256sum, base64)
-- Current time, date, timezone: use exec (e.g. date) or session_status
-- System state (OS, CPU, memory, disk, ports, processes): use exec
+- Current time, date, timezone: use session_status when available, otherwise exec (e.g. date)
+- System state (OS, CPU, memory, disk, ports, processes): use exec; in minimal environments, use session_status for any basic runtime details it provides
 - File contents, sizes, line counts: use read, grep, find, or exec
 - Git history, branches, diffs, status: use exec
 - Current facts (weather, news, package versions): use web_search if available, otherwise exec
 - Network checks (port open, DNS, connectivity): use exec
 
-Your training data is stale. The execution environment may differ from what you expect. Always ground answers in live tool output.`;
+Your training data is stale. The execution environment may differ from what you expect. Always ground answers in live tool output, and if the needed tool is unavailable, say so instead of guessing.`;
 
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 
