@@ -285,6 +285,52 @@ function resolvesToExistingFileSync(rawOperand: string, cwd: string | undefined)
   }
 }
 
+function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
+  return (
+    buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
+    buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xce])) ||
+    buffer.subarray(0, 4).equals(Buffer.from([0xce, 0xfa, 0xed, 0xfe])) ||
+    buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xcf])) ||
+    buffer.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe])) ||
+    buffer.subarray(0, 2).equals(Buffer.from([0x4d, 0x5a]))
+  );
+}
+
+function isLikelyScriptLikePathSync(targetPath: string): boolean {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(targetPath);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile()) {
+    return false;
+  }
+  let header: Buffer;
+  try {
+    const fd = fs.openSync(targetPath, "r");
+    try {
+      header = Buffer.alloc(256);
+      const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+      header = header.subarray(0, bytesRead);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return true;
+  }
+  if (header.length === 0) {
+    return false;
+  }
+  if (header.subarray(0, 2).equals(Buffer.from("#!"))) {
+    return true;
+  }
+  if (isKnownBinaryExecutableHeader(header)) {
+    return false;
+  }
+  return !header.includes(0);
+}
+
 function unwrapArgvForMutableOperand(argv: string[]): {
   argv: string[];
   baseIndex: number;
@@ -832,7 +878,10 @@ function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | unde
     return true;
   }
   const firstToken = readTrimmedArgToken(argv, 0);
-  return resolvesToExistingFileSync(firstToken, cwd);
+  if (!resolvesToExistingFileSync(firstToken, cwd)) {
+    return false;
+  }
+  return isLikelyScriptLikePathSync(path.resolve(cwd ?? process.cwd(), firstToken));
 }
 
 function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
