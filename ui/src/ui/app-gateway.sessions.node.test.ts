@@ -147,18 +147,60 @@ describe("handleGatewayEvent session.message", () => {
     const host = createHost();
     host.sessionKey = "agent:qa:main";
     host.chatRunId = "run-1";
+    host.chatMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 123,
+      },
+    ];
 
     handleGatewayEvent(host, {
       type: "event",
       event: "session.message",
       payload: {
         sessionKey: "agent:qa:main",
-        message: { role: "user", id: "msg-user-1" },
+        message: {
+          role: "user",
+          id: "msg-user-1",
+          content: [{ type: "text", text: "hello" }],
+        },
       },
       seq: 1,
     });
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("still reloads history for a different user message during an active run", () => {
+    loadChatHistoryMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+    host.chatRunId = "run-1";
+    host.chatMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 123,
+      },
+    ];
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: "agent:qa:main",
+        message: {
+          role: "user",
+          id: "msg-user-2",
+          content: [{ type: "text", text: "from another client" }],
+        },
+      },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
   });
 
   it("ignores transcript updates for other sessions", () => {

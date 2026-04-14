@@ -16,6 +16,7 @@ import {
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { extractText } from "./chat/message-extract.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
@@ -112,6 +113,10 @@ type GatewayHostWithShutdownMessage = GatewayHost & {
 type GatewayHostWithSideResults = GatewayHost & {
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
+};
+
+type GatewayHostWithChatMessages = GatewayHost & {
+  chatMessages?: unknown[];
 };
 
 function isTerminalChatState(
@@ -422,15 +427,40 @@ function handleSessionMessageGatewayEvent(
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
-  const message = payload.message;
+  const message = payload?.message;
   const role =
     message && typeof message === "object" && typeof (message as { role?: unknown }).role === "string"
       ? (message as { role: string }).role.trim().toLowerCase()
       : "";
+  const hasStableMessageId =
+    message &&
+    typeof message === "object" &&
+    (typeof (message as { id?: unknown }).id === "string" ||
+      typeof (message as { messageId?: unknown }).messageId === "string");
+  const chatMessages = (host as GatewayHostWithChatMessages).chatMessages;
+  const lastMessage = Array.isArray(chatMessages) ? chatMessages.at(-1) : undefined;
+  const lastRole =
+    lastMessage &&
+    typeof lastMessage === "object" &&
+    typeof (lastMessage as { role?: unknown }).role === "string"
+      ? (lastMessage as { role: string }).role.trim().toLowerCase()
+      : "";
+  const lastHasStableMessageId =
+    lastMessage &&
+    typeof lastMessage === "object" &&
+    (typeof (lastMessage as { id?: unknown }).id === "string" ||
+      typeof (lastMessage as { messageId?: unknown }).messageId === "string");
+  const matchesOptimisticUserEcho =
+    host.chatRunId &&
+    role === "user" &&
+    hasStableMessageId &&
+    lastRole === "user" &&
+    !lastHasStableMessageId &&
+    extractText(lastMessage) === extractText(message);
   // The active run already rendered this user message optimistically. Reloading
   // history here can briefly replace it with a stale snapshot before the
   // persisted transcript catches up, which causes the visible flicker.
-  if (host.chatRunId && role === "user") {
+  if (matchesOptimisticUserEcho) {
     return;
   }
   void loadChatHistory(host as unknown as ChatState);
