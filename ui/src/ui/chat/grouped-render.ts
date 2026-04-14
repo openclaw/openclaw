@@ -50,7 +50,22 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
 type ImageBlock = {
   url: string;
   alt?: string;
+  /** Whether this is a local file path requiring gateway URL construction */
+  isLocal?: boolean;
 };
+
+function isLocalMediaPath(source: string): boolean {
+  const trimmed = source.trim();
+  if (/^\/(?:__openclaw__|media)\//.test(trimmed)) {
+    return false;
+  }
+  return (
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("~") ||
+    trimmed.startsWith("/") ||
+    /^[a-zA-Z]:[\\/]/.test(trimmed)
+  );
+}
 
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
@@ -83,6 +98,24 @@ function extractImages(message: unknown): ImageBlock[] {
           images.push({ url: imageUrl.url });
         }
       }
+    }
+  }
+
+  // Also extract from MediaPath/MediaPaths fields (user message attachments)
+  const mediaPaths = m.MediaPaths;
+  if (Array.isArray(mediaPaths)) {
+    for (const mp of mediaPaths) {
+      if (typeof mp === "string" && mp.trim()) {
+        const isLocal = isLocalMediaPath(mp);
+        images.push({ url: mp, isLocal });
+      }
+    }
+  } else {
+    // Single MediaPath
+    const mediaPath = m.MediaPath;
+    if (typeof mediaPath === "string" && mediaPath.trim()) {
+      const isLocal = isLocalMediaPath(mediaPath);
+      images.push({ url: mediaPath, isLocal });
     }
   }
 
@@ -575,7 +608,12 @@ function isAvatarUrl(value: string): boolean {
   );
 }
 
-function renderMessageImages(images: ImageBlock[]) {
+function renderMessageImages(
+  images: ImageBlock[],
+  localMediaPreviewRoots?: readonly string[],
+  basePath?: string,
+  authToken?: string | null,
+) {
   if (images.length === 0) {
     return nothing;
   }
@@ -586,16 +624,21 @@ function renderMessageImages(images: ImageBlock[]) {
 
   return html`
     <div class="chat-message-images">
-      ${images.map(
-        (img) => html`
+      ${images.map((img) => {
+        // For local images, build gateway URL if allowed
+        let displayUrl = img.url;
+        if (img.isLocal && localMediaPreviewRoots) {
+          displayUrl = buildAssistantAttachmentUrl(img.url, basePath, authToken);
+        }
+        return html`
           <img
-            src=${img.url}
+            src=${displayUrl}
             alt=${img.alt ?? "Attached image"}
             class="chat-message-image"
-            @click=${() => openImage(img.url)}
+            @click=${() => openImage(displayUrl)}
           />
-        `,
-      )}
+        `;
+      })}
     </div>
   `;
 }
@@ -1163,7 +1206,12 @@ function renderGroupedMessage(
               ${toolMessageExpanded
                 ? html`
                     <div class="chat-tool-msg-body">
-                      ${renderMessageImages(images)}
+                      ${renderMessageImages(
+                        images,
+                        opts.localMediaPreviewRoots ?? [],
+                        opts.basePath,
+                        opts.assistantAttachmentAuthToken,
+                      )}
                       ${renderAssistantAttachments(
                         assistantAttachments,
                         opts.localMediaPreviewRoots ?? [],
@@ -1219,7 +1267,12 @@ function renderGroupedMessage(
             </div>
           `
         : html`
-            ${renderMessageImages(images)}
+            ${renderMessageImages(
+              images,
+              opts.localMediaPreviewRoots ?? [],
+              opts.basePath,
+              opts.assistantAttachmentAuthToken,
+            )}
             ${renderAssistantAttachments(
               assistantAttachments,
               opts.localMediaPreviewRoots ?? [],
