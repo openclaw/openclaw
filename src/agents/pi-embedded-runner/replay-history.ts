@@ -411,7 +411,8 @@ export async function sanitizeSessionHistory(params: {
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
-    params.modelApi === "azure-openai-responses";
+    params.modelApi === "azure-openai-responses" ||
+    params.modelApi === "vida-responses";
   const sanitizedImages = await sanitizeSessionMessagesImages(
     withInterSessionMarkers,
     "session:history",

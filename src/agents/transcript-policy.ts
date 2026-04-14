@@ -38,10 +38,10 @@ export function shouldAllowProviderOwnedThinkingReplay(params: {
 }): boolean {
   return (
     isAnthropicApi(params.modelApi) &&
-    params.policy.validateAnthropicTurns &&
-    params.policy.preserveSignatures &&
-    !params.policy.dropThinkingBlocks
-  );
+      params.policy.validateAnthropicTurns &&
+      params.policy.preserveSignatures &&
+      !params.policy.dropThinkingBlocks
+    );
 }
 
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {

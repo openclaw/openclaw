@@ -453,6 +453,7 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
+      const { timeoutMs } = readOptionalTargetAndTimeout(params);
 
       switch (action) {
         case "status":
@@ -462,10 +463,11 @@ export function createBrowserTool(opts?: {
                 method: "GET",
                 path: "/",
                 profile,
+                timeoutMs,
               }),
             );
           }
-          return jsonResult(await browserToolDeps.browserStatus(baseUrl, { profile }));
+          return jsonResult(await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs }));
         case "start":
           if (proxyRequest) {
             await proxyRequest({
@@ -505,12 +507,13 @@ export function createBrowserTool(opts?: {
             const result = await proxyRequest({
               method: "GET",
               path: "/profiles",
+              timeoutMs,
             });
             return jsonResult(result);
           }
-          return jsonResult({ profiles: await browserToolDeps.browserProfiles(baseUrl) });
+          return jsonResult({ profiles: await browserToolDeps.browserProfiles(baseUrl, { timeoutMs }) });
         case "tabs":
-          return await executeTabsAction({ baseUrl, profile, proxyRequest });
+          return await executeTabsAction({ baseUrl, profile, proxyRequest, timeoutMs });
         case "open": {
           const targetUrl = readTargetUrlParam(params);
           if (proxyRequest) {

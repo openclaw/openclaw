@@ -158,18 +158,20 @@ export async function executeTabsAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  timeoutMs?: number;
 }): Promise<AgentToolResult<unknown>> {
-  const { baseUrl, profile, proxyRequest } = params;
+  const { baseUrl, profile, proxyRequest, timeoutMs } = params;
   if (proxyRequest) {
     const result = await proxyRequest({
       method: "GET",
       path: "/tabs",
       profile,
+      timeoutMs,
     });
     const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
     return formatTabsToolResult(tabs);
   }
-  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile });
+  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs });
   return formatTabsToolResult(tabs);
 }
 

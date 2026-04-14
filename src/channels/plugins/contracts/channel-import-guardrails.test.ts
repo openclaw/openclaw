@@ -315,6 +315,36 @@ function collectSourceFiles(
   return files;
 }
 
+function findPluginSdkToExtensionApiBackedges(): Array<{
+  extensionId: string;
+  sdkPath: string;
+  apiPath: string;
+}> {
+  const pluginSdkDir = resolve(ROOT_DIR);
+  const results: Array<{
+    extensionId: string;
+    sdkPath: string;
+    apiPath: string;
+  }> = [];
+  for (const entry of readdirSync(pluginSdkDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".ts")) {
+      continue;
+    }
+    const sdkPath = `src/plugin-sdk/${entry.name}`;
+    const text = readSource(sdkPath);
+    const match = text.match(/extensions\/([^/"']+)\/api\.js/);
+    if (!match?.[1]) {
+      continue;
+    }
+    results.push({
+      extensionId: match[1],
+      sdkPath,
+      apiPath: `extensions/${match[1]}/api.ts`,
+    });
+  }
+  return results;
+}
+
 function readSetupBarrelImportBlock(path: string): string {
   const lines = readSource(path).split("\n");
   const targetLineIndex = lines.findIndex((line) =>
@@ -631,6 +661,16 @@ describe("channel import guardrails", () => {
           `${normalized} should import ${extensionId} helpers via the local api barrel`,
         ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${extensionId}(?:["'/])`, "u"));
       }
+    }
+  });
+
+  it("prevents plugin-sdk subpaths from forming two-way api barrel cycles", () => {
+    for (const edge of findPluginSdkToExtensionApiBackedges()) {
+      const apiSource = readSource(edge.apiPath);
+      expect(
+        apiSource,
+        `${edge.apiPath} should not re-export its own SDK barrel when ${edge.sdkPath} already points back to it`,
+      ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${edge.extensionId}["']`, "u"));
     }
   });
 });
