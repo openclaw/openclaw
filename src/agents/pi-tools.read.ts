@@ -415,7 +415,7 @@ export function createOpenClawReadTool(
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
         const encodedSource = encodeURIComponent(inputPath);
-        let mediaUrl = `http://localhost:18791${inputPath}`;
+        let mediaUrl = `http://localhost:18791${inputPath.split('/').map(encodeURIComponent).join('/')}`;
         // For audio and video, use direct path instead of the assistant-media endpoint
         if (AUDIO_EXTENSIONS.has(ext) || VIDEO_EXTENSIONS.has(ext)) {
             const relativePath = path.relative(rootDir, inputPath);
