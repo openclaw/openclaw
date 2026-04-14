@@ -2,13 +2,33 @@
   "name": "openclaw",
   "version": "2026.4.14-beta.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
+  "keywords": [
+    "ai",
+    "assistant",
+    "personal-ai",
+    "multi-channel",
+    "gateway",
+    "automation",
+    "llm",
+    "openai",
+    "claude",
+    "messaging",
+    "whatsapp",
+    "telegram",
+    "slack",
+    "discord",
+    "chatbot",
+    "productivity",
+    "self-hosted",
+    "nodejs",
+    "typescript"
+  ],
   "homepage": "https://github.com/openclaw/openclaw#readme",
   "bugs": {
     "url": "https://github.com/openclaw/openclaw/issues"
   },
   "license": "MIT",
-  "author": "",
+  "author": "OpenClaw Contributors (https://github.com/openclaw/openclaw/graphs/contributors)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/openclaw.git"
