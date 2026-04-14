@@ -61,6 +61,30 @@ describe("doctor-contract-registry getJiti", () => {
     );
   });
 
+  it("prefers doctor-contract-api over the broader contract-api surface", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.js"),
+      "export default {};\n",
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginRoot, "contract-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+
+    listPluginDoctorLegacyConfigRules({
+      workspaceDir: pluginRoot,
+      env: {},
+    });
+
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+      path.join(pluginRoot, "doctor-contract-api.js"),
+    );
+  });
+
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({
