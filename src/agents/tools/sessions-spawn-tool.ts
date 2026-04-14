@@ -34,6 +34,23 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "reply_to",
 ] as const;
 
+/**
+ * Properties in the sessions_spawn schema that are specific to certain runtimes
+ * and can be stripped when those runtimes are unavailable. This reduces schema
+ * complexity for non-native OpenAI-compatible providers that reject strict
+ * schemas with too many optional or nested-object properties.
+ */
+const ACP_ONLY_SCHEMA_PROPERTIES = new Set([
+  "streamTo",
+  "resumeSessionId",
+]);
+
+const SUBAGENT_ONLY_SCHEMA_PROPERTIES = new Set([
+  "lightContext",
+  "attachments",
+  "attachAs",
+]);
+
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
 let acpSpawnModulePromise: Promise<AcpSpawnModule> | undefined;
@@ -134,6 +151,30 @@ const SessionsSpawnToolSchema = Type.Object({
   ),
 });
 
+function buildSessionsSpawnSchema(opts?: {
+  stripProperties?: ReadonlySet<string>;
+}): typeof SessionsSpawnToolSchema {
+  const strip = opts?.stripProperties;
+  if (!strip || strip.size === 0) {
+    return SessionsSpawnToolSchema;
+  }
+  const originalProps = SessionsSpawnToolSchema.properties;
+  const filteredProps: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(originalProps)) {
+    if (!strip.has(key)) {
+      filteredProps[key] = value;
+    }
+  }
+  const originalRequired = SessionsSpawnToolSchema.required ?? [];
+  const filteredRequired = originalRequired.filter(
+    (key: string) => !strip.has(key),
+  );
+  return Type.Object(
+    filteredProps as Parameters<typeof Type.Object>[0],
+    { ...(filteredRequired.length > 0 ? { required: filteredRequired } : {}) },
+  ) as unknown as typeof SessionsSpawnToolSchema;
+}
+
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
@@ -144,6 +185,8 @@ export function createSessionsSpawnTool(
     sandboxed?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /** When false, ACP-specific properties are stripped from the tool schema for provider compatibility. */
+    acpEnabled?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   return {
@@ -151,7 +194,11 @@ export function createSessionsSpawnTool(
     name: "sessions_spawn",
     displaySummary: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSpawnTool(),
-    parameters: SessionsSpawnToolSchema,
+    parameters: buildSessionsSpawnSchema({
+      stripProperties: opts?.acpEnabled === false
+        ? new Set([...ACP_ONLY_SCHEMA_PROPERTIES, ...SUBAGENT_ONLY_SCHEMA_PROPERTIES])
+        : undefined,
+    }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
