@@ -365,7 +365,12 @@ export function createOpenClawReadTool(
 ): AnyAgentTool {
   return {
     ...base,
-    execute: async (toolCallId, params, _signal) => {
+    execute: async (toolCallId, params, signal) => {  // Changed _signal to signal
+      // Check for early abort
+      if (signal?.aborted) {
+        throw new Error("Read operation aborted");
+      }
+
       const normalized = normalizeToolParams(params);
       const record =
         normalized ??
@@ -389,6 +394,11 @@ export function createOpenClawReadTool(
         inputPath = path.resolve(rootDir, rawPath);
       }
 
+      // Check abort before access
+      if (signal?.aborted) {
+        throw new Error("Read operation aborted");
+      }
+
       try {
         await fs.access(inputPath);
       } catch {
@@ -397,6 +407,10 @@ export function createOpenClawReadTool(
         if (match) {
           const alternativePath = path.resolve(rootDir, match[1]);
           try {
+            // Check abort before alternative access
+            if (signal?.aborted) {
+              throw new Error("Read operation aborted");
+            }
             await fs.access(alternativePath);
             inputPath = alternativePath;
           } catch {
@@ -405,10 +419,20 @@ export function createOpenClawReadTool(
         }
       }
 
+      // Check abort before stat
+      if (signal?.aborted) {
+        throw new Error("Read operation aborted");
+      }
+
       try {
         const stats = await fs.stat(inputPath);
 
         if (stats.isDirectory()) {
+          // Check abort before readdir
+          if (signal?.aborted) {
+            throw new Error("Read operation aborted");
+          }
+          
           // P2 FIX: Add truncation for directory listings
           let files = await fs.readdir(inputPath);
           let truncated = false;
@@ -435,6 +459,11 @@ export function createOpenClawReadTool(
 
         // Handle images - keep base64 for images (they work)
         if (IMAGE_EXTENSIONS.has(ext)) {
+          // Check abort before reading file
+          if (signal?.aborted) {
+            throw new Error("Read operation aborted");
+          }
+          
           const fileBuffer = await fs.readFile(inputPath);
           // P1 FIX #1: Size cap for images
           if (fileBuffer.length > 5242880) {
@@ -542,6 +571,11 @@ export function createOpenClawReadTool(
           };
         }
 
+        // Check abort before reading text file
+        if (signal?.aborted) {
+          throw new Error("Read operation aborted");
+        }
+
         // Handle text files with P1 FIX #3 (offset/limit paging)
         const fileBuffer = await fs.readFile(inputPath, "utf-8");
         const maxChars = (options?.modelContextWindowTokens || 100000) * 4;
@@ -566,6 +600,10 @@ export function createOpenClawReadTool(
         };
 
       } catch (err) {
+        // Check if error was due to abort
+        if (signal?.aborted) {
+          throw new Error("Read operation aborted");
+        }
         const error = err as Error;
         return {
           toolCallId,
