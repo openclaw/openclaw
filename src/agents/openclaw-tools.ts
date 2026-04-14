@@ -110,6 +110,12 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
+    /**
+     * When true, strips complex and runtime-specific properties from the
+     * sessions_spawn tool schema. Enable when routing through proxy gateways
+     * or non-native OpenAI-compatible providers that reject strict schemas.
+     */
+    simplifiedSchemaForGateway?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
@@ -291,6 +297,7 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
       workspaceDir: spawnWorkspaceDir,
+      simplifiedSchemaForGateway: options?.simplifiedSchemaForGateway,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
