@@ -201,13 +201,41 @@ type BundledChannelState = {
 };
 
 let cachedBundledChannelState: BundledChannelState | null = null;
+let bundledChannelStateLoading = false;
+
+const EMPTY_BUNDLED_CHANNEL_STATE: BundledChannelState = {
+  entries: [],
+  plugins: [],
+  setupPlugins: [],
+  pluginsById: new Map(),
+  runtimeSettersById: new Map(),
+};
 
 function getBundledChannelState(): BundledChannelState {
   if (cachedBundledChannelState) {
     return cachedBundledChannelState;
   }
+  // Reentrancy guard: loading a bundled channel module (via jiti) transitively
+  // imports the plugin-sdk facade runtime, which -- through `applyPluginAutoEnable`
+  // -> `hasPotentialConfiguredChannels` -> `listConfiguredChannelEnvPrefixes`
+  // -- calls back into `listBundledChannelPlugins()`. Without this guard the
+  // re-entry restarts `loadGeneratedBundledChannelEntries()` from scratch and
+  // each subsequent channel load re-enters again, producing a
+  // `RangeError: Maximum call stack size exceeded`. Returning an empty state
+  // during the in-flight load is safe: the auto-enable probe simply sees no
+  // bundled channels on the inner call and proceeds without triggering
+  // further recursion.
+  if (bundledChannelStateLoading) {
+    return EMPTY_BUNDLED_CHANNEL_STATE;
+  }
 
-  const entries = loadGeneratedBundledChannelEntries();
+  bundledChannelStateLoading = true;
+  let entries: readonly GeneratedBundledChannelEntry[];
+  try {
+    entries = loadGeneratedBundledChannelEntries();
+  } finally {
+    bundledChannelStateLoading = false;
+  }
   const plugins = entries.map(({ entry }) => entry.channelPlugin);
   const setupPlugins = entries.flatMap(({ setupEntry }) => {
     const plugin = setupEntry?.plugin;
