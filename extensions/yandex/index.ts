@@ -16,7 +16,6 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { applyYandexConfig, YANDEX_DEFAULT_MODEL_REF } from "./onboard.js";
-import { YANDEX_BASE_URL } from "./models.js";
 import { buildYandexProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "yandex";
@@ -104,11 +103,7 @@ const yandexApiKeyAuthMethod: ProviderAuthMethod = {
       configPatch: {
         models: {
           providers: {
-            [PROVIDER_ID]: {
-              baseUrl: YANDEX_BASE_URL,
-              api: "openai-completions" as const,
-              headers: { "OpenAI-Project": folderId },
-            },
+            [PROVIDER_ID]: buildYandexProvider(folderId),
           },
         },
       },
@@ -137,7 +132,7 @@ const yandexApiKeyAuthMethod: ProviderAuthMethod = {
     const folderId =
       (typeof opts?.yandexFolderId === "string" && opts.yandexFolderId.trim()
         ? opts.yandexFolderId.trim()
-        : undefined) ?? (process.env["YANDEX_FOLDER_ID"] ?? "").trim() || undefined;
+        : undefined) ?? ((process.env["YANDEX_FOLDER_ID"] ?? "").trim() || undefined);
 
     if (!folderId) {
       ctx.runtime.error(
@@ -177,10 +172,7 @@ const yandexApiKeyAuthMethod: ProviderAuthMethod = {
         ...next.models,
         providers: {
           ...next.models?.providers,
-          [PROVIDER_ID]: {
-            ...(next.models?.providers?.[PROVIDER_ID] ?? {}),
-            headers: { "OpenAI-Project": folderId },
-          },
+          [PROVIDER_ID]: buildYandexProvider(folderId),
         },
       },
     };
@@ -203,9 +195,9 @@ export default definePluginEntry({
         run: (ctx) =>
           Promise.resolve({
             provider: buildYandexProvider(
-              ctx.config.models?.providers?.[PROVIDER_ID]?.headers?.["OpenAI-Project"] as
+              (ctx.config.models?.providers?.[PROVIDER_ID]?.headers?.["OpenAI-Project"] as
                 | string
-                | undefined,
+                | undefined) ?? ctx.env?.["YANDEX_FOLDER_ID"],
             ),
           }),
       },
