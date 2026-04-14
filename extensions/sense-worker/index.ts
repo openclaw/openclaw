@@ -4,6 +4,7 @@ import {
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/core";
 import { handleNemoClawCommand } from "./src/command.js";
+import { handleRunCommand } from "./src/run-command.js";
 import { createSenseWorkerHealthTool, createSenseWorkerTool } from "./src/tool.js";
 
 export default definePluginEntry({
@@ -17,6 +18,12 @@ export default definePluginEntry({
       description: "Show the latest NemoClaw digest summary, recent/failed jobs, or inspect a job.",
       acceptsArgs: true,
       handler: async (ctx) => await handleNemoClawCommand(ctx.args, ctx.config),
+    });
+    api.registerCommand({
+      name: "run",
+      description: "Queue an OpenClaw run record for health, digest, or free-text work.",
+      acceptsArgs: true,
+      handler: async (ctx) => await handleRunCommand(ctx),
     });
     api.registerTool(
       (ctx) => {
