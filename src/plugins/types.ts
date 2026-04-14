@@ -698,6 +698,33 @@ export type ProviderToolSchemaDiagnostic = {
  */
 export type ProviderReasoningOutputModeContext = ProviderReplayPolicyContext;
 
+export type ProviderIncompleteTurnRetryRule = {
+  enabled?: boolean;
+  maxRetries?: number;
+  instruction?: string;
+};
+
+/**
+ * Provider-owned incomplete-turn recovery policy.
+ *
+ * Use this when a provider/model family can safely continue after a
+ * reasoning-only or empty-response assistant turn without hardcoding that
+ * recovery policy in the embedded runner.
+ */
+export type ProviderIncompleteTurnRecoveryPolicy = {
+  reasoningOnly?: ProviderIncompleteTurnRetryRule;
+  emptyResponse?: ProviderIncompleteTurnRetryRule;
+};
+
+/**
+ * Provider-owned incomplete-turn recovery input.
+ *
+ * This mirrors the provider/model transport context used by other runtime
+ * policy hooks. Core still owns attempt-shape classification, replay-safety,
+ * and terminal fallback behavior.
+ */
+export type ProviderIncompleteTurnRecoveryContext = ProviderReplayPolicyContext;
+
 /**
  * Provider-owned transport creation.
  *
@@ -1230,6 +1257,16 @@ export type ProviderPlugin = {
   resolveReasoningOutputMode?: (
     ctx: ProviderReasoningOutputModeContext,
   ) => ProviderReasoningOutputMode | null | undefined;
+  /**
+   * Provider-owned incomplete-turn recovery policy.
+   *
+   * Use this when a provider/model family can safely continue after
+   * reasoning-only or empty-response assistant turns. Core still classifies
+   * the attempt and owns replay-safety, liveness, and terminal fallback.
+   */
+  resolveIncompleteTurnRecoveryPolicy?: (
+    ctx: ProviderIncompleteTurnRecoveryContext,
+  ) => ProviderIncompleteTurnRecoveryPolicy | null | undefined;
   /**
    * Provider-owned extra-param normalization before generic stream option
    * wrapping.

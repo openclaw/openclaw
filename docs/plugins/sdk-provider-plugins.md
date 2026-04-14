@@ -519,32 +519,33 @@ API key auth, and dynamic model resolution.
       | 15 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
       | 16 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
       | 17 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
-      | 18 | `prepareExtraParams` | Default request params |
-      | 19 | `createStreamFn` | Fully custom StreamFn transport |
-      | 20 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
-      | 21 | `resolveTransportTurnState` | Native per-turn headers/metadata |
-      | 22 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
-      | 23 | `formatApiKey` | Custom runtime token shape |
-      | 24 | `refreshOAuth` | Custom OAuth refresh |
-      | 25 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 26 | `matchesContextOverflowError` | Provider-owned overflow detection |
-      | 27 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
-      | 28 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 29 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 30 | `suppressBuiltInModel` | Hide stale upstream rows |
-      | 31 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 32 | `isBinaryThinking` | Binary thinking on/off |
-      | 33 | `supportsXHighThinking` | `xhigh` reasoning support |
-      | 34 | `resolveDefaultThinkingLevel` | Default `/think` policy |
-      | 35 | `isModernModelRef` | Live/smoke model matching |
-      | 36 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 37 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 38 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 39 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
-      | 40 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 41 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 18 | `resolveIncompleteTurnRecoveryPolicy` | Provider-owned reasoning-only / empty-response continuation policy |
+      | 19 | `prepareExtraParams` | Default request params |
+      | 20 | `createStreamFn` | Fully custom StreamFn transport |
+      | 21 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | 22 | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | 23 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | 24 | `formatApiKey` | Custom runtime token shape |
+      | 25 | `refreshOAuth` | Custom OAuth refresh |
+      | 26 | `buildAuthDoctorHint` | Auth repair guidance |
+      | 27 | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | 28 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | 29 | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | 30 | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | 31 | `suppressBuiltInModel` | Hide stale upstream rows |
+      | 32 | `augmentModelCatalog` | Synthetic forward-compat rows |
+      | 33 | `isBinaryThinking` | Binary thinking on/off |
+      | 34 | `supportsXHighThinking` | `xhigh` reasoning support |
+      | 35 | `resolveDefaultThinkingLevel` | Default `/think` policy |
+      | 36 | `isModernModelRef` | Live/smoke model matching |
+      | 37 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 38 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 39 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 40 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | 41 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | 42 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 43 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 44 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       Prompt tuning note:
 

@@ -68,6 +68,30 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("registers reasoning-only incomplete-turn recovery for Claude transports", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveIncompleteTurnRecoveryPolicy?.({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toEqual({
+      reasoningOnly: {
+        enabled: true,
+        maxRetries: 2,
+      },
+    });
+    expect(
+      provider.resolveIncompleteTurnRecoveryPolicy?.({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("defaults provider api through plugin config normalization", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 

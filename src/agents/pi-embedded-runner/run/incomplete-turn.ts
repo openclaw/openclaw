@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
+import type { ProviderIncompleteTurnRetryRule } from "../../../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
@@ -276,11 +277,10 @@ function isEmptyResponseAssistantTurn(params: {
 }
 
 export function resolveReasoningOnlyRetryInstruction(params: {
-  provider?: string;
-  modelId?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  recoveryRule?: ProviderIncompleteTurnRetryRule | null;
 }): string | null {
   if (
     params.aborted ||
@@ -294,12 +294,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     return null;
   }
 
-  if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
+  if (params.recoveryRule?.enabled !== true) {
     return null;
   }
 
@@ -314,16 +309,16 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     return null;
   }
 
-  return REASONING_ONLY_RETRY_INSTRUCTION;
+  const overrideInstruction = params.recoveryRule.instruction?.trim();
+  return overrideInstruction?.length ? overrideInstruction : REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
 export function resolveEmptyResponseRetryInstruction(params: {
-  provider?: string;
-  modelId?: string;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  recoveryRule?: ProviderIncompleteTurnRetryRule | null;
 }): string | null {
   if (
     params.aborted ||
@@ -337,12 +332,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
+  if (params.recoveryRule?.enabled !== true) {
     return null;
   }
 
@@ -355,7 +345,8 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  return EMPTY_RESPONSE_RETRY_INSTRUCTION;
+  const overrideInstruction = params.recoveryRule.instruction?.trim();
+  return overrideInstruction?.length ? overrideInstruction : EMPTY_RESPONSE_RETRY_INSTRUCTION;
 }
 
 function shouldApplyPlanningOnlyRetryGuard(params: {

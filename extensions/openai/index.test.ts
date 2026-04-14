@@ -342,6 +342,52 @@ describe("openai plugin", () => {
     ).toEqual([]);
   });
 
+  it("registers incomplete-turn recovery policy for OpenAI and Codex GPT-5 runs", async () => {
+    const { providers } = await registerOpenAIPluginWithHook();
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    const codexProvider = requireRegisteredProvider(providers, "openai-codex");
+
+    expect(
+      openaiProvider.resolveIncompleteTurnRecoveryPolicy?.({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+      } as never),
+    ).toEqual({
+      reasoningOnly: {
+        enabled: true,
+        maxRetries: 2,
+      },
+      emptyResponse: {
+        enabled: true,
+        maxRetries: 1,
+      },
+    });
+    expect(
+      codexProvider.resolveIncompleteTurnRecoveryPolicy?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        modelApi: "openai-codex-responses",
+      } as never),
+    ).toEqual({
+      reasoningOnly: {
+        enabled: true,
+        maxRetries: 2,
+      },
+      emptyResponse: {
+        enabled: true,
+        maxRetries: 1,
+      },
+    });
+    expect(
+      openaiProvider.resolveIncompleteTurnRecoveryPolicy?.({
+        provider: "openai",
+        modelId: "gpt-4.1",
+        modelApi: "openai-responses",
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {
     const { on, providers } = await registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },

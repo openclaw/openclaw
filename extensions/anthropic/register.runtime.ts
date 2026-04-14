@@ -33,6 +33,7 @@ import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfig,
 } from "./config-defaults.js";
+import { buildAnthropicIncompleteTurnRecoveryPolicy } from "./incomplete-turn-policy.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
@@ -474,6 +475,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
     buildReplayPolicy: buildAnthropicReplayPolicy,
+    resolveIncompleteTurnRecoveryPolicy: buildAnthropicIncompleteTurnRecoveryPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
     wrapStreamFn: wrapAnthropicProviderStream,

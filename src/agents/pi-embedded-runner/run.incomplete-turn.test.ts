@@ -707,10 +707,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
   it("detects reasoning-only GPT turns from signed thinking blocks", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
-      provider: "openai",
-      modelId: "gpt-5.4",
       aborted: false,
       timedOut: false,
+      recoveryRule: { enabled: true },
       attempt: makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
@@ -734,10 +733,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
   it("does not retry reasoning-only GPT turns after side effects", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
-      provider: "openai",
-      modelId: "gpt-5.4",
       aborted: false,
       timedOut: false,
+      recoveryRule: { enabled: true },
       attempt: makeAttemptResult({
         assistantTexts: [],
         didSendViaMessagingTool: true,
@@ -763,10 +761,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
   it("does not retry reasoning-only GPT turns when the assistant ended in error", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
-      provider: "openai",
-      modelId: "gpt-5.4",
       aborted: false,
       timedOut: false,
+      recoveryRule: { enabled: true },
       attempt: makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
@@ -790,10 +787,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
   it("does not retry reasoning-only GPT turns when visible assistant text already exists", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
-      provider: "openai",
-      modelId: "gpt-5.4",
       aborted: false,
       timedOut: false,
+      recoveryRule: { enabled: true },
       attempt: makeAttemptResult({
         assistantTexts: ["Visible answer."],
         lastAssistant: {
@@ -821,11 +817,10 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
   it("detects generic empty GPT turns without visible text", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
-      provider: "openai",
-      modelId: "gpt-5.4",
       payloadCount: 0,
       aborted: false,
       timedOut: false,
+      recoveryRule: { enabled: true },
       attempt: makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
@@ -844,11 +839,10 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
   it("does not retry generic empty GPT turns after side effects", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
-      provider: "openai",
-      modelId: "gpt-5.4",
       payloadCount: 0,
       aborted: false,
       timedOut: false,
+      recoveryRule: { enabled: true },
       attempt: makeAttemptResult({
         assistantTexts: [],
         didSendViaMessagingTool: true,

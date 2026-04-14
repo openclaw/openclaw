@@ -21,6 +21,7 @@ import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-str
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import { buildOpenAIIncompleteTurnRecoveryPolicy } from "./incomplete-turn-policy.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import { CODEX_CLI_PROFILE_ID, readOpenAICodexCliOAuthProfile } from "./openai-codex-cli-auth.js";
@@ -288,6 +289,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       normalizeProviderId(ctx.provider) === PROVIDER_ID &&
       ctx.modelId.trim().toLowerCase() === OPENAI_CODEX_GPT_54_MODEL_ID,
     buildReplayPolicy: buildOpenAIReplayPolicy,
+    resolveIncompleteTurnRecoveryPolicy: buildOpenAIIncompleteTurnRecoveryPolicy,
     prepareExtraParams: (ctx) => {
       const transport = ctx.extraParams?.transport;
       if (transport === "auto" || transport === "sse" || transport === "websocket") {

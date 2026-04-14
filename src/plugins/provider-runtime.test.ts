@@ -51,6 +51,7 @@ let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolv
 let resolveProviderBuiltInModelSuppression: typeof import("./provider-runtime.js").resolveProviderBuiltInModelSuppression;
 let createProviderEmbeddingProvider: typeof import("./provider-runtime.js").createProviderEmbeddingProvider;
 let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").resolveProviderDefaultThinkingLevel;
+let resolveProviderIncompleteTurnRecoveryPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderIncompleteTurnRecoveryPolicyWithPlugin;
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderReplayPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderReplayPolicyWithPlugin;
@@ -265,6 +266,7 @@ describe("provider-runtime", () => {
       resolveProviderBuiltInModelSuppression,
       createProviderEmbeddingProvider,
       resolveProviderDefaultThinkingLevel,
+      resolveProviderIncompleteTurnRecoveryPolicyWithPlugin,
       resolveProviderModernModelRef,
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderReplayPolicyWithPlugin,
@@ -656,6 +658,16 @@ describe("provider-runtime", () => {
     );
     const inspectToolSchemas = vi.fn(() => [] as { toolName: string; violations: string[] }[]);
     const resolveReasoningOutputMode = vi.fn(() => "tagged" as const);
+    const resolveIncompleteTurnRecoveryPolicy = vi.fn(() => ({
+      reasoningOnly: {
+        enabled: true,
+        maxRetries: 2,
+      },
+      emptyResponse: {
+        enabled: true,
+        maxRetries: 1,
+      },
+    }));
     const resolveSyntheticAuth = vi.fn(() => ({
       apiKey: "demo-local",
       source: "models.providers.demo (synthetic local key)",
@@ -712,6 +724,7 @@ describe("provider-runtime", () => {
           normalizeToolSchemas,
           inspectToolSchemas,
           resolveReasoningOutputMode,
+          resolveIncompleteTurnRecoveryPolicy,
           prepareExtraParams: ({ extraParams }) => ({
             ...extraParams,
             transport: "auto",
@@ -872,6 +885,24 @@ describe("provider-runtime", () => {
         }),
       }),
     ).toBe("tagged");
+
+    expect(
+      resolveProviderIncompleteTurnRecoveryPolicyWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({
+          modelApi: MODEL.api,
+        }),
+      }),
+    ).toEqual({
+      reasoningOnly: {
+        enabled: true,
+        maxRetries: 2,
+      },
+      emptyResponse: {
+        enabled: true,
+        maxRetries: 1,
+      },
+    });
 
     expect(
       prepareProviderExtraParams({

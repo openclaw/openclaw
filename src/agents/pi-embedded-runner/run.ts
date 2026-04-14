@@ -7,6 +7,7 @@ import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveProviderIncompleteTurnRecoveryPolicyWithPlugin } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
@@ -446,9 +447,6 @@ export async function runEmbeddedPiAgent(
       });
       const executionContract = strictAgenticActive ? "strict-agentic" : "default";
       const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
-      const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
-      const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
-
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
@@ -1668,6 +1666,26 @@ export async function runEmbeddedPiAgent(
           }
 
           const payloadCount = payloadsWithToolMedia?.length ?? 0;
+          const incompleteTurnRecoveryPolicy =
+            resolveProviderIncompleteTurnRecoveryPolicyWithPlugin({
+              provider: activeErrorContext.provider,
+              config: params.config,
+              workspaceDir: params.workspaceDir,
+              context: {
+                config: params.config,
+                agentDir,
+                workspaceDir: params.workspaceDir,
+                provider: activeErrorContext.provider,
+                modelId: activeErrorContext.model,
+                modelApi: currentAttemptAssistant?.api ?? sessionLastAssistant?.api ?? model.api,
+              },
+            });
+          const reasoningOnlyRecoveryRule = incompleteTurnRecoveryPolicy?.reasoningOnly;
+          const emptyResponseRecoveryRule = incompleteTurnRecoveryPolicy?.emptyResponse;
+          const maxReasoningOnlyRetryAttempts =
+            reasoningOnlyRecoveryRule?.maxRetries ?? DEFAULT_REASONING_ONLY_RETRY_LIMIT;
+          const maxEmptyResponseRetryAttempts =
+            emptyResponseRecoveryRule?.maxRetries ?? DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
@@ -1677,19 +1695,17 @@ export async function runEmbeddedPiAgent(
             attempt,
           });
           const nextReasoningOnlyRetryInstruction = resolveReasoningOnlyRetryInstruction({
-            provider: activeErrorContext.provider,
-            modelId: activeErrorContext.model,
             aborted,
             timedOut,
             attempt,
+            recoveryRule: reasoningOnlyRecoveryRule,
           });
           const nextEmptyResponseRetryInstruction = resolveEmptyResponseRetryInstruction({
-            provider: activeErrorContext.provider,
-            modelId: activeErrorContext.model,
             payloadCount,
             aborted,
             timedOut,
             attempt,
+            recoveryRule: emptyResponseRecoveryRule,
           });
           if (
             nextPlanningOnlyRetryInstruction &&

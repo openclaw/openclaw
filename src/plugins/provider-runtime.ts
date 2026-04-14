@@ -31,6 +31,8 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
   ProviderFailoverErrorContext,
+  ProviderIncompleteTurnRecoveryContext,
+  ProviderIncompleteTurnRecoveryPolicy,
   ProviderNormalizeToolSchemasContext,
   ProviderNormalizeConfigContext,
   ProviderNormalizeModelIdContext,
@@ -610,6 +612,19 @@ export function resolveProviderReasoningOutputModeWithPlugin(params: {
 }): ProviderReasoningOutputMode | undefined {
   const mode = resolveProviderHookPlugin(params)?.resolveReasoningOutputMode?.(params.context);
   return mode === "native" || mode === "tagged" ? mode : undefined;
+}
+
+export function resolveProviderIncompleteTurnRecoveryPolicyWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderIncompleteTurnRecoveryContext;
+}): ProviderIncompleteTurnRecoveryPolicy | undefined {
+  return (
+    resolveProviderHookPlugin(params)?.resolveIncompleteTurnRecoveryPolicy?.(params.context) ??
+    undefined
+  );
 }
 
 export function prepareProviderExtraParams(params: {

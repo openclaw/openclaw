@@ -12,6 +12,7 @@ import {
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import { buildOpenAIIncompleteTurnRecoveryPolicy } from "./incomplete-turn-policy.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   buildOpenAISyntheticCatalogEntry,
@@ -222,6 +223,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         ? { api: "openai-responses", baseUrl }
         : undefined,
     buildReplayPolicy: buildOpenAIReplayPolicy,
+    resolveIncompleteTurnRecoveryPolicy: buildOpenAIIncompleteTurnRecoveryPolicy,
     prepareExtraParams: (ctx) => {
       const transport = ctx.extraParams?.transport;
       const hasSupportedTransport =

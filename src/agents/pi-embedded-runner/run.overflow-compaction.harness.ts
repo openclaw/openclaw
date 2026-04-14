@@ -68,6 +68,25 @@ export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
+export const mockedResolveProviderIncompleteTurnRecoveryPolicy = vi.fn(
+  (params?: { provider?: string; context?: { modelId?: string } }) => {
+    const provider = normalizeLowercaseStringOrEmpty(params?.provider ?? "");
+    const modelId = normalizeLowercaseStringOrEmpty(params?.context?.modelId ?? "");
+    const isGpt5Family = /^gpt-5(?:[.o-]|$)/i.test(modelId);
+    if ((provider === "openai" || provider === "openai-codex") && isGpt5Family) {
+      return {
+        reasoningOnly: { enabled: true, maxRetries: 2 },
+        emptyResponse: { enabled: true, maxRetries: 1 },
+      };
+    }
+    if (provider === "anthropic" && modelId.startsWith("claude-")) {
+      return {
+        reasoningOnly: { enabled: true, maxRetries: 2 },
+      };
+    }
+    return undefined;
+  },
+);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
@@ -215,6 +234,26 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedEnsureRuntimePluginsLoaded.mockReset();
   mockedPrepareProviderRuntimeAuth.mockReset();
   mockedPrepareProviderRuntimeAuth.mockResolvedValue(undefined);
+  mockedResolveProviderIncompleteTurnRecoveryPolicy.mockReset();
+  mockedResolveProviderIncompleteTurnRecoveryPolicy.mockImplementation(
+    (params?: { provider?: string; context?: { modelId?: string } }) => {
+      const provider = normalizeLowercaseStringOrEmpty(params?.provider ?? "");
+      const modelId = normalizeLowercaseStringOrEmpty(params?.context?.modelId ?? "");
+      const isGpt5Family = /^gpt-5(?:[.o-]|$)/i.test(modelId);
+      if ((provider === "openai" || provider === "openai-codex") && isGpt5Family) {
+        return {
+          reasoningOnly: { enabled: true, maxRetries: 2 },
+          emptyResponse: { enabled: true, maxRetries: 1 },
+        };
+      }
+      if (provider === "anthropic" && modelId.startsWith("claude-")) {
+        return {
+          reasoningOnly: { enabled: true, maxRetries: 2 },
+        };
+      }
+      return undefined;
+    },
+  );
   mockedRunEmbeddedAttempt.mockReset();
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
@@ -340,6 +379,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
+    resolveProviderIncompleteTurnRecoveryPolicyWithPlugin:
+      mockedResolveProviderIncompleteTurnRecoveryPolicy,
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
