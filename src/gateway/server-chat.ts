@@ -202,6 +202,10 @@ export type ChatRunState = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /** Runs that already had a terminal chat event (error/final) broadcast.
+   *  Used to prevent duplicate error events when both the chat.send .catch()
+   *  path and the lifecycle error grace timer attempt to surface the error. */
+  terminalChatSent: Set<string>;
   clear: () => void;
 };
 
@@ -212,6 +216,7 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const terminalChatSent = new Set<string>();
 
   const clear = () => {
     registry.clear();
@@ -220,6 +225,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
+    terminalChatSent.clear();
   };
 
   return {
@@ -229,6 +235,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
+    terminalChatSent,
     clear,
   };
 }
@@ -645,6 +652,13 @@ export function createAgentEventHandler({
     clearAgentRunContext(evt.runId);
     agentRunSeq.delete(evt.runId);
     agentRunSeq.delete(clientRunId);
+    // Deferred cleanup: the terminalChatSent guard must survive past this
+    // function because the broadcastChatError in chat.ts may race with us.
+    // Clean up after a short delay so the set does not grow unbounded.
+    setTimeout(() => {
+      chatRunState.terminalChatSent.delete(clientRunId);
+      chatRunState.terminalChatSent.delete(evt.runId);
+    }, 30_000).unref?.();
 
     if (sessionKey) {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
@@ -668,13 +682,26 @@ export function createAgentEventHandler({
 
   const scheduleTerminalLifecycleError = (
     evt: AgentEventPayload,
-    opts?: { skipChatErrorFinal?: boolean },
+    _opts?: { skipChatErrorFinal?: boolean },
   ) => {
     clearPendingTerminalLifecycleError(evt.runId);
     const delayMs = Math.max(1, Math.min(Math.floor(lifecycleErrorRetryGraceMs), 2_147_483_647));
     const timer = setTimeout(() => {
       pendingTerminalLifecycleErrors.delete(evt.runId);
-      finalizeLifecycleEvent(evt, opts);
+      // Re-evaluate skipChatErrorFinal at fire time instead of using the stale
+      // closure value captured at schedule time.  When a chat.send run resolves
+      // normally (e.g. billing surface_error → continue_normal), .finally()
+      // removes the run from chatAbortControllers before this timer fires.  The
+      // stale captured value would still be `true`, suppressing the error chat
+      // event and leaving the web UI stuck forever.  Re-checking ensures the
+      // error is surfaced when the .catch() path did not already handle it.
+      //
+      // For the throw path (where .catch() *does* fire and already broadcasts
+      // the error), the terminalChatSent guard in emitChatFinal prevents a
+      // duplicate error event.
+      const chatLink = chatRunState.registry.peek(evt.runId);
+      const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
+      finalizeLifecycleEvent(evt, { skipChatErrorFinal });
     }, delayMs);
     timer.unref?.();
     pendingTerminalLifecycleErrors.set(evt.runId, timer);
@@ -813,6 +840,14 @@ export function createAgentEventHandler({
     stopReason?: string,
     errorKind?: ErrorKind,
   ) => {
+    // Guard against duplicate terminal chat events.  The chat.send .catch()
+    // path (broadcastChatError) marks the run in terminalChatSent; if the
+    // lifecycle error grace timer fires afterwards we must not emit a second
+    // error event.
+    if (chatRunState.terminalChatSent.has(clientRunId)) {
+      return;
+    }
+    chatRunState.terminalChatSent.add(clientRunId);
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
     // Flush any throttled delta so streaming clients receive the complete text
     // before the final event. The 150 ms throttle in emitChatDelta may have
