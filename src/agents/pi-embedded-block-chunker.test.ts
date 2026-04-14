@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import * as fences from "../markdown/fences.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 
-function createFlushOnParagraphChunker(params: { minChars: number; maxChars: number }) {
+function createFlushOnParagraphChunker(params: {
+  minChars: number;
+  maxChars: number;
+}) {
   return new EmbeddedBlockChunker({
     minChars: params.minChars,
     maxChars: params.maxChars,
@@ -47,7 +50,10 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("waits until minChars before flushing paragraph boundaries when flushOnParagraph is set", () => {
-    const chunker = createFlushOnParagraphChunker({ minChars: 30, maxChars: 200 });
+    const chunker = createFlushOnParagraphChunker({
+      minChars: 30,
+      maxChars: 200,
+    });
 
     chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
 
@@ -58,12 +64,17 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("still force flushes buffered paragraphs below minChars at the end", () => {
-    const chunker = createFlushOnParagraphChunker({ minChars: 100, maxChars: 200 });
+    const chunker = createFlushOnParagraphChunker({
+      minChars: 100,
+      maxChars: 200,
+    });
 
     chunker.append("First paragraph.\n \nSecond paragraph.");
 
     expect(drainChunks(chunker)).toEqual([]);
-    expect(drainChunks(chunker, true)).toEqual(["First paragraph.\n \nSecond paragraph."]);
+    expect(drainChunks(chunker, true)).toEqual([
+      "First paragraph.\n \nSecond paragraph.",
+    ]);
     expect(chunker.bufferedText).toBe("");
   });
 
@@ -141,6 +152,89 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunks.length).toBeGreaterThan(2);
     expect(parseSpy).toHaveBeenCalledTimes(1);
     parseSpy.mockRestore();
+  });
+
+  it("does not split text+table+text into separate chunks when under maxChars", () => {
+    const chunker = createFlushOnParagraphChunker({
+      minChars: 1,
+      maxChars: 500,
+    });
+
+    const text = [
+      "Here is a table:",
+      "",
+      "| Name | Value |",
+      "| --- | --- |",
+      "| A | 1 |",
+      "| B | 2 |",
+      "",
+      "And some text after.",
+    ].join("\n");
+
+    chunker.append(text);
+
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toContain("| Name | Value |");
+    expect(chunks[0]).toContain("And some text after.");
+  });
+
+  it("keeps table intact when flushOnParagraph splits around it", () => {
+    const chunker = createFlushOnParagraphChunker({
+      minChars: 10,
+      maxChars: 200,
+    });
+
+    const text = [
+      "First paragraph.",
+      "",
+      "| Col1 | Col2 |",
+      "| --- | --- |",
+      "| x | y |",
+      "",
+      "After table.",
+    ].join("\n");
+
+    chunker.append(text);
+
+    const chunks = drainChunks(chunker);
+
+    // The paragraph break between "First paragraph." and the table should flush,
+    // but the blank line between the table header/rows should NOT cause a split.
+    for (const chunk of chunks) {
+      if (chunk.includes("| Col1")) {
+        expect(chunk).toContain("| x | y |");
+      }
+    }
+  });
+
+  it("splits outside table when text exceeds maxChars", () => {
+    const chunker = createFlushOnParagraphChunker({
+      minChars: 1,
+      maxChars: 80,
+    });
+
+    const text = [
+      "A".repeat(40),
+      "",
+      "| H1 | H2 |",
+      "| --- | --- |",
+      "| d1 | d2 |",
+      "",
+      "B".repeat(40),
+    ].join("\n");
+
+    chunker.append(text);
+
+    const chunks = drainChunks(chunker);
+
+    // Table rows must not be split across chunks
+    for (const chunk of chunks) {
+      if (chunk.includes("| H1")) {
+        expect(chunk).toContain("| d1 | d2 |");
+      }
+    }
   });
 
   it("does not split inside the closing fence marker when clamping at maxChars", () => {
