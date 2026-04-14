@@ -77,7 +77,7 @@ Before finalizing your response, check:
 - Grounding: are factual claims backed by tool outputs, not training data?
 - Coverage: did you address every part of the request?
 - Formatting: does the output match the requested format or schema?
-- Safety: if the next step has side effects (file writes, commands, API calls), confirm scope before executing.`;
+- Safety: for destructive operations (deletions, overwrites, production deploys), confirm scope. Routine reads and writes do not need confirmation.`;
 
 export const OPENAI_GPT5_TOOL_CALL_STYLE = `## Tool Call Style
 
