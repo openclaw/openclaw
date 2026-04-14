@@ -4,6 +4,8 @@ import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
+  formatContextWindowBlockMessage,
+  formatContextWindowWarningMessage,
   resolveContextWindowInfo,
 } from "./context-window-guard.js";
 
@@ -221,5 +223,46 @@ describe("context-window-guard", () => {
   it("exports thresholds as expected", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
+  });
+
+  it("adds a local-model hint to warning messages for localhost endpoints", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 24_000, source: "model" },
+    });
+
+    expect(
+      formatContextWindowWarningMessage({
+        provider: "lmstudio",
+        modelId: "qwen3",
+        guard,
+        runtimeBaseUrl: "http://127.0.0.1:1234/v1",
+      }),
+    ).toContain("local/self-hosted runs work best at 32000+ tokens");
+  });
+
+  it("adds a local-model hint to block messages for localhost endpoints", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 8_000, source: "model" },
+    });
+
+    expect(
+      formatContextWindowBlockMessage({
+        guard,
+        runtimeBaseUrl: "http://127.0.0.1:11434/v1",
+      }),
+    ).toContain("This looks like a local model endpoint.");
+  });
+
+  it("keeps block messages concise for public providers", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 8_000, source: "model" },
+    });
+
+    expect(
+      formatContextWindowBlockMessage({
+        guard,
+        runtimeBaseUrl: "https://api.openai.com/v1",
+      }),
+    ).toBe(`Model context window too small (8000 tokens; source=model). Minimum is 16000.`);
   });
 });

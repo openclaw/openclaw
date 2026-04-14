@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { findNormalizedProviderValue } from "./provider-id.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
@@ -60,6 +61,59 @@ export type ContextWindowGuardResult = ContextWindowInfo & {
   shouldWarn: boolean;
   shouldBlock: boolean;
 };
+
+export type ContextWindowGuardHint = {
+  endpointClass: ReturnType<typeof resolveProviderEndpoint>["endpointClass"];
+  likelySelfHosted: boolean;
+};
+
+export function resolveContextWindowGuardHint(params: {
+  runtimeBaseUrl?: string | null;
+}): ContextWindowGuardHint {
+  const endpoint = resolveProviderEndpoint(params.runtimeBaseUrl ?? undefined);
+  return {
+    endpointClass: endpoint.endpointClass,
+    likelySelfHosted: endpoint.endpointClass === "local" || endpoint.endpointClass === "custom",
+  };
+}
+
+export function formatContextWindowWarningMessage(params: {
+  provider: string;
+  modelId: string;
+  guard: ContextWindowGuardResult;
+  runtimeBaseUrl?: string | null;
+}): string {
+  const base = `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} (warn<${CONTEXT_WINDOW_WARN_BELOW_TOKENS}) source=${params.guard.source}`;
+  const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
+  if (!hint.likelySelfHosted) {
+    return base;
+  }
+  return (
+    `${base}; local/self-hosted runs work best at ` +
+    `${CONTEXT_WINDOW_WARN_BELOW_TOKENS}+ tokens and may show weaker tool use or more compaction until the server context limit is raised`
+  );
+}
+
+export function formatContextWindowBlockMessage(params: {
+  guard: ContextWindowGuardResult;
+  runtimeBaseUrl?: string | null;
+}): string {
+  const base =
+    `Model context window too small (${params.guard.tokens} tokens; ` +
+    `source=${params.guard.source}). Minimum is ${CONTEXT_WINDOW_HARD_MIN_TOKENS}.`;
+  const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
+  if (!hint.likelySelfHosted) {
+    return base;
+  }
+  const endpointHint =
+    hint.endpointClass === "local"
+      ? "This looks like a local model endpoint."
+      : "This looks like a self-hosted model endpoint.";
+  return (
+    `${base} ${endpointHint} Raise the server/model context limit or choose a larger model. ` +
+    `OpenClaw local runs work best at ${CONTEXT_WINDOW_WARN_BELOW_TOKENS}+ tokens.`
+  );
+}
 
 export function evaluateContextWindowGuard(params: {
   info: ContextWindowInfo;
