@@ -113,6 +113,7 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
 };
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
+const FULLWIDTH_UNDERSCORE = 0xff3f;
 
 // Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
 const ANGLE_BRACKET_MAP: Record<number, string> = {
@@ -146,6 +147,58 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x02c3: ">", // modifier letter right arrowhead
 };
 
+const MARKER_IGNORED_CODEPOINTS = new Set([
+  0x200b, // zero width space
+  0x200c, // zero width non-joiner
+  0x200d, // zero width joiner
+  0x200e, // left-to-right mark
+  0x200f, // right-to-left mark
+  0x202a, // left-to-right embedding
+  0x202b, // right-to-left embedding
+  0x202c, // pop directional formatting
+  0x202d, // left-to-right override
+  0x202e, // right-to-left override
+  0x2060, // word joiner
+  0x2066, // left-to-right isolate
+  0x2067, // right-to-left isolate
+  0x2068, // first strong isolate
+  0x2069, // pop directional isolate
+  0xfeff, // zero width no-break space / BOM
+]);
+
+function isMarkerWhitespace(char: string): boolean {
+  return /\s/u.test(char);
+}
+
+function decodeMarkerEntity(
+  input: string,
+  start: number,
+): { value: string; length: number } | null {
+  const namedMatch = /^&(lt|gt);/i.exec(input.slice(start, start + 4));
+  if (namedMatch) {
+    return {
+      value: namedMatch[1]?.toLowerCase() === "lt" ? "<" : ">",
+      length: namedMatch[0].length,
+    };
+  }
+
+  const numericMatch = /^&#(x?[0-9a-f]+);/i.exec(input.slice(start, start + 10));
+  if (!numericMatch) {
+    return null;
+  }
+  const raw = numericMatch[1] ?? "";
+  const value = raw.toLowerCase().startsWith("x")
+    ? Number.parseInt(raw.slice(1), 16)
+    : Number.parseInt(raw, 10);
+  if (value === 60) {
+    return { value: "<", length: numericMatch[0].length };
+  }
+  if (value === 62) {
+    return { value: ">", length: numericMatch[0].length };
+  }
+  return null;
+}
+
 function foldMarkerChar(char: string): string {
   const code = char.charCodeAt(0);
   if (code >= 0xff21 && code <= 0xff3a) {
@@ -154,6 +207,9 @@ function foldMarkerChar(char: string): string {
   if (code >= 0xff41 && code <= 0xff5a) {
     return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
   }
+  if (code === FULLWIDTH_UNDERSCORE) {
+    return "_";
+  }
   const bracket = ANGLE_BRACKET_MAP[code];
   if (bracket) {
     return bracket;
@@ -161,49 +217,45 @@ function foldMarkerChar(char: string): string {
   return char;
 }
 
-function isMarkerIgnorableChar(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return (
-    code === 0x200b ||
-    code === 0x200c ||
-    code === 0x200d ||
-    code === 0x2060 ||
-    code === 0xfeff ||
-    code === 0x00ad
-  );
-}
-
-type FoldedMarkerMatch = {
-  folded: string;
-  originalStartByFoldedIndex: number[];
-  originalEndByFoldedIndex: number[];
-};
-
-function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
-  let folded = "";
-  const originalStartByFoldedIndex: number[] = [];
-  const originalEndByFoldedIndex: number[] = [];
+function normalizeForMarkerDetection(input: string): {
+  normalized: string;
+  startMap: number[];
+  endMap: number[];
+} {
+  let normalized = "";
+  const startMap: number[] = [];
+  const endMap: number[] = [];
 
   for (let index = 0; index < input.length; index += 1) {
-    const char = input[index];
-    if (isMarkerIgnorableChar(char)) {
+    const char = input[index] ?? "";
+    const code = char.charCodeAt(0);
+    if (MARKER_IGNORED_CODEPOINTS.has(code) || isMarkerWhitespace(char) || code === 0x00ad) {
       continue;
     }
-    const foldedChar = foldMarkerChar(char);
-    folded += foldedChar;
-    originalStartByFoldedIndex.push(index);
-    originalEndByFoldedIndex.push(index + 1);
+
+    const entity = char === "&" ? decodeMarkerEntity(input, index) : null;
+    if (entity) {
+      normalized += entity.value;
+      startMap.push(index);
+      endMap.push(index + entity.length);
+      index += entity.length - 1;
+      continue;
+    }
+
+    const folded = foldMarkerChar(char);
+    normalized += folded;
+    for (let offset = 0; offset < folded.length; offset += 1) {
+      startMap.push(index);
+      endMap.push(index + 1);
+    }
   }
 
-  return { folded, originalStartByFoldedIndex, originalEndByFoldedIndex };
+  return { normalized, startMap, endMap };
 }
 
 function replaceMarkers(content: string): string {
-  const { folded, originalStartByFoldedIndex, originalEndByFoldedIndex } =
-    foldMarkerTextWithIndexMap(content);
-  // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
-  // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
-  if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
+  const { normalized, startMap, endMap } = normalizeForMarkerDetection(content);
+  if (!/external[\s_]+untrusted[\s_]+content/i.test(normalized)) {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
@@ -222,15 +274,17 @@ function replaceMarkers(content: string): string {
   for (const pattern of patterns) {
     pattern.regex.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = pattern.regex.exec(folded)) !== null) {
-      const foldedStart = match.index;
-      const foldedEnd = match.index + match[0].length;
+    while ((match = pattern.regex.exec(normalized)) !== null) {
+      const normalizedStart = match.index;
+      const normalizedEnd = match.index + match[0].length - 1;
+      const originalStart = startMap[normalizedStart];
+      const originalEnd = endMap[normalizedEnd];
+      if (originalStart === undefined || originalEnd === undefined) {
+        continue;
+      }
       replacements.push({
-        start: originalStartByFoldedIndex[foldedStart] ?? foldedStart,
-        end:
-          originalEndByFoldedIndex[foldedEnd - 1] ??
-          originalStartByFoldedIndex[foldedEnd] ??
-          foldedEnd,
+        start: originalStart,
+        end: originalEnd,
         value: pattern.value,
       });
     }
