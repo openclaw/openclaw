@@ -12,6 +12,10 @@ const JITI_ENTRY_PATH = require.resolve("jiti");
 const matrixWrapperGlobal = globalThis as typeof globalThis & {
   __openclawMatrixWrapperJitiOptions?: unknown;
 };
+const PLUGIN_SDK_ROOT = ["openclaw", "plugin-sdk"].join("/");
+const SCOPED_PLUGIN_SDK_ROOT = ["@openclaw", "plugin-sdk"].join("/");
+const GROUP_ACCESS_SUBPATH = `${PLUGIN_SDK_ROOT}/group-access`;
+const SCOPED_GROUP_ACCESS_SUBPATH = `${SCOPED_PLUGIN_SDK_ROOT}/group-access`;
 const PACKAGED_RUNTIME_STUB = [
   "export async function ensureMatrixCryptoRuntime() {}",
   "export async function handleVerifyRecoveryKey() {}",
@@ -228,20 +232,10 @@ it("builds scoped and unscoped plugin-sdk aliases for the wrapper jiti loader", 
 
   expect(matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions).toMatchObject({
     alias: {
-      "openclaw/plugin-sdk": path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
-      "@openclaw/plugin-sdk": path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
-      "openclaw/plugin-sdk/group-access": path.join(
-        fixtureRoot,
-        "src",
-        "plugin-sdk",
-        "group-access.ts",
-      ),
-      "@openclaw/plugin-sdk/group-access": path.join(
-        fixtureRoot,
-        "src",
-        "plugin-sdk",
-        "group-access.ts",
-      ),
+      [PLUGIN_SDK_ROOT]: path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
+      [SCOPED_PLUGIN_SDK_ROOT]: path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
+      [GROUP_ACCESS_SUBPATH]: path.join(fixtureRoot, "src", "plugin-sdk", "group-access.ts"),
+      [SCOPED_GROUP_ACCESS_SUBPATH]: path.join(fixtureRoot, "src", "plugin-sdk", "group-access.ts"),
     },
   });
 }, 240_000);
@@ -312,14 +306,14 @@ it("keeps wrapper plugin-sdk aliases deterministic and ignores unsafe subpaths",
     ).alias ?? {},
   );
   expect(aliasKeys).toEqual([
-    "openclaw/plugin-sdk",
-    "@openclaw/plugin-sdk",
-    "openclaw/plugin-sdk/alpha",
-    "@openclaw/plugin-sdk/alpha",
-    "openclaw/plugin-sdk/group-access",
-    "@openclaw/plugin-sdk/group-access",
-    "openclaw/plugin-sdk/zeta",
-    "@openclaw/plugin-sdk/zeta",
+    PLUGIN_SDK_ROOT,
+    SCOPED_PLUGIN_SDK_ROOT,
+    `${PLUGIN_SDK_ROOT}/alpha`,
+    `${SCOPED_PLUGIN_SDK_ROOT}/alpha`,
+    GROUP_ACCESS_SUBPATH,
+    SCOPED_GROUP_ACCESS_SUBPATH,
+    `${PLUGIN_SDK_ROOT}/zeta`,
+    `${SCOPED_PLUGIN_SDK_ROOT}/zeta`,
   ]);
 }, 240_000);
 
@@ -369,20 +363,10 @@ it("ignores nearby untrusted openclaw package stubs when resolving the wrapper r
 
   expect(matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions).toMatchObject({
     alias: {
-      "openclaw/plugin-sdk": path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
-      "@openclaw/plugin-sdk": path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
-      "openclaw/plugin-sdk/group-access": path.join(
-        fixtureRoot,
-        "src",
-        "plugin-sdk",
-        "group-access.ts",
-      ),
-      "@openclaw/plugin-sdk/group-access": path.join(
-        fixtureRoot,
-        "src",
-        "plugin-sdk",
-        "group-access.ts",
-      ),
+      [PLUGIN_SDK_ROOT]: path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
+      [SCOPED_PLUGIN_SDK_ROOT]: path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
+      [GROUP_ACCESS_SUBPATH]: path.join(fixtureRoot, "src", "plugin-sdk", "group-access.ts"),
+      [SCOPED_GROUP_ACCESS_SUBPATH]: path.join(fixtureRoot, "src", "plugin-sdk", "group-access.ts"),
     },
   });
 }, 240_000);
@@ -411,8 +395,8 @@ it("treats string bin hints case-insensitively when trusting wrapper package roo
 
   expect(matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions).toMatchObject({
     alias: {
-      "openclaw/plugin-sdk": path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
-      "@openclaw/plugin-sdk": path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
+      [PLUGIN_SDK_ROOT]: path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
+      [SCOPED_PLUGIN_SDK_ROOT]: path.join(fixtureRoot, "src", "plugin-sdk", "root-alias.cjs"),
     },
   });
 }, 240_000);

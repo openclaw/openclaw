@@ -41,7 +41,7 @@ describe("channel plugin blockers", () => {
         },
       ],
       diagnostics: [],
-    } as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {

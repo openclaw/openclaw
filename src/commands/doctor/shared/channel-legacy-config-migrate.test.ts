@@ -71,7 +71,10 @@ describe("bundled channel legacy config migrations", () => {
 
     expect(applyPluginDoctorCompatibilityMigrations).not.toHaveBeenCalled();
     expect(loadBundledChannelDoctorContractApi).toHaveBeenCalledWith("slack");
-    expect(result.next.channels?.slack).toMatchObject({
+    const nextChannels = (result.next.channels ?? {}) as {
+      slack?: Record<string, unknown>;
+    };
+    expect(nextChannels.slack).toMatchObject({
       streaming: true,
       normalizedByBundledContract: true,
     });

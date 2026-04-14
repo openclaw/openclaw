@@ -779,6 +779,14 @@ describe("isFailoverErrorMessage", () => {
     ]);
   });
 
+  it("matches Provider finish_reason: network_error as timeout (#61281)", () => {
+    expectTimeoutFailoverSamples([
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: abort",
+      "Provider finish_reason: malformed_response",
+    ]);
+  });
+
   it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
     const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
     expect(isTimeoutErrorMessage(sample)).toBe(false);
