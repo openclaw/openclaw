@@ -1166,6 +1166,9 @@ async function processMessageAfterDedupe(
             mediaTypes.push(saved.contentType);
           }
         } catch (err) {
+          runtime.error?.(
+            `[bluebubbles] attachment download failed guid=${attachment.guid} err=${String(err)}`,
+          );
           logVerbose(
             core,
             runtime,
