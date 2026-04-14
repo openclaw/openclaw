@@ -416,10 +416,21 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
 
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string } | undefined,
+  payload: { sessionKey?: string; message?: unknown } | undefined,
 ) {
   const sessionKey = payload?.sessionKey?.trim();
   if (!sessionKey || sessionKey !== host.sessionKey) {
+    return;
+  }
+  const message = payload.message;
+  const role =
+    message && typeof message === "object" && typeof (message as { role?: unknown }).role === "string"
+      ? (message as { role: string }).role.trim().toLowerCase()
+      : "";
+  // The active run already rendered this user message optimistically. Reloading
+  // history here can briefly replace it with a stale snapshot before the
+  // persisted transcript catches up, which causes the visible flicker.
+  if (host.chatRunId && role === "user") {
     return;
   }
   void loadChatHistory(host as unknown as ChatState);
@@ -462,7 +473,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "session.message") {
-    handleSessionMessageGatewayEvent(host, evt.payload as { sessionKey?: string } | undefined);
+    handleSessionMessageGatewayEvent(
+      host,
+      evt.payload as { sessionKey?: string; message?: unknown } | undefined,
+    );
     return;
   }
 
