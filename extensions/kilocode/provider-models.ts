@@ -132,6 +132,10 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
     if (apiKey) {
       headers["Authorization"] = `Bearer ${apiKey}`;
     }
+    const orgId = process.env.KILOCODE_ORGANIZATION_ID;
+    if (orgId) {
+      headers["X-KiloCode-OrganizationId"] = orgId;
+    }
 
     const response = await fetch(KILOCODE_MODELS_URL, {
       headers,
