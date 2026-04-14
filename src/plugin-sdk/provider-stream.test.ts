@@ -10,6 +10,13 @@ import {
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
+  GOOGLE_THINKING_STREAM_HOOKS,
+  KILOCODE_THINKING_STREAM_HOOKS,
+  MINIMAX_FAST_MODE_STREAM_HOOKS,
+  MOONSHOT_THINKING_STREAM_HOOKS,
+  OPENAI_RESPONSES_STREAM_HOOKS,
+  OPENROUTER_THINKING_STREAM_HOOKS,
+  TOOL_STREAM_DEFAULT_ON_HOOKS,
 } from "./provider-stream.js";
 
 function requireWrapStreamFn(
@@ -89,7 +96,7 @@ describe("buildProviderStreamFamilyHooks", () => {
       return {} as never;
     };
 
-    const googleHooks = buildProviderStreamFamilyHooks("google-thinking");
+    const googleHooks = GOOGLE_THINKING_STREAM_HOOKS;
     const googleStream = requireStreamFn(
       requireWrapStreamFn(googleHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -109,7 +116,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     ).thinkingConfig as Record<string, unknown>;
     expect(googleThinkingConfig).not.toHaveProperty("thinkingBudget");
 
-    const minimaxHooks = buildProviderStreamFamilyHooks("minimax-fast-mode");
+    const minimaxHooks = MINIMAX_FAST_MODE_STREAM_HOOKS;
     const minimaxStream = requireStreamFn(
       requireWrapStreamFn(minimaxHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -127,7 +134,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     );
     expect(capturedModelId).toBe("MiniMax-M2.7-highspeed");
 
-    const kilocodeHooks = buildProviderStreamFamilyHooks("kilocode-thinking");
+    const kilocodeHooks = KILOCODE_THINKING_STREAM_HOOKS;
     void requireStreamFn(
       requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -152,7 +159,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     });
     expect(capturedPayload).not.toHaveProperty("reasoning");
 
-    const moonshotHooks = buildProviderStreamFamilyHooks("moonshot-thinking");
+    const moonshotHooks = MOONSHOT_THINKING_STREAM_HOOKS;
     const moonshotStream = requireStreamFn(
       requireWrapStreamFn(moonshotHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -165,7 +172,7 @@ describe("buildProviderStreamFamilyHooks", () => {
       thinking: { type: "disabled" },
     });
 
-    const openAiHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
+    const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
     void requireStreamFn(
       requireWrapStreamFn(openAiHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -189,7 +196,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     });
     expect(capturedHeaders).toBeDefined();
 
-    const openRouterHooks = buildProviderStreamFamilyHooks("openrouter-thinking");
+    const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -214,7 +221,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     });
     expect(capturedPayload).not.toHaveProperty("reasoning");
 
-    const toolStreamHooks = buildProviderStreamFamilyHooks("tool-stream-default-on");
+    const toolStreamHooks = TOOL_STREAM_DEFAULT_ON_HOOKS;
     const toolStreamDefault = requireStreamFn(
       requireWrapStreamFn(toolStreamHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -238,5 +245,15 @@ describe("buildProviderStreamFamilyHooks", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
     });
     expect(capturedPayload).not.toHaveProperty("tool_stream");
+  });
+
+  it("exposes canonical stream hook constants for reused families", () => {
+    expect(GOOGLE_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
+    expect(KILOCODE_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
+    expect(MINIMAX_FAST_MODE_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
+    expect(MOONSHOT_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
+    expect(OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
+    expect(OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
+    expect(TOOL_STREAM_DEFAULT_ON_HOOKS.wrapStreamFn).toBeTypeOf("function");
   });
 });

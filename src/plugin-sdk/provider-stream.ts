@@ -139,6 +139,18 @@ export function buildProviderStreamFamilyHooks(
   throw new Error("Unsupported provider stream family");
 }
 
+export const GOOGLE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("google-thinking");
+export const KILOCODE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("kilocode-thinking");
+export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
+export const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
+export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
+  "openai-responses-defaults",
+);
+export const OPENROUTER_THINKING_STREAM_HOOKS =
+  buildProviderStreamFamilyHooks("openrouter-thinking");
+export const TOOL_STREAM_DEFAULT_ON_HOOKS =
+  buildProviderStreamFamilyHooks("tool-stream-default-on");
+
 // Public stream-wrapper helpers for provider plugins.
 
 export {
