@@ -162,6 +162,28 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
+  it("drops absolute host-local media paths when sandbox mapping fails", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { tools: { fs: { workspaceOnly: false } } },
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/Documents/report.pdf"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
+
   it("stages absolute workspace media paths so the PR scenario now works", async () => {
     const absolutePath = "/Users/peter/.openclaw/workspace/exports/images/chart.png";
     const normalize = createReplyMediaPathNormalizer({

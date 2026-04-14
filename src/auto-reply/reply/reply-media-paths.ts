@@ -187,19 +187,13 @@ export function createReplyMediaPathNormalizer(params: {
           sandboxRoot,
         });
       } catch (err) {
-        if (!isLikelyLocalMediaSource(media)) {
-          throw err;
-        }
         if (FILE_URL_RE.test(media)) {
           throw new Error(
             "Host-local MEDIA file URLs are blocked in normal replies. Use a safe path or the message tool.",
             { cause: err },
           );
         }
-        if (isRelativeLocalMedia) {
-          return await persistLocalReplyMedia(resolveWorkspaceRelativeMedia(media));
-        }
-        return await persistLocalReplyMedia(media);
+        throw err;
       }
       return await persistLocalReplyMedia(sandboxResolvedMedia);
     }
