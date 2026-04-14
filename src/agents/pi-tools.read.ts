@@ -22,6 +22,7 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
 
 export {
   REQUIRED_PARAM_GROUPS,
@@ -457,27 +458,65 @@ export function createOpenClawReadTool(
         const fileName = path.basename(inputPath);
         const mediaUrl = `http://localhost:18791${inputPath}`;
 
-        // Handle images - keep base64 for images (they work)
+        // Handle images with sanitization
         if (IMAGE_EXTENSIONS.has(ext)) {
           // Check abort before reading file
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
           
-          const fileBuffer = await fs.readFile(inputPath);
-          // P1 FIX #1: Size cap for images
-          if (fileBuffer.length > 5242880) {
+          let fileBuffer = await fs.readFile(inputPath);
+          let mimeType = getImageMimeType(ext);
+          
+          // Apply image sanitization if configured
+          if (options?.imageSanitization) {
+            try {
+              const maxDimensionPx = options.imageSanitization.maxDimensionPx || 3840;
+              const maxBytes = options.imageSanitization.maxBytes || 5 * 1024 * 1024;
+              
+              const meta = await getImageMetadata(fileBuffer);
+              if (meta?.width && meta?.height) {
+                const overDimension = meta.width > maxDimensionPx || meta.height > maxDimensionPx;
+                const overBytes = fileBuffer.length > maxBytes;
+                
+                if (overDimension || overBytes) {
+                  const resized = await resizeToJpeg({
+                    buffer: fileBuffer,
+                    maxSide: maxDimensionPx,
+                    quality: 85,
+                    withoutEnlargement: true,
+                  });
+                  fileBuffer = Buffer.from(resized);
+                  mimeType = "image/jpeg";
+                }
+              }
+            } catch (sanitizeError) {
+              // If sanitization fails, fall back to URL-only response
+              console.warn(`Image sanitization failed for ${fileName}:`, sanitizeError);
+              return {
+                toolCallId,
+                content: [{
+                  type: "text",
+                  text: `🖼️ ${fileName} - Unable to process image. View at: ${mediaUrl}`
+                }],
+                details: { path: inputPath, size: fileBuffer.length, sanitizationFailed: true },
+              };
+            }
+          }
+          
+          // Size cap for images after sanitization
+          const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+          if (fileBuffer.length > MAX_IMAGE_BYTES) {
             return {
               toolCallId,
               content: [{
                 type: "text",
-                text: `🖼️ ${fileName} - Image too large (${formatBytes(fileBuffer.length)}). View at: ${mediaUrl}`
+                text: `🖼️ ${fileName} - Image too large after processing (${formatBytes(fileBuffer.length)}). View at: ${mediaUrl}`
               }],
               details: { path: inputPath, size: fileBuffer.length, truncated: true },
             };
           }
-          const mimeType = getImageMimeType(ext);
-          // FIXED: Use the correct working format for images
+          
           return {
             toolCallId,
             content: [
