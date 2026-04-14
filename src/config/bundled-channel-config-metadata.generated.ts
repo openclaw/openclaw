@@ -13199,6 +13199,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         silentErrorReplies: {
           type: "boolean",
         },
+        suppressTextBlockDelivery: {
+          type: "boolean",
+        },
         responsePrefix: {
           type: "string",
         },
@@ -14230,6 +14233,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "boolean",
               },
               silentErrorReplies: {
+                type: "boolean",
+              },
+              suppressTextBlockDelivery: {
                 type: "boolean",
               },
               responsePrefix: {
