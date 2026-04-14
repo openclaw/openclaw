@@ -38,6 +38,32 @@ function collectRuntimeDeps(packageJson: Record<string, unknown>): Record<string
   };
 }
 
+function collectIgnoredBuiltDependencies(params: { packageRoot: string }): Set<string> {
+  const packageJsonPath = path.join(params.packageRoot, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
+    return new Set<string>();
+  }
+
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      pnpm?: {
+        ignoredBuiltDependencies?: unknown;
+      };
+    };
+    const ignoredBuiltDependencies = packageJson.pnpm?.ignoredBuiltDependencies;
+    if (!Array.isArray(ignoredBuiltDependencies)) {
+      return new Set<string>();
+    }
+    return new Set(
+      ignoredBuiltDependencies
+        .map((name) => (typeof name === "string" ? name.trim() : ""))
+        .filter((name) => name.length > 0),
+    );
+  } catch {
+    return new Set<string>();
+  }
+}
+
 function collectBundledPluginRuntimeDeps(params: { extensionsDir: string }): {
   deps: RuntimeDepEntry[];
   conflicts: RuntimeDepConflict[];
@@ -120,11 +146,19 @@ export function scanBundledPluginRuntimeDeps(params: { packageRoot: string }): {
   if (!fs.existsSync(extensionsDir)) {
     return { missing: [], conflicts: [] };
   }
+  const ignoredBuiltDependencies = collectIgnoredBuiltDependencies({
+    packageRoot: params.packageRoot,
+  });
   const { deps, conflicts } = collectBundledPluginRuntimeDeps({ extensionsDir });
   const missing = deps.filter(
-    (dep) => !fs.existsSync(path.join(params.packageRoot, dependencySentinelPath(dep.name))),
+    (dep) =>
+      !ignoredBuiltDependencies.has(dep.name) &&
+      !fs.existsSync(path.join(params.packageRoot, dependencySentinelPath(dep.name))),
   );
-  return { missing, conflicts };
+  const visibleConflicts = conflicts.filter(
+    (conflict) => !ignoredBuiltDependencies.has(conflict.name),
+  );
+  return { missing, conflicts: visibleConflicts };
 }
 
 function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
