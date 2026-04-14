@@ -4,7 +4,7 @@ import readline from "node:readline";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { stripHeartbeatContent } from "../auto-reply/heartbeat.js";
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -508,7 +508,7 @@ export async function discoverAllSessions(params?: {
             
             // Filter out heartbeat content to prevent session label pollution (issue #66533)
             if (rawContent) {
-              const heartbeatFiltered = stripHeartbeatContent(rawContent, "message");
+              const heartbeatFiltered = stripHeartbeatToken(rawContent, { mode: "message" });
               const finalContent = heartbeatFiltered.shouldSkip ? "" : (heartbeatFiltered.text || rawContent);
               
               if (finalContent.trim()) {
@@ -517,6 +517,7 @@ export async function discoverAllSessions(params?: {
               }
               // If this message was pure heartbeat content, continue to next message
             }
+          }
         } catch {
           // Skip malformed lines
         }
