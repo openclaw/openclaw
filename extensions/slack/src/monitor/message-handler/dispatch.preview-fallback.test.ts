@@ -114,6 +114,7 @@ function createPreparedSlackMessage(params?: {
       channelHistories: new Map(),
       allowFrom: [],
       setSlackThreadStatus: params?.setSlackThreadStatus ?? (async () => undefined),
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
     },
     account: {
       accountId: "default",
