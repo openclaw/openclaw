@@ -2995,6 +2995,10 @@ td.data-table-key-col {
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
+  max-height: calc(100dvh - 48px); /* overlay has 24px padding top + bottom */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .exec-approval-header {
@@ -3034,6 +3038,8 @@ td.data-table-key-col {
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .exec-approval-meta {
@@ -3066,6 +3072,7 @@ td.data-table-key-col {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ===========================================
@@ -4369,13 +4376,10 @@ details[open] > .ov-expandable-toggle::after {
   .exec-approval-card {
     padding: 16px;
     max-height: 90dvh;
-    display: flex;
-    flex-direction: column;
   }
 
   .exec-approval-actions {
     flex-direction: column;
-    flex-shrink: 0;
   }
 
   .exec-approval-actions .btn {
