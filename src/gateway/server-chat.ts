@@ -688,9 +688,9 @@ export function createAgentEventHandler({
     text: string,
     delta?: unknown,
   ) => {
-    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
+    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text.trim();
     const cleanedDelta =
-      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
+      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text.trim() : "";
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
