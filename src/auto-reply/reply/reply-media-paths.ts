@@ -11,7 +11,7 @@ import { readPathWithinRoot } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
-import { saveMediaBuffer, saveMediaSource } from "../../media/store.js";
+import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -114,6 +114,7 @@ export function createReplyMediaPathNormalizer(params: {
     agentId,
   });
   const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(params.cfg);
+  const rootScopedReadMaxBytes = configuredMediaMaxBytes ?? MEDIA_MAX_BYTES;
   let sandboxRootPromise: Promise<string | undefined> | undefined;
   const persistedMediaBySource = new Map<string, Promise<string>>();
 
@@ -146,7 +147,7 @@ export function createReplyMediaPathNormalizer(params: {
       const persistPromise = readPathWithinRoot({
         rootDir: rootScopedBoundary,
         filePath: media,
-        maxBytes: configuredMediaMaxBytes,
+        maxBytes: rootScopedReadMaxBytes,
       })
         .then(async ({ buffer }) => {
           const saved = await saveMediaBuffer(

@@ -227,6 +227,14 @@ describe("createReplyMediaPathNormalizer", () => {
       8 * 1024 * 1024,
       "generated.png",
     );
+    expect(readPathWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/Users/peter/.openclaw/workspace",
+        filePath:
+          "/Users/peter/.openclaw/workspace/.openclaw/media/tool-image-generation/generated.png",
+        maxBytes: 8 * 1024 * 1024,
+      }),
+    );
     expect(saveMediaSource).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       mediaUrl: "/Users/peter/.openclaw/media/outbound/persisted.png",
@@ -325,6 +333,13 @@ describe("createReplyMediaPathNormalizer", () => {
       "outbound",
       undefined,
       "chart.png",
+    );
+    expect(readPathWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/home/user/.openclaw/workspace",
+        filePath: "/home/user/.openclaw/workspace/exports/images/chart.png",
+        maxBytes: 5 * 1024 * 1024,
+      }),
     );
   });
 

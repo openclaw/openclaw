@@ -16,6 +16,8 @@ const waitForEmbeddedPiRunEndMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 const scheduleFollowupDrainMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
+const readPathWithinRootMock = vi.fn();
+const saveMediaBufferMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -46,6 +48,22 @@ vi.mock("./queue.js", () => ({
   scheduleFollowupDrain: scheduleFollowupDrainMock,
 }));
 
+vi.mock("../../infra/fs-safe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/fs-safe.js")>();
+  return {
+    ...actual,
+    readPathWithinRoot: readPathWithinRootMock,
+  };
+});
+
+vi.mock("../../media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../media/store.js")>();
+  return {
+    ...actual,
+    saveMediaBuffer: saveMediaBufferMock,
+  };
+});
+
 let runReplyAgent: typeof import("./agent-runner.js").runReplyAgent;
 
 describe("runReplyAgent media path normalization", () => {
@@ -66,6 +84,18 @@ describe("runReplyAgent media path normalization", () => {
     enqueueFollowupRunMock.mockReset();
     scheduleFollowupDrainMock.mockReset();
     refreshQueuedFollowupSessionMock.mockReset();
+    readPathWithinRootMock.mockReset();
+    readPathWithinRootMock.mockResolvedValue({
+      buffer: Buffer.from("generated-media"),
+      realPath: "/tmp/workspace/out/generated.png",
+      stat: { size: 15 } as never,
+    });
+    saveMediaBufferMock.mockReset();
+    saveMediaBufferMock.mockResolvedValue({
+      id: "generated.png",
+      path: "/tmp/openclaw-state/media/outbound/generated.png",
+      size: 15,
+    });
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     runWithModelFallbackMock.mockImplementation(
       async ({
@@ -137,8 +167,20 @@ describe("runReplyAgent media path normalization", () => {
     });
 
     expect(result).toMatchObject({
-      mediaUrl: path.join("/tmp/workspace", "out", "generated.png"),
-      mediaUrls: [path.join("/tmp/workspace", "out", "generated.png")],
+      mediaUrl: "/tmp/openclaw-state/media/outbound/generated.png",
+      mediaUrls: ["/tmp/openclaw-state/media/outbound/generated.png"],
     });
+    expect(readPathWithinRootMock).toHaveBeenCalledWith({
+      rootDir: "/tmp/workspace",
+      filePath: path.join("/tmp/workspace", "out", "generated.png"),
+      maxBytes: 5 * 1024 * 1024,
+    });
+    expect(saveMediaBufferMock).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      undefined,
+      "outbound",
+      undefined,
+      "generated.png",
+    );
   });
 });
