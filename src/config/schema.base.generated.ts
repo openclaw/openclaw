@@ -3243,6 +3243,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Max total characters across all injected workspace bootstrap files (default: 150000).",
               },
+              localModelMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "default",
+                  },
+                  {
+                    type: "string",
+                    const: "lean",
+                  },
+                ],
+                title: "Local Model Mode",
+                description:
+                  'Local-model prompt profile: "default" keeps the standard tool surface, while "lean" drops heavyweight non-essential tools for smaller or weaker models.',
+              },
               bootstrapPromptTruncationWarning: {
                 anyOf: [
                   {
@@ -24512,6 +24527,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Bootstrap Total Max Chars",
       help: "Max total characters across all injected workspace bootstrap files (default: 150000).",
       tags: ["performance"],
+    },
+    "agents.defaults.localModelMode": {
+      label: "Local Model Mode",
+      help: 'Local-model prompt profile: "default" keeps the standard tool surface, while "lean" drops heavyweight non-essential tools for smaller or weaker models.',
+      tags: ["advanced"],
     },
     "agents.defaults.bootstrapPromptTruncationWarning": {
       label: "Bootstrap Prompt Truncation Warning",
