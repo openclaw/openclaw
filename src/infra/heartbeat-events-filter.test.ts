@@ -9,10 +9,21 @@ import {
 describe("heartbeat event prompts", () => {
   it.each([
     {
-      name: "builds user-relay cron prompt by default",
+      name: "builds neutral execution cron prompt by default",
       events: ["Cron: rotate logs"],
-      expected: ["Cron: rotate logs", "Please relay this reminder to the user"],
-      unexpected: ["Handle this reminder internally", "Reply HEARTBEAT_OK."],
+      expected: [
+        "Cron: rotate logs",
+        "scheduled reminder has been triggered",
+        "Follow the instructions above exactly",
+        "execute them with the",
+        "Reply HEARTBEAT_OK when done",
+      ],
+      unexpected: [
+        "Handle this reminder internally",
+        "Reply HEARTBEAT_OK.",
+        "NO_REPLY",
+        "Please relay this reminder to the user",
+      ],
     },
     {
       name: "builds internal-only cron prompt when delivery is disabled",
