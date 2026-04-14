@@ -431,6 +431,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
         };
+        if (evt.upstreamRequestId) {
+          spanAttrs["openclaw.upstream_request_id"] = evt.upstreamRequestId;
+        }
 
         const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
         span.end();

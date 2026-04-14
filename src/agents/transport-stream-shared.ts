@@ -19,6 +19,19 @@ type TransportOutputShape = {
   errorMessage?: string;
 };
 
+const TRANSPORT_UPSTREAM_ID_HEADERS = ["request-id", "x-request-id", "trace-id"] as const;
+
+function normalizeTransportId(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  return undefined;
+}
+
 export function sanitizeTransportPayloadText(text: string): string {
   return text.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
@@ -42,6 +55,42 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
     }
   }
   return {};
+}
+
+export function resolveTransportUpstreamRequestId(...candidates: Array<unknown>): string | undefined {
+  for (const candidate of candidates) {
+    const normalized = normalizeTransportId(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+export function resolveTransportUpstreamRequestIdFromHeaders(
+  headers: Headers | Record<string, unknown> | undefined,
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    for (const headerName of TRANSPORT_UPSTREAM_ID_HEADERS) {
+      const value = resolveTransportUpstreamRequestId(headers.get(headerName));
+      if (value) {
+        return value;
+      }
+    }
+    return undefined;
+  }
+  const entries = Object.entries(headers);
+  for (const headerName of TRANSPORT_UPSTREAM_ID_HEADERS) {
+    const matched = entries.find(([key]) => key.toLowerCase() === headerName);
+    const value = resolveTransportUpstreamRequestId(matched?.[1]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 export function mergeTransportHeaders(

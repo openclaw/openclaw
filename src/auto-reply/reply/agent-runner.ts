@@ -644,6 +644,9 @@ export async function runReplyAgent(params: {
         config: cfg,
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      const upstreamRequestId = normalizeOptionalString(
+        runResult.meta?.agentMeta?.upstreamRequestId,
+      );
       emitDiagnosticEvent({
         type: "model.usage",
         sessionKey,
@@ -651,6 +654,7 @@ export async function runReplyAgent(params: {
         channel: replyToChannel,
         provider: providerUsed,
         model: modelUsed,
+        upstreamRequestId,
         usage: {
           input,
           output,

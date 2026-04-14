@@ -336,4 +336,58 @@ describe("anthropic transport stream", () => {
       undefined,
     );
   });
+
+  it("propagates upstream request id from stream response headers", async () => {
+    const streamedEvents = (async function* () {
+      yield {
+        type: "message_start",
+        message: { id: "msg_1", usage: { input_tokens: 4, output_tokens: 0 } },
+      };
+      yield {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 4, output_tokens: 2 },
+      };
+    })();
+    anthropicMessagesStreamMock.mockReturnValueOnce(
+      Object.assign(streamedEvents, {
+        withResponse: async () => ({
+          data: streamedEvents,
+          response: new Response(null, {
+            headers: {
+              "request-id": "req_header_123",
+            },
+          }),
+          request_id: "req_fallback_abc",
+        }),
+      }),
+    );
+
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        {
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          api: "anthropic-messages",
+          provider: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } as Model<"anthropic-messages">,
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect((result as { upstreamRequestId?: string }).upstreamRequestId).toBe("req_header_123");
+  });
 });

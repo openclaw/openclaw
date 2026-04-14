@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
@@ -125,7 +126,7 @@ export function buildErrorAgentMeta(params: {
   model: string;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastAssistant?: { usage?: unknown } | null;
+  lastAssistant?: { usage?: unknown; upstreamRequestId?: unknown } | null;
   lastTurnTotal?: number;
 }): EmbeddedPiAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
@@ -134,10 +135,12 @@ export function buildErrorAgentMeta(params: {
     lastRunPromptUsage: params.lastRunPromptUsage,
     lastTurnTotal: params.lastTurnTotal,
   });
+  const upstreamRequestId = normalizeOptionalString(params.lastAssistant?.upstreamRequestId);
   return {
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.model,
+    ...(upstreamRequestId ? { upstreamRequestId } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),

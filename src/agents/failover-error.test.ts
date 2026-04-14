@@ -569,6 +569,34 @@ describe("failover-error", () => {
     expect(err?.model).toBe("claude-opus-4-6");
   });
 
+  it("captures upstream request ids from structured error response headers", () => {
+    const err = coerceToFailoverError(
+      {
+        status: 429,
+        response: {
+          headers: new Headers({
+            "x-request-id": "xreq_429_test",
+          }),
+        },
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    );
+    expect(err?.upstreamRequestId).toBe("xreq_429_test");
+    expect(describeFailoverError(err).upstreamRequestId).toBe("xreq_429_test");
+  });
+
+  it("captures upstream request ids from raw error text", () => {
+    const described = describeFailoverError({
+      status: 429,
+      message:
+        "request failed: RESOURCE_EXHAUSTED (request_id: 20260303141547610b7f574d1b44cb) please retry",
+    });
+    expect(described.upstreamRequestId).toBe("20260303141547610b7f574d1b44cb");
+  });
+
   it("maps overloaded to a 503 fallback status", () => {
     expect(resolveFailoverStatus("overloaded")).toBe(503);
   });

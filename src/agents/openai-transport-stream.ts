@@ -36,7 +36,12 @@ import {
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
-import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
+import {
+  mergeTransportMetadata,
+  resolveTransportUpstreamRequestId,
+  resolveTransportUpstreamRequestIdFromHeaders,
+  sanitizeTransportPayloadText,
+} from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 
@@ -79,6 +84,14 @@ type OpenAIModeModel = Model<Api> & {
   compat?: Record<string, unknown>;
 };
 
+type OpenAIStreamRequest<T> = (AsyncIterable<T> | PromiseLike<AsyncIterable<T>>) & {
+  withResponse?: () => Promise<{
+    data: AsyncIterable<T>;
+    response?: Response;
+    request_id?: string | null;
+  }>;
+};
+
 type MutableAssistantOutput = {
   role: "assistant";
   content: Array<Record<string, unknown>>;
@@ -96,6 +109,7 @@ type MutableAssistantOutput = {
   stopReason: string;
   timestamp: number;
   responseId?: string;
+  upstreamRequestId?: string;
   errorMessage?: string;
 };
 
@@ -122,6 +136,65 @@ function stringifyJsonLike(value: unknown, fallback = ""): string {
     return String(value);
   }
   return fallback;
+}
+
+function resolveOpenAIUpstreamRequestId(candidate: unknown): string | undefined {
+  if (!candidate || typeof candidate !== "object") {
+    return undefined;
+  }
+  const record = candidate as {
+    upstreamRequestId?: unknown;
+    request_id?: unknown;
+    requestId?: unknown;
+    _request_id?: unknown;
+    trace_id?: unknown;
+    traceId?: unknown;
+    headers?: Headers | Record<string, unknown>;
+    response?: {
+      headers?: Headers | Record<string, unknown>;
+      request_id?: unknown;
+      requestId?: unknown;
+      _request_id?: unknown;
+      trace_id?: unknown;
+      traceId?: unknown;
+    };
+  };
+  return resolveTransportUpstreamRequestId(
+    record.upstreamRequestId,
+    record.request_id,
+    record.requestId,
+    record._request_id,
+    record.trace_id,
+    record.traceId,
+    resolveTransportUpstreamRequestIdFromHeaders(record.headers),
+    resolveTransportUpstreamRequestIdFromHeaders(record.response?.headers),
+    record.response?.request_id,
+    record.response?.requestId,
+    record.response?._request_id,
+    record.response?.trace_id,
+    record.response?.traceId,
+  );
+}
+
+async function resolveOpenAIStreamResponse<T>(
+  request: OpenAIStreamRequest<T>,
+): Promise<{ data: AsyncIterable<T>; upstreamRequestId?: string }> {
+  if (typeof request.withResponse === "function") {
+    const responseWithMeta = await request.withResponse();
+    return {
+      data: responseWithMeta.data,
+      upstreamRequestId: resolveTransportUpstreamRequestId(
+        resolveTransportUpstreamRequestIdFromHeaders(responseWithMeta.response?.headers),
+        responseWithMeta.request_id,
+      ),
+    };
+  }
+  const data = await request;
+  return {
+    data,
+    upstreamRequestId:
+      resolveOpenAIUpstreamRequestId(request) ?? resolveOpenAIUpstreamRequestId(data),
+  };
 }
 
 function getServiceTierCostMultiplier(serviceTier: ResponseCreateParamsStreaming["service_tier"]) {
@@ -381,8 +454,10 @@ async function processResponsesStream(
   for await (const rawEvent of openaiStream) {
     const event = rawEvent as Record<string, unknown>;
     const type = stringifyUnknown(event.type);
+    output.upstreamRequestId ||= resolveOpenAIUpstreamRequestId(event);
     if (type === "response.created") {
       output.responseId = stringifyUnknown((event.response as { id?: string } | undefined)?.id);
+      output.upstreamRequestId ||= resolveOpenAIUpstreamRequestId(event.response);
     } else if (type === "response.output_item.added") {
       const item = event.item as Record<string, unknown>;
       if (item.type === "reasoning") {
@@ -502,6 +577,7 @@ async function processResponsesStream(
       if (typeof response?.id === "string") {
         output.responseId = response.id;
       }
+      output.upstreamRequestId ||= resolveOpenAIUpstreamRequestId(response);
       const usage = response?.usage as
         | {
             input_tokens?: number;
@@ -691,10 +767,13 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           params = nextParams as typeof params;
         }
         params = mergeTransportMetadata(params, turnState?.metadata);
-        const responseStream = (await client.responses.create(
+        const responseRequest = client.responses.create(
           params as never,
           options?.signal ? { signal: options.signal } : undefined,
-        )) as unknown as AsyncIterable<unknown>;
+        ) as OpenAIStreamRequest<unknown>;
+        const responseWithMeta = await resolveOpenAIStreamResponse(responseRequest);
+        output.upstreamRequestId = responseWithMeta.upstreamRequestId;
+        const responseStream = responseWithMeta.data;
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
           serviceTier: (options as OpenAIResponsesOptions | undefined)?.serviceTier,
@@ -852,10 +931,13 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           params = nextParams as typeof params;
         }
         params = mergeTransportMetadata(params, turnState?.metadata);
-        const responseStream = (await client.responses.create(
+        const responseRequest = client.responses.create(
           params as never,
           options?.signal ? { signal: options.signal } : undefined,
-        )) as unknown as AsyncIterable<unknown>;
+        ) as OpenAIStreamRequest<unknown>;
+        const responseWithMeta = await resolveOpenAIStreamResponse(responseRequest);
+        output.upstreamRequestId = responseWithMeta.upstreamRequestId;
+        const responseStream = responseWithMeta.data;
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model);
         if (options?.signal?.aborted) {
@@ -981,9 +1063,12 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
-        const responseStream = (await client.chat.completions.create(params as never, {
+        const responseRequest = client.chat.completions.create(params as never, {
           signal: options?.signal,
-        })) as unknown as AsyncIterable<ChatCompletionChunk>;
+        }) as OpenAIStreamRequest<ChatCompletionChunk>;
+        const responseWithMeta = await resolveOpenAIStreamResponse(responseRequest);
+        output.upstreamRequestId = responseWithMeta.upstreamRequestId;
+        const responseStream = responseWithMeta.data;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream);
         if (options?.signal?.aborted) {
@@ -1035,6 +1120,7 @@ async function processOpenAICompletionsStream(
   };
   for await (const chunk of responseStream) {
     output.responseId ||= chunk.id;
+    output.upstreamRequestId ||= resolveOpenAIUpstreamRequestId(chunk);
     if (chunk.usage) {
       output.usage = parseTransportChunkUsage(chunk.usage, model);
     }

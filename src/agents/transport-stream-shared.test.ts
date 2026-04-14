@@ -3,6 +3,8 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  resolveTransportUpstreamRequestId,
+  resolveTransportUpstreamRequestIdFromHeaders,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -71,5 +73,29 @@ describe("transport stream shared helpers", () => {
       error: output,
     });
     expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the first non-empty normalized upstream id candidate", () => {
+    expect(resolveTransportUpstreamRequestId(undefined, "   ", "req_123", "trace_abc")).toBe(
+      "req_123",
+    );
+  });
+
+  it("extracts request-id style headers from Headers objects", () => {
+    const headers = new Headers({
+      "x-request-id": "xreq_456",
+      "trace-id": "trace_789",
+    });
+    expect(resolveTransportUpstreamRequestIdFromHeaders(headers)).toBe("xreq_456");
+  });
+
+  it("prefers request-id over x-request-id and trace-id in record headers", () => {
+    expect(
+      resolveTransportUpstreamRequestIdFromHeaders({
+        "Trace-Id": "trace_789",
+        "X-Request-Id": "xreq_456",
+        "Request-Id": "req_123",
+      }),
+    ).toBe("req_123");
   });
 });

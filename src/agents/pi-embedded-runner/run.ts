@@ -1488,10 +1488,14 @@ export async function runEmbeddedPiAgent(
             lastRunPromptUsage,
             lastTurnTotal,
           });
+          const upstreamRequestId = normalizeOptionalString(
+            (sessionLastAssistant as { upstreamRequestId?: unknown } | undefined)?.upstreamRequestId,
+          );
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: sessionLastAssistant?.provider ?? provider,
             model: sessionLastAssistant?.model ?? model.id,
+            ...(upstreamRequestId ? { upstreamRequestId } : {}),
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
             promptTokens: usageMeta.promptTokens,

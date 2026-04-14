@@ -5,6 +5,7 @@ export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
+  upstreamRequestId?: string;
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
   promptTokens?: number;

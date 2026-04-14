@@ -10,6 +10,9 @@ import {
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
   registerMemoryFlushPlanResolver,
@@ -157,6 +160,8 @@ beforeEach(() => {
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
+  resetDiagnosticEventsForTest();
+  resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -170,6 +175,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  resetDiagnosticEventsForTest();
+  resetSystemEventsForTest();
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
@@ -1452,7 +1459,11 @@ describe("runReplyAgent fallback reasoning tags", () => {
 });
 
 describe("runReplyAgent response usage footer", () => {
-  function createRun(params: { responseUsage: "tokens" | "full"; sessionKey: string }) {
+  function createRun(params: {
+    responseUsage: "tokens" | "full";
+    sessionKey: string;
+    config?: Record<string, unknown>;
+  }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "whatsapp",
@@ -1480,7 +1491,7 @@ describe("runReplyAgent response usage footer", () => {
         messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: createCliBackendTestConfig(),
+        config: params.config ?? createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1558,6 +1569,38 @@ describe("runReplyAgent response usage footer", () => {
     const text = payload?.text ?? "";
     expect(text).toContain("Usage:");
     expect(text).not.toContain("· session ");
+  });
+
+  it("emits upstream request ids on model usage diagnostics", async () => {
+    const capturedRequestIds: string[] = [];
+    const stop = onDiagnosticEvent((event) => {
+      if (event.type === "model.usage" && event.upstreamRequestId) {
+        capturedRequestIds.push(event.upstreamRequestId);
+      }
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 12, output: 3 },
+          upstreamRequestId: "req_diag_123",
+        },
+      },
+    });
+
+    await createRun({
+      responseUsage: "tokens",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      config: {
+        ...createCliBackendTestConfig(),
+        diagnostics: { enabled: true },
+      },
+    });
+    stop();
+
+    expect(capturedRequestIds).toEqual(["req_diag_123"]);
   });
 });
 

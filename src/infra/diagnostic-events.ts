@@ -14,6 +14,7 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   channel?: string;
   provider?: string;
   model?: string;
+  upstreamRequestId?: string;
   usage: {
     input?: number;
     output?: number;

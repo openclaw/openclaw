@@ -5,8 +5,16 @@ import {
   type FailoverClassification,
   type FailoverSignal,
 } from "./pi-embedded-helpers/errors.js";
+import {
+  resolveTransportUpstreamRequestId,
+  resolveTransportUpstreamRequestIdFromHeaders,
+} from "./transport-stream-shared.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
+const UPSTREAM_REQUEST_ID_PATTERNS = [
+  /\b(?:x-request-id|request-id|request_id|trace-id|trace_id)\s*[:=]\s*([a-zA-Z0-9._:-]+)/i,
+  /\((?:request_id|trace_id)\s*:\s*([a-zA-Z0-9._:-]+)\)/i,
+] as const;
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -15,6 +23,7 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  readonly upstreamRequestId?: string;
 
   constructor(
     message: string,
@@ -25,6 +34,7 @@ export class FailoverError extends Error {
       profileId?: string;
       status?: number;
       code?: string;
+      upstreamRequestId?: string;
       cause?: unknown;
     },
   ) {
@@ -36,6 +46,7 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.upstreamRequestId = params.upstreamRequestId;
   }
 }
 
@@ -138,6 +149,60 @@ function readDirectErrorCode(err: unknown): string | undefined {
 
 function getErrorCode(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectErrorCode);
+}
+
+function readDirectUpstreamRequestId(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as {
+    upstreamRequestId?: unknown;
+    request_id?: unknown;
+    requestId?: unknown;
+    _request_id?: unknown;
+    trace_id?: unknown;
+    traceId?: unknown;
+    headers?: Headers | Record<string, unknown>;
+    response?: {
+      headers?: Headers | Record<string, unknown>;
+      request_id?: unknown;
+      requestId?: unknown;
+      _request_id?: unknown;
+      trace_id?: unknown;
+      traceId?: unknown;
+    };
+  };
+  return resolveTransportUpstreamRequestId(
+    candidate.upstreamRequestId,
+    candidate.request_id,
+    candidate.requestId,
+    candidate._request_id,
+    candidate.trace_id,
+    candidate.traceId,
+    resolveTransportUpstreamRequestIdFromHeaders(candidate.headers),
+    resolveTransportUpstreamRequestIdFromHeaders(candidate.response?.headers),
+    candidate.response?.request_id,
+    candidate.response?.requestId,
+    candidate.response?._request_id,
+    candidate.response?.trace_id,
+    candidate.response?.traceId,
+  );
+}
+
+function getUpstreamRequestId(err: unknown): string | undefined {
+  const direct = findErrorProperty(err, readDirectUpstreamRequestId);
+  if (direct) {
+    return direct;
+  }
+  const message = getErrorMessage(err);
+  for (const pattern of UPSTREAM_REQUEST_ID_PATTERNS) {
+    const matched = message.match(pattern);
+    const id = resolveTransportUpstreamRequestId(matched?.[1]);
+    if (id) {
+      return id;
+    }
+  }
+  return undefined;
 }
 
 function readDirectProvider(err: unknown): string | undefined {
@@ -277,6 +342,7 @@ export function describeFailoverError(err: unknown): {
   reason?: FailoverReason;
   status?: number;
   code?: string;
+  upstreamRequestId?: string;
 } {
   if (isFailoverError(err)) {
     return {
@@ -284,6 +350,7 @@ export function describeFailoverError(err: unknown): {
       reason: err.reason,
       status: err.status,
       code: err.code,
+      upstreamRequestId: err.upstreamRequestId,
     };
   }
   const signal = normalizeErrorSignal(err);
@@ -293,6 +360,7 @@ export function describeFailoverError(err: unknown): {
     reason: resolveFailoverReasonFromError(err) ?? undefined,
     status: signal.status,
     code: signal.code,
+    upstreamRequestId: getUpstreamRequestId(err),
   };
 }
 
@@ -302,6 +370,7 @@ export function coerceToFailoverError(
     provider?: string;
     model?: string;
     profileId?: string;
+    upstreamRequestId?: string;
   },
 ): FailoverError | null {
   if (isFailoverError(err)) {
@@ -316,6 +385,7 @@ export function coerceToFailoverError(
   const message = signal.message ?? String(err);
   const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
+  const upstreamRequestId = getUpstreamRequestId(err) ?? context?.upstreamRequestId;
 
   return new FailoverError(message, {
     reason,
@@ -324,6 +394,7 @@ export function coerceToFailoverError(
     profileId: context?.profileId,
     status,
     code,
+    upstreamRequestId,
     cause: err instanceof Error ? err : undefined,
   });
 }

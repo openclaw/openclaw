@@ -25,6 +25,8 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  resolveTransportUpstreamRequestId,
+  resolveTransportUpstreamRequestIdFromHeaders,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -95,6 +97,7 @@ type MutableAssistantOutput = {
   stopReason: string;
   timestamp: number;
   responseId?: string;
+  upstreamRequestId?: string;
   errorMessage?: string;
 };
 
@@ -626,19 +629,46 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
         }
-        const anthropicStream = client.messages.stream(
+        const anthropicRequest = client.messages.stream(
           { ...params, stream: true } as never,
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
-        ) as AsyncIterable<Record<string, unknown>>;
+        ) as AsyncIterable<Record<string, unknown>> & {
+          request_id?: string | null;
+          withResponse?: () => Promise<{
+            data: AsyncIterable<Record<string, unknown>>;
+            response?: Response;
+            request_id?: string | null;
+          }>;
+        };
+        let anthropicStream: AsyncIterable<Record<string, unknown>> = anthropicRequest;
+        if (typeof anthropicRequest.withResponse === "function") {
+          const withResponse = await anthropicRequest.withResponse();
+          anthropicStream = withResponse.data;
+          output.upstreamRequestId = resolveTransportUpstreamRequestId(
+            resolveTransportUpstreamRequestIdFromHeaders(withResponse.response?.headers),
+            withResponse.request_id,
+          );
+        } else {
+          output.upstreamRequestId = resolveTransportUpstreamRequestId(anthropicRequest.request_id);
+        }
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
         for await (const event of anthropicStream) {
           if (event.type === "message_start") {
             const message = event.message as
-              | { id?: string; usage?: Record<string, unknown> }
+              | {
+                  id?: string;
+                  usage?: Record<string, unknown>;
+                  _request_id?: string;
+                  request_id?: string;
+                }
               | undefined;
             const usage = message?.usage ?? {};
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
+            output.upstreamRequestId ||= resolveTransportUpstreamRequestId(
+              message?._request_id,
+              message?.request_id,
+            );
             output.usage.input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
             output.usage.output = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
             output.usage.cacheRead =
@@ -846,6 +876,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
+        output.upstreamRequestId ||= resolveTransportUpstreamRequestId(anthropicRequest.request_id);
         finalizeTransportStream({ stream, output, signal: transportOptions.signal });
       } catch (error) {
         failTransportStream({

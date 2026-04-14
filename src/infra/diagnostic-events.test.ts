@@ -39,6 +39,23 @@ describe("diagnostic-events", () => {
     ]);
   });
 
+  it("keeps optional upstream request ids on model usage events", () => {
+    const captured: Array<{ upstreamRequestId?: string }> = [];
+    onDiagnosticEvent((event) => {
+      if (event.type === "model.usage") {
+        captured.push({ upstreamRequestId: event.upstreamRequestId });
+      }
+    });
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      upstreamRequestId: "req_otel_123",
+      usage: { total: 1 },
+    });
+
+    expect(captured).toEqual([{ upstreamRequestId: "req_otel_123" }]);
+  });
+
   it("isolates listener failures and logs them", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const seen: string[] = [];

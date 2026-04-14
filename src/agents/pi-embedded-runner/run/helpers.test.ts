@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { resolveFinalAssistantVisibleText } from "./helpers.js";
+import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import { buildErrorAgentMeta, resolveFinalAssistantVisibleText } from "./helpers.js";
 
 function makeAssistantMessage(
   content: AssistantMessage["content"],
@@ -59,5 +60,36 @@ describe("resolveFinalAssistantVisibleText", () => {
     ]);
 
     expect(resolveFinalAssistantVisibleText(lastAssistant)).toBeUndefined();
+  });
+});
+
+describe("buildErrorAgentMeta", () => {
+  it("preserves upstream request ids in error agent meta", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 12,
+      output: 3,
+      total: 15,
+    });
+
+    const meta = buildErrorAgentMeta({
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      usageAccumulator,
+      lastRunPromptUsage: { input: 12, output: 3, total: 15 },
+      lastAssistant: {
+        usage: {
+          inputTokens: 12,
+          outputTokens: 3,
+          totalTokens: 15,
+        },
+        upstreamRequestId: " req_err_123 ",
+      },
+      lastTurnTotal: 15,
+    });
+
+    expect(meta.upstreamRequestId).toBe("req_err_123");
+    expect(meta.usage).toMatchObject({ total: 15 });
   });
 });

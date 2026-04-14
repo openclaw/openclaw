@@ -271,6 +271,35 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("attaches upstream request id to model usage spans", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      sessionKey: "agent:main:test:dm:peer",
+      sessionId: "sess-1",
+      channel: "telegram",
+      provider: "openai",
+      model: "gpt-5.4",
+      upstreamRequestId: "req_otel_span_123",
+      usage: {
+        input: 10,
+        output: 5,
+        total: 15,
+      },
+    });
+
+    const call = telemetryState.tracer.startSpan.mock.calls.find(
+      (args) => args[0] === "openclaw.model.usage",
+    );
+    const attrs = (call?.[1] as { attributes?: Record<string, unknown> } | undefined)?.attributes;
+    expect(attrs?.["openclaw.upstream_request_id"]).toBe("req_otel_span_123");
+
+    await service.stop?.(ctx);
+  });
+
   test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createTraceOnlyContext("https://www.comet.com/opik/api/v1/private/otel");
