@@ -28,6 +28,7 @@ function loadRootAliasWithStubs(options?: {
   aliasPath?: string;
   packageExports?: Record<string, unknown>;
   platform?: string;
+  existingPaths?: string[];
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
@@ -70,6 +71,9 @@ function loadRootAliasWithStubs(options?: {
         existsSync: (targetPath: string) => {
           if (targetPath.endsWith(path.join("dist", "infra", "diagnostic-events.js"))) {
             return options?.distExists ?? false;
+          }
+          if (options?.existingPaths?.includes(targetPath)) {
+            return true;
           }
           return options?.distExists ?? false;
         },
@@ -303,6 +307,35 @@ describe("plugin-sdk root alias", () => {
       "openclaw/plugin-sdk/zeta",
       "@openclaw/plugin-sdk/zeta",
     ]);
+  });
+
+  it("builds source plugin-sdk subpath aliases through the wider source extension family", () => {
+    const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const lazyModule = loadRootAliasWithStubs({
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+      existingPaths: [path.join(packageRoot, "src", "plugin-sdk", "channel-runtime.mts")],
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    expect(lazyModule.createJitiOptions.at(-1)?.alias).toMatchObject({
+      "openclaw/plugin-sdk/channel-runtime": path.join(
+        packageRoot,
+        "src",
+        "plugin-sdk",
+        "channel-runtime.mts",
+      ),
+      "@openclaw/plugin-sdk/channel-runtime": path.join(
+        packageRoot,
+        "src",
+        "plugin-sdk",
+        "channel-runtime.mts",
+      ),
+    });
   });
 
   it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
