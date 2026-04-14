@@ -18,6 +18,7 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
@@ -229,6 +230,9 @@ export function createOpenClawTools(
     workspaceDir,
   });
   const embedded = isEmbeddedMode();
+  const effectiveCallGateway = embedded
+    ? createEmbeddedCallGateway()
+    : openClawToolsDeps.callGateway;
   const tools: AnyAgentTool[] = [
     ...(embedded
       ? []
@@ -240,14 +244,10 @@ export function createOpenClawTools(
           }),
         ]),
     ...(!embedded && messageTool ? [messageTool] : []),
-    ...(embedded
-      ? []
-      : [
-          createTtsTool({
-            agentChannel: options?.agentChannel,
-            config: options?.config,
-          }),
-        ]),
+    createTtsTool({
+      agentChannel: options?.agentChannel,
+      config: options?.config,
+    }),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []
@@ -256,13 +256,12 @@ export function createOpenClawTools(
             agentSessionKey: options?.agentSessionKey,
             config: options?.config,
           }),
-          createAgentsListTool({
-            agentSessionKey: options?.agentSessionKey,
-            requesterAgentIdOverride: options?.requesterAgentIdOverride,
-          }),
         ]),
-    ...(!embedded &&
-    isUpdatePlanToolEnabledForOpenClawTools({
+    createAgentsListTool({
+      agentSessionKey: options?.agentSessionKey,
+      requesterAgentIdOverride: options?.requesterAgentIdOverride,
+    }),
+    ...(isUpdatePlanToolEnabledForOpenClawTools({
       config: resolvedConfig,
       agentSessionKey: options?.agentSessionKey,
       agentId: options?.requesterAgentIdOverride,
@@ -271,31 +270,27 @@ export function createOpenClawTools(
     })
       ? [createUpdatePlanTool()]
       : []),
+    createSessionsListTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config: resolvedConfig,
+      callGateway: effectiveCallGateway,
+    }),
+    createSessionsHistoryTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config: resolvedConfig,
+      callGateway: effectiveCallGateway,
+    }),
     ...(embedded
       ? []
       : [
-          createSessionsListTool({
-            agentSessionKey: options?.agentSessionKey,
-            sandboxed: options?.sandboxed,
-            config: resolvedConfig,
-            callGateway: openClawToolsDeps.callGateway,
-          }),
-          createSessionsHistoryTool({
-            agentSessionKey: options?.agentSessionKey,
-            sandboxed: options?.sandboxed,
-            config: resolvedConfig,
-            callGateway: openClawToolsDeps.callGateway,
-          }),
           createSessionsSendTool({
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
             callGateway: openClawToolsDeps.callGateway,
-          }),
-          createSessionsYieldTool({
-            sessionId: options?.sessionId,
-            onYield: options?.onYield,
           }),
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
@@ -311,15 +306,19 @@ export function createOpenClawTools(
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
           }),
-          createSubagentsTool({
-            agentSessionKey: options?.agentSessionKey,
-          }),
-          createSessionStatusTool({
-            agentSessionKey: options?.agentSessionKey,
-            config: resolvedConfig,
-            sandboxed: options?.sandboxed,
-          }),
         ]),
+    createSessionsYieldTool({
+      sessionId: options?.sessionId,
+      onYield: options?.onYield,
+    }),
+    createSubagentsTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createSessionStatusTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: resolvedConfig,
+      sandboxed: options?.sandboxed,
+    }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
 

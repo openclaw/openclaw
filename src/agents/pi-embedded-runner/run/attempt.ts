@@ -630,7 +630,7 @@ export async function runEmbeddedAttempt(
     }
     if (isEmbeddedMode()) {
       workspaceNotes.push(
-        "Running in local embedded mode (no gateway). Gateway-dependent tools (sessions, subagents, cron, canvas, nodes, message, tts) are unavailable. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid. Focus on coding and local file operations.",
+        "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",
       );
     }
 
