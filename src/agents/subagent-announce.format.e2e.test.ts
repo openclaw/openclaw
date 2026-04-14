@@ -7,6 +7,7 @@ import {
 } from "../config/config.js";
 import * as configSessions from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import * as gatewayCall from "../gateway/call.js";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,

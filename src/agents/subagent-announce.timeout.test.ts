@@ -477,7 +477,10 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(findFinalDirectAgentCall()).toBeUndefined();
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("NO_REPLY");
   });
 
   it("prefers visible assistant progress over a later raw tool result", async () => {
@@ -518,9 +521,12 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(
-      findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
-    ).toBeUndefined();
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("NO_REPLY");
   });
 
   it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {
