@@ -17,6 +17,10 @@ import {
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
+import {
+  installVisualViewportKeyboardInset,
+  uninstallVisualViewportKeyboardInset,
+} from "./visual-viewport-keyboard.ts";
 
 type LifecycleHost = {
   basePath: string;
@@ -65,6 +69,7 @@ export function handleConnected(host: LifecycleHost) {
   if (host.tab === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   }
+  installVisualViewportKeyboardInset();
 }
 
 export function handleFirstUpdated(host: LifecycleHost) {
@@ -83,6 +88,7 @@ export function handleDisconnected(host: LifecycleHost) {
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;
+  uninstallVisualViewportKeyboardInset();
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {

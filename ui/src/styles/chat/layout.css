@@ -187,7 +187,7 @@
   gap: 12px;
   margin-top: auto;
   /* Push to bottom of flex container */
-  padding: 12px 4px 4px;
+  padding: 12px 4px calc(4px + var(--visual-viewport-keyboard-inset, 0px));
   background: linear-gradient(to bottom, transparent, var(--bg) 20%);
   z-index: 10;
 }
@@ -477,7 +477,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  margin: 0 18px calc(14px + var(--visual-viewport-keyboard-inset, 0px));
   padding: 0;
   background: var(--card);
   border: 1px solid var(--border);
