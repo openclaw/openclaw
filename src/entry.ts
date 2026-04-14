@@ -8,8 +8,8 @@ import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/containe
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { buildCliRespawnPlan } from "./entry.respawn.js";
-import { exitAfterFlush } from "./infra/exit-after-flush.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
+import { exitAfterFlush } from "./infra/exit-after-flush.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
@@ -204,7 +204,7 @@ function runMainOrRootHelp(argv: string[]): void {
   }
   import("./cli/run-main.js")
     .then(({ runCli }) => runCli(argv))
-    .then(() => exitAfterFlush(process.exitCode ?? 0))
+    .then(() => exitAfterFlush(Number(process.exitCode) || 0))
     .catch((error) => {
       console.error(
         "[openclaw] Failed to start CLI:",
@@ -213,5 +213,3 @@ function runMainOrRootHelp(argv: string[]): void {
       exitAfterFlush(1);
     });
 }
-
-

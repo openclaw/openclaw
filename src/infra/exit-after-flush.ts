@@ -11,10 +11,14 @@ export function exitAfterFlush(code: number): void {
   process.exitCode = code;
   let pending = 2;
   const done = () => {
-    if (--pending === 0) process.exit(code);
+    if (--pending === 0) {
+      process.exit(code);
+    }
   };
   const safetyTimer = setTimeout(() => process.exit(code), 500);
-  if (typeof safetyTimer.unref === "function") safetyTimer.unref();
+  if (typeof safetyTimer.unref === "function") {
+    safetyTimer.unref();
+  }
   if (process.stdout.writableNeedDrain) {
     process.stdout.once("drain", done);
   } else {

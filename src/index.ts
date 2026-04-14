@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { exitAfterFlush } from "./infra/exit-after-flush.js";
 import { formatUncaughtError } from "./infra/errors.js";
+import { exitAfterFlush } from "./infra/exit-after-flush.js";
 import { isMainModule } from "./infra/is-main.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 
@@ -97,7 +97,7 @@ if (isMain) {
   });
 
   void runLegacyCliEntry(process.argv)
-    .then(() => exitAfterFlush(process.exitCode ?? 0))
+    .then(() => exitAfterFlush(Number(process.exitCode) || 0))
     .catch((err) => {
       console.error("[openclaw] CLI failed:", formatUncaughtError(err));
       restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });

@@ -124,6 +124,7 @@ class StubGatewayClient {
     }
   }
   stop() {}
+  async stopAndWait(_opts?: { timeoutMs?: number }) {}
 }
 
 function resetGatewayCallMocks() {
@@ -501,6 +502,7 @@ describe("callGateway url resolution", () => {
             } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
           },
           stop() {},
+          async stopAndWait() {},
         }) as never,
       loadConfig: loadConfig as unknown as () => OpenClawConfig,
       loadOrCreateDeviceIdentity: () => deviceIdentityState.value,

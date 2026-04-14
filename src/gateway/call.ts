@@ -462,76 +462,93 @@ async function executeGatewayRequestWithScopes<T>(params: {
   // can starve the event loop, preventing timely processing of the
   // connect.challenge frame and causing handshake timeouts (#48736).
   await new Promise<void>((r) => setImmediate(r));
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    let ignoreClose = false;
-    const stop = (err?: Error, value?: T) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(value as T);
-      }
-    };
 
-    const client = gatewayCallDeps.createGatewayClient({
-      url,
-      token,
-      password,
-      tlsFingerprint,
-      instanceId: opts.instanceId ?? randomUUID(),
-      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: resolveGatewayClientDisplayName(opts),
-      clientVersion: opts.clientVersion ?? VERSION,
-      platform: opts.platform,
-      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
-      role: "operator",
-      scopes,
-      deviceIdentity: resolveDeviceIdentityForGatewayCall(),
-      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
-      maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
-      onHelloOk: async (hello) => {
-        try {
-          ensureGatewaySupportsRequiredMethods({
-            requiredMethods: opts.requiredMethods,
-            methods: hello.features?.methods,
-            attemptedMethod: opts.method,
-          });
-          const result = await client.request<T>(opts.method, opts.params, {
-            expectFinal: opts.expectFinal,
-            timeoutMs: opts.timeoutMs,
-          });
-          ignoreClose = true;
-          stop(undefined, result);
-          client.stop();
-        } catch (err) {
-          ignoreClose = true;
-          client.stop();
-          stop(err as Error);
-        }
-      },
-      onClose: (code, reason) => {
-        if (settled || ignoreClose) {
+  // Create the client outside the promise so we can await a clean teardown
+  // after the RPC result settles. This ensures the underlying WebSocket and
+  // all associated timers are fully destroyed before the function returns,
+  // allowing the Node.js event loop to exit naturally without process.exit().
+  let client: GatewayClient | null = null;
+
+  try {
+    const result = await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      let ignoreClose = false;
+      const stop = (err?: Error, value?: T) => {
+        if (settled) {
           return;
         }
+        settled = true;
+        clearTimeout(timer);
+        if (err) {
+          reject(err);
+        } else {
+          resolve(value as T);
+        }
+      };
+
+      client = gatewayCallDeps.createGatewayClient({
+        url,
+        token,
+        password,
+        tlsFingerprint,
+        instanceId: opts.instanceId ?? randomUUID(),
+        clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+        clientDisplayName: resolveGatewayClientDisplayName(opts),
+        clientVersion: opts.clientVersion ?? VERSION,
+        platform: opts.platform,
+        mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+        role: "operator",
+        scopes,
+        deviceIdentity: resolveDeviceIdentityForGatewayCall(),
+        minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+        maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+        onHelloOk: async (hello) => {
+          try {
+            ensureGatewaySupportsRequiredMethods({
+              requiredMethods: opts.requiredMethods,
+              methods: hello.features?.methods,
+              attemptedMethod: opts.method,
+            });
+            const result = await client!.request<T>(opts.method, opts.params, {
+              expectFinal: opts.expectFinal,
+              timeoutMs: opts.timeoutMs,
+            });
+            ignoreClose = true;
+            stop(undefined, result);
+          } catch (err) {
+            ignoreClose = true;
+            stop(err as Error);
+          }
+        },
+        onClose: (code, reason) => {
+          if (settled || ignoreClose) {
+            return;
+          }
+          ignoreClose = true;
+          client!.stop();
+          stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        },
+      });
+
+      const timer = setTimeout(() => {
         ignoreClose = true;
-        client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
-      },
+        client!.stop();
+        stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      }, safeTimerTimeoutMs);
+
+      client.start();
     });
 
-    const timer = setTimeout(() => {
-      ignoreClose = true;
-      client.stop();
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
-    }, safeTimerTimeoutMs);
-
-    client.start();
-  });
+    return result;
+  } finally {
+    // Clean teardown: wait for the WebSocket to fully close so no ref'd
+    // handles survive. This runs on both success and error paths.
+    // stopAndWait() has its own internal timeout and handles already-stopped
+    // clients gracefully (returns immediately if no socket is open).
+    if (client) {
+      await (client as GatewayClient).stopAndWait({ timeoutMs: 500 });
+    }
+  }
 }
 
 async function callGatewayWithScopes<T = Record<string, unknown>>(
