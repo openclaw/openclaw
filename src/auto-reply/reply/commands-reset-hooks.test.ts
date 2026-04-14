@@ -256,6 +256,45 @@ describe("handleCommands reset hooks", () => {
     );
   });
 
+  it("matches /reset@otherbot when the handler regex is loosened for multi-bot mentions", async () => {
+    // Regression for Codex P2 on #66407. `normalizeCommandBody` only strips
+    // `@mention` when the mention matches `options.botUsername`, so a
+    // wrong-bot mention like `/reset@otherbot foo` is preserved verbatim and
+    // reaches `maybeHandleResetCommand`. The handler regex must accept `@`
+    // as a boundary after the command token so the handler proceeds past
+    // `if (!resetMatch) return null;` and invokes `emitResetCommandHooks`
+    // rather than bailing and falling back to the ACP session as
+    // conversational input. Matching is proven by the hook mock being
+    // called — non-matching input returns null before reaching the hook.
+    const params = buildResetParams("/reset@otherbot foo", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    await maybeHandleResetCommand(params);
+
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "reset" }),
+    );
+  });
+
+  it("matches /reset:foo colon-syntax when the handler regex is loosened", async () => {
+    // Defense-in-depth symmetry with the bypass regex: `/cmd:tail` is
+    // rewritten to `/cmd tail` by `normalizeCommandBody` on the fast path,
+    // but the handler regex still accepts `:` so the unnormalized form
+    // doesn't slip past when the fast path is bypassed.
+    const params = buildResetParams("/reset:foo", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    await maybeHandleResetCommand(params);
+
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "reset" }),
+    );
+  });
+
   it("prefers the target session entry when emitting reset hooks", async () => {
     const params = buildResetParams("/reset", {
       commands: { text: true },

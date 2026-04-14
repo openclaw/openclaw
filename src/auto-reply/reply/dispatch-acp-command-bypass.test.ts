@@ -66,6 +66,69 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(true);
   });
 
+  it("returns true for /acp@otherbot slash commands (multi-bot mention not stripped)", () => {
+    // Regression for Codex P2 on #66407. In multi-bot environments
+    // `normalizeCommandBody` only strips `@mention` when the mention matches
+    // `options.botUsername`; a wrong-bot mention is preserved as-is and
+    // reaches `handleAcpCommand`, which uses `startsWith("/acp")`. The bypass
+    // regex must accept the same `/cmd@bot` form the handler accepts, or
+    // `/acp@otherbot close` slips past the bypass and gets consumed by the
+    // ACP session as conversational input.
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/acp@otherbot close",
+      BodyForCommands: "/acp@otherbot close",
+      BodyForAgent: "/acp@otherbot close",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for /acp:close colon-syntax", () => {
+    // In the production fast path `normalizeCommandBody` would rewrite
+    // `/acp:close` to `/acp close`, but the bypass should still catch the
+    // unnormalized form for defense in depth — the handler regex in
+    // commands-reset.ts also accepts `:` after the command token.
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/acp:close",
+      BodyForCommands: "/acp:close",
+      BodyForAgent: "/acp:close",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for /reset@otherbot reset-tail", () => {
+    // Symmetric regression to the /acp@otherbot case. `maybeHandleResetCommand`
+    // is gated on its own regex which is loosened in the same commit; the
+    // bypass regex must stay in lockstep so `/reset@otherbot continue` does
+    // not leak into the ACP session.
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/reset@otherbot continue",
+      BodyForCommands: "/reset@otherbot continue",
+      BodyForAgent: "/reset@otherbot continue",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for /reset:foo colon-syntax", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/reset:foo",
+      BodyForCommands: "/reset:foo",
+      BodyForAgent: "/reset:foo",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
   it("returns false for unrecognized slash commands", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
