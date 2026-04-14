@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Media-understanding/attachments: fail closed when a local attachment path cannot be canonically resolved via `realpath`, so a `realpath` error can no longer downgrade the canonical-roots allowlist check to a non-canonical comparison; attachments that also have a URL still fall back to the network fetch path. (#66022) Thanks @eleqtrizit.
 - Agents/gateway-tool: reject `config.patch` and `config.apply` calls from the model-facing gateway tool when they would newly enable any flag enumerated by `openclaw security audit` (for example `dangerouslyDisableDeviceAuth`, `allowInsecureAuth`, `dangerouslyAllowHostHeaderOriginFallback`, `hooks.gmail.allowUnsafeExternalContent`, `tools.exec.applyPatch.workspaceOnly: false`); already-enabled flags pass through unchanged so non-dangerous edits in the same patch still apply, and direct authenticated operator RPC behavior is unchanged. (#62006) Thanks @eleqtrizit.
 - Telegram/forum topics: persist learned topic names to the Telegram session sidecar store so agent context can keep using human topic names after a restart instead of relearning from future service metadata. (#66107) Thanks @obviyus.
+- Doctor/systemd: keep `openclaw doctor --repair` and service reinstall from re-embedding dotenv-backed secrets in user systemd units, while preserving newer inline overrides over stale state-dir `.env` values. (#66249) Thanks @tmimmanuel.
 
 ## 2026.4.14-beta.1
 
