@@ -2285,6 +2285,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               error,
             },
           });
+          // Cancel the pending lifecycle error timer: .catch() is handling this error,
+          // so we don't want the timer to fire a duplicate error event later.
+          context.clearPendingChatLifecycleError?.(clientRunId);
           broadcastChatError({
             context,
             runId: clientRunId,
