@@ -30,13 +30,16 @@ describe("loadControlUiBootstrapConfig", () => {
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
       serverVersion: null,
+      settings: null,
+      password: null,
+      hello: null,
     };
 
     await loadControlUiBootstrapConfig(state);
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET", headers: { Accept: "application/json" } }),
     );
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
@@ -62,13 +65,16 @@ describe("loadControlUiBootstrapConfig", () => {
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
       serverVersion: null,
+      settings: null,
+      password: null,
+      hello: null,
     };
 
     await loadControlUiBootstrapConfig(state);
 
     expect(fetchMock).toHaveBeenCalledWith(
       CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET", headers: { Accept: "application/json" } }),
     );
     expect(state.assistantName).toBe("Assistant");
     expect(state.embedSandboxMode).toBe("scripts");
@@ -90,13 +96,50 @@ describe("loadControlUiBootstrapConfig", () => {
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
       serverVersion: null,
+      settings: null,
+      password: null,
+      hello: null,
     };
 
     await loadControlUiBootstrapConfig(state);
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET", headers: { Accept: "application/json" } }),
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it("includes gateway auth header when a token is configured", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      settings: { token: "secret-token" },
+      password: null,
+      hello: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+      expect.objectContaining({
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: "Bearer secret-token",
+        },
+      }),
     );
 
     vi.unstubAllGlobals();

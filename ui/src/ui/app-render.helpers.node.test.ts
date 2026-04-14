@@ -140,6 +140,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
       resolveAssistantAttachmentAuthToken({
         settings: { token: "session-token" } as AppViewState["settings"],
         password: "shared-password",
+        hello: undefined,
       }),
     ).toBe("session-token");
   });
@@ -149,8 +150,19 @@ describe("resolveAssistantAttachmentAuthToken", () => {
       resolveAssistantAttachmentAuthToken({
         settings: { token: "   " } as AppViewState["settings"],
         password: "shared-password",
+        hello: undefined,
       }),
     ).toBe("shared-password");
+  });
+
+  it("falls back to the paired device token when shared auth is unavailable", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "" } as AppViewState["settings"],
+        password: "   ",
+        hello: { auth: { deviceToken: "paired-device-token" } } as AppViewState["hello"],
+      }),
+    ).toBe("paired-device-token");
   });
 
   it("returns null when neither auth secret is available", () => {
@@ -158,6 +170,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
       resolveAssistantAttachmentAuthToken({
         settings: { token: "" } as AppViewState["settings"],
         password: "   ",
+        hello: null,
       }),
     ).toBeNull();
   });

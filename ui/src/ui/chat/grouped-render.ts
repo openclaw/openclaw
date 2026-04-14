@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { until } from "lit/directives/until.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { until } from "lit/directives/until.js";
 import {
   DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_HEIGHT,
   DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_WIDTH,
@@ -736,7 +736,11 @@ const IMAGE_ACTION_COPIED_FEEDBACK_MS = 1_500;
 const imageActionFeedbackTimers = new WeakMap<HTMLButtonElement, number>();
 const MANAGED_IMAGE_PREVIEW_SELECTOR = ".chat-message-image";
 
-function buildManagedImageFetchCacheKey(url: string, authHeader?: string, requesterSessionKey?: string) {
+function buildManagedImageFetchCacheKey(
+  url: string,
+  authHeader?: string,
+  requesterSessionKey?: string,
+) {
   return JSON.stringify([url, authHeader ?? null, requesterSessionKey ?? null]);
 }
 
@@ -751,7 +755,7 @@ function resolveManagedImageUrl(
   if (!rawUrl) {
     return null;
   }
-  const safeUrl = resolveSafeExternalUrl(rawUrl, opts.basePath, {
+  const safeUrl = resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
     allowDataImage: opts.allowDataImage ?? true,
   });
   if (!safeUrl || safeUrl.startsWith("data:") || safeUrl.startsWith("blob:")) {
@@ -878,7 +882,9 @@ async function fetchImageBlob(
     });
   }
 
-  const safeUrl = resolveSafeExternalUrl(rawUrl, opts.basePath, { allowDataImage: true });
+  const safeUrl = resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
+    allowDataImage: true,
+  });
   if (!safeUrl) {
     return null;
   }
@@ -923,8 +929,8 @@ async function rasterizeBlobToPng(blob: Blob): Promise<Blob | null> {
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
       const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("image load failed"));
+      img.addEventListener("load", () => resolve(img), { once: true });
+      img.addEventListener("error", () => reject(new Error("image load failed")), { once: true });
       img.src = objectUrl;
     });
     const canvas = document.createElement("canvas");
@@ -1048,7 +1054,9 @@ async function fetchManagedPreviewBlobUrl(
     }
     return null;
   }
-  return resolveSafeExternalUrl(rawUrl, opts.basePath, { allowDataImage: true });
+  return resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
+    allowDataImage: true,
+  });
 }
 
 function resolveManagedPreviewSource(
@@ -1069,7 +1077,9 @@ function resolveManagedPreviewSource(
     allowDataImage: true,
   });
   if (!managedUrl) {
-    return resolveSafeExternalUrl(rawUrl, opts.basePath, { allowDataImage: true });
+    return resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
+      allowDataImage: true,
+    });
   }
 
   const resolvedPrimary = managedImageBlobUrlResolvedCache.get(
@@ -1087,7 +1097,11 @@ function resolveManagedPreviewSource(
     });
     if (fallbackManagedUrl && fallbackManagedUrl !== managedUrl) {
       const resolvedFallback = managedImageBlobUrlResolvedCache.get(
-        buildManagedImageFetchCacheKey(fallbackManagedUrl, opts.authHeader, opts.requesterSessionKey),
+        buildManagedImageFetchCacheKey(
+          fallbackManagedUrl,
+          opts.authHeader,
+          opts.requesterSessionKey,
+        ),
       );
       if (typeof resolvedFallback === "string" && resolvedFallback.length > 0) {
         return resolvedFallback;
@@ -1210,7 +1224,9 @@ function renderMessageImages(
 
   const renderImageFrameContent = (img: ImageBlock, resolvedPreviewSrc: string | null) => {
     if (!resolvedPreviewSrc) {
-      return html`<div class="chat-message-image-unavailable" role="status">Image unavailable</div>`;
+      return html`<div class="chat-message-image-unavailable" role="status">
+        Image unavailable
+      </div>`;
     }
     return html`
       <img
@@ -1228,7 +1244,8 @@ function renderMessageImages(
           class="chat-message-image-action chat-message-image-copy"
           title="copy image"
           aria-label="copy image"
-          @click=${(event: Event) => copyImage(img, event.currentTarget as HTMLButtonElement | null)}
+          @click=${(event: Event) =>
+            copyImage(img, event.currentTarget as HTMLButtonElement | null)}
         >
           <span class="chat-message-image-action__icon chat-message-image-action__icon--copy"
             >${icons.copy}</span
@@ -1440,6 +1457,9 @@ function resolveAssistantAttachmentAvailability(
 ): AssistantAttachmentAvailability {
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
+  }
+  if (localMediaPreviewRoots.length === 0) {
+    return { status: "checking" };
   }
   if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };

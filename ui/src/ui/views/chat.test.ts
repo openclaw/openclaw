@@ -2040,6 +2040,61 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("renders local assistant attachments once preview roots arrive after initial render", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("meta=1")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({ available: true }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    const renderWithRoots = (localMediaPreviewRoots: string[]) =>
+      render(
+        renderChat(
+          createProps({
+            showToolCalls: false,
+            basePath: "/openclaw",
+            assistantAttachmentAuthToken: "session-token",
+            localMediaPreviewRoots,
+            onRequestUpdate: () => renderWithRoots(localMediaPreviewRoots),
+            messages: [
+              {
+                id: "assistant-local-media-roots-arrive-late",
+                role: "assistant",
+                content: "Local image\nMEDIA:/home/test/.openclaw/media/test image.png",
+                timestamp: Date.now(),
+              },
+            ],
+          }),
+        ),
+        container,
+      );
+
+    renderWithRoots([]);
+    expect(container.textContent).toContain("Checking...");
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    renderWithRoots(["/home/test/.openclaw/media"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/openclaw/__openclaw__/assistant-media?source=%2Fhome%2Ftest%2F.openclaw%2Fmedia%2Ftest+image.png&token=session-token&meta=1",
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
+    );
+    expect(container.querySelector(".chat-message-image")).not.toBeNull();
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    vi.unstubAllGlobals();
+  });
+
   it("rechecks local assistant attachment availability when the auth token changes", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const fetchMock = vi.fn(async (url: string) => {
