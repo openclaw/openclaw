@@ -274,6 +274,21 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
+  it("keeps markdown local file images as plain text in final replies", async () => {
+    const text = "Look ![chart](file:///etc/passwd) now";
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text,
+    });
+    expect(replyPayloads[0]?.mediaUrl).toBeUndefined();
+    expect(replyPayloads[0]?.mediaUrls).toBeUndefined();
+  });
+
   it("deduplicates final payloads against directly sent block keys regardless of replyToId", async () => {
     // When block streaming is not active but directlySentBlockKeys has entries
     // (e.g. from pre-tool flush), the key should match even if replyToId differs.
