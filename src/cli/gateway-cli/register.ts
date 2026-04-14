@@ -168,10 +168,8 @@ export function registerGatewayCli(program: Command) {
       .action(async (method, opts, command) => {
         await runGatewayCommand(async () => {
           const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const { readBestEffortConfig } = await loadConfigModule();
-          const config = await readBestEffortConfig();
           const params = JSON.parse(String(opts.params ?? "{}"));
-          const result = await callGatewayCli(method, { ...rpcOpts, config }, params);
+          const result = await callGatewayCli(method, rpcOpts, params);
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -194,9 +192,7 @@ export function registerGatewayCli(program: Command) {
         await runGatewayCommand(async () => {
           const rpcOpts = resolveGatewayRpcOptions(opts, command);
           const days = parseDaysOption(opts.days);
-          const { readBestEffortConfig } = await loadConfigModule();
-          const config = await readBestEffortConfig();
-          const result = await callGatewayCli("usage.cost", { ...rpcOpts, config }, { days });
+          const result = await callGatewayCli("usage.cost", rpcOpts, { days });
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -217,17 +213,11 @@ export function registerGatewayCli(program: Command) {
       .action(async (opts, command) => {
         await runGatewayCommand(async () => {
           const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const [
-            { readBestEffortConfig },
-            { formatHealthChannelLines },
-            { styleHealthChannelLine },
-          ] = await Promise.all([
-            loadConfigModule(),
+          const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
             loadGatewayHealthModule(),
             loadHealthStyleModule(),
           ]);
-          const config = await readBestEffortConfig();
-          const result = await callGatewayCli("health", { ...rpcOpts, config });
+          const result = await callGatewayCli("health", rpcOpts);
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;
