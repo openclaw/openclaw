@@ -102,7 +102,7 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
     expect(params.cronSession.sessionEntry.sessionFile).toBe("/tmp/transcripts/cron-session.jsonl");
   });
 
-  it("persists sessionFile with correct path format", () => {
+  it("persists sessionFile with correct path format", async () => {
     const params = makeMockParams({
       cronSession: {
         sessionEntry: {
@@ -143,7 +143,7 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
     expect(params.cronSession.sessionEntry.sessionFile).toBe("/tmp/transcripts/cron-session.jsonl");
   });
 
-  it("calls resolveSessionTranscriptPath with correct arguments", () => {
+  it("calls resolveSessionTranscriptPath with correct arguments", async () => {
     const params = makeMockParams({
       cronSession: {
         sessionEntry: {
