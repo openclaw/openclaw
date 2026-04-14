@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_QA_RUNNER = {
@@ -19,6 +20,25 @@ function createAvailableQaRunnerContribution() {
         qa.command(TEST_QA_RUNNER.commandName).action(() => undefined);
       }),
     },
+  } satisfies QaRunnerCliContribution;
+}
+
+function createMissingQaRunnerContribution(): QaRunnerCliContribution {
+  return {
+    pluginId: TEST_QA_RUNNER.pluginId,
+    commandName: TEST_QA_RUNNER.commandName,
+    description: TEST_QA_RUNNER.description,
+    status: "missing",
+    npmSpec: TEST_QA_RUNNER.npmSpec,
+  };
+}
+
+function createBlockedQaRunnerContribution(): QaRunnerCliContribution {
+  return {
+    pluginId: TEST_QA_RUNNER.pluginId,
+    commandName: TEST_QA_RUNNER.commandName,
+    description: TEST_QA_RUNNER.description,
+    status: "blocked",
   };
 }
 
@@ -97,15 +117,7 @@ describe("qa cli registration", () => {
   });
 
   it("shows an install hint when a discovered runner plugin is unavailable", async () => {
-    listQaRunnerCliContributions.mockReset().mockReturnValue([
-      {
-        pluginId: TEST_QA_RUNNER.pluginId,
-        commandName: TEST_QA_RUNNER.commandName,
-        description: TEST_QA_RUNNER.description,
-        status: "missing",
-        npmSpec: TEST_QA_RUNNER.npmSpec,
-      },
-    ]);
+    listQaRunnerCliContributions.mockReset().mockReturnValue([createMissingQaRunnerContribution()]);
     const missingProgram = new Command();
     registerQaLabCli(missingProgram);
 
@@ -115,14 +127,7 @@ describe("qa cli registration", () => {
   });
 
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
-    listQaRunnerCliContributions.mockReset().mockReturnValue([
-      {
-        pluginId: TEST_QA_RUNNER.pluginId,
-        commandName: TEST_QA_RUNNER.commandName,
-        description: TEST_QA_RUNNER.description,
-        status: "blocked",
-      },
-    ]);
+    listQaRunnerCliContributions.mockReset().mockReturnValue([createBlockedQaRunnerContribution()]);
     const blockedProgram = new Command();
     registerQaLabCli(blockedProgram);
 

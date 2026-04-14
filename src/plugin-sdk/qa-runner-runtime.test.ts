@@ -3,7 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
-const listBundledQaRunnerCatalog = vi.hoisted(() => vi.fn(() => []));
+const listBundledQaRunnerCatalog = vi.hoisted(() =>
+  vi.fn<
+    () => Array<{
+      pluginId: string;
+      commandName: string;
+      description?: string;
+      npmSpec: string;
+    }>
+  >(() => []),
+);
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
