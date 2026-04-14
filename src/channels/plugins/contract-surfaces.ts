@@ -1,3 +1,12 @@
+// NOTE: This module provides guarded, cached entrypoints for loading channel
+// contract-api.ts surfaces via jiti. The exported functions
+// (getBundledChannelContractSurfaceEntries / getBundledChannelContractSurfaces)
+// are forward infrastructure: the reentrancy guards are correct and tested, but
+// no production callers exist yet. The active Docker stack-overflow fix is in
+// src/channels/plugins/bundled.ts (commit ec369898c1). When callers are wired
+// in as part of the channel-contract-api migration, they should import from
+// here rather than src/secrets/channel-contract-api.ts to get the reentrancy
+// protection for free.
 import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
