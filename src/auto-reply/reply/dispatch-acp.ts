@@ -186,6 +186,7 @@ async function maybeUnbindStaleBoundConversations(params: {
 async function finalizeAcpTurnOutput(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string | null;
   delivery: AcpDispatchDeliveryCoordinator;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
@@ -197,7 +198,7 @@ async function finalizeAcpTurnOutput(params: {
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
   const speechCfg = resolveAgentSpeechConfig(
     params.cfg,
-    resolveAgentIdFromSessionKey(params.sessionKey),
+    params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
   );
   const ttsMode = resolveConfiguredTtsMode(speechCfg);
   const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
@@ -275,6 +276,18 @@ async function finalizeAcpTurnOutput(params: {
   return queuedFinal;
 }
 
+function resolveAcpSpeechAgentId(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  acpMetaAgent?: string | null;
+}): string {
+  return (
+    normalizeOptionalString(params.acpMetaAgent) ??
+    normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
+    resolveAgentIdFromSessionKey(params.sessionKey)
+  );
+}
+
 export async function tryDispatchAcpReply(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -310,10 +323,18 @@ export async function tryDispatchAcpReply(params: {
     return null;
   }
   const canonicalSessionKey = acpResolution.sessionKey;
-  const speechCfg = resolveAgentSpeechConfig(
-    params.cfg,
-    resolveAgentIdFromSessionKey(canonicalSessionKey),
-  );
+  const resolvedAcpAgent =
+    acpResolution.kind === "ready"
+      ? resolveAcpSpeechAgentId({
+          cfg: params.cfg,
+          sessionKey: canonicalSessionKey,
+          acpMetaAgent: acpResolution.meta.agent,
+        })
+      : resolveAcpSpeechAgentId({
+          cfg: params.cfg,
+          sessionKey: canonicalSessionKey,
+        });
+  const speechCfg = resolveAgentSpeechConfig(params.cfg, resolvedAcpAgent);
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
@@ -347,12 +368,6 @@ export async function tryDispatchAcpReply(params: {
         accountIdRaw: params.ctx.AccountId,
       })));
 
-  const resolvedAcpAgent =
-    acpResolution.kind === "ready"
-      ? (normalizeOptionalString(acpResolution.meta.agent) ??
-        normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
-        resolveAgentIdFromSessionKey(canonicalSessionKey))
-      : resolveAgentIdFromSessionKey(canonicalSessionKey);
   const normalizedDispatchChannel = normalizeOptionalLowercaseString(
     params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
   );
@@ -410,7 +425,7 @@ export async function tryDispatchAcpReply(params: {
         const { applyMediaUnderstanding } = await loadDispatchAcpMediaRuntime();
         await applyMediaUnderstanding({
           ctx: params.ctx,
-          cfg: params.cfg,
+          cfg: speechCfg,
         });
       } catch (err) {
         logVerbose(
@@ -453,6 +468,7 @@ export async function tryDispatchAcpReply(params: {
       (await finalizeAcpTurnOutput({
         cfg: params.cfg,
         sessionKey: canonicalSessionKey,
+        agentId: resolvedAcpAgent,
         delivery,
         inboundAudio: params.inboundAudio,
         sessionTtsAuto: params.sessionTtsAuto,

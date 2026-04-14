@@ -491,6 +491,80 @@ describe("tryDispatchAcpReply", () => {
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
+  it("resolves ACP speech config from the resolved ACP agent instead of the raw session key", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: "main",
+      meta: createAcpSessionMeta({
+        agent: "voice",
+      }),
+    });
+    mockVisibleTextTurn("hola");
+
+    await runDispatch({
+      bodyForAgent: "speak",
+      cfg: createAcpTestConfig({
+        messages: {
+          tts: {
+            auto: "always",
+            mode: "all",
+            provider: "openai",
+            providers: {
+              openai: {
+                voice: "alloy",
+              },
+            },
+          },
+        },
+        tools: {
+          media: {
+            audio: {
+              language: "en",
+            },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "voice",
+              tts: {
+                providers: {
+                  openai: {
+                    voice: "coral",
+                  },
+                },
+              },
+              stt: {
+                language: "es",
+              },
+            },
+          ],
+        },
+      }),
+      ctxOverrides: {
+        MediaPath: "/tmp/inbound.wav",
+        MediaType: "audio/wav",
+      },
+      sessionKeyOverride: "main",
+    });
+
+    const [mediaParams] = mediaUnderstandingMocks.applyMediaUnderstanding.mock.calls[0] as [
+      { cfg: OpenClawConfig },
+    ];
+    expect(mediaParams.cfg.tools?.media?.audio).toEqual(
+      expect.objectContaining({
+        language: "es",
+      }),
+    );
+
+    const [ttsParams] = ttsMocks.maybeApplyTtsToPayload.mock.calls[0] as [{ cfg: OpenClawConfig }];
+    expect(ttsParams.cfg.messages?.tts?.providers?.openai).toEqual(
+      expect.objectContaining({
+        voice: "coral",
+      }),
+    );
+  });
+
   it("forwards normalized image attachments into ACP turns", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "inbound.png");

@@ -1619,8 +1619,7 @@ describe("active-memory plugin", () => {
         messages: [
           {
             role: "user",
-            content:
-              "Active Memory: I really do want you to remember that I prefer aisle seats.",
+            content: "Active Memory: I really do want you to remember that I prefer aisle seats.",
           },
           {
             role: "user",
