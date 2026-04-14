@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   resolveOpenAITransportTurnState,
@@ -121,10 +120,4 @@ export function buildOpenAISyntheticCatalogEntry(
   };
 }
 
-export {
-  cloneFirstTemplateModel,
-  findCatalogTemplate,
-  isOpenAIApiBaseUrl,
-  isOpenAICodexBaseUrl,
-  matchesExactOrPrefix,
-};
+export { cloneFirstTemplateModel, findCatalogTemplate, matchesExactOrPrefix };
