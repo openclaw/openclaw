@@ -116,6 +116,7 @@ function createPreparedSlackMessage(params?: {
     isRoomish: false,
     historyKey: "history-key",
     preview: "",
+    storePath: "/tmp/test-store",
     ackReactionValue: "eyes",
     ackReactionPromise: null,
   } as never;
