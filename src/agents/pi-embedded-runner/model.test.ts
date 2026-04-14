@@ -827,6 +827,91 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
+  it("canonicalizes the legacy openai-codex gpt-5.4-codex alias at runtime", () => {
+    mockOpenAICodexTemplateModel(discoverModels);
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-codex", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+    expect(result.model?.id).toBe("gpt-5.4");
+    expect(result.model?.name).toBe("gpt-5.4");
+  });
+
+  it("applies canonical openai-codex overrides when resolving the gpt-5.4-codex alias", () => {
+    mockOpenAICodexTemplateModel(discoverModels);
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://proxy.example.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                contextWindow: 123456,
+                contextTokens: 65432,
+                maxTokens: 7777,
+                reasoning: false,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-codex", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://proxy.example.com/backend-api",
+      contextWindow: 123456,
+      contextTokens: 65432,
+      maxTokens: 7777,
+      reasoning: false,
+    });
+  });
+
+  it("prefers alias-specific overrides over canonical ones for gpt-5.4-codex", () => {
+    mockOpenAICodexTemplateModel(discoverModels);
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-codex-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                contextWindow: 222222,
+                maxTokens: 22222,
+              },
+              {
+                ...makeModel("gpt-5.4-codex"),
+                contextWindow: 111111,
+                maxTokens: 11111,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-codex", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 111111,
+      maxTokens: 11111,
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.4-mini", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 

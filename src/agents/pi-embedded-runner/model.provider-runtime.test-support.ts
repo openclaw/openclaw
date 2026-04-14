@@ -182,8 +182,9 @@ function buildDynamicModel(
       };
     }
     case "openai-codex": {
+      const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
       const template =
-        lower === "gpt-5.4"
+        lower === "gpt-5.4" || isLegacyGpt54Alias
           ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4"])
           : lower === "gpt-5.4-mini"
             ? findTemplate(params, "openai-codex", [
@@ -205,10 +206,10 @@ function buildDynamicModel(
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         maxTokens: DEFAULT_CONTEXT_WINDOW,
       };
-      if (lower === "gpt-5.4") {
+      if (lower === "gpt-5.4" || isLegacyGpt54Alias) {
         return cloneTemplate(
           template,
-          modelId,
+          "gpt-5.4",
           {
             provider: "openai-codex",
             api: "openai-codex-responses",
