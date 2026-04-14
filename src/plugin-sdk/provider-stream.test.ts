@@ -1,9 +1,15 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { composeProviderStreamWrappers as composeProviderStreamWrappersShared } from "./provider-stream-shared.js";
+import {
+  composeProviderStreamWrappers as composeProviderStreamWrappersShared,
+  createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
+  createToolStreamWrapper as createToolStreamWrapperShared,
+} from "./provider-stream-shared.js";
 import {
   buildProviderStreamFamilyHooks,
   composeProviderStreamWrappers,
+  createMoonshotThinkingWrapper,
+  createToolStreamWrapper,
 } from "./provider-stream.js";
 
 function requireWrapStreamFn(
@@ -27,6 +33,11 @@ function requireStreamFn(streamFn: StreamFn | null | undefined) {
 describe("composeProviderStreamWrappers", () => {
   it("re-exports the shared wrapper composer", () => {
     expect(composeProviderStreamWrappers).toBe(composeProviderStreamWrappersShared);
+  });
+
+  it("re-exports shared helper wrappers", () => {
+    expect(createMoonshotThinkingWrapper).toBe(createMoonshotThinkingWrapperShared);
+    expect(createToolStreamWrapper).toBe(createToolStreamWrapperShared);
   });
 
   it("applies wrappers left to right", async () => {
