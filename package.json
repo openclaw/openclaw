@@ -1380,6 +1380,7 @@
     "@sinclair/typebox": "0.34.49",
     "@slack/bolt": "^4.7.0",
     "@slack/web-api": "^7.15.0",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
