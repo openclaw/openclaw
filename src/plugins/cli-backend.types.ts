@@ -56,6 +56,14 @@ export type CliBackendPlugin = {
    */
   bundleMcpMode?: CliBundleMcpMode;
   /**
+   * Whether to include external MCP servers from `openclaw.json` `mcp.servers`
+   * in the bundled MCP config passed to the CLI subprocess.
+   *
+   * Defaults to `true` when `bundleMcp` is enabled. Set to `false` to only
+   * include plugin-based MCP servers.
+   */
+  bundleExternalMcp?: boolean;
+  /**
    * Optional config normalizer applied after user overrides merge.
    *
    * Use this for backend-specific compatibility rewrites when old config

@@ -309,9 +309,32 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   };
 }
 
+/**
+ * Extract enabled MCP servers from the openclaw.json `mcp.servers` config.
+ * These are "external" MCP servers configured by the user at the gateway level.
+ */
+function extractExternalMcpConfig(config?: OpenClawConfig): BundleMcpConfig {
+  const servers = (config as Record<string, unknown> | undefined)?.mcp as
+    | Record<string, unknown>
+    | undefined;
+  const serverMap = servers?.servers as Record<string, Record<string, unknown>> | undefined;
+  if (!serverMap || typeof serverMap !== "object") {
+    return { mcpServers: {} };
+  }
+  const result: Record<string, BundleMcpServerConfig> = {};
+  for (const [name, server] of Object.entries(serverMap)) {
+    if (!server || typeof server !== "object") continue;
+    if ((server as Record<string, unknown>).enabled === false) continue;
+    const { enabled, ...rest } = server as Record<string, unknown>;
+    result[name] = rest;
+  }
+  return { mcpServers: result };
+}
+
 export async function prepareCliBundleMcpConfig(params: {
   enabled: boolean;
   mode?: CliBundleMcpMode;
+  bundleExternalMcp?: boolean;
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -348,6 +371,15 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+
+  // Merge external MCP servers from openclaw.json mcp.servers (default: on when bundleMcp is on)
+  if (params.bundleExternalMcp !== false) {
+    const externalMcp = extractExternalMcpConfig(params.config);
+    if (Object.keys(externalMcp.mcpServers).length > 0) {
+      mergedConfig = applyMergePatch(mergedConfig, externalMcp) as BundleMcpConfig;
+    }
+  }
+
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }

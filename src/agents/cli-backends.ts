@@ -25,6 +25,7 @@ export type ResolvedCliBackend = {
   config: CliBackendConfig;
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
+  bundleExternalMcp?: boolean;
   pluginId?: string;
   transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
   textTransforms?: PluginTextTransforms;
@@ -46,6 +47,7 @@ export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBacke
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
+  bundleExternalMcp?: boolean;
   baseConfig?: CliBackendConfig;
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
   transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
@@ -79,6 +81,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
       entry.backend.bundleMcpMode,
       entry.backend.bundleMcp === true,
     ),
+    bundleExternalMcp: entry.backend.bundleExternalMcp,
     baseConfig: entry.backend.config,
     normalizeConfig: entry.backend.normalizeConfig,
     transformSystemPrompt: entry.backend.transformSystemPrompt,
@@ -212,6 +215,7 @@ export function resolveCliBackendConfig(
         registered.bundleMcpMode,
         registered.bundleMcp === true,
       ),
+      bundleExternalMcp: registered.bundleExternalMcp,
       pluginId: registered.pluginId,
       transformSystemPrompt: registered.transformSystemPrompt,
       textTransforms: mergePluginTextTransforms(runtimeTextTransforms, registered.textTransforms),
@@ -235,6 +239,7 @@ export function resolveCliBackendConfig(
       config: { ...baseConfig, command },
       bundleMcp: fallbackPolicy.bundleMcp,
       bundleMcpMode: fallbackPolicy.bundleMcpMode,
+      bundleExternalMcp: fallbackPolicy.bundleExternalMcp,
       transformSystemPrompt: fallbackPolicy.transformSystemPrompt,
       textTransforms: mergePluginTextTransforms(
         runtimeTextTransforms,
@@ -257,6 +262,7 @@ export function resolveCliBackendConfig(
     config: { ...config, command },
     bundleMcp: fallbackPolicy?.bundleMcp === true,
     bundleMcpMode: fallbackPolicy?.bundleMcpMode,
+    bundleExternalMcp: fallbackPolicy?.bundleExternalMcp,
     transformSystemPrompt: fallbackPolicy?.transformSystemPrompt,
     textTransforms: mergePluginTextTransforms(
       runtimeTextTransforms,

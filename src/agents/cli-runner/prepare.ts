@@ -130,6 +130,7 @@ export async function prepareCliRunContext(
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
     mode: backendResolved.bundleMcpMode,
+    bundleExternalMcp: backendResolved.bundleExternalMcp ?? backendResolved.bundleMcp,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,
