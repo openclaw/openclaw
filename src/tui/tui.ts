@@ -239,6 +239,8 @@ export async function runTui(opts: TuiOptions) {
   let lastCtrlCAt = 0;
   let exitRequested = false;
   let activityStatus = "idle";
+  let streamingIdleTimer: NodeJS.Timeout | null = null;
+  const STREAMING_IDLE_TIMEOUT_MS = 30_000;
   let connectionStatus = "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
   let statusTimer: NodeJS.Timeout | null = null;
@@ -652,6 +654,27 @@ export async function runTui(opts: TuiOptions) {
 
   const setActivityStatus = (text: string) => {
     activityStatus = text;
+    // Reset any pending streaming-idle safety timer whenever status changes.
+    if (streamingIdleTimer) {
+      clearTimeout(streamingIdleTimer);
+      streamingIdleTimer = null;
+    }
+    // Arm a safety timer when entering streaming or running state. If no
+    // further status update arrives within the timeout window the UI resets to
+    // idle, preventing the "streaming forever" stuck state (#63189).
+    // We intentionally exclude "sending" and "waiting" since those represent
+    // pre-response phases that can legitimately take longer.
+    if (text === "streaming" || text === "running") {
+      streamingIdleTimer = setTimeout(() => {
+        streamingIdleTimer = null;
+        if (activityStatus === "streaming" || activityStatus === "running") {
+          activityStatus = "idle";
+          state.activeChatRunId = null;
+          renderStatus();
+        }
+      }, STREAMING_IDLE_TIMEOUT_MS);
+      streamingIdleTimer.unref?.();
+    }
     renderStatus();
   };
 

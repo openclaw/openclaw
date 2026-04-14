@@ -650,4 +650,41 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
+
+  it("resets activity status when final event arrives after activeChatRunId mismatch (#63189)", () => {
+    // Simulates the streaming-stuck bug: a run's final event arrives but
+    // activeChatRunId has already been cleared or reassigned, so
+    // wasActiveRun is false. The safety net should still reset to idle
+    // when no other runs are pending.
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    // Simulate a delta that set streaming status (activeChatRunId was set and
+    // later cleared by another path, leaving status stuck at "streaming").
+    handleChatEvent({
+      runId: "run-orphan",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "hello" }] },
+    } as ChatEvent);
+
+    // The delta handler would have set activeChatRunId to "run-orphan".
+    // Simulate the scenario where it was cleared externally (e.g. lifecycle end).
+    state.activeChatRunId = null;
+    setActivityStatus.mockClear();
+
+    // Final arrives — wasActiveRun will be false since activeChatRunId is null.
+    handleChatEvent({
+      runId: "run-orphan",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "hello" }] },
+    } as ChatEvent);
+
+    // The safety net should trigger setActivityStatus("idle") even though
+    // wasActiveRun was false.
+    const idleCalls = setActivityStatus.mock.calls.filter((args: unknown[]) => args[0] === "idle");
+    expect(idleCalls.length).toBeGreaterThanOrEqual(1);
+  });
 });
