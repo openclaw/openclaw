@@ -6,6 +6,8 @@ import {
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedLog,
+  mockedMarkAuthProfileFailure,
+  mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
   mockedResolveModelAsync,
   overflowBaseRunParams,
@@ -780,6 +782,94 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(mockedLog.warn).toHaveBeenCalledWith(
       expect.stringContaining("reasoning-only retries exhausted"),
     );
+  });
+
+  it("persists reasoning-only exhausted cooldowns with the active model id", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
+    mockedResolveAuthProfileOrder.mockReturnValue(["openai:p1"]);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        externalAbort: true,
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_reasoning_exhausted_rate_limit",
+                type: "reasoning",
+              }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:p1",
+      authProfileIdSource: "auto",
+      reasoningLevel: "on",
+      runId: "run-reasoning-only-exhausted-model-scoped-cooldown",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledTimes(1);
+    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "openai:p1",
+        reason: "rate_limit",
+        modelId: "gpt-5.4",
+      }),
+    );
+  });
+
+  it("persists incomplete-turn cooldowns with the active model id on every write", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
+    mockedResolveAuthProfileOrder.mockReturnValue(["openai:p1"]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "openai",
+          model: "gpt-5.4",
+          errorMessage: "rate limit exceeded",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:p1",
+      authProfileIdSource: "auto",
+      runId: "run-incomplete-turn-model-scoped-cooldown",
+    });
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledTimes(2);
+    expect(
+      mockedMarkAuthProfileFailure.mock.calls.map(
+        (call) => (call[0] as { modelId?: string }).modelId,
+      ),
+    ).toEqual(["gpt-5.4", "gpt-5.4"]);
+    expect(
+      mockedMarkAuthProfileFailure.mock.calls.map(
+        (call) => (call[0] as { profileId?: string }).profileId,
+      ),
+    ).toEqual(["openai:p1", "openai:p1"]);
   });
 
   it("detects structured bullet-only plans with intent cues as planning-only GPT turns", () => {

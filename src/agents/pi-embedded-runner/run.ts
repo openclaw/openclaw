@@ -2177,6 +2177,7 @@ export async function runEmbeddedPiAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
+                modelId,
               });
             }
             return {
@@ -2285,6 +2286,7 @@ export async function runEmbeddedPiAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
+                modelId,
               });
             }
 
