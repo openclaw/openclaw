@@ -446,6 +446,7 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
 type MemoryFlushAppendOnlyWriteOptions = {
   root: string;
   relativePath: string;
+  additionalWritePaths?: string[];
   containerWorkdir?: string;
   sandbox?: {
     root: string;
@@ -540,9 +541,14 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   options: MemoryFlushAppendOnlyWriteOptions,
 ): AnyAgentTool {
   const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
+  const additionalAbsoluteMap = new Map<string, string>();
+  for (const rel of options.additionalWritePaths ?? []) {
+    additionalAbsoluteMap.set(path.resolve(options.root, rel), rel);
+  }
+  const allAllowedRelative = [options.relativePath, ...additionalAbsoluteMap.values()];
   return {
     ...tool,
-    description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
+    description: `${tool.description} During memory flush, this tool may only write to ${allAllowedRelative.join(", ")}.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
       assertRequiredParams(record, REQUIRED_PARAM_GROUPS.write, tool.name);
@@ -558,27 +564,45 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         root: options.root,
         containerWorkdir: options.containerWorkdir,
       });
-      if (resolvedPath !== allowedAbsolutePath) {
-        throw new Error(
-          `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
-        );
+
+      if (resolvedPath === allowedAbsolutePath) {
+        await appendMemoryFlushContent({
+          absolutePath: allowedAbsolutePath,
+          root: options.root,
+          relativePath: options.relativePath,
+          content,
+          sandbox: options.sandbox,
+          signal,
+        });
+        return {
+          content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
+          details: {
+            path: options.relativePath,
+            appendOnly: true,
+          },
+        };
       }
 
-      await appendMemoryFlushContent({
-        absolutePath: allowedAbsolutePath,
-        root: options.root,
-        relativePath: options.relativePath,
-        content,
-        sandbox: options.sandbox,
-        signal,
-      });
-      return {
-        content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
-        details: {
-          path: options.relativePath,
-          appendOnly: true,
-        },
-      };
+      const additionalRelative = additionalAbsoluteMap.get(resolvedPath);
+      if (additionalRelative !== undefined) {
+        await writeFileWithinRoot({
+          rootDir: options.root,
+          relativePath: additionalRelative,
+          data: content,
+          mkdir: true,
+        });
+        return {
+          content: [{ type: "text", text: `Wrote content to ${additionalRelative}.` }],
+          details: {
+            path: additionalRelative,
+            appendOnly: false,
+          },
+        };
+      }
+
+      throw new Error(
+        `Memory flush writes are restricted to ${allAllowedRelative.join(", ")}; use those paths only.`,
+      );
     },
   };
 }

@@ -260,6 +260,8 @@ export function createOpenClawCodingTools(options?: {
   trigger?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
+  /** Additional relative paths the memory flush agent may overwrite. */
+  memoryFlushAdditionalWritePaths?: string[];
   agentDir?: string;
   workspaceDir?: string;
   /**
@@ -331,6 +333,9 @@ export function createOpenClawCodingTools(options?: {
     throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
   }
   const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
+  const memoryFlushAdditionalWritePaths = isMemoryFlushRun
+    ? options?.memoryFlushAdditionalWritePaths
+    : undefined;
   const {
     agentId,
     globalPolicy,
@@ -612,6 +617,7 @@ export function createOpenClawCodingTools(options?: {
               wrapToolMemoryFlushAppendOnlyWrite(tool, {
                 root: sandboxRoot ?? workspaceRoot,
                 relativePath: memoryFlushWritePath,
+                additionalWritePaths: memoryFlushAdditionalWritePaths,
                 containerWorkdir: sandbox?.containerWorkdir,
                 sandbox:
                   sandboxRoot && sandboxFsBridge

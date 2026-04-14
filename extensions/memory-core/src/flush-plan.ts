@@ -128,12 +128,23 @@ export function buildMemoryFlushPlan(
     ),
   );
 
+  const additionalWritePaths: string[] = [];
+  const resolvedPrompt = appendCurrentTimeLine(
+    promptBase.replaceAll("YYYY-MM-DD", dateStamp),
+    timeLine,
+  );
+  const resolvedSystemPrompt = systemPrompt.replaceAll("YYYY-MM-DD", dateStamp);
+  if (resolvedPrompt.includes("SESSION_HANDOFF") || resolvedSystemPrompt.includes("SESSION_HANDOFF")) {
+    additionalWritePaths.push("SESSION_HANDOFF.md");
+  }
+
   return {
     softThresholdTokens,
     forceFlushTranscriptBytes,
     reserveTokensFloor,
-    prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
-    systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
+    prompt: resolvedPrompt,
+    systemPrompt: resolvedSystemPrompt,
     relativePath,
+    additionalWritePaths,
   };
 }

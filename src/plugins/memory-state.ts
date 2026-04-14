@@ -71,6 +71,7 @@ export type MemoryFlushPlan = {
   prompt: string;
   systemPrompt: string;
   relativePath: string;
+  additionalWritePaths: string[];
 };
 
 export type MemoryFlushPlanResolver = (params: {
