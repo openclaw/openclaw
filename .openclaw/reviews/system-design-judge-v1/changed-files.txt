@@ -4,6 +4,8 @@ src/agents/judge-gate.ts
 src/agents/judge-gate.test.ts
 src/agents/challenger-lane.ts
 src/agents/challenger-lane.test.ts
+src/agents/pi-embedded-runner/run/attempt.ts
+src/agents/model-fallback.ts
 .openclaw/reviews/system-design-judge-v1/contract.md
 .openclaw/reviews/system-design-judge-v1/completion.md
 .openclaw/reviews/system-design-judge-v1/changed-files.txt

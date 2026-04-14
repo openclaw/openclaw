@@ -31,9 +31,13 @@
 - `isChallengerEnabled()` — config check
 - `shouldInvokeChallenger()` — trigger policy with revise threshold, max invocations
 
+### Stage 4: Route Metadata Wiring (`src/agents/pi-embedded-runner/run/attempt.ts`, `src/agents/model-fallback.ts`)
+
+- `llm_output` hook events now include `route.lane` from `inferRoutingLane()` and `route.selectedModel` from the active provider/model pair
+- `ModelFallbackRunResult<T>` now carries optional `requestedProvider` and `requestedModel` so downstream consumers can distinguish the requested model from the selected fallback target
+
 ## What was intentionally NOT done
 
-- Hook system integration (adding route metadata to llm_output events) — requires deeper integration into hooks.ts dispatch
 - Status surface integration (enriching status --all --json) — requires changes to report-data.ts and format.ts
 - Task registry field extensions — requires schema changes to task-registry.types.ts
 - Config schema changes for challengerLane — requires changes to config/schema.base.generated.ts
@@ -41,5 +45,6 @@
 
 ## Verification
 
-- 30/30 new tests pass
-- No existing tests affected (new files only, no modifications to existing code)
+- Requested `npx vitest ...` invocations were attempted first, but `npx` tried to reach the npm registry in this sandbox.
+- `pnpm exec vitest run src/agents/routing-lanes.test.ts src/agents/judge-gate.test.ts src/agents/challenger-lane.test.ts --reporter verbose` passed: 3 files, 30 tests.
+- `pnpm exec vitest run src/agents/model-fallback.test.ts --reporter verbose` passed: 1 file, 68 tests.

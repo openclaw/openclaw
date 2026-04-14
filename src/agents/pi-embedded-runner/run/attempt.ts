@@ -91,6 +91,7 @@ import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../..
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { inferRoutingLane } from "../../routing-lanes.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -2376,6 +2377,14 @@ export async function runEmbeddedAttempt(
               assistantTexts,
               lastAssistant,
               usage: attemptUsage,
+              route: {
+                lane: inferRoutingLane({
+                  agentId: hookAgentId,
+                  model: params.modelId,
+                  provider: params.provider,
+                }),
+                selectedModel: `${params.provider}/${params.modelId}`,
+              },
             },
             {
               runId: params.runId,

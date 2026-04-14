@@ -138,6 +138,10 @@ type ModelFallbackRunResult<T> = {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  /** The originally requested provider before any fallback. */
+  requestedProvider?: string;
+  /** The originally requested model before any fallback. */
+  requestedModel?: string;
 };
 
 type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
@@ -154,12 +158,16 @@ function buildFallbackSuccess<T>(params: {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  requestedProvider?: string;
+  requestedModel?: string;
 }): ModelFallbackRunResult<T> {
   return {
     result: params.result,
     provider: params.provider,
     model: params.model,
     attempts: params.attempts,
+    requestedProvider: params.requestedProvider,
+    requestedModel: params.requestedModel,
   };
 }
 
@@ -196,6 +204,8 @@ async function runFallbackAttempt<T>(params: {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  requestedProvider?: string;
+  requestedModel?: string;
   options?: ModelFallbackRunOptions;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
@@ -211,6 +221,8 @@ async function runFallbackAttempt<T>(params: {
         provider: params.provider,
         model: params.model,
         attempts: params.attempts,
+        requestedProvider: params.requestedProvider,
+        requestedModel: params.requestedModel,
       }),
     };
   }
@@ -783,6 +795,8 @@ export async function runWithModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
+      requestedProvider: params.provider,
+      requestedModel: params.model,
       options: runOptions,
     });
     if ("success" in attemptRun) {
