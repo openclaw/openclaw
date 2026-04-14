@@ -69,8 +69,16 @@ vi.mock("../runtime-api.js", () => ({
   withResolvedWebhookRequestPipeline: vi.fn(),
 }));
 
-const mockFetch = vi.fn();
-globalThis.fetch = mockFetch as unknown as typeof fetch;
+const mockFetchInner = vi.fn();
+/** Wraps mockFetchInner to return { response, release } matching fetchWithSsrFGuard shape. */
+const mockFetchWithSsrFGuard = vi.fn(async (params: { url: string; init?: RequestInit }) => {
+  const response = await mockFetchInner(params.url, params.init);
+  return { response, finalUrl: params.url, release: vi.fn() };
+});
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: (...args: unknown[]) => mockFetchWithSsrFGuard(args[0] as never),
+}));
 
 function defaultAccount(overrides?: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -90,11 +98,11 @@ describe("monitorRoamProvider", () => {
   });
 
   afterEach(() => {
-    mockFetch.mockReset();
+    mockFetchInner.mockReset();
   });
 
   it("fetches bot identity from /v1/token.info at startup", async () => {
-    mockFetch.mockResolvedValue({
+    mockFetchInner.mockResolvedValue({
       ok: true,
       json: async () => ({
         bot: { id: "bot-uuid", name: "TestBot", imageUrl: "https://img.test/bot.png" },
@@ -104,7 +112,7 @@ describe("monitorRoamProvider", () => {
     const { stop } = await monitorRoamProvider({});
     stop();
 
-    const tokenInfoCall = mockFetch.mock.calls.find(([url]: string[]) =>
+    const tokenInfoCall = mockFetchInner.mock.calls.find(([url]: string[]) =>
       url.includes("/v1/token.info"),
     );
     expect(tokenInfoCall).toBeDefined();
@@ -115,7 +123,7 @@ describe("monitorRoamProvider", () => {
   it("stores bot identity on account when token.info succeeds", async () => {
     const account = defaultAccount();
     mockResolveRoamAccount.mockReturnValue(account);
-    mockFetch.mockResolvedValue({
+    mockFetchInner.mockResolvedValue({
       ok: true,
       json: async () => ({ bot: { id: "bot-uuid", name: "TestBot" } }),
     });
@@ -131,7 +139,7 @@ describe("monitorRoamProvider", () => {
   });
 
   it("continues without botId when token.info fails", async () => {
-    mockFetch.mockRejectedValue(new Error("network error"));
+    mockFetchInner.mockRejectedValue(new Error("network error"));
 
     const { stop } = await monitorRoamProvider({});
     stop();
@@ -142,7 +150,7 @@ describe("monitorRoamProvider", () => {
   });
 
   it("continues without botId when token.info returns no bot", async () => {
-    mockFetch.mockResolvedValue({
+    mockFetchInner.mockResolvedValue({
       ok: true,
       json: async () => ({}),
     });
@@ -156,7 +164,7 @@ describe("monitorRoamProvider", () => {
   });
 
   it("continues without botId when token.info returns HTTP error", async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 401 });
+    mockFetchInner.mockResolvedValue({ ok: false, status: 401 });
 
     const { stop } = await monitorRoamProvider({});
     stop();
@@ -171,14 +179,14 @@ describe("monitorRoamProvider", () => {
       defaultAccount({ config: { webhookUrl: "https://example.com/roam-webhook" } }),
     );
     // token.info → no bot, webhook.subscribe → ok
-    mockFetch
+    mockFetchInner
       .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
       .mockResolvedValueOnce({ ok: true });
 
     const { stop } = await monitorRoamProvider({});
     stop();
 
-    const subscribeCall = mockFetch.mock.calls.find(([url]: string[]) =>
+    const subscribeCall = mockFetchInner.mock.calls.find(([url]: string[]) =>
       url.includes("/v1/webhook.subscribe"),
     );
     expect(subscribeCall).toBeDefined();
@@ -188,7 +196,7 @@ describe("monitorRoamProvider", () => {
   });
 
   it("skips subscription when webhookUrl is not configured", async () => {
-    mockFetch.mockResolvedValue({
+    mockFetchInner.mockResolvedValue({
       ok: true,
       json: async () => ({}),
     });
@@ -196,7 +204,7 @@ describe("monitorRoamProvider", () => {
     const { stop } = await monitorRoamProvider({});
     stop();
 
-    const subscribeCall = mockFetch.mock.calls.find(([url]: string[]) =>
+    const subscribeCall = mockFetchInner.mock.calls.find(([url]: string[]) =>
       url.includes("/v1/webhook.subscribe"),
     );
     expect(subscribeCall).toBeUndefined();
@@ -207,7 +215,7 @@ describe("monitorRoamProvider", () => {
       defaultAccount({ config: { webhookUrl: "https://example.com/hook" } }),
     );
     // token.info succeeds, webhook.subscribe fails
-    mockFetch
+    mockFetchInner
       .mockResolvedValueOnce({ ok: true, json: async () => ({}) }) // token.info
       .mockResolvedValueOnce({ ok: false, status: 500, text: async () => "server error" }); // subscribe
 
@@ -220,7 +228,7 @@ describe("monitorRoamProvider", () => {
   });
 
   it("stop() unregisters webhook target", async () => {
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+    mockFetchInner.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const { stop } = await monitorRoamProvider({});
     stop();
@@ -232,14 +240,14 @@ describe("monitorRoamProvider", () => {
     mockResolveRoamAccount.mockReturnValue(
       defaultAccount({ config: { webhookUrl: "https://example.com/hook" } }),
     );
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+    mockFetchInner.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const { stop } = await monitorRoamProvider({});
     stop();
 
     // Unsubscribe is fire-and-forget; flush microtasks
     await vi.waitFor(() => {
-      const unsubscribeCall = mockFetch.mock.calls.find(([url]: string[]) =>
+      const unsubscribeCall = mockFetchInner.mock.calls.find(([url]: string[]) =>
         url.includes("/v1/webhook.unsubscribe"),
       );
       expect(unsubscribeCall).toBeDefined();
@@ -247,7 +255,7 @@ describe("monitorRoamProvider", () => {
   });
 
   it("respects abortSignal", async () => {
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+    mockFetchInner.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const controller = new AbortController();
     await monitorRoamProvider({ abortSignal: controller.signal });
@@ -257,7 +265,7 @@ describe("monitorRoamProvider", () => {
   });
 
   it("calls stop immediately when abortSignal is already aborted", async () => {
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+    mockFetchInner.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const controller = new AbortController();
     controller.abort();
@@ -267,7 +275,7 @@ describe("monitorRoamProvider", () => {
   });
 
   it("stop() is idempotent — second call is a no-op", async () => {
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+    mockFetchInner.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const { stop } = await monitorRoamProvider({});
     stop();
@@ -286,12 +294,12 @@ describe("monitorRoamProvider", () => {
     const cfg = {
       channels: { roam: { apiBaseUrl: "https://api.roam.dev" } },
     } as CoreConfig;
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+    mockFetchInner.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const { stop } = await monitorRoamProvider({ config: cfg });
     stop();
 
-    const tokenInfoCall = mockFetch.mock.calls.find(([url]: string[]) =>
+    const tokenInfoCall = mockFetchInner.mock.calls.find(([url]: string[]) =>
       url.includes("token.info"),
     );
     expect(tokenInfoCall).toBeDefined();
@@ -305,12 +313,12 @@ describe("monitorRoamProvider", () => {
     mockResolveRoamAccount.mockReturnValue(
       defaultAccount({ config: { apiBaseUrl: "https://api.account.dev" } }),
     );
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+    mockFetchInner.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const { stop } = await monitorRoamProvider({ config: cfg });
     stop();
 
-    const tokenInfoCall = mockFetch.mock.calls.find(([url]: string[]) =>
+    const tokenInfoCall = mockFetchInner.mock.calls.find(([url]: string[]) =>
       url.includes("token.info"),
     );
     expect(tokenInfoCall![0]).toBe("https://api.account.dev/v1/token.info");
@@ -325,12 +333,12 @@ describe("monitorRoamProvider", () => {
         },
       }),
     );
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+    mockFetchInner.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const { stop } = await monitorRoamProvider({});
     stop();
 
-    const subscribeCall = mockFetch.mock.calls.find(([url]: string[]) =>
+    const subscribeCall = mockFetchInner.mock.calls.find(([url]: string[]) =>
       url.includes("webhook.subscribe"),
     );
     expect(subscribeCall).toBeDefined();

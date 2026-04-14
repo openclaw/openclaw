@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   type RuntimeEnv,
   createWebhookInFlightLimiter,
@@ -283,17 +284,26 @@ async function subscribeRoamWebhooks(params: {
   accountApiBaseUrl?: string;
 }): Promise<void> {
   const apiBase = resolveApiBase(params.cfg, params.accountApiBaseUrl);
-  const response = await fetch(`${apiBase}/webhook.subscribe`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json",
+  const url = `${apiBase}/webhook.subscribe`;
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url: params.webhookUrl, event: WEBHOOK_EVENT }),
     },
-    body: JSON.stringify({ url: params.webhookUrl, event: WEBHOOK_EVENT }),
+    auditContext: "roam-webhook-subscribe",
   });
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(`Roam webhook.subscribe failed: ${response.status} ${errorBody}`);
+  try {
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      throw new Error(`Roam webhook.subscribe failed: ${response.status} ${errorBody}`);
+    }
+  } finally {
+    await release();
   }
 }
 
@@ -305,16 +315,22 @@ async function unsubscribeRoamWebhooks(params: {
   accountApiBaseUrl?: string;
 }): Promise<void> {
   const apiBase = resolveApiBase(params.cfg, params.accountApiBaseUrl);
-  await fetch(`${apiBase}/webhook.unsubscribe`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json",
+  await fetchWithSsrFGuard({
+    url: `${apiBase}/webhook.unsubscribe`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url: params.webhookUrl, event: WEBHOOK_EVENT }),
     },
-    body: JSON.stringify({ url: params.webhookUrl, event: WEBHOOK_EVENT }),
-  }).catch(() => {
-    // Best-effort unsubscribe on shutdown
-  });
+    auditContext: "roam-webhook-unsubscribe",
+  })
+    .then(({ release }) => release())
+    .catch(() => {
+      // Best-effort unsubscribe on shutdown
+    });
 }
 
 /** Fetch bot persona identity from token.info. Returns null on failure. */
@@ -325,24 +341,32 @@ async function fetchRoamBotIdentity(
 ): Promise<RoamBotIdentity | null> {
   const apiBase = resolveApiBase(cfg, accountApiBaseUrl);
   try {
-    const response = await fetch(`${apiBase}/token.info`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${apiKey}` },
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${apiBase}/token.info`,
+      init: {
+        method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}` },
+      },
+      auditContext: "roam-token-info",
     });
-    if (!response.ok) {
-      return null;
+    try {
+      if (!response.ok) {
+        return null;
+      }
+      const data = (await response.json()) as {
+        bot?: { id?: string; name?: string; imageUrl?: string };
+      };
+      if (!data.bot?.id || !data.bot?.name) {
+        return null;
+      }
+      return {
+        id: data.bot.id,
+        name: data.bot.name,
+        imageUrl: data.bot.imageUrl || undefined,
+      };
+    } finally {
+      await release();
     }
-    const data = (await response.json()) as {
-      bot?: { id?: string; name?: string; imageUrl?: string };
-    };
-    if (!data.bot?.id || !data.bot?.name) {
-      return null;
-    }
-    return {
-      id: data.bot.id,
-      name: data.bot.name,
-      imageUrl: data.bot.imageUrl || undefined,
-    };
   } catch {
     return null;
   }

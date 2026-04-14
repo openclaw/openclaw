@@ -1,3 +1,4 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveRoamAccount } from "./accounts.js";
 import { resolveApiBase } from "./api-base.js";
 import { stripRoamTargetPrefix } from "./normalize.js";
@@ -75,52 +76,60 @@ export async function sendMessageRoam(
 
   const apiBase = resolveApiBase(cfg, account.config.apiBaseUrl);
 
-  const response = await fetch(`${apiBase}/chat.post`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${apiBase}/chat.post`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
+    auditContext: "roam-chat-post",
   });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    const status = response.status;
-    let errorMsg = `Roam send failed (${status})`;
-
-    if (status === 400) {
-      errorMsg = `Roam: bad request - ${errorBody || "invalid message format"}`;
-    } else if (status === 401) {
-      errorMsg = "Roam: authentication failed - check API key";
-    } else if (status === 403) {
-      errorMsg = "Roam: forbidden - bot may not have access to this chat";
-    } else if (status === 404) {
-      errorMsg = `Roam: chat not found (id=${chatId})`;
-    } else if (status === 413) {
-      errorMsg = "Roam: message too large (8000 byte limit for blocks)";
-    } else if (errorBody) {
-      errorMsg = `Roam send failed: ${errorBody}`;
-    }
-
-    throw new Error(errorMsg);
-  }
 
   let timestamp: number | undefined;
   let responseChatId = chatId;
   try {
-    const data = (await response.json()) as {
-      chat?: string;
-      timestamp?: number;
-    };
-    if (data.chat) {
-      responseChatId = data.chat;
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      const status = response.status;
+      let errorMsg = `Roam send failed (${status})`;
+
+      if (status === 400) {
+        errorMsg = `Roam: bad request - ${errorBody || "invalid message format"}`;
+      } else if (status === 401) {
+        errorMsg = "Roam: authentication failed - check API key";
+      } else if (status === 403) {
+        errorMsg = "Roam: forbidden - bot may not have access to this chat";
+      } else if (status === 404) {
+        errorMsg = `Roam: chat not found (id=${chatId})`;
+      } else if (status === 413) {
+        errorMsg = "Roam: message too large (8000 byte limit for blocks)";
+      } else if (errorBody) {
+        errorMsg = `Roam send failed: ${errorBody}`;
+      }
+
+      throw new Error(errorMsg);
     }
-    if (typeof data.timestamp === "number") {
-      timestamp = data.timestamp;
+
+    try {
+      const data = (await response.json()) as {
+        chat?: string;
+        timestamp?: number;
+      };
+      if (data.chat) {
+        responseChatId = data.chat;
+      }
+      if (typeof data.timestamp === "number") {
+        timestamp = data.timestamp;
+      }
+    } catch {
+      // Response parsing failed, but message was sent.
     }
-  } catch {
-    // Response parsing failed, but message was sent.
+  } finally {
+    await release();
   }
 
   getRoamRuntime().channel.activity.record({
@@ -141,14 +150,20 @@ export async function sendTypingRoam(
   const normalizedChatId = normalizeChatId(chatId);
   const apiBase = resolveApiBase(cfg, account.config.apiBaseUrl);
 
-  await fetch(`${apiBase}/chat.typing`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+  await fetchWithSsrFGuard({
+    url: `${apiBase}/chat.typing`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ chatId: normalizedChatId }),
     },
-    body: JSON.stringify({ chatId: normalizedChatId }),
-  }).catch(() => {
-    // Typing indicator failure is non-critical
-  });
+    auditContext: "roam-chat-typing",
+  })
+    .then(({ release }) => release())
+    .catch(() => {
+      // Typing indicator failure is non-critical
+    });
 }
