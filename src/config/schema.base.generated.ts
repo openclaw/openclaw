@@ -19001,10 +19001,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     const: "idle",
                   },
+                  {
+                    type: "string",
+                    const: "off",
+                  },
                 ],
                 title: "Session Reset Mode",
                 description:
-                  'Selects reset strategy: "daily" resets at a configured hour and "idle" resets after inactivity windows. Keep one clear mode per policy to avoid surprising context turnover patterns.',
+                  'Selects reset strategy: "daily" resets at a configured hour, "idle" resets after inactivity windows, and "off" disables automatic resets entirely. Keep one clear mode per policy to avoid surprising context turnover patterns.',
               },
               atHour: {
                 type: "integer",
@@ -19044,6 +19048,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "string",
                         const: "idle",
                       },
+                      {
+                        type: "string",
+                        const: "off",
+                      },
                     ],
                   },
                   atHour: {
@@ -19074,6 +19082,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       {
                         type: "string",
                         const: "idle",
+                      },
+                      {
+                        type: "string",
+                        const: "off",
                       },
                     ],
                   },
@@ -19106,6 +19118,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "string",
                         const: "idle",
                       },
+                      {
+                        type: "string",
+                        const: "off",
+                      },
                     ],
                   },
                   atHour: {
@@ -19136,6 +19152,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       {
                         type: "string",
                         const: "idle",
+                      },
+                      {
+                        type: "string",
+                        const: "off",
                       },
                     ],
                   },
@@ -19178,6 +19198,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     {
                       type: "string",
                       const: "idle",
+                    },
+                    {
+                      type: "string",
+                      const: "off",
                     },
                   ],
                 },
@@ -25836,7 +25860,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "session.reset.mode": {
       label: "Session Reset Mode",
-      help: 'Selects reset strategy: "daily" resets at a configured hour and "idle" resets after inactivity windows. Keep one clear mode per policy to avoid surprising context turnover patterns.',
+      help: 'Selects reset strategy: "daily" resets at a configured hour, "idle" resets after inactivity windows, and "off" disables automatic resets entirely. Keep one clear mode per policy to avoid surprising context turnover patterns.',
       tags: ["storage"],
     },
     "session.reset.atHour": {
