@@ -1,6 +1,7 @@
 import os from "node:os";
 import { expect, vi } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -8,7 +9,11 @@ type MockImplementationTarget = {
 };
 type SessionStore = Record<string, Record<string, unknown>>;
 type SessionStoreMutator = (store: SessionStore) => unknown;
-type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks" | "runSubagentSpawning">;
+type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks" | "runSubagentSpawning"> &
+  Partial<Pick<SubagentLifecycleHookRunner, "runSubagentSpawned" | "runSubagentEnded">>;
+type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
+  resetSubagentRegistryForTests: MockFn;
+};
 
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
@@ -116,11 +121,14 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
   resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
   resolveSubagentSpawnModelSelection?: () => string | undefined;
-  resolveSandboxRuntimeStatus?: () => { sandboxed: boolean };
+  resolveSandboxRuntimeStatus?: (params: {
+    cfg?: Record<string, unknown>;
+    sessionKey?: string;
+  }) => { sandboxed: boolean };
   workspaceDir?: string;
   sessionStorePath?: string;
   resetModules?: boolean;
-}) {
+}): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
     vi.resetModules();
   }
@@ -134,8 +142,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     emitSessionLifecycleEvent: (...args: unknown[]) =>
       params.emitSessionLifecycleEventMock?.(...args),
     formatThinkingLevels: (levels: string[]) => levels.join(", "),
-    normalizeThinkLevel: (level: unknown) =>
-      typeof level === "string" && level.trim() ? level.trim() : undefined,
+    normalizeThinkLevel: (level: unknown) => normalizeOptionalString(level),
     DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH: 3,
     ADMIN_SCOPE: "operator.admin",
     AGENT_LANE_SUBAGENT: "subagent",

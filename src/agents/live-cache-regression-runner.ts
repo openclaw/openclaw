@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   LIVE_CACHE_REGRESSION_BASELINE,
   type LiveCacheFloor,
@@ -216,8 +218,10 @@ async function completeCacheProbe(params: {
     timeoutMs,
   );
   const text = extractAssistantText(response);
+  const responseTextLower = normalizeLowercaseStringOrEmpty(text);
+  const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
   assert(
-    text.toLowerCase().includes(params.suffix.toLowerCase()),
+    responseTextLower.includes(suffixLower),
     `expected response to contain ${params.suffix}, got ${JSON.stringify(text)}`,
   );
   const usage = normalizeCacheUsage(response.usage);
@@ -401,7 +405,7 @@ function assertAgainstBaseline(params: {
 
 export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResult> {
   const pngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
-  const runToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const runToken = randomUUID().slice(0, 13);
   const openai = await resolveLiveDirectModel({
     provider: "openai",
     api: "openai-responses",

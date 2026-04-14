@@ -1,8 +1,5 @@
 import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./node-list-types.js";
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
+import { asRecord } from "./record-coerce.js";
 
 export function parsePairingList(value: unknown): PairingList {
   const obj = asRecord(value);

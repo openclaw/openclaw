@@ -65,8 +65,10 @@ describe("feishu websocket cleanup", () => {
       eventDispatcher: {} as never,
     });
 
-    expect(wsClient.start).toHaveBeenCalledTimes(1);
-    expect(wsClients.get(accountId)).toBe(wsClient);
+    await vi.waitFor(() => {
+      expect(wsClient.start).toHaveBeenCalledTimes(1);
+      expect(wsClients.get(accountId)).toBe(wsClient);
+    });
 
     abortController.abort();
     await monitorPromise;

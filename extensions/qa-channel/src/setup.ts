@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -9,11 +9,9 @@ export function applyQaSetup(params: {
 }): OpenClawConfig {
   const nextCfg = structuredClone(params.cfg) as CoreConfig;
   const section = nextCfg.channels?.["qa-channel"] ?? {};
-  const accounts = { ...(section.accounts ?? {}) };
+  const accounts = { ...section.accounts };
   const target =
-    params.accountId === DEFAULT_ACCOUNT_ID
-      ? { ...section }
-      : { ...(accounts[params.accountId] ?? {}) };
+    params.accountId === DEFAULT_ACCOUNT_ID ? { ...section } : { ...accounts[params.accountId] };
   if (typeof params.input.baseUrl === "string") {
     target.baseUrl = params.input.baseUrl;
   }

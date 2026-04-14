@@ -1,6 +1,6 @@
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 
 const [{ prepareSlackMessage }, helpers] = await Promise.all([

@@ -4,26 +4,18 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openMemoryDatabaseAtPath } from "./manager-sync-ops.js";
-import { runMemorySyncWithReadonlyRecovery } from "./manager.js";
+import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import {
+  _createMemorySyncControlConfigForTests,
+  enqueueMemoryTargetedSessionSync,
+  runMemorySyncWithReadonlyRecovery,
+  type MemoryReadonlyRecoveryState,
+} from "./manager-sync-control.js";
 
-type ReadonlyRecoveryHarness = {
-  closed: boolean;
+type ReadonlyRecoveryHarness = MemoryReadonlyRecoveryState & {
   syncing: Promise<void> | null;
   queuedSessionFiles: Set<string>;
   queuedSessionSync: Promise<void> | null;
-  db: DatabaseSync;
-  vectorReady: Promise<boolean> | null;
-  vector: {
-    enabled: boolean;
-    available: boolean | null;
-    loadError?: string;
-    dims?: number;
-  };
-  readonlyRecoveryAttempts: number;
-  readonlyRecoverySuccesses: number;
-  readonlyRecoveryFailures: number;
-  readonlyRecoveryLastError?: string;
   ensureProviderInitialized: ReturnType<typeof vi.fn>;
   enqueueTargetedSessionSync: ReturnType<typeof vi.fn>;
   runSync: ReturnType<typeof vi.fn>;
@@ -36,23 +28,31 @@ describe("memory manager readonly recovery", () => {
   let workspaceDir = "";
   let indexPath = "";
 
-  function createMemoryConfig(): OpenClawConfig {
+  function createQueuedSyncHarness(syncing: Promise<void>) {
+    const queuedSessionFiles = new Set<string>();
+    let queuedSessionSync: Promise<void> | null = null;
+    const sync = vi.fn(async () => {});
     return {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            cache: { enabled: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
-        },
-        list: [{ id: "main", default: true }],
+      queuedSessionFiles,
+      get queuedSessionSync() {
+        return queuedSessionSync;
       },
-    } as OpenClawConfig;
+      sync,
+      state: {
+        isClosed: () => false,
+        getSyncing: () => syncing,
+        getQueuedSessionFiles: () => queuedSessionFiles,
+        getQueuedSessionSync: () => queuedSessionSync,
+        setQueuedSessionSync: (value: Promise<void> | null) => {
+          queuedSessionSync = value;
+        },
+        sync,
+      },
+    };
+  }
+
+  function _createMemoryConfig(): OpenClawConfig {
+    return _createMemorySyncControlConfigForTests(workspaceDir, indexPath);
   }
 
   function createReadonlyRecoveryHarness() {
@@ -79,9 +79,9 @@ describe("memory manager readonly recovery", () => {
       readonlyRecoveryLastError: undefined,
       ensureProviderInitialized: vi.fn(async () => {}),
       enqueueTargetedSessionSync: vi.fn(async () => {}),
-      runSync: vi.fn(),
+      runSync: vi.fn(async (_params) => undefined) as ReadonlyRecoveryHarness["runSync"],
       openDatabase: vi.fn(() => reopenedDb),
-      ensureSchema: vi.fn(),
+      ensureSchema: vi.fn(() => undefined) as ReadonlyRecoveryHarness["ensureSchema"],
       readMeta: vi.fn(() => undefined),
     };
     return {
@@ -97,10 +97,7 @@ describe("memory manager readonly recovery", () => {
     harness: ReadonlyRecoveryHarness,
     params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
   ) {
-    return await runMemorySyncWithReadonlyRecovery(
-      harness as unknown as Parameters<typeof runMemorySyncWithReadonlyRecovery>[0],
-      params,
-    );
+    return await runMemorySyncWithReadonlyRecovery(harness, params);
   }
 
   function expectReadonlyRecoveryStatus(
@@ -187,5 +184,74 @@ describe("memory manager readonly recovery", () => {
     const busyTimeout = row?.busy_timeout ?? row?.timeout;
     expect(busyTimeout).toBe(5000);
     db.close();
+  });
+
+  it("queues targeted session files behind an in-flight sync", async () => {
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    });
+    const harness = createQueuedSyncHarness(pendingSync);
+
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, [
+      "  /tmp/first.jsonl ",
+      "",
+      "/tmp/second.jsonl",
+    ]);
+
+    expect(harness.sync).not.toHaveBeenCalled();
+
+    releaseSync();
+    await queued;
+
+    expect(harness.sync).toHaveBeenCalledTimes(1);
+    expect(harness.sync).toHaveBeenCalledWith({
+      reason: "queued-session-files",
+      sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
+    });
+    expect(harness.queuedSessionSync).toBeNull();
+  });
+
+  it("merges repeated queued requests while the active sync is still running", async () => {
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    });
+    const harness = createQueuedSyncHarness(pendingSync);
+
+    const first = enqueueMemoryTargetedSessionSync(harness.state, [
+      "/tmp/first.jsonl",
+      "/tmp/second.jsonl",
+    ]);
+    const second = enqueueMemoryTargetedSessionSync(harness.state, [
+      "/tmp/second.jsonl",
+      "/tmp/third.jsonl",
+    ]);
+
+    expect(first).toBe(second);
+
+    releaseSync();
+    await second;
+
+    expect(harness.sync).toHaveBeenCalledTimes(1);
+    expect(harness.sync).toHaveBeenCalledWith({
+      reason: "queued-session-files",
+      sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
+    });
+  });
+
+  it("falls back to the active sync when no usable session files were queued", async () => {
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    });
+    const harness = createQueuedSyncHarness(pendingSync);
+
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, ["", "   "]);
+
+    expect(queued).toBe(pendingSync);
+    releaseSync();
+    await queued;
+    expect(harness.sync).not.toHaveBeenCalled();
   });
 });

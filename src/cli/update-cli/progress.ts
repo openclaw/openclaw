@@ -6,6 +6,7 @@ import type {
   UpdateStepProgress,
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -72,7 +73,7 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     return [];
   }
 
-  const stderr = (failedStep.stderrTail ?? "").toLowerCase();
+  const stderr = normalizeLowercaseStringOrEmpty(failedStep.stderrTail);
   const hints: string[] = [];
 
   if (failedStep.name.startsWith("global update") && stderr.includes("eacces")) {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { uniqueSortedStrings } from "../../../test/helpers/plugins/contracts-testkit.js";
 import {
   loadPluginManifestRegistry,
   resolveManifestContractPluginIds,
@@ -16,7 +17,6 @@ import {
   speechProviderContractRegistry,
   webFetchProviderContractRegistry,
 } from "./registry.js";
-import { uniqueSortedStrings } from "./testkit.js";
 
 const REGISTRY_CONTRACT_TIMEOUT_MS = 300_000;
 

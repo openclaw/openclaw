@@ -1,14 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const baseGitEnv = {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_TERMINAL_PROMPT: "0",
 };
 const baseRunEnv: NodeJS.ProcessEnv = { ...process.env, ...baseGitEnv };
+const tempDirs: string[] = [];
 
 const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) => {
   return execFileSync(cmd, args, {
@@ -25,34 +26,44 @@ function writeExecutable(dir: string, name: string, contents: string): void {
   });
 }
 
+function installPreCommitFixture(dir: string): string {
+  mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
+  mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
+  symlinkSync(
+    path.join(process.cwd(), "git-hooks", "pre-commit"),
+    path.join(dir, "git-hooks", "pre-commit"),
+  );
+  writeFileSync(
+    path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"),
+    "#!/usr/bin/env bash\nexit 0\n",
+    {
+      encoding: "utf8",
+      mode: 0o755,
+    },
+  );
+  writeFileSync(
+    path.join(dir, "scripts", "pre-commit", "filter-staged-files.mjs"),
+    "process.exit(0);\n",
+    "utf8",
+  );
+
+  const fakeBinDir = path.join(dir, "bin");
+  mkdirSync(fakeBinDir, { recursive: true });
+  writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
+  return fakeBinDir;
+}
+
+afterEach(() => {
+  cleanupTempDirs(tempDirs);
+});
+
 describe("git-hooks/pre-commit (integration)", () => {
   it("does not treat staged filenames as git-add flags (e.g. --all)", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-"));
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
     // Use the real hook script and lightweight helper stubs.
-    mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
-    mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
-    symlinkSync(
-      path.join(process.cwd(), "git-hooks", "pre-commit"),
-      path.join(dir, "git-hooks", "pre-commit"),
-    );
-    writeFileSync(
-      path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"),
-      "#!/usr/bin/env bash\nexit 0\n",
-      {
-        encoding: "utf8",
-        mode: 0o755,
-      },
-    );
-    writeFileSync(
-      path.join(dir, "scripts", "pre-commit", "filter-staged-files.mjs"),
-      "process.exit(0);\n",
-      "utf8",
-    );
-    const fakeBinDir = path.join(dir, "bin");
-    mkdirSync(fakeBinDir, { recursive: true });
-    writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
+    const fakeBinDir = installPreCommitFixture(dir);
     // The hook ends with `pnpm check`, but this fixture is only exercising staged-file handling.
     // Stub pnpm too so Windows CI does not invoke a real package-manager command in the temp repo.
     writeExecutable(fakeBinDir, "pnpm", "#!/usr/bin/env bash\nexit 0\n");
@@ -74,34 +85,13 @@ describe("git-hooks/pre-commit (integration)", () => {
   });
 
   it("skips pnpm check when FAST_COMMIT is enabled", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-yolo-"));
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-yolo-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
-    mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
-    mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
-    symlinkSync(
-      path.join(process.cwd(), "git-hooks", "pre-commit"),
-      path.join(dir, "git-hooks", "pre-commit"),
-    );
-    writeFileSync(
-      path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"),
-      "#!/usr/bin/env bash\nexit 0\n",
-      {
-        encoding: "utf8",
-        mode: 0o755,
-      },
-    );
-    writeFileSync(
-      path.join(dir, "scripts", "pre-commit", "filter-staged-files.mjs"),
-      "process.exit(0);\n",
-      "utf8",
-    );
+    const fakeBinDir = installPreCommitFixture(dir);
     writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
     writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
 
-    const fakeBinDir = path.join(dir, "bin");
-    mkdirSync(fakeBinDir, { recursive: true });
-    writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
     writeExecutable(
       fakeBinDir,
       "pnpm",

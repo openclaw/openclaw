@@ -130,7 +130,7 @@ function createSpawnEvent(overrides?: {
     ...overrides,
     requester: {
       ...base.requester,
-      ...(overrides?.requester ?? {}),
+      ...overrides?.requester,
     },
   };
 }

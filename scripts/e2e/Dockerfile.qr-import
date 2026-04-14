@@ -21,6 +21,9 @@ COPY --chown=appuser:appuser patches ./patches
 # Keep the pre-install copy set limited to the manifests needed for root
 # workspace resolution so unrelated extension edits do not bust the layer.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/home/appuser/.local/share/pnpm/store,sharing=locked \
-    pnpm install --frozen-lockfile --ignore-scripts
+    if ! pnpm install --frozen-lockfile --ignore-scripts >/tmp/openclaw-qr-pnpm-install.log 2>&1; then \
+      cat /tmp/openclaw-qr-pnpm-install.log; \
+      exit 1; \
+    fi
 
 COPY --chown=appuser:appuser . .

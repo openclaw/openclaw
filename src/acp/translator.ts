@@ -35,6 +35,7 @@ import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import { getAvailableCommands } from "./commands.js";
 import {
@@ -55,6 +56,7 @@ const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
 const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
 const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
+const ACP_TRACE_LEVEL_CONFIG_ID = "trace_level";
 const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
 const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
@@ -103,6 +105,7 @@ type GatewaySessionPresentationRow = Pick<
   | "modelProvider"
   | "model"
   | "verboseLevel"
+  | "traceLevel"
   | "reasoningLevel"
   | "responseUsage"
   | "elevatedLevel"
@@ -232,7 +235,7 @@ function buildSessionPresentation(params: {
     ...params.overrides,
   };
   const availableLevelIds: string[] = [...listThinkingLevels(row.modelProvider, row.model)];
-  const currentModeId = row.thinkingLevel?.trim() || "adaptive";
+  const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
   if (!availableLevelIds.includes(currentModeId)) {
     availableLevelIds.push(currentModeId);
   }
@@ -268,14 +271,21 @@ function buildSessionPresentation(params: {
       name: "Tool verbosity",
       description:
         "Controls how much tool progress and output detail OpenClaw keeps enabled for the session.",
-      currentValue: row.verboseLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.verboseLevel) || "off",
       values: ["off", "on", "full"],
+    }),
+    buildSelectConfigOption({
+      id: ACP_TRACE_LEVEL_CONFIG_ID,
+      name: "Plugin trace",
+      description: "Controls whether plugin-owned trace lines are shown for the session.",
+      currentValue: normalizeOptionalString(row.traceLevel) || "off",
+      values: ["off", "on"],
     }),
     buildSelectConfigOption({
       id: ACP_REASONING_LEVEL_CONFIG_ID,
       name: "Reasoning stream",
       description: "Controls whether reasoning-capable models emit reasoning text for the session.",
-      currentValue: row.reasoningLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.reasoningLevel) || "off",
       values: ["off", "on", "stream"],
     }),
     buildSelectConfigOption({
@@ -283,14 +293,14 @@ function buildSessionPresentation(params: {
       name: "Usage detail",
       description:
         "Controls how much usage information OpenClaw attaches to responses for the session.",
-      currentValue: row.responseUsage?.trim() || "off",
+      currentValue: normalizeOptionalString(row.responseUsage) || "off",
       values: ["off", "tokens", "full"],
     }),
     buildSelectConfigOption({
       id: ACP_ELEVATED_LEVEL_CONFIG_ID,
       name: "Elevated actions",
       description: "Controls how aggressively the session allows elevated execution behavior.",
-      currentValue: row.elevatedLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.elevatedLevel) || "off",
       values: ["off", "on", "ask", "full"],
     }),
   ];
@@ -350,9 +360,9 @@ function buildSessionMetadata(params: {
   sessionKey: string;
 }): SessionMetadata {
   const title =
-    params.row?.derivedTitle?.trim() ||
-    params.row?.displayName?.trim() ||
-    params.row?.label?.trim() ||
+    normalizeOptionalString(params.row?.derivedTitle) ||
+    normalizeOptionalString(params.row?.displayName) ||
+    normalizeOptionalString(params.row?.label) ||
     params.sessionKey;
   const updatedAt =
     typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
@@ -955,11 +965,9 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     if (state === "error") {
-      // ACP has no explicit "server_error" stop reason.  Use "end_turn" so clients
-      // do not treat transient backend errors (timeouts, rate-limits) as deliberate
-      // refusals.  TODO: when ChatEventSchema gains a structured errorKind field
-      // (e.g. "refusal" | "timeout" | "rate_limit"), use it to distinguish here.
-      void this.finishPrompt(pending.sessionId, pending, "end_turn");
+      const errorKind = payload.errorKind as string | undefined;
+      const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
+      void this.finishPrompt(pending.sessionId, pending, stopReason);
     }
   }
 
@@ -1145,7 +1153,7 @@ export class AcpGatewayAgent implements Agent {
     }
     let result: AgentWaitResult | undefined;
     try {
-      result = await this.gateway.request<AgentWaitResult>(
+      result = await this.gateway.request(
         "agent.wait",
         {
           runId: pending.idempotencyKey,
@@ -1251,6 +1259,7 @@ export class AcpGatewayAgent implements Agent {
       model: session.model,
       fastMode: session.fastMode,
       verboseLevel: session.verboseLevel,
+      traceLevel: session.traceLevel,
       reasoningLevel: session.reasoningLevel,
       responseUsage: session.responseUsage,
       elevatedLevel: session.elevatedLevel,
@@ -1288,6 +1297,11 @@ export class AcpGatewayAgent implements Agent {
           patch: { verboseLevel: value },
           overrides: { verboseLevel: value },
         };
+      case ACP_TRACE_LEVEL_CONFIG_ID:
+        return {
+          patch: { traceLevel: value },
+          overrides: { traceLevel: value },
+        };
       case ACP_REASONING_LEVEL_CONFIG_ID:
         return {
           patch: { reasoningLevel: value },
@@ -1309,7 +1323,7 @@ export class AcpGatewayAgent implements Agent {
   }
 
   private async getSessionTranscript(sessionKey: string): Promise<GatewayTranscriptMessage[]> {
-    const result = await this.gateway.request<{ messages?: unknown[] }>("sessions.get", {
+    const result = await this.gateway.request("sessions.get", {
       key: sessionKey,
       limit: ACP_LOAD_SESSION_REPLAY_LIMIT,
     });

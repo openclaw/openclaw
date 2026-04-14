@@ -5,14 +5,16 @@ import {
 } from "../../../test/helpers/plugins/plugin-registry.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
 
 type MonitorModule = typeof import("../src/monitor.js");
 type SecretInputModule = typeof import("../src/secret-input.js");
+type WebhookModule = typeof import("../src/monitor.webhook.js");
 
 const monitorModuleUrl = new URL("../src/monitor.ts", import.meta.url).href;
 const secretInputModuleUrl = new URL("../src/secret-input.ts", import.meta.url).href;
+const webhookModuleUrl = new URL("../src/monitor.webhook.ts", import.meta.url).href;
 const apiModuleId = new URL("../src/api.js", import.meta.url).pathname;
 const runtimeModuleId = new URL("../src/runtime.js", import.meta.url).pathname;
 
@@ -94,13 +96,13 @@ async function importSecretInputModule(cacheBust: string): Promise<SecretInputMo
   )) as SecretInputModule;
 }
 
+async function importWebhookModule(cacheBust: string): Promise<WebhookModule> {
+  return (await import(`${webhookModuleUrl}?t=${cacheBust}-${Date.now()}`)) as WebhookModule;
+}
+
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();
-  const { clearZaloWebhookSecurityStateForTest } = await importMonitorModule({
-    cacheBust: "reset",
-    mocked: false,
-  });
-  clearZaloWebhookSecurityStateForTest();
+  (await importWebhookModule("reset-webhook")).clearZaloWebhookSecurityStateForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 

@@ -1,15 +1,79 @@
-export {
-  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-  DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
-  DEFAULT_BROWSER_EVALUATE_ENABLED,
-  DEFAULT_OPENCLAW_BROWSER_COLOR,
-  DEFAULT_OPENCLAW_BROWSER_ENABLED,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-  DEFAULT_UPLOAD_DIR,
-  resolveBrowserConfig,
-  resolveProfile,
-} from "../../extensions/browser/browser-profiles.js";
-export type {
-  ResolvedBrowserConfig,
-  ResolvedBrowserProfile,
-} from "../../extensions/browser/browser-profiles.js";
+import path from "node:path";
+import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+
+export const DEFAULT_OPENCLAW_BROWSER_ENABLED = true;
+export const DEFAULT_BROWSER_EVALUATE_ENABLED = true;
+export const DEFAULT_OPENCLAW_BROWSER_COLOR = "#FF4500";
+export const DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME = "openclaw";
+export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "openclaw";
+export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
+export const DEFAULT_UPLOAD_DIR = path.join(resolvePreferredOpenClawTmpDir(), "uploads");
+
+export type ResolvedBrowserConfig = {
+  enabled: boolean;
+  evaluateEnabled: boolean;
+  controlPort: number;
+  cdpPortRangeStart: number;
+  cdpPortRangeEnd: number;
+  cdpProtocol: "http" | "https";
+  cdpHost: string;
+  cdpIsLoopback: boolean;
+  remoteCdpTimeoutMs: number;
+  remoteCdpHandshakeTimeoutMs: number;
+  color: string;
+  executablePath?: string;
+  headless: boolean;
+  noSandbox: boolean;
+  attachOnly: boolean;
+  defaultProfile: string;
+  profiles: Record<string, BrowserProfileConfig>;
+  ssrfPolicy?: SsrFPolicy;
+  extraArgs: string[];
+};
+
+export type ResolvedBrowserProfile = {
+  name: string;
+  cdpPort: number;
+  cdpUrl: string;
+  cdpHost: string;
+  cdpIsLoopback: boolean;
+  userDataDir?: string;
+  color: string;
+  driver: "openclaw" | "existing-session";
+  attachOnly: boolean;
+};
+
+type BrowserProfilesSurface = {
+  resolveBrowserConfig: (
+    cfg: BrowserConfig | undefined,
+    rootConfig?: OpenClawConfig,
+  ) => ResolvedBrowserConfig;
+  resolveProfile: (
+    resolved: ResolvedBrowserConfig,
+    profileName: string,
+  ) => ResolvedBrowserProfile | null;
+};
+
+function loadBrowserProfilesSurface(): BrowserProfilesSurface {
+  return loadBundledPluginPublicSurfaceModuleSync<BrowserProfilesSurface>({
+    dirName: "browser",
+    artifactBasename: "browser-profiles.js",
+  });
+}
+
+export function resolveBrowserConfig(
+  cfg: BrowserConfig | undefined,
+  rootConfig?: OpenClawConfig,
+): ResolvedBrowserConfig {
+  return loadBrowserProfilesSurface().resolveBrowserConfig(cfg, rootConfig);
+}
+
+export function resolveProfile(
+  resolved: ResolvedBrowserConfig,
+  profileName: string,
+): ResolvedBrowserProfile | null {
+  return loadBrowserProfilesSurface().resolveProfile(resolved, profileName);
+}

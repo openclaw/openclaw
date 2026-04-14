@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAccessToken } from "../api.js";
 import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
 import { debugError, debugLog } from "../utils/debug-log.js";
@@ -188,7 +189,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
             }
             debugError("[qqbot-channel-api] <<< Network error:", err);
             return json({
-              error: `Network error: ${err instanceof Error ? err.message : String(err)}`,
+              error: `Network error: ${formatErrorMessage(err)}`,
               path: p.path,
             });
           } finally {
@@ -238,7 +239,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
           });
         } catch (err) {
           return json({
-            error: err instanceof Error ? err.message : String(err),
+            error: formatErrorMessage(err),
             path: p.path,
           });
         }
