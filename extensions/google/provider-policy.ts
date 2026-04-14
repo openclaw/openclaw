@@ -152,14 +152,21 @@ export function normalizeGoogleProviderConfig(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
   let nextProvider = provider;
+  const shouldNormalizeModelIds =
+    providerKey === "google-vertex" ||
+    shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, nextProvider);
 
-  if (shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, nextProvider)) {
+  if (shouldNormalizeModelIds) {
     const modelNormalized = normalizeProviderModels(nextProvider, normalizeGoogleModelId);
-    const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
-    nextProvider =
-      normalizedBaseUrl !== modelNormalized.baseUrl
-        ? { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl }
-        : modelNormalized;
+    if (shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, modelNormalized)) {
+      const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
+      nextProvider =
+        normalizedBaseUrl !== modelNormalized.baseUrl
+          ? { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl }
+          : modelNormalized;
+    } else {
+      nextProvider = modelNormalized;
+    }
   }
 
   if (providerKey === "google-antigravity") {
