@@ -54,7 +54,8 @@ export type ObserveRecoveryDeps = {
       options?: { throwIfNoEntry?: boolean },
     ): {
       mode?: number;
-    } | null;
+      size?: number;
+    } | null | undefined;
     readFileSync(path: string, encoding: BufferEncoding): string;
     writeFileSync(
       path: string,
@@ -709,9 +710,15 @@ const RECOVERY_MAX_BYTES = 10 * 1024 * 1024;
 const S_IFMT = 0o170000;
 /** File-type value for a symbolic link. */
 const S_IFLNK = 0o120000;
+/** File-type value for a regular file. */
+const S_IFREG = 0o100000;
 
 function isSymlink(mode: number | undefined): boolean {
   return mode !== undefined && (mode & S_IFMT) === S_IFLNK;
+}
+
+function isRegularFile(mode: number | undefined): boolean {
+  return mode !== undefined && (mode & S_IFMT) === S_IFREG;
 }
 
 /**
@@ -745,8 +752,10 @@ export function maybeRecoverFromSchemaInvalidConfigSync(params: {
   // Safety: refuse to overwrite through a symlink at the primary config path.
   // If configPath is a symlink, copyFileSync would follow it and write to an
   // attacker-controlled target (CWE-59 / TOCTOU). Abort recovery entirely.
+  // Note: lstatSync returns undefined (not null) for missing paths when
+  // throwIfNoEntry is false — normalise with ?? null so the check is reliable.
   try {
-    const configLstat = deps.fs.lstatSync(configPath, { throwIfNoEntry: false });
+    const configLstat = deps.fs.lstatSync(configPath, { throwIfNoEntry: false }) ?? null;
     if (configLstat !== null && isSymlink(configLstat.mode)) {
       return false;
     }
@@ -777,18 +786,29 @@ export function maybeRecoverFromSchemaInvalidConfigSync(params: {
   let invalidArchived = false;
 
   for (const candidatePath of candidatePaths) {
-    // Safety: refuse to read through a symlink in the backup ring.
-    // An attacker could plant a symlink at a .bak path to exfiltrate or poison
-    // data from elsewhere on the filesystem (CWE-59).
+    // Safety: only accept regular files in the backup ring.
+    // Symlinks are a TOCTOU risk (CWE-59); FIFOs/devices can block readFileSync
+    // indefinitely during startup (CWE-400 hang). Normalise with ?? null so that
+    // a missing file (lstat returns undefined) is handled without a TypeError.
+    let candidateSize: number | undefined;
     try {
-      const candidateLstat = deps.fs.lstatSync(candidatePath, { throwIfNoEntry: false });
+      const candidateLstat = deps.fs.lstatSync(candidatePath, { throwIfNoEntry: false }) ?? null;
       if (candidateLstat === null) {
         continue; // file does not exist — try next slot
       }
-      if (isSymlink(candidateLstat.mode)) {
-        continue; // symlink — skip this slot
+      if (!isRegularFile(candidateLstat.mode)) {
+        continue; // symlink, FIFO, device, socket, etc. — skip this slot
       }
+      candidateSize = candidateLstat.size;
     } catch {
+      continue;
+    }
+
+    // Guard against attacker-inflated backup files: check the stat-reported size
+    // before reading so we never load an oversized file into memory (CWE-400).
+    // Fall back to a post-read byte check in case size is not available on the
+    // current platform.
+    if (candidateSize !== undefined && candidateSize > RECOVERY_MAX_BYTES) {
       continue;
     }
 
@@ -799,8 +819,7 @@ export function maybeRecoverFromSchemaInvalidConfigSync(params: {
       continue;
     }
 
-    // Guard against attacker-inflated backup files causing memory/CPU exhaustion
-    // during JSON5 parsing (CWE-400).
+    // Post-read size guard (fallback for platforms where stat size is unavailable).
     if (Buffer.byteLength(raw, "utf-8") > RECOVERY_MAX_BYTES) {
       continue;
     }

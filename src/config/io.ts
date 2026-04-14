@@ -1220,7 +1220,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           const recovered = maybeRecoverFromSchemaInvalidConfigSync({
             deps,
             configPath,
-            validate: (parsed) => validateConfigObjectRawWithPlugins(parsed, { env: deps.env }).ok,
+            // Mirror loadConfig's pre-validation pipeline: apply runtime legacy
+            // migrations before schema validation so backups containing legacy
+            // alias keys are not falsely rejected during recovery.
+            // Include resolution ($include directives) is intentionally skipped:
+            // writeConfigFile expands includes before persisting, so backups
+            // written through normal paths never contain raw $include refs.
+            validate: (parsed) => {
+              const effective =
+                parsed !== null && typeof parsed === "object"
+                  ? (applyRuntimeLegacyConfigMigrations(parsed).next ?? parsed)
+                  : parsed;
+              return validateConfigObjectRawWithPlugins(effective, { env: deps.env }).ok;
+            },
           });
           if (recovered) {
             return loadConfig(true);
