@@ -157,8 +157,21 @@ export async function processMessage(params: {
     accountId: account.accountId,
   });
   const configuredAllowFrom = account.allowFrom ?? [];
+  // Mirror the fallback order used by inbound access control and command
+  // authorization so context-visibility filtering, allow-gating, and command
+  // gating agree on the same sender list. Without this, a config that relies
+  // on `channels.defaults.groupAllowFrom` can accept group messages but then
+  // drop/allow history context using an empty allowlist.
+  // `channels.defaults.groupAllowFrom` is typed as `Array<string | number>`
+  // but the visibility resolvers only consume string identifiers; coerce the
+  // numeric entries to strings instead of widening the downstream signature.
+  const defaultGroupAllowFrom = params.cfg.channels?.defaults?.groupAllowFrom?.map((entry) =>
+    String(entry),
+  );
   const configuredGroupAllowFrom =
-    account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
+    account.groupAllowFrom ??
+    defaultGroupAllowFrom ??
+    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
   const groupAllowFrom = configuredGroupAllowFrom ?? [];
   const groupPolicy = normalizeNonTelegramGroupPolicy(account.groupPolicy ?? "allowlist");
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({

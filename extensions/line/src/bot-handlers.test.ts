@@ -117,6 +117,9 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   resolveDefaultGroupPolicy: (cfg: { channels?: { line?: { groupPolicy?: string } } }) =>
     cfg.channels?.line?.groupPolicy ?? "open",
   warnMissingProviderGroupPolicyFallbackOnce: () => {},
+  // Line is non-Telegram, so "members" collapses to "open" at runtime.
+  normalizeNonTelegramGroupPolicy: (policy: string | undefined) =>
+    policy === "members" ? "open" : policy,
 }));
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (text: string) => text,

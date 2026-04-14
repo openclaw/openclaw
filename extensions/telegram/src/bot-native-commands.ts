@@ -74,6 +74,7 @@ import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
+import { verifyGroupMembership } from "./group-membership-cache.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -416,6 +417,31 @@ async function resolveTelegramCommandAuth(params: {
     }
     if (policyAccess.reason === "group-chat-not-allowed") {
       return await sendAuthMessage("This group is not allowed.");
+    }
+  }
+
+  // groupPolicy="members" must also gate native commands to preserve the
+  // security boundary: messages and commands would otherwise diverge (messages
+  // blocked but `/start`, `/help`, etc. still execute) when a trusted sender
+  // shares a group with an untrusted member.
+  if (
+    isGroup &&
+    requireAuth &&
+    useAccessGroups &&
+    policyAccess.allowed &&
+    policyAccess.groupPolicy === "members"
+  ) {
+    const membership = await verifyGroupMembership({
+      chatId,
+      api: bot.api,
+      botId: bot.botInfo.id,
+      allowFrom: effectiveGroupAllow,
+    });
+    if (!membership.trusted) {
+      logVerbose(
+        `Blocked telegram command (groupPolicy: members, untrusted members: ${membership.reason ?? "unknown"})`,
+      );
+      return await rejectNotAuthorized();
     }
   }
 

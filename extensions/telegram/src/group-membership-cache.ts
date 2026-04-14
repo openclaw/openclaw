@@ -106,6 +106,7 @@ export async function verifyGroupMembership(params: {
     }
 
     let presentCount = 0;
+    let transientErrors = 0;
     for (const userId of trustedIds) {
       try {
         const member = await api.getChatMember(Number(chatId), userId);
@@ -113,8 +114,13 @@ export async function verifyGroupMembership(params: {
           presentCount++;
         }
       } catch {
-        // Member lookup may fail for a specific user (not in chat, API error);
-        // leave presentCount unchanged so they're treated as absent.
+        // A per-member lookup failure is treated as indeterminate rather than
+        // "absent": a transient Telegram API/network hiccup would otherwise be
+        // cached as `untrusted-members` for the full TTL and block every
+        // subsequent message until the cache expires. Fail closed (do not
+        // increment presentCount) but skip caching below so the next call
+        // retries instead of being locked out.
+        transientErrors++;
       }
     }
 
@@ -125,12 +131,19 @@ export async function verifyGroupMembership(params: {
           trusted: false,
           reason: `untrusted-members: ${totalCount} total, ${presentCount} trusted`,
         };
-    cache.set(key, { result, timestamp: Date.now() });
+    // Only cache results that were determined purely from successful API calls.
+    // If any per-member lookup failed and we still treated it as untrusted, skip
+    // caching so the next message retries instead of inheriting the transient
+    // failure for the full TTL window.
+    if (trusted || transientErrors === 0) {
+      cache.set(key, { result, timestamp: Date.now() });
+    }
     return result;
   } catch {
-    const result: MembershipResult = { trusted: false, reason: "api-error" };
-    cache.set(key, { result, timestamp: Date.now() });
-    return result;
+    // Do not cache top-level API failures (e.g. getChatMemberCount timeout):
+    // a one-off hiccup would otherwise lock the group out for the full TTL
+    // even after Telegram recovers seconds later.
+    return { trusted: false, reason: "api-error" };
   }
 }
 

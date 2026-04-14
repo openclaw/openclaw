@@ -120,6 +120,53 @@ describe("group-membership-cache", () => {
     expect(result.reason).toBe("api-error");
   });
 
+  it("does not cache top-level API failures so next call retries", async () => {
+    // A one-off getChatMemberCount failure must not lock the group out for the
+    // full TTL: the next call must retry against the API.
+    let shouldFail = true;
+    const api = {
+      getChatMemberCount: vi.fn(async () => {
+        if (shouldFail) {
+          throw new Error("transient");
+        }
+        return 2;
+      }),
+      getChatMember: vi.fn(async () => ({ status: "member" })),
+    } as unknown as import("grammy").Api;
+    const allowFrom = makeAllowFrom(["111"]);
+    const r1 = await verifyGroupMembership({ chatId: -100999, api, botId: 999, allowFrom });
+    expect(r1.trusted).toBe(false);
+    expect(r1.reason).toBe("api-error");
+    shouldFail = false;
+    const r2 = await verifyGroupMembership({ chatId: -100999, api, botId: 999, allowFrom });
+    expect(r2.trusted).toBe(true);
+    // Proves the first failure was not cached; both attempts hit the API.
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+
+  it("does not cache a result when a per-member lookup transiently fails", async () => {
+    // Treating per-member errors as "absent" and caching the result would
+    // block an entire trusted group for the TTL after one transient hiccup.
+    let shouldFailMember = true;
+    const api = {
+      getChatMemberCount: vi.fn(async () => 2),
+      getChatMember: vi.fn(async (_chatId: number, userId: number) => {
+        if (userId === 111 && shouldFailMember) {
+          throw new Error("transient");
+        }
+        return { status: "member" };
+      }),
+    } as unknown as import("grammy").Api;
+    const allowFrom = makeAllowFrom(["111"]);
+    const r1 = await verifyGroupMembership({ chatId: -101000, api, botId: 999, allowFrom });
+    expect(r1.trusted).toBe(false);
+    shouldFailMember = false;
+    const r2 = await verifyGroupMembership({ chatId: -101000, api, botId: 999, allowFrom });
+    expect(r2.trusted).toBe(true);
+    // Second call retried instead of inheriting the transient failure.
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+
   it("returns untrusted when no numeric entries in allowFrom", async () => {
     const api = makeApi({ memberCount: 2 });
     const result = await verifyGroupMembership({

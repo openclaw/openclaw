@@ -11,8 +11,11 @@ const ChannelActionsSchema = z
   .optional();
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
+// "members" is Telegram-only at runtime; Feishu accepts it so shared configs
+// (e.g. channels.defaults.groupPolicy) validate cleanly and it normalizes to
+// "open" via `normalizeNonTelegramGroupPolicy` in the monitor.
 const GroupPolicySchema = z.union([
-  z.enum(["open", "allowlist", "disabled"]),
+  z.enum(["open", "allowlist", "disabled", "members"]),
   z.literal("allowall").transform(() => "open" as const),
 ]);
 const FeishuDomainSchema = z.union([

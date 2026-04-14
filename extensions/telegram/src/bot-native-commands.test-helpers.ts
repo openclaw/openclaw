@@ -128,10 +128,22 @@ export function createNativeCommandsHarness(params?: {
   nativeEnabled?: boolean;
   groupConfig?: Record<string, unknown>;
   resolveGroupPolicy?: () => ChannelGroupPolicy;
+  // Optional membership hooks used by `groupPolicy="members"` tests to simulate
+  // the Telegram member-list API. When omitted, defaults return an empty group
+  // — enough for the existing non-members test cases, which never call them.
+  getChatMemberCount?: (chatId: number) => Promise<number>;
+  getChatMember?: (chatId: number, userId: number) => Promise<{ status: string }>;
+  botId?: number;
 }): NativeCommandHarness {
   const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
   const sendMessage: AnyAsyncMock = vi.fn(async () => undefined);
   const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
+  const getChatMemberCount: AnyAsyncMock = vi.fn(
+    params?.getChatMemberCount ?? (async () => 0),
+  );
+  const getChatMember: AnyAsyncMock = vi.fn(
+    params?.getChatMember ?? (async () => ({ status: "member" as const })),
+  );
   const log: AnyMock = vi.fn();
   const telegramDeps = {
     loadConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
@@ -143,9 +155,12 @@ export function createNativeCommandsHarness(params?: {
     syncTelegramMenuCommands: vi.fn(),
   };
   const bot = {
+    botInfo: { id: params?.botId ?? 777 },
     api: {
       setMyCommands,
       sendMessage,
+      getChatMemberCount,
+      getChatMember,
     },
     command: (name: string, handler: (ctx: unknown) => Promise<void>) => {
       handlers[name] = handler;

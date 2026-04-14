@@ -174,6 +174,9 @@ vi.mock("../../runtime-api.js", () => {
       groupPolicy: "allowlist",
       providerMissingFallbackApplied: false,
     }),
+    // Matrix is non-Telegram, so "members" collapses to "open" at runtime.
+    normalizeNonTelegramGroupPolicy: (policy: string | undefined) =>
+      policy === "members" ? "open" : policy,
     resolveChannelEntryMatch: ({
       entries,
       keys,

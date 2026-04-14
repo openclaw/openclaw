@@ -26652,13 +26652,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "channels.defaults.groupPolicy": {
       label: "Default Group Policy",
-      help: 'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
+      help: 'Default group policy across channels: "open", "disabled", "allowlist", or "members" (Telegram only; normalized to "open" on other channels). Keep "allowlist" for safer production setups unless broad group participation is intentional.',
       tags: ["access", "network", "channels"],
     },
     "channels.defaults.contextVisibility": {
       label: "Default Context Visibility",
       help: 'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
       tags: ["network", "channels"],
+    },
+    "channels.defaults.groupAllowFrom": {
+      label: "Default Group Allow List",
+      help: "Default trusted sender list applied to group messages across channels when no per-channel groupAllowFrom is set. Use numeric Telegram user IDs, phone numbers, or usernames depending on the channel. Per-channel groupAllowFrom always takes precedence.",
+      tags: ["access", "network", "channels"],
     },
     "channels.defaults.heartbeat": {
       label: "Default Heartbeat Visibility",

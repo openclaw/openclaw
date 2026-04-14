@@ -1,12 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createNativeCommandsHarness,
   createTelegramGroupCommandContext,
   findNotAuthorizedCalls,
 } from "./bot-native-commands.test-helpers.js";
+import { clearGroupMembershipCache } from "./group-membership-cache.js";
 
 describe("native command auth in groups", () => {
   function setup(params: {
@@ -192,5 +193,66 @@ describe("native command auth in groups", () => {
       "You are not authorized to use this command.",
       expect.objectContaining({ message_thread_id: 42 }),
     );
+  });
+
+  // Regression: without these gates native commands would keep executing even
+  // though regular messages from the same chat are blocked by `members`, which
+  // would break the security boundary the policy promises.
+  describe('groupPolicy "members" native-command gating', () => {
+    afterEach(() => {
+      // The membership cache is module-level singleton state; reset between
+      // cases so results from the untrusted-members test do not leak into the
+      // trusted-members test via an identical cache key.
+      clearGroupMembershipCache();
+    });
+
+    it("rejects native commands when group membership contains an untrusted user", async () => {
+      const { handlers, sendMessage } = createNativeCommandsHarness({
+        cfg: {
+          channels: {
+            telegram: { groupPolicy: "members" },
+          },
+        } as OpenClawConfig,
+        telegramCfg: { groupPolicy: "members" } as TelegramAccountConfig,
+        allowFrom: ["12345"],
+        groupAllowFrom: ["12345"],
+        useAccessGroups: true,
+        // Telegram reports three participants but only two trusted IDs
+        // (the bot + 12345) exist, so one untrusted member is present.
+        getChatMemberCount: async () => 3,
+      });
+
+      const ctx = createTelegramGroupCommandContext();
+      await handlers.status?.(ctx);
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        -100999,
+        "You are not authorized to use this command.",
+        expect.objectContaining({ message_thread_id: 42 }),
+      );
+    });
+
+    it("authorizes native commands when all group members are trusted", async () => {
+      const { handlers, sendMessage } = createNativeCommandsHarness({
+        cfg: {
+          channels: {
+            telegram: { groupPolicy: "members" },
+          },
+        } as OpenClawConfig,
+        telegramCfg: { groupPolicy: "members" } as TelegramAccountConfig,
+        allowFrom: ["12345"],
+        groupAllowFrom: ["12345"],
+        useAccessGroups: true,
+        // Two members (bot + trusted sender) and both present.
+        getChatMemberCount: async () => 2,
+        getChatMember: async () => ({ status: "member" }),
+      });
+
+      const ctx = createTelegramGroupCommandContext();
+      await handlers.status?.(ctx);
+
+      const notAuthCalls = findNotAuthorizedCalls(sendMessage);
+      expect(notAuthCalls).toHaveLength(0);
+    });
   });
 });

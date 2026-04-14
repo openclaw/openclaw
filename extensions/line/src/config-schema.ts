@@ -2,7 +2,10 @@ import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-sch
 import { z } from "openclaw/plugin-sdk/zod";
 
 const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
-const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
+// "members" is Telegram-only at runtime; Line accepts it so shared configs
+// (e.g. channels.defaults.groupPolicy) validate cleanly and it normalizes to
+// "open" via `normalizeNonTelegramGroupPolicy` in bot-handlers.
+const GroupPolicySchema = z.enum(["open", "allowlist", "disabled", "members"]);
 const ThreadBindingsSchema = z
   .object({
     enabled: z.boolean().optional(),
