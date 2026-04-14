@@ -23,6 +23,14 @@ function providerAccountKey(provider: ChannelId, accountId?: string) {
   return `${provider}:${accountId ?? DEFAULT_ACCOUNT_ID}`;
 }
 
+function isUnresolvedSecretRefResolutionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    typeof error.message === "string" &&
+    /unresolved SecretRef/i.test(error.message)
+  );
+}
+
 function formatChannelAccountLabel(params: {
   provider: ChannelId;
   accountId: string;
@@ -65,7 +73,10 @@ export async function buildProviderStatusIndex(
       let account: unknown;
       try {
         account = await resolveReadOnlyAccount({ plugin, cfg, accountId });
-      } catch {
+      } catch (error) {
+        if (!isUnresolvedSecretRefResolutionError(error)) {
+          throw error;
+        }
         map.set(providerAccountKey(plugin.id, accountId), {
           provider: plugin.id,
           accountId,

@@ -203,7 +203,7 @@ describe("scanStatus", () => {
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: "configured-channels",
-        config: expect.objectContaining({ marker: "source-preload" }),
+        config: expect.objectContaining({ marker: "resolved-preload" }),
         activationSourceConfig: expect.objectContaining({ marker: "source-preload" }),
       }),
     );
@@ -238,7 +238,7 @@ describe("scanStatus", () => {
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: "configured-channels",
-        config: expect.objectContaining({ marker: "source-env-only" }),
+        config: expect.objectContaining({ marker: "resolved-env-only" }),
         activationSourceConfig: expect.objectContaining({ marker: "source-env-only" }),
       }),
     );

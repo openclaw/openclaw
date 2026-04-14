@@ -245,6 +245,49 @@ describe("resolveTelegramToken", () => {
     });
   });
 
+  it("does not fall back to TELEGRAM_BOT_TOKEN when an explicit env SecretRef is configured but unavailable", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
+    vi.stubEnv("TELEGRAM_REF_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_REF_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramToken(cfg)).toEqual({
+      token: "",
+      source: "none",
+    });
+  });
+
+  it("does not fall through when account-level env SecretRef is configured but unavailable", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
+    vi.stubEnv("TELEGRAM_ACCOUNT_REF_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-token",
+          accounts: {
+            default: {
+              botToken: {
+                source: "env",
+                provider: "default",
+                id: "TELEGRAM_ACCOUNT_REF_TOKEN",
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramToken(cfg)).toEqual({
+      token: "",
+      source: "none",
+    });
+  });
+
   it("does not bypass env provider allowlists for env-backed SecretRefs", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "secretref-env-token");
     const cfg = {

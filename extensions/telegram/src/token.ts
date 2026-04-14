@@ -16,6 +16,11 @@ export type TelegramTokenResolution = BaseTokenResolution & {
   source: TelegramTokenSource;
 };
 
+type RuntimeTokenValueResolution =
+  | { status: "available"; value: string }
+  | { status: "configured_unavailable" }
+  | { status: "missing" };
+
 function resolveEnvSecretRefValue(params: {
   cfg?: Pick<OpenClawConfig, "secrets">;
   provider: string;
@@ -48,7 +53,7 @@ function resolveRuntimeTokenValue(params: {
   cfg?: Pick<OpenClawConfig, "secrets">;
   value: unknown;
   path: string;
-}): string | undefined {
+}): RuntimeTokenValueResolution {
   const resolved = resolveSecretInputString({
     value: params.value,
     path: params.path,
@@ -56,17 +61,27 @@ function resolveRuntimeTokenValue(params: {
     mode: "inspect",
   });
   if (resolved.status === "available") {
-    return resolved.value;
+    return {
+      status: "available",
+      value: resolved.value,
+    };
   }
-  if (resolved.status !== "configured_unavailable") {
-    return undefined;
+  if (resolved.status === "missing") {
+    return { status: "missing" };
   }
   if (resolved.ref.source === "env") {
-    return resolveEnvSecretRefValue({
+    const envValue = resolveEnvSecretRefValue({
       cfg: params.cfg,
       provider: resolved.ref.provider,
       id: resolved.ref.id,
     });
+    if (envValue) {
+      return {
+        status: "available",
+        value: envValue,
+      };
+    }
+    return { status: "configured_unavailable" };
   }
   // Runtime resolution stays strict for non-env SecretRefs.
   resolveSecretInputString({
@@ -75,7 +90,7 @@ function resolveRuntimeTokenValue(params: {
     defaults: params.cfg?.secrets?.defaults,
     mode: "strict",
   });
-  return undefined;
+  return { status: "configured_unavailable" };
 }
 
 type ResolveTelegramTokenOpts = {
@@ -150,8 +165,11 @@ export function resolveTelegramToken(
     value: accountCfg?.botToken,
     path: `channels.telegram.accounts.${accountId}.botToken`,
   });
-  if (accountToken) {
-    return { token: accountToken, source: "config" };
+  if (accountToken.status === "available") {
+    return { token: accountToken.value, source: "config" };
+  }
+  if (accountToken.status === "configured_unavailable") {
+    return { token: "", source: "none" };
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -172,8 +190,11 @@ export function resolveTelegramToken(
     value: telegramCfg?.botToken,
     path: "channels.telegram.botToken",
   });
-  if (configToken) {
-    return { token: configToken, source: "config" };
+  if (configToken.status === "available") {
+    return { token: configToken.value, source: "config" };
+  }
+  if (configToken.status === "configured_unavailable") {
+    return { token: "", source: "none" };
   }
 
   const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";

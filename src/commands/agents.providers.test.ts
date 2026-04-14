@@ -102,4 +102,23 @@ describe("buildProviderStatusIndex", () => {
       ]),
     );
   });
+
+  it("rethrows unexpected read-only account resolution errors", async () => {
+    const plugin = {
+      id: "telegram",
+      meta: { label: "Telegram" },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => {
+          throw new Error("plugin crash");
+        },
+      },
+      status: {},
+    } as never;
+
+    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+
+    await expect(buildProviderStatusIndex({} as OpenClawConfig)).rejects.toThrow("plugin crash");
+  });
 });
