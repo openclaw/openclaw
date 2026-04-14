@@ -1638,7 +1638,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         // Available outside registrationMode === "full" like registerCli/registerChannel.
         // In non-full modes registry.tools will be empty, so calls throw "Tool not found".
         executeTool: async (toolName, toolParams) => {
-          const entry = registry.tools.find((e) => e.names.includes(toolName));
+          const entry = registry.tools.find(
+            (e) => e.pluginId === record.id && e.names.includes(toolName),
+          );
           if (!entry) {
             throw new Error(`Tool not found: ${toolName}`);
           }
