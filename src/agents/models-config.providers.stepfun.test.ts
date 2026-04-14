@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { upsertAuthProfile } from "./auth-profiles.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
-const EXPECTED_STANDARD_MODELS = ["step-3.5-flash"];
+const EXPECTED_STANDARD_MODELS = ["step-3.5-flash", "step-3.5-flash-2603"];
 const EXPECTED_PLAN_MODELS = ["step-3.5-flash", "step-3.5-flash-2603"];
 
 describe("StepFun provider catalog", () => {
@@ -233,6 +233,30 @@ describe("StepFun provider catalog", () => {
       env: { ...process.env, STEPFUN_API_KEY: "test-stepfun-key" },
       config: {
         auth: {
+          order: {
+            stepfun: ["stepfun:cn"],
+            "stepfun-plan": ["stepfun-plan:cn"],
+          },
+        },
+      },
+    });
+
+    expect(providers?.stepfun?.baseUrl).toBe("https://api.stepfun.ai/v1");
+    expect(providers?.["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
+  });
+
+  it("ignores stale auth.order metadata when StepFun auth resolves from env", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: { ...process.env, STEPFUN_API_KEY: "test-stepfun-key" },
+      config: {
+        auth: {
+          profiles: {
+            "stepfun:cn": { provider: "stepfun", mode: "api_key" },
+            "stepfun-plan:cn": { provider: "stepfun-plan", mode: "api_key" },
+          },
           order: {
             stepfun: ["stepfun:cn"],
             "stepfun-plan": ["stepfun-plan:cn"],

@@ -169,10 +169,16 @@ function resolveStepFunCatalog(
   }
 
   const explicitBaseUrl = trimExplicitBaseUrl(ctx, params.providerId);
+  // auth.order/auth.profiles can drift from credential reality. Only use those
+  // config hints when discovery is currently profile-backed.
+  const configuredRegion =
+    auth.source === "profile"
+      ? inferLatestConfiguredRegion(ctx, params.providerId, auth.profileId)
+      : inferRegionFromProfileId(auth.profileId);
   const region =
     inferRegionFromBaseUrl(explicitBaseUrl) ??
     inferRegionFromExplicitBaseUrls(ctx) ??
-    inferLatestConfiguredRegion(ctx, params.providerId, auth.profileId) ??
+    configuredRegion ??
     inferRegionFromEnv(ctx.env);
   // Keep discovery working for legacy/manual auth profiles that resolved a
   // key but do not encode region in the profile id.

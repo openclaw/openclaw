@@ -39,6 +39,7 @@ describe("StepFun onboarding", () => {
     expect(next.models?.providers?.stepfun?.models?.map((model) => model.id).toSorted()).toEqual([
       "custom-stepfun-model",
       "step-3.5-flash",
+      "step-3.5-flash-2603",
     ]);
     expect(next.models?.providers?.["stepfun-plan"]?.baseUrl).toBe(
       "https://api.stepfun.ai/step_plan/v1",
@@ -47,7 +48,7 @@ describe("StepFun onboarding", () => {
       next.models?.providers?.["stepfun-plan"]?.models?.map((model) => model.id).toSorted(),
     ).toEqual(["step-3.5-flash", "step-3.5-flash-2603"]);
     expect(next.agents?.defaults?.model).toEqual({
-      primary: "stepfun-plan/step-3.5-flash",
+      primary: "stepfun-plan/step-3.5-flash-2603",
     });
   });
 
@@ -56,13 +57,14 @@ describe("StepFun onboarding", () => {
 
     expect(next.models?.providers?.stepfun?.models?.map((model) => model.id)).toEqual([
       "step-3.5-flash",
+      "step-3.5-flash-2603",
     ]);
     expect(next.models?.providers?.["stepfun-plan"]?.models?.map((model) => model.id)).toEqual([
       "step-3.5-flash",
       "step-3.5-flash-2603",
     ]);
     expect(next.agents?.defaults?.model).toEqual({
-      primary: "stepfun/step-3.5-flash",
+      primary: "stepfun/step-3.5-flash-2603",
     });
   });
 });

@@ -11,8 +11,9 @@ export const STEPFUN_STANDARD_INTL_BASE_URL = "https://api.stepfun.ai/v1";
 export const STEPFUN_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1";
 export const STEPFUN_PLAN_INTL_BASE_URL = "https://api.stepfun.ai/step_plan/v1";
 
-export const STEPFUN_DEFAULT_MODEL_ID = "step-3.5-flash";
 export const STEPFUN_FLASH_2603_MODEL_ID = "step-3.5-flash-2603";
+export const STEPFUN_FLASH_MODEL_ID = "step-3.5-flash";
+export const STEPFUN_DEFAULT_MODEL_ID = STEPFUN_FLASH_2603_MODEL_ID;
 export const STEPFUN_DEFAULT_MODEL_REF = `${STEPFUN_PROVIDER_ID}/${STEPFUN_DEFAULT_MODEL_ID}`;
 export const STEPFUN_PLAN_DEFAULT_MODEL_REF = `${STEPFUN_PLAN_PROVIDER_ID}/${STEPFUN_DEFAULT_MODEL_ID}`;
 
@@ -36,11 +37,12 @@ function buildStepFunModel(id: string, name: string): ModelDefinitionConfig {
 }
 
 const STEPFUN_STANDARD_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
-  buildStepFunModel(STEPFUN_DEFAULT_MODEL_ID, "Step 3.5 Flash"),
+  buildStepFunModel(STEPFUN_FLASH_MODEL_ID, "Step 3.5 Flash"),
+  buildStepFunModel(STEPFUN_FLASH_2603_MODEL_ID, "Step 3.5 Flash 2603"),
 ];
 
 const STEPFUN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
-  buildStepFunModel(STEPFUN_DEFAULT_MODEL_ID, "Step 3.5 Flash"),
+  buildStepFunModel(STEPFUN_FLASH_MODEL_ID, "Step 3.5 Flash"),
   buildStepFunModel(STEPFUN_FLASH_2603_MODEL_ID, "Step 3.5 Flash 2603"),
 ];
 
