@@ -859,6 +859,60 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
+  it("keeps the channel picker usable when the active registry contains broken sibling diagnostics", async () => {
+    const registry = createTestRegistry([
+      {
+        pluginId: "healthy-channel",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "external-chat",
+            label: "Healthy Chat",
+            docsPath: "/channels/external-chat",
+          }),
+        },
+      },
+    ]);
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: "broken-channel",
+      source: "/tmp/broken-channel/setup-entry.cjs",
+      message: "failed to load setup entry: boom: setup plugin missing",
+    });
+    setActivePluginRegistry(registry);
+
+    const note = vi.fn(async (_message?: string, _title?: string) => {});
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        const entries = options as Array<{ value: string; label?: string }>;
+        expect(entries.find((entry) => entry.value === "external-chat")?.label).toBe(
+          "Healthy Chat",
+        );
+        expect(entries.some((entry) => entry.value === "broken-channel")).toBe(false);
+        return "__done__";
+      }
+      return "__done__";
+    });
+
+    const prompter = createPrompter({
+      note,
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter);
+
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    expect(
+      note.mock.calls.some((call) =>
+        (call[0] ?? "").includes("broken-channel plugin not available"),
+      ),
+    ).toBe(false);
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
   it("keeps configured external plugin channels visible when the active registry starts empty", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([createMSTeamsCatalogEntry()]);
