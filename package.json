@@ -934,6 +934,10 @@
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
     },
+    "./plugin-sdk/opencode": {
+      "types": "./dist/plugin-sdk/opencode.d.ts",
+      "default": "./dist/plugin-sdk/opencode.js"
+    },
     "./plugin-sdk/volc-model-catalog-shared": {
       "types": "./dist/plugin-sdk/volc-model-catalog-shared.d.ts",
       "default": "./dist/plugin-sdk/volc-model-catalog-shared.js"
@@ -1472,7 +1476,8 @@
     "openshell": "0.1.0"
   },
   "overrides": {
-    "axios": "1.15.0"
+    "axios": "1.15.0",
+    "follow-redirects": "1.16.0"
   },
   "engines": {
     "node": ">=22.14.0"
@@ -1484,6 +1489,7 @@
       "hono": "4.12.12",
       "@hono/node-server": "1.19.13",
       "axios": "1.15.0",
+      "follow-redirects": "1.16.0",
       "defu": "6.1.5",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",

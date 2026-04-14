@@ -21,6 +21,62 @@ const MAX_ERROR_RESPONSE_BYTES = 4096;
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
+export type ProviderOperationDeadline = {
+  deadlineAtMs?: number;
+  label: string;
+  timeoutMs?: number;
+};
+
+export function createProviderOperationDeadline(params: {
+  timeoutMs?: number;
+  label: string;
+}): ProviderOperationDeadline {
+  if (
+    typeof params.timeoutMs !== "number" ||
+    !Number.isFinite(params.timeoutMs) ||
+    params.timeoutMs <= 0
+  ) {
+    return { label: params.label };
+  }
+  const timeoutMs = Math.floor(params.timeoutMs);
+  return {
+    deadlineAtMs: Date.now() + timeoutMs,
+    label: params.label,
+    timeoutMs,
+  };
+}
+
+export function resolveProviderOperationTimeoutMs(params: {
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+}): number {
+  const deadlineAtMs = params.deadline.deadlineAtMs;
+  if (typeof deadlineAtMs !== "number") {
+    return params.defaultTimeoutMs;
+  }
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+  }
+  return Math.max(1, Math.min(params.defaultTimeoutMs, remainingMs));
+}
+
+export async function waitProviderOperationPollInterval(params: {
+  deadline: ProviderOperationDeadline;
+  pollIntervalMs: number;
+}): Promise<void> {
+  const deadlineAtMs = params.deadline.deadlineAtMs;
+  if (typeof deadlineAtMs !== "number") {
+    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    return;
+  }
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, Math.min(params.pollIntervalMs, remainingMs)));
+}
+
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
