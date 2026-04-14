@@ -9,6 +9,16 @@
 
 const CSS_VAR = "--visual-viewport-keyboard-inset";
 
+const TEXT_ENTRY_INPUT_TYPES = new Set([
+  "text",
+  "search",
+  "url",
+  "tel",
+  "email",
+  "password",
+  "number",
+]);
+
 let cleanup: (() => void) | null = null;
 
 /** @internal Exported for unit tests. */
@@ -21,7 +31,8 @@ export function computeVisualViewportKeyboardInsetPx(
   return Math.max(0, Math.round(windowInnerHeight - visualViewportHeight - top));
 }
 
-function isTextEditableElement(value: unknown): value is HTMLElement {
+/** @internal Exported for unit tests. */
+export function isTextEditableElement(value: unknown): value is HTMLElement {
   if (typeof HTMLElement === "undefined") {
     return false;
   }
@@ -35,7 +46,7 @@ function isTextEditableElement(value: unknown): value is HTMLElement {
     return true;
   }
   if (value instanceof HTMLInputElement) {
-    return !value.readOnly && !value.disabled;
+    return !value.readOnly && !value.disabled && TEXT_ENTRY_INPUT_TYPES.has(value.type);
   }
   return false;
 }
