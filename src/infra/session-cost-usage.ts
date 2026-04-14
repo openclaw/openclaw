@@ -4,6 +4,7 @@ import readline from "node:readline";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripHeartbeatContent } from "../auto-reply/heartbeat.js";
 import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -485,8 +486,10 @@ export async function discoverAllSessions(params?: {
           const message = parsed.message as Record<string, unknown> | undefined;
           if (message?.role === "user") {
             const content = message.content;
+            let rawContent: string | undefined;
+            
             if (typeof content === "string") {
-              firstUserMessage = content.slice(0, 100);
+              rawContent = content;
             } else if (Array.isArray(content)) {
               for (const block of content) {
                 if (
@@ -496,14 +499,24 @@ export async function discoverAllSessions(params?: {
                 ) {
                   const text = (block as Record<string, unknown>).text;
                   if (typeof text === "string") {
-                    firstUserMessage = text.slice(0, 100);
+                    rawContent = text;
                   }
                   break;
                 }
               }
             }
-            break; // Found first user message
-          }
+            
+            // Filter out heartbeat content to prevent session label pollution (issue #66533)
+            if (rawContent) {
+              const heartbeatFiltered = stripHeartbeatContent(rawContent, "message");
+              const finalContent = heartbeatFiltered.shouldSkip ? "" : (heartbeatFiltered.text || rawContent);
+              
+              if (finalContent.trim()) {
+                firstUserMessage = finalContent.slice(0, 100);
+                break; // Found first non-heartbeat user message
+              }
+              // If this message was pure heartbeat content, continue to next message
+            }
         } catch {
           // Skip malformed lines
         }
