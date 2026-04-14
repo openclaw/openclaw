@@ -774,6 +774,25 @@ describe("resolveUninstallDirectoryTarget", () => {
     ).toBeNull();
   });
 
+  it("does NOT return null for path-based installs where installPath !== sourcePath (files were copied)", () => {
+    // When installPath !== sourcePath, files were copied to the installPath location,
+    // so resolveUninstallDirectoryTarget should return a valid (default) path for deletion.
+    const extensionsDir = path.join(os.tmpdir(), "openclaw-uninstall-test");
+    const defaultPath = resolvePluginInstallDir("my-plugin", extensionsDir);
+    const target = resolveUninstallDirectoryTarget({
+      pluginId: "my-plugin",
+      hasInstall: true,
+      installRecord: {
+        source: "path",
+        sourcePath: "/external/plugin-source",
+        installPath: defaultPath, // different from sourcePath — files were copied here
+      },
+      extensionsDir,
+    });
+
+    expect(target).toBe(defaultPath);
+  });
+
   it("falls back to default path when configured installPath is untrusted", () => {
     const extensionsDir = path.join(os.tmpdir(), "openclaw-uninstall-safe");
     const target = resolveUninstallDirectoryTarget({

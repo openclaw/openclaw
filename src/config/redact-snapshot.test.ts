@@ -578,8 +578,8 @@ describe("redactConfigSnapshot", () => {
     expect(sourceConfig.gateway.auth.token).toBe(REDACTED_SENTINEL);
     expect(resolved.gateway.auth.token).toBe(REDACTED_SENTINEL);
     expect(runtimeConfig.channels.discord.token).toBe(REDACTED_SENTINEL);
-    expect(result.sourceConfig).toBe(result.resolved);
-    expect(result.runtimeConfig).toBe(result.config);
+    expect(result.sourceConfig).toBe(result.config);
+    expect(result.runtimeConfig).toBe(result.resolved);
   });
 
   it("handles null raw gracefully", () => {
@@ -625,8 +625,8 @@ describe("redactConfigSnapshot", () => {
     expect(result.sourceConfig).toEqual({});
     expect(result.resolved).toEqual({});
     expect(result.runtimeConfig).toEqual({});
-    expect(result.sourceConfig).toBe(result.resolved);
-    expect(result.runtimeConfig).toBe(result.config);
+    expect(result.sourceConfig).toBe(result.config);
+    expect(result.runtimeConfig).toBe(result.resolved);
   });
 
   it("handles deeply nested tokens in accounts", () => {

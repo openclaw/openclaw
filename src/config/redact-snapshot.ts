@@ -427,8 +427,8 @@ export function redactConfigSnapshot(
     const redactedResolved = {} as ConfigFileSnapshot["resolved"];
     return {
       ...snapshot,
-      sourceConfig: redactedResolved,
-      runtimeConfig: redactedConfig,
+      sourceConfig: redactedConfig,
+      runtimeConfig: redactedResolved,
       config: redactedConfig,
       raw: null,
       parsed: null,
@@ -459,8 +459,8 @@ export function redactConfigSnapshot(
 
   return {
     ...snapshot,
-    sourceConfig: redactedResolved,
-    runtimeConfig: redactedConfig,
+    sourceConfig: redactedConfig,
+    runtimeConfig: redactedResolved,
     config: redactedConfig,
     raw: redactedRaw,
     parsed: redactedParsed,

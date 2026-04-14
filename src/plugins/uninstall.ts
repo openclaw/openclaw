@@ -36,7 +36,12 @@ export function resolveUninstallDirectoryTarget(params: {
     return null;
   }
 
-  if (params.installRecord?.source === "path") {
+  // Linked installs (source === "path" && installPath === sourcePath): no files were copied, skip deletion.
+  // Normal path installs (source === "path" && installPath !== sourcePath): files were copied, delete them.
+  if (
+    params.installRecord?.source === "path" &&
+    params.installRecord?.installPath === params.installRecord?.sourcePath
+  ) {
     return null;
   }
 
@@ -221,7 +226,8 @@ export type UninstallPluginParams = {
 
 /**
  * Uninstall a plugin by removing it from config and optionally deleting installed files.
- * Linked plugins (source === "path") never have their source directory deleted.
+ * Linked plugins (source === "path" && installPath === sourcePath) never have their source directory deleted.
+ * Normal path installs (source === "path" && installPath !== sourcePath) have their files deleted.
  */
 export async function uninstallPlugin(
   params: UninstallPluginParams,
@@ -237,7 +243,9 @@ export async function uninstallPlugin(
   }
 
   const installRecord = config.plugins?.installs?.[pluginId];
-  const isLinked = installRecord?.source === "path";
+  // Linked install: source === "path" && installPath === sourcePath (no files copied to extensions).
+  const isLinked =
+    installRecord?.source === "path" && installRecord?.installPath === installRecord?.sourcePath;
 
   // Remove from config
   const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId, {
