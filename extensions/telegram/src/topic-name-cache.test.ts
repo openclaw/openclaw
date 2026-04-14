@@ -90,7 +90,6 @@ describe("topic-name-cache", () => {
     for (let i = 2; i <= 2048; i++) {
       updateTopicName(-100000, i, { name: `Topic ${i}` });
     }
-    await vi.advanceTimersByTimeAsync(10);
     getTopicName(-100000, 1);
     updateTopicName(-100000, 9999, { name: "Newcomer" });
     expect(getTopicName(-100000, 1)).toBe("Active");
