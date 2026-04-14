@@ -97,6 +97,7 @@ export {
 export type ProviderReplayFamily =
   | "openai-compatible"
   | "anthropic-by-model"
+  | "native-anthropic-by-model"
   | "google-gemini"
   | "passthrough-gemini"
   | "hybrid-anthropic-openai";
@@ -109,6 +110,7 @@ type ProviderReplayFamilyHooks = Pick<
 type BuildProviderReplayFamilyHooksOptions =
   | { family: "openai-compatible" }
   | { family: "anthropic-by-model" }
+  | { family: "native-anthropic-by-model" }
   | { family: "google-gemini" }
   | { family: "passthrough-gemini" }
   | {
@@ -129,6 +131,11 @@ export function buildProviderReplayFamilyHooks(
       return {
         buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
           buildAnthropicReplayPolicyForModel(modelId),
+      };
+    case "native-anthropic-by-model":
+      return {
+        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
+          buildNativeAnthropicReplayPolicyForModel(modelId),
       };
     case "google-gemini":
       return {

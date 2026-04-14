@@ -35,6 +35,25 @@ describe("buildProviderReplayFamilyHooks", () => {
         reasoningMode: undefined,
       },
       {
+        family: "native-anthropic-by-model" as const,
+        ctx: {
+          provider: "anthropic",
+          modelApi: "anthropic-messages",
+          modelId: "claude-sonnet-4-6",
+        },
+        match: {
+          sanitizeMode: "full",
+          preserveNativeAnthropicToolUseIds: true,
+          preserveSignatures: true,
+          repairToolUseResultPairing: true,
+          validateAnthropicTurns: true,
+          allowSyntheticToolResults: true,
+        },
+        absent: ["dropThinkingBlocks"],
+        hasSanitizeReplayHistory: false,
+        reasoningMode: undefined,
+      },
+      {
         family: "google-gemini" as const,
         ctx: {
           provider: "google",
