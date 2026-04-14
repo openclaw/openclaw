@@ -204,17 +204,17 @@ describe("provider family plugin-boundary inventory", () => {
       expect(actualAssignments[pluginId]).toBeDefined();
       if (expected.replayFamilies) {
         expect(actualAssignments[pluginId]?.replayFamilies ?? []).toEqual(
-          expect.arrayContaining(expected.replayFamilies),
+          expect.arrayContaining([...expected.replayFamilies]),
         );
       }
       if (expected.streamFamilies) {
         expect(actualAssignments[pluginId]?.streamFamilies ?? []).toEqual(
-          expect.arrayContaining(expected.streamFamilies),
+          expect.arrayContaining([...expected.streamFamilies]),
         );
       }
       if (expected.toolCompatFamilies) {
         expect(actualAssignments[pluginId]?.toolCompatFamilies ?? []).toEqual(
-          expect.arrayContaining(expected.toolCompatFamilies),
+          expect.arrayContaining([...expected.toolCompatFamilies]),
         );
       }
     }
