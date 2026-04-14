@@ -70,22 +70,38 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
   return channels;
 }
 
+const catalogCache = new Map<string, ExternalCatalogChannelEntry[] | null>();
+
+function readCatalogEntries(resolved: string): ExternalCatalogChannelEntry[] | null {
+  const cached = catalogCache.get(resolved);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (!fs.existsSync(resolved)) {
+    catalogCache.set(resolved, null);
+    return null;
+  }
+  try {
+    const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
+    const entries = parseExternalCatalogChannelEntries(payload);
+    catalogCache.set(resolved, entries);
+    return entries;
+  } catch {
+    catalogCache.set(resolved, null);
+    return null;
+  }
+}
+
 function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.ProcessEnv): string[] {
   for (const rawPath of resolveExternalCatalogPaths(env)) {
     const resolved = resolveUserPath(rawPath, env);
-    if (!fs.existsSync(resolved)) {
+    const entries = readCatalogEntries(resolved);
+    if (!entries) {
       continue;
     }
-    try {
-      const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
-      const channel = parseExternalCatalogChannelEntries(payload).find(
-        (entry) => entry.id === channelId,
-      );
-      if (channel) {
-        return channel.preferOver;
-      }
-    } catch {
-      // Ignore invalid catalog files.
+    const channel = entries.find((entry) => entry.id === channelId);
+    if (channel) {
+      return channel.preferOver;
     }
   }
   return [];
