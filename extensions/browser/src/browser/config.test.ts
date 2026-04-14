@@ -318,7 +318,7 @@ describe("browser config", () => {
         dangerouslyAllowPrivateNetwork: false,
       },
     });
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
   });
 
   it("keeps allowlist-only browser SSRF policy strict by default", () => {
