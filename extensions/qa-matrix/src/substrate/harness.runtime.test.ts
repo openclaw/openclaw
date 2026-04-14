@@ -2,11 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  __testing,
-  startMatrixQaHarness,
-  writeMatrixQaHarnessFiles,
-} from "./matrix-harness.runtime.js";
+import { __testing, startMatrixQaHarness, writeMatrixQaHarnessFiles } from "./harness.runtime.js";
 
 describe("matrix harness runtime", () => {
   it("writes a pinned Tuwunel compose file and redacted manifest", async () => {

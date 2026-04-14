@@ -4,7 +4,7 @@ import {
   createLiveTransportQaCliRegistration,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
-} from "../shared/live-transport-cli.js";
+} from "./shared/live-transport-cli.js";
 
 type MatrixQaCliRuntime = typeof import("./cli.runtime.js");
 
@@ -26,6 +26,8 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
     sutAccountHelp: "Temporary Matrix account id inside the QA gateway config",
     run: runQaMatrix,
   });
+
+export const qaRunnerCliRegistrations = [matrixQaCliRegistration] as const;
 
 export function registerMatrixQaCli(qa: Command) {
   matrixQaCliRegistration.register(qa);
