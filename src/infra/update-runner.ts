@@ -717,8 +717,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           const depsStepName = preflightIgnoreScripts
             ? `preflight deps install (ignore scripts) (${shortSha})`
             : `preflight deps install (${shortSha})`;
+          const preflightDepsEnv = {
+            ...manager.env,
+            NODE_LLAMA_CPP_POSTINSTALL: "skip",
+          };
           const depsStep = await runStep(
-            step(depsStepName, depsStepArgv, worktreeDir, manager.env),
+            step(depsStepName, depsStepArgv, worktreeDir, preflightDepsEnv),
           );
           steps.push(depsStep);
           let finalDepsStep = depsStep;
