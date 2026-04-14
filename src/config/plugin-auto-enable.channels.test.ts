@@ -150,32 +150,35 @@ describe("applyPluginAutoEnable channels", () => {
 
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
-    materializePluginAutoEnableCandidates({
-      config: {
-        channels: {
-          "env-primary": { token: "primary" },
-          "env-secondary": { token: "secondary" },
+    try {
+      materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            "env-primary": { token: "primary" },
+            "env-secondary": { token: "secondary" },
+          },
         },
-      },
-      candidates: Array.from({ length: 20 }, (_, index) => ({
-        pluginId: index % 2 === 0 ? "env-primary" : "env-secondary",
-        kind: "channel-configured" as const,
-        channelId: index % 2 === 0 ? "env-primary" : "env-secondary",
-      })),
-      env: {
-        ...makeIsolatedEnv(),
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-      manifestRegistry: makeRegistry([]),
-    });
+        candidates: Array.from({ length: 20 }, (_, index) => ({
+          pluginId: index % 2 === 0 ? "env-primary" : "env-secondary",
+          kind: "channel-configured" as const,
+          channelId: index % 2 === 0 ? "env-primary" : "env-secondary",
+        })),
+        env: {
+          ...makeIsolatedEnv(),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        manifestRegistry: makeRegistry([]),
+      });
 
-    expect(
-      readFileSpy.mock.calls.filter(([filePath]) =>
-        String(filePath).endsWith("plugins/catalog.json"),
-      ),
-    ).toHaveLength(2);
-    readFileSpy.mockRestore();
+      expect(
+        readFileSpy.mock.calls.filter(([filePath]) =>
+          String(filePath).endsWith("plugins/catalog.json"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {

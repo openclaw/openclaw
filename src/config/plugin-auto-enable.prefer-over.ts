@@ -134,17 +134,16 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   registry: PluginManifestRegistry;
   isPluginDenied: (config: OpenClawConfig, pluginId: string) => boolean;
   isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
-  preferOverCache?: Map<string, string[]>;
+  preferOverCache: Map<string, string[]>;
 }): boolean {
-  const preferOverCache = params.preferOverCache ?? new Map<string, string[]>();
   const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
     const cacheKey = getPluginAutoEnableCandidateCacheKey(candidate);
-    const cached = preferOverCache.get(cacheKey);
+    const cached = params.preferOverCache.get(cacheKey);
     if (cached) {
       return cached;
     }
     const resolved = resolvePreferredOverIds(candidate, params.env, params.registry);
-    preferOverCache.set(cacheKey, resolved);
+    params.preferOverCache.set(cacheKey, resolved);
     return resolved;
   };
 
