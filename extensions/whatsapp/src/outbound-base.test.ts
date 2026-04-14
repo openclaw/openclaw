@@ -18,7 +18,7 @@ describe("createWhatsAppOutboundBase", () => {
   it("forwards mediaLocalRoots to sendMessageWhatsApp", async () => {
     const sendMessageWhatsApp = vi.fn(async () => ({
       messageId: "msg-1",
-      toJid: "15551234567@s.whatsapp.net",
+      toJid: "test-user@s.whatsapp.net",
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
@@ -31,7 +31,7 @@ describe("createWhatsAppOutboundBase", () => {
 
     const result = await outbound.sendMedia!({
       cfg: {} as never,
-      to: "whatsapp:+15551234567",
+      to: "whatsapp:test-user",
       text: "photo",
       mediaUrl: "/tmp/workspace/photo.png",
       mediaLocalRoots,
@@ -41,7 +41,7 @@ describe("createWhatsAppOutboundBase", () => {
     });
 
     expect(sendMessageWhatsApp).toHaveBeenCalledWith(
-      "whatsapp:+15551234567",
+      "whatsapp:test-user",
       "photo",
       expect.objectContaining({
         verbose: false,
@@ -57,11 +57,11 @@ describe("createWhatsAppOutboundBase", () => {
   it("bypasses legacy outbound deps for media sends", async () => {
     const sendMessageWhatsApp = vi.fn(async () => ({
       messageId: "msg-runtime",
-      toJid: "15551234567@s.whatsapp.net",
+      toJid: "test-user@s.whatsapp.net",
     }));
     const legacySendWhatsApp = vi.fn(async () => ({
       messageId: "msg-legacy",
-      toJid: "15551234567@s.whatsapp.net",
+      toJid: "test-user@s.whatsapp.net",
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
@@ -73,7 +73,7 @@ describe("createWhatsAppOutboundBase", () => {
 
     const result = await outbound.sendMedia!({
       cfg: {} as never,
-      to: "whatsapp:+15551234567",
+      to: "whatsapp:test-user",
       text: "photo",
       mediaUrl: "/tmp/workspace/photo.png",
       accountId: "default",
@@ -83,7 +83,7 @@ describe("createWhatsAppOutboundBase", () => {
 
     expect(legacySendWhatsApp).not.toHaveBeenCalled();
     expect(sendMessageWhatsApp).toHaveBeenCalledWith(
-      "whatsapp:+15551234567",
+      "whatsapp:test-user",
       "photo",
       expect.objectContaining({
         mediaUrl: "/tmp/workspace/photo.png",
@@ -96,7 +96,7 @@ describe("createWhatsAppOutboundBase", () => {
   it("threads cfg into sendPollWhatsApp call", async () => {
     const sendPollWhatsApp = vi.fn(async () => ({
       messageId: "wa-poll-1",
-      toJid: "1555@s.whatsapp.net",
+      toJid: "test-poll@s.whatsapp.net",
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
@@ -122,7 +122,7 @@ describe("createWhatsAppOutboundBase", () => {
     expect(result).toEqual({
       channel: "whatsapp",
       messageId: "wa-poll-1",
-      toJid: "1555@s.whatsapp.net",
+      toJid: "test-poll@s.whatsapp.net",
     });
   });
 });
