@@ -479,7 +479,7 @@ export async function takeScreenshotViaPlaywright(opts: {
   }
   const buffer = await page.screenshot({
     type,
-    fullPage: Boolean(opts.fullPage),
+    fullPage: Boolean(opts.fullPage) && !loadConfig().browser?.headless,
   });
   return { buffer };
 }

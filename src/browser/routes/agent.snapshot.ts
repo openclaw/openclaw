@@ -1,4 +1,5 @@
 import path from "node:path";
+import { loadConfig } from "../../config/config.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria } from "../cdp.js";
 import {
@@ -106,7 +107,7 @@ export function registerBrowserAgentSnapshotRoutes(
   app.post("/screenshot", async (req, res) => {
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
-    const fullPage = toBoolean(body.fullPage) ?? false;
+    const fullPage = (toBoolean(body.fullPage) ?? false) && !loadConfig().browser?.headless;
     const ref = toStringOrEmpty(body.ref) || undefined;
     const element = toStringOrEmpty(body.element) || undefined;
     const type = body.type === "jpeg" ? "jpeg" : "png";

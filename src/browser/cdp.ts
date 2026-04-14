@@ -66,8 +66,11 @@ export async function captureScreenshot(opts: {
       });
     }
 
+    // Force fullPage off in headless mode
+    const effectiveFullPage = opts.fullPage && !loadConfig().browser?.headless;
+
     let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
-    if (opts.fullPage) {
+    if (effectiveFullPage) {
       const metrics = (await send("Page.getLayoutMetrics")) as {
         cssContentSize?: { width?: number; height?: number };
         contentSize?: { width?: number; height?: number };
@@ -88,7 +91,7 @@ export async function captureScreenshot(opts: {
       format,
       ...(quality !== undefined ? { quality } : {}),
       fromSurface: true,
-      captureBeyondViewport: true,
+      captureBeyondViewport: Boolean(effectiveFullPage),
       ...(clip ? { clip } : {}),
     })) as { data?: string };
 
