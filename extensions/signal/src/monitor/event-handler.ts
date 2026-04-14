@@ -321,6 +321,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
+    // Send early typing indicator before dispatch to reduce perceived latency.
+    // The default typing indicator only fires on the first AI token (onReplyStart),
+    // but group messages have significant pre-dispatch overhead (history building,
+    // blocking hooks, larger context assembly). This fire-and-forget call ensures
+    // users see "typing..." immediately rather than waiting through pre-processing.
+    if (ctxPayload.To) {
+      sendTypingSignal(ctxPayload.To, {
+        baseUrl: deps.baseUrl,
+        account: deps.account,
+        accountId: deps.accountId,
+      }).catch(() => {});
+    }
+
     const { queuedFinal } = await dispatchInboundMessage({
       ctx: ctxPayload,
       cfg: deps.cfg,
