@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Agents/workspace files: route `agents.files.get`, `agents.files.set`, and workspace listing through the shared `fs-safe` helpers (`openFileWithinRoot`/`readFileWithinRoot`/`writeFileWithinRoot`), reject symlink aliases for allowlisted agent files, and have `fs-safe` resolve opened-file real paths from the file descriptor before falling back to path-based `realpath` so a symlink swap between `open` and `realpath` can no longer redirect the validated path off the intended inode. (#66636) Thanks @eleqtrizit.
 - Gateway/MCP loopback: switch the `/mcp` bearer comparison from plain `!==` to constant-time `safeEqualSecret` (matching the convention every other auth surface in the codebase uses), and reject non-loopback browser-origin requests via `checkBrowserOrigin` before the auth gate runs. Loopback origins (`127.0.0.1:*`, `localhost:*`, same-origin) still go through, including the `localhost`↔`127.0.0.1` host mismatch that browsers flag as `Sec-Fetch-Site: cross-site`. (#66665) Thanks @eleqtrizit.
 - Auto-reply/billing: classify pure billing cooldown fallback summaries from structured fallback reasons so users see billing guidance instead of the generic failure reply. (#66363) Thanks @Rohan5commit.
+- Agents/fallback: preserve the original prompt body on model fallback retries with session history so the retrying model keeps the active task instead of only seeing a generic continue message. (#66029) Thanks @WuKongAI-CMU.
 
 ## 2026.4.14
 
