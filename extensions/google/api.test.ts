@@ -1,3 +1,4 @@
+import type { ProviderRequestTransportOverrides } from "openclaw/plugin-sdk/provider-http";
 import { describe, expect, it } from "vitest";
 import {
   isGoogleGenerativeAiApi,
@@ -178,19 +179,39 @@ describe("google generative ai helpers", () => {
     });
   });
 
-  it("strips URL credentials and only allows private-network access via explicit request opt-in", () => {
+  it("strips URL credentials during Google base URL normalization", () => {
     const normalized = normalizeGoogleApiBaseUrl(
       "https://user:secret@generativelanguage.googleapis.com/v1beta/openai?x=1#frag",
     );
     expect(normalized).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+  });
 
-    const privateNetworkConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+  it("rejects non-Google Gemini base URLs and ignores smuggled private-network flags", () => {
+    expect(() =>
+      resolveGoogleGenerativeAiHttpRequestConfig({
+        apiKey: "api-key-123",
+        baseUrl: "https://proxy.example.com/v1beta",
+        capability: "image",
+        transport: "http",
+      }),
+    ).toThrow("Google Generative AI baseUrl must use https://generativelanguage.googleapis.com");
+
+    expect(() =>
+      resolveGoogleGenerativeAiHttpRequestConfig({
+        apiKey: "api-key-123",
+        baseUrl: "http://generativelanguage.googleapis.com/v1beta",
+        capability: "image",
+        transport: "http",
+      }),
+    ).toThrow("Google Generative AI baseUrl must use https://generativelanguage.googleapis.com");
+
+    const config = resolveGoogleGenerativeAiHttpRequestConfig({
       apiKey: "api-key-123",
-      baseUrl: "https://proxy.example.com/v1beta",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       capability: "image",
       transport: "http",
-      request: { allowPrivateNetwork: true },
+      request: { allowPrivateNetwork: true } as unknown as ProviderRequestTransportOverrides,
     });
-    expect(privateNetworkConfig.allowPrivateNetwork).toBe(true);
+    expect(config.allowPrivateNetwork).toBe(false);
   });
 });

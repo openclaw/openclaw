@@ -44,6 +44,29 @@ export function parseGeminiAuth(apiKey: string): { headers: Record<string, strin
   };
 }
 
+function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
+  const normalized =
+    normalizeGoogleGenerativeAiBaseUrl(baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL) ??
+    DEFAULT_GOOGLE_API_BASE_URL;
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    throw new Error(
+      "Google Generative AI baseUrl must be a valid https URL on generativelanguage.googleapis.com",
+    );
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname.toLowerCase() !== "generativelanguage.googleapis.com"
+  ) {
+    throw new Error(
+      "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",
+    );
+  }
+  return normalized;
+}
+
 export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   apiKey: string;
   baseUrl?: string;
@@ -52,14 +75,10 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   capability: "image" | "audio" | "video";
   transport: "http" | "media-understanding";
 }) {
-  const allowPrivateNetwork =
-    (params.request as { allowPrivateNetwork?: boolean } | undefined)?.allowPrivateNetwork === true;
   return resolveProviderHttpRequestConfig({
-    baseUrl:
-      normalizeGoogleGenerativeAiBaseUrl(params.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL) ??
-      DEFAULT_GOOGLE_API_BASE_URL,
+    baseUrl: resolveTrustedGoogleGenerativeAiBaseUrl(params.baseUrl),
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-    allowPrivateNetwork,
+    allowPrivateNetwork: false,
     headers: params.headers,
     request: params.request,
     defaultHeaders: parseGeminiAuth(params.apiKey).headers,
