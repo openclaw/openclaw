@@ -24,11 +24,16 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => value,
 }));
 
+vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+  getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getChannelPlugin(...args),
+}));
+
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginChannelRegistry: () => mocks.getActivePluginChannelRegistry(),
   getActivePluginRegistry: () => mocks.getActivePluginRegistry(),
   getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
 }));
+
 
 beforeAll(async () => {
   ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =

@@ -1,9 +1,7 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as modelSelection from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import {
@@ -15,11 +13,18 @@ import {
   runCronTurn,
   withTempHome,
 } from "./isolated-agent.turn-test-helpers.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
+import {
+  mockRunCronFallbackPassthrough,
+  runEmbeddedPiAgentMock,
+} from "./isolated-agent/run.test-harness.js";
+
+setupRunCronIsolatedAgentTurnSuite();
 
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
-    vi.mocked(runEmbeddedPiAgent).mockClear();
+    mockRunCronFallbackPassthrough();
+    runEmbeddedPiAgentMock.mockClear();
   });
 
   it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
@@ -29,7 +34,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
         agentDir?: string;
       };
       expect(call?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main", "agent"));
@@ -42,7 +47,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
       });
 
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
         prompt?: string;
       };
       const lines = call?.prompt?.split("\n") ?? [];
@@ -90,7 +95,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
         sessionKey?: string;
         workspaceDir?: string;
         sessionFile?: string;
@@ -98,6 +103,22 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       expect(call?.sessionKey).toBe("agent:ops:cron:job-ops");
       expect(call?.workspaceDir).toBe(opsWorkspace);
       expect(call?.sessionFile).toContain(path.join("agents", "ops"));
+    });
+  });
+
+  it("passes sessionFile to isolated cron runs", async () => {
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+      });
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+        sessionFile?: string;
+      };
+
+      expect(call?.sessionFile).toContain(
+        path.join(home, ".openclaw", "agents", "main", "sessions"),
+      );
+      expect(call?.sessionFile?.endsWith(".jsonl")).toBe(true);
     });
   });
 

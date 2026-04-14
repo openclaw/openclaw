@@ -5,6 +5,7 @@ import {
   clearPluginCommands,
   executePluginCommand,
   getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
   listPluginCommands,
   matchPluginCommand,
   registerPluginCommand,
@@ -202,6 +203,17 @@ beforeEach(() => {
           },
         },
       },
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "slack",
+            label: "Slack",
+            capabilities: { nativeCommands: true, chatTypes: ["direct", "group"] },
+          }),
+        },
+      },
     ]),
   );
 });
@@ -265,6 +277,23 @@ describe("registerPluginCommand", () => {
     ]);
   });
 
+  it("matches underscore aliases for hyphenated command names", () => {
+    registerPluginCommand("demo-plugin", {
+      name: "active-memory",
+      description: "Active Memory command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(matchPluginCommand("/active_memory status")).toMatchObject({
+      command: expect.objectContaining({
+        name: "active-memory",
+        pluginId: "demo-plugin",
+      }),
+      args: "status",
+    });
+  });
+
   it("supports provider-specific native command aliases", () => {
     const result = registerVoiceCommandForTest({
       nativeNames: {
@@ -280,6 +309,25 @@ describe("registerPluginCommand", () => {
       { provider: "discord", expectedNames: ["discordvoice"] },
       { provider: "telegram", expectedNames: ["talkvoice"] },
       { provider: "slack", expectedNames: [] },
+    ]);
+  });
+
+  it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
+    const result = registerVoiceCommandForTest({
+      nativeNames: {
+        default: "talkvoice",
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(listProviderPluginCommandSpecs("slack")).toEqual([
+      {
+        name: "talkvoice",
+        description: "Demo command",
+        acceptsArgs: false,
+      },
     ]);
   });
 

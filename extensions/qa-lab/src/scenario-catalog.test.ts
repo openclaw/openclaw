@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
 import {
   listQaScenarioMarkdownPaths,
   readQaBootstrapScenarioCatalog,
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
+  validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
 describe("qa scenario catalog", () => {
@@ -32,11 +34,25 @@ describe("qa scenario catalog", () => {
     expect(catalog.scenarios.some((scenario) => scenario.id === "subagent-fanout-synthesis")).toBe(
       true,
     );
+    expect(
+      QA_AGENTIC_PARITY_SCENARIO_IDS.every((scenarioId) =>
+        catalog.scenarios.some((scenario) => scenario.id === scenarioId),
+      ),
+    ).toBe(true);
   });
 
   it("loads scenario-specific execution config from per-scenario markdown", () => {
     const discovery = readQaScenarioById("source-docs-discovery-report");
     const discoveryConfig = readQaScenarioExecutionConfig("source-docs-discovery-report");
+    const codexLeak = readQaScenarioById("codex-harness-no-meta-leak");
+    const codexLeakConfig = readQaScenarioExecutionConfig("codex-harness-no-meta-leak") as
+      | {
+          harnessRuntime?: string;
+          harnessFallback?: string;
+          expectedReply?: string;
+          forbiddenReplySubstrings?: string[];
+        }
+      | undefined;
     const fallbackConfig = readQaScenarioExecutionConfig("memory-failure-fallback");
     const bundledSkill = readQaScenarioById("bundled-plugin-skill-runtime");
     const bundledSkillConfig = readQaScenarioExecutionConfig("bundled-plugin-skill-runtime") as
@@ -50,6 +66,11 @@ describe("qa scenario catalog", () => {
     expect((discoveryConfig?.requiredFiles as string[] | undefined)?.[0]).toBe(
       "repo/qa/scenarios/index.md",
     );
+    expect(codexLeak.title).toBe("Codex harness no meta leak");
+    expect(codexLeakConfig?.harnessRuntime).toBe("codex");
+    expect(codexLeakConfig?.harnessFallback).toBe("none");
+    expect(codexLeakConfig?.expectedReply).toBe("QA_LEAK_OK");
+    expect(codexLeakConfig?.forbiddenReplySubstrings).toContain("checking thread context");
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
       "will not reveal",
     );
@@ -58,6 +79,12 @@ describe("qa scenario catalog", () => {
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-1: ok");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
+  });
+
+  it("loads scenario-declared gateway runtime options from markdown", () => {
+    const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
+
+    expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
   });
 
   it("keeps the character eval scenario natural and task-shaped", () => {
@@ -77,5 +104,77 @@ describe("qa scenario catalog", () => {
     expect(
       characterConfig?.turns?.some((turn) => turn.expectFile?.path === "precious-status.html"),
     ).toBe(true);
+  });
+
+  it("includes the codex leak scenario in the markdown pack", () => {
+    const pack = readQaScenarioPack();
+    const scenario = pack.scenarios.find(
+      (candidate) => candidate.id === "codex-harness-no-meta-leak",
+    );
+
+    expect(scenario?.sourcePath).toBe("qa/scenarios/codex-harness-no-meta-leak.md");
+    expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
+      "keeps codex coordination chatter out of the visible reply",
+    );
+  });
+
+  it("keeps mock-only image debug assertions guarded in live-frontier runs", () => {
+    const scenario = readQaScenarioPack().scenarios.find(
+      (candidate) => candidate.id === "image-understanding-attachment",
+    );
+    const imageRequestAction = scenario?.execution.flow?.steps
+      .flatMap((step) => step.actions ?? [])
+      .find(
+        (
+          action,
+        ): action is {
+          set: string;
+          value?: { expr?: string };
+        } =>
+          typeof action === "object" &&
+          action !== null &&
+          "set" in action &&
+          action.set === "imageRequest",
+      );
+    const imageRequestExpr = imageRequestAction?.value?.expr;
+
+    expect(imageRequestExpr).toContain("env.mock ?");
+    expect(imageRequestExpr).toContain("/debug/requests");
+  });
+
+  it("adds a repo-instruction followthrough scenario to the parity pack", () => {
+    const scenario = readQaScenarioById("instruction-followthrough-repo-contract");
+    const config = readQaScenarioExecutionConfig("instruction-followthrough-repo-contract") as
+      | {
+          workspaceFiles?: Record<string, string>;
+          prompt?: string;
+          expectedReplyAll?: string[];
+          expectedArtifactAll?: string[];
+          expectedArtifactAny?: string[];
+        }
+      | undefined;
+
+    expect(config?.workspaceFiles?.["AGENT.md"]).toContain("Step order:");
+    expect(config?.workspaceFiles?.["SOUL.md"]).toContain("action-first");
+    expect(config?.workspaceFiles?.["FOLLOWTHROUGH_INPUT.md"]).toContain(
+      "Mission: prove you followed the repo contract.",
+    );
+    expect(config?.prompt).toContain("Repo contract followthrough check.");
+    expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
+    expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
+    expect(config?.expectedArtifactAny).toContain("evidence path");
+    expect(scenario.title).toBe("Instruction followthrough repo contract");
+  });
+
+  it("rejects malformed string matcher lists before running a flow", () => {
+    expect(() =>
+      validateQaScenarioExecutionConfig({
+        gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }],
+      }),
+    ).toThrow(/gracefulFallbackAny entries must be strings/);
+  });
+
+  it("returns undefined execution config for an unknown scenario id", () => {
+    expect(readQaScenarioExecutionConfig("missing-scenario-id")).toBeUndefined();
   });
 });
