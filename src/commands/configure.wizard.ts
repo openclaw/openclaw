@@ -4,6 +4,7 @@ import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -448,12 +449,38 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await replaceConfigFile({
-        nextConfig,
-        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
-      });
-      currentBaseHash = undefined;
-      logConfigUpdated(runtime);
+
+      // Retry loop: if config was mutated by a plugin, re-read and merge before retry
+      const maxRetries = 3;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          await replaceConfigFile({
+            nextConfig,
+            ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+          });
+
+          // After successful write, re-read the snapshot to get the new hash
+          const freshSnapshot = await readConfigFileSnapshot();
+          currentBaseHash = freshSnapshot.hash ?? undefined;
+
+          logConfigUpdated(runtime);
+          return;
+        } catch (err) {
+          if (err instanceof ConfigMutationConflictError && attempt < maxRetries - 1) {
+            // Config was mutated externally (e.g. plugin wrote token during auth setup).
+            // Re-read the on-disk config and merge plugin changes into nextConfig so
+            // the retry won't silently overwrite them.
+            const freshSnapshot = await readConfigFileSnapshot();
+            currentBaseHash = freshSnapshot.hash ?? undefined;
+            const diskConfig = freshSnapshot.valid
+              ? (freshSnapshot.sourceConfig ?? freshSnapshot.config)
+              : {};
+            nextConfig = { ...diskConfig, ...nextConfig };
+            continue;
+          }
+          throw err;
+        }
+      }
     };
 
     const configureWorkspace = async () => {
