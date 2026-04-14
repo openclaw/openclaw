@@ -247,10 +247,23 @@ export function createSessionsHistoryTool(opts?: {
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
       const includeTools = Boolean(params.includeTools);
-      const result = await gatewayCall<{ messages: Array<unknown> }>({
-        method: "chat.history",
-        params: { sessionKey: resolvedKey, limit },
-      });
+      let result: { messages: Array<unknown> };
+      try {
+        result = await gatewayCall<{ messages: Array<unknown> }>({
+          method: "chat.history",
+          params: { sessionKey: resolvedKey, limit },
+        });
+      } catch (err) {
+        // If server rejected limit as too high (e.g. "must be <= 1000"),
+        // extract the server max and retry with a compliant limit.
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const limitMatch = /limit.*must be\s*<=\s*(\d+)/.exec(errMsg);
+        const serverMax = limitMatch ? Math.max(1, Number.parseInt(limitMatch[1], 10)) : undefined;
+        result = await gatewayCall<{ messages: Array<unknown> }>({
+          method: "chat.history",
+          params: { sessionKey: resolvedKey, limit: serverMax },
+        });
+      }
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));

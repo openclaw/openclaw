@@ -656,6 +656,49 @@ describe("sessions tools", () => {
     expect(details.error).toMatch(/Session not found|No session found/);
   });
 
+  it("sessions_history retries with server-capped limit when server rejects with INVALID_REQUEST", async () => {
+    callGatewayMock.mockReset();
+    let callCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: { limit?: number } };
+      callCount++;
+      if (request.method === "chat.history") {
+        if (callCount === 1 && request.params?.limit === 2000) {
+          // Simulate server rejecting with INVALID_REQUEST when limit > 1000
+          const err = new Error(
+            "invalid chat.history params: at /limit: must be <= 1000",
+          ) as Error & { gatewayCode?: string };
+          err.gatewayCode = "INVALID_REQUEST";
+          throw err;
+        }
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-retry-limit", { sessionKey: "main", limit: 2000 });
+    expect(callCount).toBe(2);
+    const details = result.details as { messages?: unknown[] };
+    expect(details.messages).toHaveLength(1);
+    // Verify the retry used limit=1000
+    const historyCalls = callGatewayMock.mock.calls.filter(
+      (call) => (call[0] as { method?: string }).method === "chat.history",
+    );
+    expect(historyCalls).toHaveLength(2);
+    expect(historyCalls[1][0]).toMatchObject({
+      method: "chat.history",
+      params: { sessionKey: "main", limit: 1000 },
+    });
+  });
+
   it("sessions_send supports fire-and-forget and wait", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
