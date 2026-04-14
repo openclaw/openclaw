@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { exitAfterFlush } from "./infra/exit-after-flush.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
@@ -96,17 +97,10 @@ if (isMain) {
   });
 
   void runLegacyCliEntry(process.argv)
-    .then(() => {
-      // Explicitly exit after the CLI command finishes. runCli() may leave
-      // dangling handles alive (e.g. a WebSocket socket awaiting a close
-      // frame after a gateway RPC call). All async cleanup inside runCli()
-      // is already done before it resolves; process.once('exit', ...) sync
-      // handlers still fire normally.
-      process.exit(process.exitCode ?? 0);
-    })
+    .then(() => exitAfterFlush(process.exitCode ?? 0))
     .catch((err) => {
       console.error("[openclaw] CLI failed:", formatUncaughtError(err));
       restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
-      process.exit(1);
+      exitAfterFlush(1);
     });
 }

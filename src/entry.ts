@@ -8,6 +8,7 @@ import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/containe
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { buildCliRespawnPlan } from "./entry.respawn.js";
+import { exitAfterFlush } from "./infra/exit-after-flush.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
@@ -203,19 +204,14 @@ function runMainOrRootHelp(argv: string[]): void {
   }
   import("./cli/run-main.js")
     .then(({ runCli }) => runCli(argv))
-    .then(() => {
-      // Explicitly exit after the CLI command finishes. runCli() may leave
-      // dangling handles alive (e.g. a WebSocket socket awaiting a close
-      // frame after a gateway RPC call). All async cleanup inside runCli()
-      // is already done before it resolves; process.once('exit', ...) sync
-      // handlers still fire normally.
-      process.exit(process.exitCode ?? 0);
-    })
+    .then(() => exitAfterFlush(process.exitCode ?? 0))
     .catch((error) => {
       console.error(
         "[openclaw] Failed to start CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );
-      process.exit(1);
+      exitAfterFlush(1);
     });
 }
+
+
