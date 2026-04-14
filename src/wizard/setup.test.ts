@@ -278,6 +278,61 @@ describe("runSetupWizard", () => {
     return dir;
   }
 
+  it("does not crash when provider entries are missing ids (defensive trim)", async () => {
+    setupChannels.mockClear();
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    resolvePreferredProviderForAuthChoice.mockResolvedValueOnce("demo-provider");
+    resolvePluginProvidersRuntime.mockReturnValueOnce([
+      { id: undefined } as unknown as { id: string },
+      { id: "demo-provider", wizard: { setup: {} } } as unknown as { id: string },
+    ]);
+
+    const caseDir = await makeCaseDir("provider-missing-id-");
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
+      if (message === "Select setup mode") return "quickstart";
+      if (message === "Select provider authentication") return "skip";
+      if (message === "Select channel (QuickStart)") return "__skip__";
+      if (message === "How do you want to hatch your bot?") return "skip";
+      return "skip";
+    }) as unknown as WizardPrompter["select"];
+    const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
+    const prompter = buildWizardPrompter({ select, confirm });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: false,
+          skipSkills: true,
+          skipSearch: true,
+          skipChannels: false,
+          skipUi: true,
+          workspace: caseDir,
+        },
+        runtime,
+        prompter,
+      ),
+    ).resolves.toBeUndefined();
+
+    // Avoid leaking call counts into later tests in this file.
+    setupChannels.mockClear();
+  });
+
   it("exits when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",

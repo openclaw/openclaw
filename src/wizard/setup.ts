@@ -59,7 +59,11 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   const matchedProvider =
     resolvedChoice?.provider ??
     (preferredProvider
-      ? providers.find((provider) => provider.id.trim() === preferredProvider.trim())
+      ? providers.find((provider) => {
+          const providerId = typeof provider?.id === "string" ? provider.id.trim() : "";
+          const preferredId = preferredProvider?.trim() ?? "";
+          return Boolean(providerId) && Boolean(preferredId) && providerId === preferredId;
+        })
       : undefined);
   const setupPolicy =
     resolvedChoice?.wizard?.modelSelection ?? matchedProvider?.wizard?.setup?.modelSelection;
