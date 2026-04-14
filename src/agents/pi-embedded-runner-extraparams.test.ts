@@ -143,42 +143,7 @@ type WrapProviderStreamFnParams = Parameters<
   typeof import("../plugins/provider-hook-runtime.js").wrapProviderStreamFn
 >[0];
 
-function createTestOpenAIProviderWrapper(
-  params: WrapProviderStreamFnParams,
-  withDefaultTransport: boolean,
-): StreamFn {
-  let streamFn = params.context.streamFn;
-  if (withDefaultTransport) {
-    streamFn = createOpenAIDefaultTransportWrapper(streamFn);
-  }
-  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
-
-  if (resolveOpenAIFastMode(params.context.extraParams)) {
-    streamFn = createOpenAIFastModeWrapper(streamFn);
-  }
-
-  const serviceTier = resolveOpenAIServiceTier(params.context.extraParams);
-  if (serviceTier) {
-    streamFn = createOpenAIServiceTierWrapper(streamFn, serviceTier);
-  }
-
-  const textVerbosity = resolveOpenAITextVerbosity(params.context.extraParams);
-  if (textVerbosity) {
-    streamFn = createOpenAITextVerbosityWrapper(streamFn, textVerbosity);
-  }
-
-  streamFn = createCodexNativeWebSearchWrapper(streamFn, {
-    config: params.context.config,
-    agentDir: params.context.agentDir,
-  });
-  streamFn = createOpenAIStringContentWrapper(streamFn);
-  return createOpenAIResponsesContextManagementWrapper(
-    createOpenAIReasoningCompatibilityWrapper(streamFn),
-    params.context.extraParams,
-  );
-}
-
-beforeEach(() => {
+function installFullProviderRuntimeDepsForTest() {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: (params) => {
       if (params.provider !== "openai-codex") {
@@ -262,6 +227,57 @@ beforeEach(() => {
       return params.context.streamFn;
     },
   });
+}
+
+function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: () => undefined,
+    wrapProviderStreamFn: (params) => params.context.streamFn,
+  });
+  try {
+    return run();
+  } finally {
+    installFullProviderRuntimeDepsForTest();
+  }
+}
+
+function createTestOpenAIProviderWrapper(
+  params: WrapProviderStreamFnParams,
+  withDefaultTransport: boolean,
+): StreamFn {
+  let streamFn = params.context.streamFn;
+  if (withDefaultTransport) {
+    streamFn = createOpenAIDefaultTransportWrapper(streamFn);
+  }
+  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
+
+  if (resolveOpenAIFastMode(params.context.extraParams)) {
+    streamFn = createOpenAIFastModeWrapper(streamFn);
+  }
+
+  const serviceTier = resolveOpenAIServiceTier(params.context.extraParams);
+  if (serviceTier) {
+    streamFn = createOpenAIServiceTierWrapper(streamFn, serviceTier);
+  }
+
+  const textVerbosity = resolveOpenAITextVerbosity(params.context.extraParams);
+  if (textVerbosity) {
+    streamFn = createOpenAITextVerbosityWrapper(streamFn, textVerbosity);
+  }
+
+  streamFn = createCodexNativeWebSearchWrapper(streamFn, {
+    config: params.context.config,
+    agentDir: params.context.agentDir,
+  });
+  streamFn = createOpenAIStringContentWrapper(streamFn);
+  return createOpenAIResponsesContextManagementWrapper(
+    createOpenAIReasoningCompatibilityWrapper(streamFn),
+    params.context.extraParams,
+  );
+}
+
+beforeEach(() => {
+  installFullProviderRuntimeDepsForTest();
 });
 
 afterEach(() => {
@@ -362,22 +378,24 @@ describe("applyExtraParamsToAgent", () => {
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
   }) {
-    const payload = params.payload ?? {};
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      options?.onPayload?.(payload, model);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-    applyExtraParamsToAgent(
-      agent,
-      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
-      params.applyProvider,
-      params.applyModelId,
-      params.extraParamsOverride,
-    );
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(params.model, context, {});
-    return payload;
+    return withMinimalProviderRuntimeDepsForTest(() => {
+      const payload = params.payload ?? {};
+      const baseStreamFn: StreamFn = (model, _context, options) => {
+        options?.onPayload?.(payload, model);
+        return {} as ReturnType<StreamFn>;
+      };
+      const agent = { streamFn: baseStreamFn };
+      applyExtraParamsToAgent(
+        agent,
+        params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+        params.applyProvider,
+        params.applyModelId,
+        params.extraParamsOverride,
+      );
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(params.model, context, {});
+      return payload;
+    });
   }
 
   function runToolPayloadMutationCase(params: {
