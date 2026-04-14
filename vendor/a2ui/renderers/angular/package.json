@@ -6,7 +6,7 @@
   },
   "dependencies": {
     "@a2ui/lit": "file:../lit",
-    "markdown-it": "^14.1.0",
+    "markdown-it": "^14.1.1",
     "tslib": "^2.3.0"
   },
   "peerDependencies": {
@@ -17,9 +17,9 @@
   "devDependencies": {
     "@angular/build": "^21.0.2",
     "@angular/cli": "^21.0.2",
-    "@angular/compiler": "^21.0.0",
+    "@angular/compiler": "^21.2.8",
     "@angular/compiler-cli": "^21.0.3",
-    "@angular/core": "^21.0.0",
+    "@angular/core": "^21.2.8",
     "@types/express": "^5.0.1",
     "@types/jasmine": "~5.1.0",
     "@types/markdown-it": "^14.1.2",
