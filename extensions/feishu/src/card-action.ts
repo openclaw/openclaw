@@ -63,7 +63,7 @@ function beginFeishuCardActionToken(params: {
   pruneProcessedCardActionTokens(now);
   const normalizedToken = params.token.trim();
   if (!normalizedToken) {
-    return true;
+    return false;
   }
   const key = `${params.accountId}:${normalizedToken}`;
   const existing = processedCardActionTokens.get(key);
@@ -184,6 +184,12 @@ export async function handleFeishuCardAction(params: {
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
   const decoded = decodeFeishuCardAction({ event });
+  if (!event.token.trim()) {
+    log(
+      `feishu[${account.accountId}]: rejected card action from ${event.operator.open_id}: missing token`,
+    );
+    return;
+  }
   const claimedToken = beginFeishuCardActionToken({
     token: event.token,
     accountId: account.accountId,
