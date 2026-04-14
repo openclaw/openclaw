@@ -14,7 +14,11 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-h
 const MODEL_SPAWN_MODES = ["live", "spawn"] as const;
 
 // Maximum concurrent spawns for multi-model parallel execution.
-const MAX_PARALLEL_SPAWNS = 10;
+// Capped at 5 to stay within the default maxChildrenPerAgent limit.
+// Note: countActiveRunsForSession is checked inside spawnSubagentDirect, so all
+// concurrent spawns pass the gate before any sibling registers — proper enforcement
+// requires a pre-flight batch-reservation API in the runtime.
+const MAX_PARALLEL_SPAWNS = 5;
 
 const SpawnEntrySchema = Type.Object({
   model: Type.String({
@@ -137,7 +141,9 @@ export function createModelSpawnTool(
         }
 
         const cfg = loadConfig();
-        const agentId = resolveAgentIdFromSessionKey(sessionKey);
+        // Prefer the explicit override (cron/hook contexts) before falling back to key parsing.
+        const agentId =
+          opts?.requesterAgentIdOverride?.trim() || resolveAgentIdFromSessionKey(sessionKey);
         const storePath = resolveStorePath(cfg.session?.store, { agentId });
         if (!storePath) {
           return jsonResult({
