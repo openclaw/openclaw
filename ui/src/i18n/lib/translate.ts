@@ -1,6 +1,8 @@
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
+import { vi } from "../locales/vi.ts";
 import {
+  DEFAULT_APP_LOCALE,
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
   isSupportedLocale,
@@ -14,8 +16,11 @@ type Subscriber = (locale: Locale) => void;
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
 class I18nManager {
-  private locale: Locale = DEFAULT_LOCALE;
-  private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
+  private locale: Locale = DEFAULT_APP_LOCALE;
+  private translations: Partial<Record<Locale, TranslationMap>> = {
+    [DEFAULT_LOCALE]: en,
+    [DEFAULT_APP_LOCALE]: vi,
+  };
   private subscribers: Set<Subscriber> = new Set();
 
   constructor() {
@@ -58,8 +63,7 @@ class I18nManager {
 
   private loadLocale() {
     const initialLocale = this.resolveInitialLocale();
-    if (initialLocale === DEFAULT_LOCALE) {
-      this.locale = DEFAULT_LOCALE;
+    if (initialLocale === this.locale) {
       return;
     }
     // Use the normal locale setter so startup locale loading follows the same
@@ -72,7 +76,7 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
-    const needsTranslationLoad = locale !== DEFAULT_LOCALE && !this.translations[locale];
+    const needsTranslationLoad = !this.translations[locale];
     if (this.locale === locale && !needsTranslationLoad) {
       return;
     }

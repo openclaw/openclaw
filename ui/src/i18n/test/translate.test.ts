@@ -92,12 +92,24 @@ describe("i18n", () => {
 
     const fresh = await import("../lib/translate.ts");
 
-    expect(fresh.i18n.getLocale()).toBe("en");
+    expect(fresh.i18n.getLocale()).toBe("vi");
     expect(warningSpy).not.toHaveBeenCalledWith(
       "`--localstorage-file` was provided without a valid path",
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  it("defaults to Vietnamese when no locale is saved", async () => {
+    vi.resetModules();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    localStorage.clear();
+
+    const fresh = await import("../lib/translate.ts");
+
+    expect(fresh.i18n.getLocale()).toBe("vi");
+    expect(fresh.t("common.health")).toBe("Tình trạng");
   });
 
   it("keeps the version label available in shipped locales", () => {
