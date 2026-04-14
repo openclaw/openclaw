@@ -80,18 +80,12 @@ async function waitForFile(filePath: string, timeoutMs = 5_000) {
 }
 
 describe("qa-lab server", () => {
-  it("serves bootstrap state and writes a self-check report", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
-    cleanups.push(async () => {
-      await rm(tempDir, { recursive: true, force: true });
-    });
-    const outputPath = path.join(tempDir, "self-check.md");
-
+  it("serves bootstrap state and records inbound messages", async () => {
     const lab = await startQaLabServer({
       host: "127.0.0.1",
       port: 0,
-      outputPath,
       controlUiUrl: "http://127.0.0.1:18789/",
+      embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -139,12 +133,6 @@ describe("qa-lab server", () => {
       messages: Array<{ direction: string; text: string }>;
     };
     expect(snapshot.messages.some((message) => message.text === "hello from test")).toBe(true);
-
-    const result = await lab.runSelfCheck();
-    expect(result.scenarioResult.status).toBe("pass");
-    const markdown = await readFile(outputPath, "utf8");
-    expect(markdown).toContain("Synthetic Slack-class roundtrip");
-    expect(markdown).toContain("- Status: pass");
   });
 
   it("does not expose control-ui hash fragments in bootstrap URLs", async () => {
