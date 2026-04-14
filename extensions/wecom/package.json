@@ -8,7 +8,7 @@
     "@wecom/aibot-node-sdk": "^1.0.6",
     "fast-xml-parser": "^5.5.9",
     "file-type": "^21.3.0",
-    "undici": "^7.24.6",
+    "undici": "8.0.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
