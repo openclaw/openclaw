@@ -117,6 +117,7 @@ function buildProjectContextSection(params: {
   for (const file of params.files) {
     const sanitizedContent = sanitizeContextFileForInjection(
       sanitizeContextFileContentForPrompt(file.content),
+      file.path,
     );
     lines.push(`## ${file.path}`, "", sanitizedContent, "");
   }
