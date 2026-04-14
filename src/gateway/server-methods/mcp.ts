@@ -174,7 +174,7 @@ export const mcpHandlers: GatewayRequestHandlers = {
   // -------------------------------------------------------------------------
   // mcp.resources.list — list registered ui:// resources
   // -------------------------------------------------------------------------
-  "mcp.resources.list": ({ params, respond }) => {
+  "mcp.resources.list": ({ params, respond, client }) => {
     if (!validateMcpResourcesListParams(params)) {
       respond(
         false,
@@ -187,13 +187,30 @@ export const mcpHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Resolve the tool cache so syncMcpAppResources runs before reading the
+    // registry.  Without this, a WS client hitting resources.list before any
+    // tools.list/tools.call would see an empty or stale resource set.
+    const cfg = loadConfig();
+    const sessionKey = resolveMcpSessionKey(params.sessionKey);
+    const senderIsOwner = Array.isArray(client?.connect?.scopes)
+      ? client.connect.scopes.includes(ADMIN_SCOPE)
+      : false;
+
+    wsToolCache.resolve({
+      cfg,
+      sessionKey,
+      messageProvider: undefined,
+      accountId: undefined,
+      senderIsOwner,
+    });
+
     respond(true, { resources: listResources() }, undefined);
   },
 
   // -------------------------------------------------------------------------
   // mcp.resources.read — fetch HTML content for a ui:// resource
   // -------------------------------------------------------------------------
-  "mcp.resources.read": async ({ params, respond }) => {
+  "mcp.resources.read": async ({ params, respond, client }) => {
     if (!validateMcpResourcesReadParams(params)) {
       respond(
         false,
@@ -205,6 +222,24 @@ export const mcpHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    // Resolve the tool cache so syncMcpAppResources runs before reading the
+    // registry.  Without this, a WS client hitting resources.read before any
+    // tools.list/tools.call would get "resource not found" for resources that
+    // are declared via tool resourceSource but not yet synced.
+    const cfg = loadConfig();
+    const sessionKey = resolveMcpSessionKey(params.sessionKey);
+    const senderIsOwner = Array.isArray(client?.connect?.scopes)
+      ? client.connect.scopes.includes(ADMIN_SCOPE)
+      : false;
+
+    wsToolCache.resolve({
+      cfg,
+      sessionKey,
+      messageProvider: undefined,
+      accountId: undefined,
+      senderIsOwner,
+    });
 
     const uri = params.uri;
     const resolved = await resolveResourceContent(uri);

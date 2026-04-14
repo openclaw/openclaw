@@ -53,13 +53,15 @@ const mockTools = [
   },
 ];
 
+const { mockCacheResolve } = vi.hoisted(() => {
+  const mockCacheResolve = vi.fn();
+  return { mockCacheResolve };
+});
+
 vi.mock("../mcp-http.runtime.js", () => {
-  const cache = {
-    resolve: vi.fn(() => ({ tools: mockTools, toolSchema: mockToolSchema })),
-  };
   return {
     McpLoopbackToolCache: class {
-      resolve = cache.resolve;
+      resolve = mockCacheResolve;
     },
   };
 });
@@ -86,6 +88,7 @@ function invokeHandler(method: string, params: Record<string, unknown>) {
 const TEST_RESOURCE_URI = "ui://test/mcp-handler-test.html";
 
 beforeEach(() => {
+  mockCacheResolve.mockReturnValue({ tools: mockTools, toolSchema: mockToolSchema });
   registerBuiltinResource({
     uri: TEST_RESOURCE_URI,
     name: "Handler Test",
@@ -96,6 +99,7 @@ beforeEach(() => {
 afterEach(() => {
   unregisterResource(TEST_RESOURCE_URI);
   mockExecutePing.mockClear();
+  mockCacheResolve.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -249,6 +253,12 @@ describe("mcp.resources.list", () => {
     expect(Array.isArray(resources)).toBe(true);
     expect(resources.some((r) => r.uri === TEST_RESOURCE_URI)).toBe(true);
   });
+
+  it("resolves the tool cache before reading the registry", async () => {
+    const { promise } = invokeHandler("mcp.resources.list", {});
+    await promise;
+    expect(mockCacheResolve).toHaveBeenCalledOnce();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -268,6 +278,14 @@ describe("mcp.resources.read", () => {
     expect(Array.isArray(contents)).toBe(true);
     expect(contents[0]?.text).toContain("<html>");
     expect(contents[0]?.uri).toBe(TEST_RESOURCE_URI);
+  });
+
+  it("resolves the tool cache before reading the registry", async () => {
+    const { promise } = invokeHandler("mcp.resources.read", {
+      uri: TEST_RESOURCE_URI,
+    });
+    await promise;
+    expect(mockCacheResolve).toHaveBeenCalledOnce();
   });
 
   it("returns error for unknown uri", async () => {
