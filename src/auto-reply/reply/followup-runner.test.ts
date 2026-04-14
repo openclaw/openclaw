@@ -283,6 +283,30 @@ async function loadFreshFollowupRunnerModuleForTest() {
   }));
   vi.doMock("../../cli/command-secret-targets.js", () => ({
     getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries."]),
+    getScopedChannelsCommandSecretTargets: ({
+      channel,
+      accountId,
+    }: {
+      channel?: string;
+      accountId?: string;
+    }) => {
+      const normalizedChannel = channel?.trim() ?? "";
+      if (!normalizedChannel) {
+        return { targetIds: new Set<string>() };
+      }
+      const targetIds = new Set<string>([`channels.${normalizedChannel}.token`]);
+      const normalizedAccountId = accountId?.trim() ?? "";
+      if (!normalizedAccountId) {
+        return { targetIds };
+      }
+      return {
+        targetIds,
+        allowedPaths: new Set<string>([
+          `channels.${normalizedChannel}.token`,
+          `channels.${normalizedChannel}.accounts.${normalizedAccountId}.token`,
+        ]),
+      };
+    },
   }));
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =

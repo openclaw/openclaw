@@ -1013,7 +1013,12 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
-  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config);
+  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
+    originatingChannel: sessionCtx.OriginatingChannel,
+    messageProvider: followupRun.run.messageProvider,
+    originatingAccountId: followupRun.originatingAccountId,
+    agentAccountId: followupRun.run.agentAccountId,
+  });
 
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
