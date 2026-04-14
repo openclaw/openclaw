@@ -279,6 +279,7 @@ describe("createMSTeamsAdapter", () => {
     }
 
     const creds = {
+      type: "secret",
       appId: "app-id",
       appPassword: "secret",
       tenantId: "tenant-id",
@@ -319,6 +320,7 @@ describe("createMSTeamsAdapter", () => {
         activity: {
           type: "message",
           text: "hello",
+          channelData: { tenant: { id: "tenant-123" } },
           from: { id: "bot-123", name: "Bot", role: "bot" },
           conversation: {
             id: "19:conversation@thread.tacv2",

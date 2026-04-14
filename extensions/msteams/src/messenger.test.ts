@@ -206,6 +206,27 @@ describe("msteams messenger", () => {
       activityId?: string;
       threadId?: string;
     }) {
+    it("preserves tenant and conversation type when building proactive references", () => {
+      expect(buildConversationReference(baseRef)).toEqual({
+        activityId: "activity123",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        tenantId: "tenant-123",
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+          tenantId: "tenant-123",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        locale: undefined,
+      });
+    });
+    async function sendAndCaptureRevokeFallbackReference(params: {
+      conversation: StoredConversationReference["conversation"];
+      activityId?: string;
+      threadId?: string;
+    }) {
       const proactiveSent: string[] = [];
       let capturedReference: unknown;
       const conversationRef: StoredConversationReference = {

@@ -298,6 +298,7 @@ describe("sendMessageMSTeams", () => {
         activity: {
           type: "message",
           text: "hello",
+          channelData: { tenant: { id: "tenant-123" } },
           from: { id: "agent-1", name: "Agent", role: "bot" },
           conversation: {
             id: "19:conversation@thread.tacv2",
