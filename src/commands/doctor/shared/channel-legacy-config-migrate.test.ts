@@ -111,7 +111,7 @@ describe("bundled channel legacy config migrations", () => {
       name: "Ops Bot",
     });
     expect(result.changes).toContain(
-      "Moved channels.feishu.accounts.main.botName -> channels.feishu.accounts.main.name.",
+      "Moved channels.feishu.accounts.main.botName → channels.feishu.accounts.main.name.",
     );
   });
 });

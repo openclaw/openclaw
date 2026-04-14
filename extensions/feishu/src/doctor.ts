@@ -62,7 +62,7 @@ export function normalizeCompatibilityConfig({
     if (botName && typeof nextAccount.name !== "string") {
       nextAccount.name = botName;
       changes.push(
-        `Moved channels.feishu.accounts.${accountId}.botName -> channels.feishu.accounts.${accountId}.name.`,
+        `Moved channels.feishu.accounts.${accountId}.botName → channels.feishu.accounts.${accountId}.name.`,
       );
     } else {
       changes.push(`Removed legacy channels.feishu.accounts.${accountId}.botName.`);
