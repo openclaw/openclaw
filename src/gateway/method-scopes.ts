@@ -143,6 +143,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "doctor.memory.dedupeDreamDiary",
     "push.test",
     "node.pending.enqueue",
+    "cron.add",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
@@ -153,7 +154,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "skills.update",
     "secrets.reload",
     "secrets.resolve",
-    "cron.add",
     "cron.update",
     "cron.remove",
     "cron.run",

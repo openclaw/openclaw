@@ -8,6 +8,7 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -90,7 +91,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const status = await context.cron.status();
     respond(true, status, undefined);
   },
-  "cron.add": async ({ params, respond, context }) => {
+  "cron.add": async ({ params, respond, context, client }) => {
     const sessionKey =
       typeof (params as { sessionKey?: unknown } | null)?.sessionKey === "string"
         ? (params as { sessionKey: string }).sessionKey
@@ -133,7 +134,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate);
+    // CLI has no scopes concept → treat as admin. PI agents pass their actual scopes.
+    const rawScopes = (client?.connect?.scopes as OperatorScope[] | undefined) ?? [];
+    const scopes = rawScopes.length > 0 ? rawScopes : [ADMIN_SCOPE];
+    const job = await context.cron.add(jobCreate, scopes);
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
