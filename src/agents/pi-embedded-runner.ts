@@ -23,6 +23,7 @@ export {
 export {
   abortEmbeddedPiRun,
   abortEmbeddedPiRun as abortEmbeddedAgentRun,
+  clearActiveEmbeddedRun,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunActive as isEmbeddedAgentRunActive,
   isEmbeddedPiRunStreaming,
@@ -31,9 +32,11 @@ export {
   queueEmbeddedPiMessage as queueEmbeddedAgentMessage,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionId as resolveActiveEmbeddedAgentRunSessionId,
+  setActiveEmbeddedRun,
   waitForEmbeddedPiRunEnd,
   waitForEmbeddedPiRunEnd as waitForEmbeddedAgentRunEnd,
 } from "./pi-embedded-runner/runs.js";
+export type { EmbeddedPiQueueHandle } from "./pi-embedded-runner/runs.js";
 export { buildEmbeddedSandboxInfo } from "./pi-embedded-runner/sandbox-info.js";
 export { createSystemPromptOverride } from "./pi-embedded-runner/system-prompt.js";
 export { splitSdkTools } from "./pi-embedded-runner/tool-split.js";
