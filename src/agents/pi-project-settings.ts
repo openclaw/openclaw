@@ -187,11 +187,17 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  /**
+   * Model context window in tokens; enables resolution of the `*Share`
+   * compaction-budget sibling fields against the actual model window.
+   */
+  contextWindowTokens?: number;
 }): SettingsManager {
   const settingsManager = createEmbeddedPiSettingsManager(params);
   applyPiCompactionSettingsFromConfig({
     settingsManager,
     cfg: params.cfg,
+    contextWindowTokens: params.contextWindowTokens,
   });
   return settingsManager;
 }

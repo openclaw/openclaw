@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import {
+  resolveCompactionReserveTokensFloor,
+  resolveShareBasedTokenBudget,
+} from "../../agents/pi-settings.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -19,6 +23,42 @@ export function resolveMemoryFlushContextWindowTokens(params: {
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );
+}
+
+/**
+ * Apply ratio-based sibling fields (`softThresholdTokensShare`,
+ * `reserveTokensFloorShare`) from config over a memory-flush plan that was
+ * built without knowledge of the model's context window. When the share is set
+ * it replaces the absolute value; otherwise the plan's absolute values are
+ * preserved (full backward compatibility).
+ */
+export function applyMemoryFlushSharesToPlan<
+  TPlan extends { softThresholdTokens: number; reserveTokensFloor: number },
+>(params: { plan: TPlan; cfg?: OpenClawConfig; contextWindowTokens: number }): TPlan {
+  const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const memoryFlushCfg = compactionCfg?.memoryFlush;
+  const softThresholdTokens = resolveShareBasedTokenBudget({
+    share: memoryFlushCfg?.softThresholdTokensShare,
+    absolute: params.plan.softThresholdTokens,
+    contextWindowTokens: params.contextWindowTokens,
+    fallback: params.plan.softThresholdTokens,
+  });
+  const reserveTokensFloor = resolveCompactionReserveTokensFloor(
+    params.cfg,
+    params.contextWindowTokens,
+  );
+  // Preserve absolute floor from the plan when no share is configured and the
+  // caller's resolver returns the default (config-absent) value.
+  const resolvedReserveTokensFloor =
+    typeof compactionCfg?.reserveTokensFloorShare === "number" ||
+    typeof compactionCfg?.reserveTokensFloor === "number"
+      ? reserveTokensFloor
+      : params.plan.reserveTokensFloor;
+  return {
+    ...params.plan,
+    softThresholdTokens,
+    reserveTokensFloor: resolvedReserveTokensFloor,
+  };
 }
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {

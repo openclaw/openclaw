@@ -786,6 +786,7 @@ export async function compactEmbeddedPiSessionDirect(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        contextWindowTokens: model?.contextWindow,
       });
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.

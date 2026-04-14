@@ -4357,6 +4357,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
                   },
+                  reserveTokensShare: {
+                    type: "number",
+                    minimum: 0.01,
+                    maximum: 0.9,
+                    title: "Compaction Reserve Tokens Share",
+                    description:
+                      "Fraction of the model's contextWindowTokens used as reserveTokens (0.01-0.9). When set, it wins over reserveTokens so the reserve scales with the actual model window — a single config behaves sensibly across heterogeneous models (e.g. GLM/Claude 200k vs Kimi K2 1M vs small-window models).",
+                  },
                   keepRecentTokens: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -4365,6 +4373,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
                   },
+                  keepRecentTokensShare: {
+                    type: "number",
+                    minimum: 0.01,
+                    maximum: 0.9,
+                    title: "Compaction Keep Recent Tokens Share",
+                    description:
+                      "Fraction of the model's contextWindowTokens used as keepRecentTokens (0.01-0.9). When set, it wins over keepRecentTokens so recent-turn preservation scales with the model's actual context window rather than a fixed absolute count.",
+                  },
                   reserveTokensFloor: {
                     type: "integer",
                     minimum: 0,
@@ -4372,6 +4388,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Compaction Reserve Token Floor",
                     description:
                       "Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
+                  },
+                  reserveTokensFloorShare: {
+                    type: "number",
+                    minimum: 0.01,
+                    maximum: 0.9,
+                    title: "Compaction Reserve Token Floor Share",
+                    description:
+                      "Fraction of the model's contextWindowTokens used as the reserveTokens floor (0.01-0.9). When set, it wins over reserveTokensFloor; the resolved floor is still applied as an absolute minimum on the final reserve tokens after share-based computation.",
                   },
                   maxHistoryShare: {
                     type: "number",
@@ -4486,6 +4510,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Compaction Memory Flush Soft Threshold",
                         description:
                           "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
+                      },
+                      softThresholdTokensShare: {
+                        type: "number",
+                        minimum: 0.01,
+                        maximum: 0.9,
+                        title: "Compaction Memory Flush Soft Threshold Share",
+                        description:
+                          "Fraction of the model's contextWindowTokens used as the memory-flush soft threshold (0.01-0.9). When set, it wins over softThresholdTokens so the trigger point scales with the actual context window rather than being fixed in absolute tokens.",
                       },
                       forceFlushTranscriptBytes: {
                         anyOf: [
@@ -25450,14 +25482,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
       tags: ["security", "auth"],
     },
+    "agents.defaults.compaction.reserveTokensShare": {
+      label: "Compaction Reserve Tokens Share",
+      help: "Fraction of the model's contextWindowTokens used as reserveTokens (0.01-0.9). When set, it wins over reserveTokens so the reserve scales with the actual model window — a single config behaves sensibly across heterogeneous models (e.g. GLM/Claude 200k vs Kimi K2 1M vs small-window models).",
+      tags: ["security", "auth"],
+    },
     "agents.defaults.compaction.keepRecentTokens": {
       label: "Compaction Keep Recent Tokens",
       help: "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
       tags: ["security", "auth"],
     },
+    "agents.defaults.compaction.keepRecentTokensShare": {
+      label: "Compaction Keep Recent Tokens Share",
+      help: "Fraction of the model's contextWindowTokens used as keepRecentTokens (0.01-0.9). When set, it wins over keepRecentTokens so recent-turn preservation scales with the model's actual context window rather than a fixed absolute count.",
+      tags: ["security", "auth"],
+    },
     "agents.defaults.compaction.reserveTokensFloor": {
       label: "Compaction Reserve Token Floor",
       help: "Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
+      tags: ["security", "auth"],
+    },
+    "agents.defaults.compaction.reserveTokensFloorShare": {
+      label: "Compaction Reserve Token Floor Share",
+      help: "Fraction of the model's contextWindowTokens used as the reserveTokens floor (0.01-0.9). When set, it wins over reserveTokensFloor; the resolved floor is still applied as an absolute minimum on the final reserve tokens after share-based computation.",
       tags: ["security", "auth"],
     },
     "agents.defaults.compaction.maxHistoryShare": {
@@ -25538,6 +25585,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.compaction.memoryFlush.softThresholdTokens": {
       label: "Compaction Memory Flush Soft Threshold",
       help: "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
+      tags: ["security", "auth"],
+    },
+    "agents.defaults.compaction.memoryFlush.softThresholdTokensShare": {
+      label: "Compaction Memory Flush Soft Threshold Share",
+      help: "Fraction of the model's contextWindowTokens used as the memory-flush soft threshold (0.01-0.9). When set, it wins over softThresholdTokens so the trigger point scales with the actual context window rather than being fixed in absolute tokens.",
       tags: ["security", "auth"],
     },
     "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes": {

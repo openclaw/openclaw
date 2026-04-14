@@ -534,8 +534,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.mode": "Compaction Mode",
   "agents.defaults.compaction.provider": "Compaction Provider",
   "agents.defaults.compaction.reserveTokens": "Compaction Reserve Tokens",
+  "agents.defaults.compaction.reserveTokensShare": "Compaction Reserve Tokens Share",
   "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
+  "agents.defaults.compaction.keepRecentTokensShare": "Compaction Keep Recent Tokens Share",
   "agents.defaults.compaction.reserveTokensFloor": "Compaction Reserve Token Floor",
+  "agents.defaults.compaction.reserveTokensFloorShare": "Compaction Reserve Token Floor Share",
   "agents.defaults.compaction.maxHistoryShare": "Compaction Max History Share",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.identifierInstructions": "Compaction Identifier Instructions",
@@ -553,6 +556,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Compaction Memory Flush Soft Threshold",
+  "agents.defaults.compaction.memoryFlush.softThresholdTokensShare":
+    "Compaction Memory Flush Soft Threshold Share",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     "Compaction Memory Flush Transcript Size Threshold",
   "agents.defaults.compaction.memoryFlush.prompt": "Compaction Memory Flush Prompt",

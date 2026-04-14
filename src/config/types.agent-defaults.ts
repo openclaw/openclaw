@@ -384,10 +384,28 @@ export type AgentCompactionConfig = {
   mode?: AgentCompactionMode;
   /** Pi reserve tokens target before floor enforcement. */
   reserveTokens?: number;
+  /**
+   * Fraction of the model's contextWindowTokens used as the reserve-tokens target
+   * (0.01-0.9). Wins over `reserveTokens` when both are set, which lets a single
+   * config scale correctly across heterogeneous context windows (e.g. 200k vs 1M).
+   */
+  reserveTokensShare?: number;
   /** Pi keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
+  /**
+   * Fraction of the model's contextWindowTokens used as the keepRecentTokens budget
+   * (0.01-0.9). Wins over `keepRecentTokens` when both are set so recent-turn
+   * preservation scales with the window instead of being fixed in absolute tokens.
+   */
+  keepRecentTokensShare?: number;
   /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
   reserveTokensFloor?: number;
+  /**
+   * Fraction of the model's contextWindowTokens used as the reserve-tokens floor
+   * (0.01-0.9). Wins over `reserveTokensFloor` when both are set; the resolved
+   * floor is still applied as an absolute minimum on the final reserve tokens.
+   */
+  reserveTokensFloorShare?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
@@ -440,6 +458,12 @@ export type AgentCompactionMemoryFlushConfig = {
   enabled?: boolean;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
+  /**
+   * Fraction of the model's contextWindowTokens used as the memory-flush soft threshold
+   * (0.01-0.9). Wins over `softThresholdTokens` when both are set, so the trigger point
+   * scales with the actual context window rather than being fixed in absolute tokens.
+   */
+  softThresholdTokensShare?: number;
   /**
    * Force a memory flush when transcript size reaches this threshold
    * (bytes, or byte-size string like "2mb"). Set to 0 to disable.

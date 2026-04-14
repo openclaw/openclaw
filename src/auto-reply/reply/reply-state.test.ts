@@ -14,6 +14,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "./history.js";
 import {
+  applyMemoryFlushSharesToPlan,
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
   shouldRunMemoryFlush,
@@ -411,6 +412,109 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
         agentCfgContextTokens: 100_000,
       }),
     ).toBe(100_000);
+  });
+});
+
+describe("applyMemoryFlushSharesToPlan", () => {
+  const basePlan = {
+    softThresholdTokens: 4_000,
+    forceFlushTranscriptBytes: 2 * 1024 * 1024,
+    reserveTokensFloor: 20_000,
+    prompt: "p",
+    systemPrompt: "sp",
+    relativePath: "memory/today.md",
+  };
+
+  it("returns the plan unchanged when no shares are configured (backward compat)", () => {
+    const result = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      contextWindowTokens: 200_000,
+    });
+    expect(result.softThresholdTokens).toBe(4_000);
+    expect(result.reserveTokensFloor).toBe(20_000);
+    expect(result.forceFlushTranscriptBytes).toBe(basePlan.forceFlushTranscriptBytes);
+    expect(result.relativePath).toBe("memory/today.md");
+  });
+
+  it("computes softThresholdTokens from share against the context window", () => {
+    const result = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: { softThresholdTokensShare: 0.02 },
+            },
+          },
+        },
+      } as never,
+      contextWindowTokens: 1_000_000,
+    });
+    expect(result.softThresholdTokens).toBe(20_000); // 1M × 0.02
+  });
+
+  it("share wins over absolute softThresholdTokens", () => {
+    const result = applyMemoryFlushSharesToPlan({
+      plan: { ...basePlan, softThresholdTokens: 999_999 },
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                softThresholdTokens: 999_999,
+                softThresholdTokensShare: 0.02,
+              },
+            },
+          },
+        },
+      } as never,
+      contextWindowTokens: 200_000,
+    });
+    expect(result.softThresholdTokens).toBe(4_000); // 200k × 0.02
+  });
+
+  it("applies reserveTokensFloorShare from config", () => {
+    const result = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { reserveTokensFloorShare: 0.1 },
+          },
+        },
+      } as never,
+      contextWindowTokens: 200_000,
+    });
+    expect(result.reserveTokensFloor).toBe(20_000);
+  });
+
+  it("scales reasonably across heterogeneous context windows", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            reserveTokensFloorShare: 0.1,
+            memoryFlush: { softThresholdTokensShare: 0.02 },
+          },
+        },
+      },
+    } as never;
+
+    const big = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg,
+      contextWindowTokens: 1_000_000,
+    });
+    expect(big.reserveTokensFloor).toBe(100_000);
+    expect(big.softThresholdTokens).toBe(20_000);
+
+    const small = applyMemoryFlushSharesToPlan({
+      plan: basePlan,
+      cfg,
+      contextWindowTokens: 8_000,
+    });
+    expect(small.reserveTokensFloor).toBe(800);
+    expect(small.softThresholdTokens).toBe(160);
   });
 });
 

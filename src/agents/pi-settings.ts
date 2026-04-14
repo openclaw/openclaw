@@ -33,8 +33,73 @@ export function ensurePiCompactionReserveTokens(params: {
   return { didOverride: true, reserveTokens: minReserveTokens };
 }
 
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
+/**
+ * Resolve a ratio-based token budget sibling field.
+ *
+ * Precedence (highest to lowest):
+ *   1. `share` + `contextWindowTokens` → `Math.floor(contextWindow * share)`
+ *   2. `absolute` if set
+ *   3. `fallback` (caller-provided default)
+ *
+ * Designed to support heterogeneous models: one config can carry a `*Share` ratio
+ * that scales across 8k, 200k, and 1M context windows instead of locking to a
+ * single absolute token count.
+ *
+ * @param share       fractional share of the context window (0.01–0.9); pass
+ *                    `undefined` when only the absolute path should apply.
+ * @param absolute    existing absolute-token field; used when share is not set
+ *                    or the context window is unknown.
+ * @param contextWindowTokens known context window in tokens; when missing, the
+ *                    share is ignored and the absolute/fallback path is used.
+ * @param fallback    value returned when neither share nor absolute produces a
+ *                    usable number.
+ */
+export function resolveShareBasedTokenBudget(params: {
+  share?: number;
+  absolute?: number;
+  contextWindowTokens?: number;
+  fallback: number;
+}): number {
+  const { share, absolute, contextWindowTokens, fallback } = params;
+  if (
+    typeof share === "number" &&
+    Number.isFinite(share) &&
+    share > 0 &&
+    typeof contextWindowTokens === "number" &&
+    Number.isFinite(contextWindowTokens) &&
+    contextWindowTokens > 0
+  ) {
+    const computed = Math.floor(contextWindowTokens * share);
+    if (computed > 0) {
+      return computed;
+    }
+  }
+  if (typeof absolute === "number" && Number.isFinite(absolute) && absolute >= 0) {
+    return Math.floor(absolute);
+  }
+  return fallback;
+}
+
+export function resolveCompactionReserveTokensFloor(
+  cfg?: OpenClawConfig,
+  contextWindowTokens?: number,
+): number {
+  const compaction = cfg?.agents?.defaults?.compaction;
+  const share = compaction?.reserveTokensFloorShare;
+  const raw = compaction?.reserveTokensFloor;
+  if (
+    typeof share === "number" &&
+    Number.isFinite(share) &&
+    share > 0 &&
+    typeof contextWindowTokens === "number" &&
+    Number.isFinite(contextWindowTokens) &&
+    contextWindowTokens > 0
+  ) {
+    const computed = Math.floor(contextWindowTokens * share);
+    if (computed >= 0) {
+      return computed;
+    }
+  }
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
   }
@@ -58,6 +123,13 @@ function toPositiveInt(value: unknown): number | undefined {
 export function applyPiCompactionSettingsFromConfig(params: {
   settingsManager: PiSettingsManagerLike;
   cfg?: OpenClawConfig;
+  /**
+   * Model context window in tokens (e.g. 200_000 for Claude/GLM, 1_000_000 for Kimi K2).
+   * When provided, `*Share` sibling fields are resolved against this window and win
+   * over their absolute counterparts. When omitted, only absolute fields apply and
+   * behavior matches pre-share configs exactly.
+   */
+  contextWindowTokens?: number;
 }): {
   didOverride: boolean;
   compaction: { reserveTokens: number; keepRecentTokens: number };
@@ -66,9 +138,38 @@ export function applyPiCompactionSettingsFromConfig(params: {
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
 
-  const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
-  const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  const reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  const configuredReserveTokensAbsolute = toNonNegativeInt(compactionCfg?.reserveTokens);
+  const configuredReserveTokens =
+    typeof compactionCfg?.reserveTokensShare === "number" &&
+    compactionCfg.reserveTokensShare > 0 &&
+    typeof params.contextWindowTokens === "number" &&
+    params.contextWindowTokens > 0
+      ? resolveShareBasedTokenBudget({
+          share: compactionCfg.reserveTokensShare,
+          absolute: configuredReserveTokensAbsolute,
+          contextWindowTokens: params.contextWindowTokens,
+          fallback: configuredReserveTokensAbsolute ?? currentReserveTokens,
+        })
+      : configuredReserveTokensAbsolute;
+
+  const configuredKeepRecentTokensAbsolute = toPositiveInt(compactionCfg?.keepRecentTokens);
+  const configuredKeepRecentTokens =
+    typeof compactionCfg?.keepRecentTokensShare === "number" &&
+    compactionCfg.keepRecentTokensShare > 0 &&
+    typeof params.contextWindowTokens === "number" &&
+    params.contextWindowTokens > 0
+      ? resolveShareBasedTokenBudget({
+          share: compactionCfg.keepRecentTokensShare,
+          absolute: configuredKeepRecentTokensAbsolute,
+          contextWindowTokens: params.contextWindowTokens,
+          fallback: configuredKeepRecentTokensAbsolute ?? currentKeepRecentTokens,
+        })
+      : configuredKeepRecentTokensAbsolute;
+
+  const reserveTokensFloor = resolveCompactionReserveTokensFloor(
+    params.cfg,
+    params.contextWindowTokens,
+  );
 
   const targetReserveTokens = Math.max(
     configuredReserveTokens ?? currentReserveTokens,

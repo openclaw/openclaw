@@ -1159,10 +1159,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
   "agents.defaults.compaction.reserveTokens":
     "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
+  "agents.defaults.compaction.reserveTokensShare":
+    "Fraction of the model's contextWindowTokens used as reserveTokens (0.01-0.9). When set, it wins over reserveTokens so the reserve scales with the actual model window — a single config behaves sensibly across heterogeneous models (e.g. GLM/Claude 200k vs Kimi K2 1M vs small-window models).",
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
+  "agents.defaults.compaction.keepRecentTokensShare":
+    "Fraction of the model's contextWindowTokens used as keepRecentTokens (0.01-0.9). When set, it wins over keepRecentTokens so recent-turn preservation scales with the model's actual context window rather than a fixed absolute count.",
   "agents.defaults.compaction.reserveTokensFloor":
     "Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
+  "agents.defaults.compaction.reserveTokensFloorShare":
+    "Fraction of the model's contextWindowTokens used as the reserveTokens floor (0.01-0.9). When set, it wins over reserveTokensFloor; the resolved floor is still applied as an absolute minimum on the final reserve tokens after share-based computation.",
   "agents.defaults.compaction.maxHistoryShare":
     "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
   "agents.defaults.compaction.identifierPolicy":
@@ -1195,6 +1201,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
+  "agents.defaults.compaction.memoryFlush.softThresholdTokensShare":
+    "Fraction of the model's contextWindowTokens used as the memory-flush soft threshold (0.01-0.9). When set, it wins over softThresholdTokens so the trigger point scales with the actual context window rather than being fixed in absolute tokens.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     'Forces pre-compaction memory flush when transcript file size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
   "agents.defaults.compaction.memoryFlush.prompt":
