@@ -264,7 +264,6 @@ function resolveContainedSkillPath(params: {
   if (params.allowExternalSkillsIn?.some((prefix) => isPathInside(prefix, candidateRealPath))) {
     return candidateRealPath;
   }
-  }
   warnEscapedSkillPath({
     source: params.source,
     rootDir: params.rootDir,
