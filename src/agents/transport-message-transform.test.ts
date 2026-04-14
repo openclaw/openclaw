@@ -72,5 +72,11 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       makeModel("openclaw-google-generative-ai-transport" as Api, "google", "gemini-2.5-pro"),
     );
     expect(googleAlias.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
+
+    const bedrockCanonical = transformTransportMessages(
+      messages,
+      makeModel("bedrock-converse-stream" as Api, "bedrock", "anthropic.claude-opus-4-6"),
+    );
+    expect(bedrockCanonical.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
   });
 });
