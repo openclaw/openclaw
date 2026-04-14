@@ -180,6 +180,8 @@ export async function withErrorBoundary<T>(
 /**
  * Executes multiple async operations concurrently with error aggregation.
  * Returns results for successful operations and aggregates failures.
+ * Uses Promise.allSettled to ensure all operations complete before returning,
+ * even in fail-fast mode.
  */
 export async function withAggregatedErrors<T>(
   operations: Array<{
@@ -203,21 +205,11 @@ export async function withAggregatedErrors<T>(
       results.push({ label, value });
     } catch (err) {
       errors.push({ label, error: err });
-      if (!options?.continueOnError) {
-        throw err;
-      }
     }
   });
 
-  if (options?.continueOnError) {
-    await Promise.allSettled(promises);
-  } else {
-    try {
-      await Promise.all(promises);
-    } catch {
-      // First error already captured in errors array
-    }
-  }
+  // Always wait for all operations to settle to avoid background operations
+  await Promise.allSettled(promises);
 
   if (errors.length > 0 && !options?.continueOnError) {
     throw new AggregateInfraError(
@@ -317,8 +309,10 @@ export function getUserFriendlyMessage(err: unknown): string {
 
 /**
  * Creates a structured error report for logging/debugging.
+ * Includes a depth guard to prevent unbounded recursion on circular cause chains.
  */
-export function createErrorReport(err: unknown): Record<string, unknown> {
+export function createErrorReport(err: unknown, depth = 0): Record<string, unknown> {
+  const maxDepth = 10;
   const report: Record<string, unknown> = {
     timestamp: new Date().toISOString(),
     message: formatErrorMessage(err),
@@ -334,8 +328,10 @@ export function createErrorReport(err: unknown): Record<string, unknown> {
   if (err instanceof Error) {
     report.name = err.name;
     report.stack = err.stack;
-    if (err.cause) {
-      report.cause = createErrorReport(err.cause);
+    if (err.cause && depth < maxDepth) {
+      report.cause = createErrorReport(err.cause, depth + 1);
+    } else if (err.cause) {
+      report.cause = "[max depth exceeded]";
     }
   }
 

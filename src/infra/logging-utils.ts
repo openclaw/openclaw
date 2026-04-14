@@ -178,18 +178,42 @@ export function createRateLimitedLogger(
   options?: {
     windowMs?: number;
     maxPerWindow?: number;
+    maxEntries?: number;
   },
 ): SubsystemLogger {
   const windowMs = options?.windowMs ?? 60_000;
   const maxPerWindow = options?.maxPerWindow ?? 10;
+  const maxEntries = options?.maxEntries ?? 1000;
   const logger = createSubsystemLogger(subsystem);
   const counts = new Map<string, { count: number; windowStart: number; suppressed: number }>();
+
+  const evictExpiredEntries = (): void => {
+    if (counts.size <= maxEntries) {
+      return;
+    }
+    const now = Date.now();
+    // Remove expired entries when over threshold
+    for (const [key, state] of counts) {
+      if (now - state.windowStart > windowMs) {
+        counts.delete(key);
+      }
+    }
+    // If still over limit, remove oldest entries
+    if (counts.size > maxEntries) {
+      const entries = [...counts.entries()].toSorted((a, b) => a[1].windowStart - b[1].windowStart);
+      const toRemove = entries.slice(0, counts.size - maxEntries);
+      for (const [key] of toRemove) {
+        counts.delete(key);
+      }
+    }
+  };
 
   const checkRateLimit = (message: string): boolean => {
     const now = Date.now();
     const state = counts.get(message);
 
     if (!state || now - state.windowStart > windowMs) {
+      evictExpiredEntries();
       counts.set(message, { count: 1, windowStart: now, suppressed: 0 });
       return true;
     }
@@ -231,6 +255,7 @@ export function createRateLimitedLogger(
       }
     },
     debug: (message) => {
+      maybeLogSuppressed(message);
       if (checkRateLimit(message)) {
         logger.debug(message);
       }

@@ -212,24 +212,28 @@ export class ResourcePool<T> implements Disposable {
 
     // Wait for an available resource
     return new Promise((resolve, reject) => {
+      // Create waiter object to track for removal on timeout
+      const waiter = {
+        resolve: (item: T) => {
+          clearTimeout(timeoutId);
+          resolve(item);
+        },
+        reject: (err: Error) => {
+          clearTimeout(timeoutId);
+          reject(err);
+        },
+      };
+
       const timeoutId = setTimeout(() => {
-        const index = this.waitQueue.findIndex((w) => w.resolve === resolve);
+        // Remove this specific waiter from the queue on timeout
+        const index = this.waitQueue.indexOf(waiter);
         if (index !== -1) {
           this.waitQueue.splice(index, 1);
         }
         reject(new Error(`Acquire timeout after ${this.options.acquireTimeoutMs}ms`));
       }, this.options.acquireTimeoutMs);
 
-      this.waitQueue.push({
-        resolve: (item) => {
-          clearTimeout(timeoutId);
-          resolve(item);
-        },
-        reject: (err) => {
-          clearTimeout(timeoutId);
-          reject(err);
-        },
-      });
+      this.waitQueue.push(waiter);
     });
   }
 
@@ -247,9 +251,14 @@ export class ResourcePool<T> implements Disposable {
       return;
     }
 
-    // If someone is waiting, give it to them
+    // If someone is waiting, give it to them (but validate first)
     const waiter = this.waitQueue.shift();
     if (waiter) {
+      if (this.options.validate && !this.options.validate(item)) {
+        void this.destroyItem(item);
+        waiter.reject(new Error("Released item failed validation"));
+        return;
+      }
       this.inUse.add(item);
       waiter.resolve(item);
       return;
