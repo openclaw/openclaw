@@ -3,167 +3,439 @@
   "pack_version": "1.0.0",
   "stage_id": "NETWORK_IO",
   "description": "Controls all network input/output operations including HTTP requests, socket connections, and data transfers. Enforces destination restrictions and bandwidth limits.",
+  "scoring": {
+    "enableSemantic": false
+  },
   "thresholds": {
-    "min_confidence_T": 0.55,
+    "min_confidence_T": 0.15,
     "dominance_margin_Delta": 0.1
   },
   "contracts": [
     {
       "contract_id": "NETWORK_GET_PUBLIC",
       "risk_class": "LOW",
-      "required_fields": [
-        "url",
-        "method"
-      ],
+      "required_fields": ["url", "method"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "fetch public url",
+        "get public resource",
+        "http get request",
+        "retrieve public data",
+        "make an http request",
+        "send http request",
+        "make a web request",
+        "send a web request",
+        "fetch data"
+      ],
+      "keywordWeights": {
+        "fetch": 1.0,
+        "get": 0.9,
+        "public": 0.8,
+        "url": 0.7,
+        "retrieve": 0.7,
+        "request": 0.6,
+        "http": 0.6
+      },
+      "synonymPhrases": {
+        "fetch": ["get", "retrieve", "download", "request"],
+        "public": ["open", "external", "internet"],
+        "url": ["endpoint", "link", "address", "uri"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_DNS_LOOKUP",
       "risk_class": "LOW",
-      "required_fields": [
-        "hostname"
-      ],
+      "required_fields": ["hostname"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": ["dns lookup", "resolve hostname", "lookup hostname", "resolve dns"],
+      "keywordWeights": {
+        "dns": 1.0,
+        "lookup": 0.9,
+        "resolve": 0.9,
+        "hostname": 0.8,
+        "domain": 0.7,
+        "address": 0.5
+      },
+      "synonymPhrases": {
+        "dns": ["domain", "nameserver", "resolver"],
+        "lookup": ["resolve", "query", "check"],
+        "hostname": ["domain", "host", "address", "name"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_HEAD_REQUEST",
       "risk_class": "LOW",
-      "required_fields": [
-        "url"
-      ],
+      "required_fields": ["url"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "http head request",
+        "send head request",
+        "check url headers",
+        "probe url"
+      ],
+      "keywordWeights": {
+        "head": 1.0,
+        "request": 0.8,
+        "http": 0.7,
+        "headers": 0.7,
+        "probe": 0.6,
+        "check": 0.6,
+        "url": 0.5
+      },
+      "synonymPhrases": {
+        "head": ["probe", "ping", "check"],
+        "request": ["call", "query", "fetch"],
+        "headers": ["metadata", "response-headers", "info"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_POST_DATA",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "url",
-        "method",
-        "body"
-      ],
+      "required_fields": ["url", "method", "body"],
       "limits": {
         "max_body_kb": 1024,
         "rate_per_minute": 60
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "post data to url",
+        "send post request",
+        "http post request",
+        "submit data to endpoint"
+      ],
+      "keywordWeights": {
+        "post": 1.0,
+        "send": 0.9,
+        "data": 0.8,
+        "submit": 0.8,
+        "body": 0.7,
+        "request": 0.6,
+        "http": 0.6,
+        "url": 0.5
+      },
+      "synonymPhrases": {
+        "post": ["send", "submit", "write", "push"],
+        "data": ["payload", "body", "content", "message"],
+        "submit": ["post", "send", "transmit", "deliver"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_DOWNLOAD_RESOURCE",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "url",
-        "destination_path"
-      ],
+      "required_fields": ["url", "destination_path"],
       "limits": {
         "max_size_mb": 100
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "download resource from url",
+        "download file",
+        "fetch and save resource",
+        "save url to disk",
+        "download file from url"
+      ],
+      "keywordWeights": {
+        "download": 1.0,
+        "fetch": 0.8,
+        "save": 0.8,
+        "resource": 0.7,
+        "file": 0.7,
+        "url": 0.6,
+        "disk": 0.5,
+        "destination": 0.5
+      },
+      "synonymPhrases": {
+        "download": ["fetch", "retrieve", "save", "pull"],
+        "resource": ["file", "asset", "content", "data"],
+        "save": ["store", "write", "persist", "download"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_UPLOAD_RESOURCE",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "url",
-        "source_path",
-        "method"
-      ],
+      "required_fields": ["url", "source_path", "method"],
       "limits": {
         "max_size_mb": 50,
         "allowed_destinations": []
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "upload resource to url",
+        "upload file",
+        "send file to server",
+        "push file to endpoint"
+      ],
+      "keywordWeights": {
+        "upload": 1.0,
+        "send": 0.8,
+        "file": 0.8,
+        "push": 0.7,
+        "resource": 0.7,
+        "server": 0.6,
+        "endpoint": 0.5,
+        "url": 0.5
+      },
+      "synonymPhrases": {
+        "upload": ["send", "push", "transfer", "submit"],
+        "file": ["resource", "asset", "data", "content"],
+        "server": ["endpoint", "host", "destination", "remote"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_WEBSOCKET_CONNECT",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "url",
-        "destination_class"
-      ],
+      "required_fields": ["url", "destination_class"],
       "limits": {
         "max_connections": 5,
         "idle_timeout_minutes": 30
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "open websocket connection",
+        "connect via websocket",
+        "establish websocket",
+        "websocket connect",
+        "connect to server"
+      ],
+      "keywordWeights": {
+        "websocket": 1.0,
+        "connect": 0.9,
+        "open": 0.7,
+        "establish": 0.7,
+        "connection": 0.7,
+        "socket": 0.6,
+        "url": 0.5
+      },
+      "synonymPhrases": {
+        "websocket": ["ws", "socket", "real-time", "streaming"],
+        "connect": ["open", "establish", "initiate", "start"],
+        "connection": ["socket", "channel", "link", "stream"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_AUTHENTICATED_REQUEST",
       "risk_class": "HIGH",
-      "required_fields": [
-        "url",
-        "method",
-        "auth_header"
-      ],
+      "required_fields": ["url", "method", "auth_header"],
       "limits": {
         "token_expiry_check": true
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "authenticated http request",
+        "request with auth token",
+        "send authenticated request",
+        "authorized api call"
+      ],
+      "keywordWeights": {
+        "authenticated": 1.0,
+        "auth": 0.9,
+        "token": 0.9,
+        "authorized": 0.8,
+        "request": 0.7,
+        "api": 0.6,
+        "credentials": 0.6,
+        "header": 0.5
+      },
+      "synonymPhrases": {
+        "authenticated": ["authorized", "credentialed", "token-bearing"],
+        "auth": ["token", "credentials", "authorization", "bearer"],
+        "request": ["call", "fetch", "query", "send"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_INTERNAL_ENDPOINT",
       "risk_class": "HIGH",
-      "required_fields": [
-        "url",
-        "method",
-        "destination_class"
-      ],
+      "required_fields": ["url", "method", "destination_class"],
       "limits": {
         "allowed_internal_ranges": []
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "request internal endpoint",
+        "access internal network",
+        "call internal service",
+        "connect to internal host"
+      ],
+      "keywordWeights": {
+        "internal": 1.0,
+        "endpoint": 0.9,
+        "network": 0.8,
+        "service": 0.7,
+        "request": 0.7,
+        "host": 0.6,
+        "private": 0.6,
+        "intranet": 0.5
+      },
+      "synonymPhrases": {
+        "internal": ["private", "intranet", "local", "restricted"],
+        "endpoint": ["service", "host", "url", "api"],
+        "network": ["intranet", "lan", "private-network", "internal-network"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_RAW_SOCKET",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "host",
-        "port",
-        "protocol"
-      ],
+      "required_fields": ["host", "port", "protocol"],
       "limits": {
         "allowed_ports": [],
         "requires_audit": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "open raw socket",
+        "raw tcp connection",
+        "raw udp socket",
+        "direct socket connection",
+        "open raw socket on port 443"
+      ],
+      "keywordWeights": {
+        "raw": 1.0,
+        "socket": 1.0,
+        "tcp": 0.9,
+        "udp": 0.9,
+        "connection": 0.8,
+        "direct": 0.7,
+        "port": 0.7,
+        "protocol": 0.6
+      },
+      "synonymPhrases": {
+        "raw": ["direct", "low-level", "unmanaged"],
+        "socket": ["connection", "tcp", "udp", "network-socket"],
+        "connection": ["socket", "link", "channel", "pipe"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NETWORK_PROXY_TUNNEL",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "proxy_url",
-        "target_url",
-        "justification"
-      ],
+      "required_fields": ["proxy_url", "target_url", "justification"],
       "limits": {
         "requires_approval": true,
         "max_duration_minutes": 60
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "open proxy tunnel",
+        "connect via proxy",
+        "tunnel through proxy",
+        "proxy network request"
+      ],
+      "keywordWeights": {
+        "proxy": 1.0,
+        "tunnel": 1.0,
+        "connect": 0.8,
+        "route": 0.7,
+        "forward": 0.7,
+        "target": 0.6,
+        "justification": 0.6,
+        "network": 0.5
+      },
+      "synonymPhrases": {
+        "proxy": ["gateway", "relay", "forwarder", "middleman"],
+        "tunnel": ["channel", "pipe", "forward", "relay"],
+        "connect": ["route", "forward", "relay", "pass-through"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -177,15 +449,7 @@
       },
       "method": {
         "type": "string",
-        "enum": [
-          "GET",
-          "POST",
-          "PUT",
-          "PATCH",
-          "DELETE",
-          "HEAD",
-          "OPTIONS"
-        ],
+        "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
         "description": "HTTP method to use"
       },
       "hostname": {
@@ -193,10 +457,7 @@
         "description": "Hostname for DNS lookup"
       },
       "body": {
-        "type": [
-          "string",
-          "object"
-        ],
+        "type": ["string", "object"],
         "description": "Request body for POST/PUT/PATCH requests"
       },
       "destination_path": {
@@ -209,12 +470,7 @@
       },
       "destination_class": {
         "type": "string",
-        "enum": [
-          "public",
-          "internal",
-          "private",
-          "restricted"
-        ],
+        "enum": ["public", "internal", "private", "restricted"],
         "description": "Classification of network destination"
       },
       "auth_header": {
@@ -233,11 +489,7 @@
       },
       "protocol": {
         "type": "string",
-        "enum": [
-          "tcp",
-          "udp",
-          "tls"
-        ],
+        "enum": ["tcp", "udp", "tls"],
         "description": "Socket protocol"
       },
       "proxy_url": {
@@ -277,8 +529,6 @@
         "description": "Whether to verify SSL certificates"
       }
     },
-    "required": [
-      "url"
-    ]
+    "required": ["url"]
   }
 }

@@ -3,6 +3,9 @@
   "pack_version": "1.0.0",
   "stage_id": "MEMORY_MODIFY",
   "description": "Controls modifications to agent memory, knowledge stores, and persistent state. Governs what can be remembered, forgotten, or altered in long-term storage.",
+  "scoring": {
+    "enableSemantic": false
+  },
   "thresholds": {
     "min_confidence_T": 0,
     "dominance_margin_Delta": 0
@@ -11,126 +14,293 @@
     {
       "contract_id": "MEMORY_READ_CONTEXT",
       "risk_class": "LOW",
-      "required_fields": [
-        "memory_scope"
-      ],
+      "required_fields": ["memory_scope"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "read memory context",
+        "get memory context",
+        "retrieve context from memory",
+        "fetch memory context"
+      ],
+      "keywordWeights": {
+        "read": 0.8,
+        "memory": 1.0,
+        "context": 0.9,
+        "retrieve": 0.7,
+        "fetch": 0.6,
+        "get": 0.5
+      },
+      "synonymPhrases": {
+        "read": ["retrieve", "fetch", "get"],
+        "memory": ["store", "storage", "knowledge"],
+        "context": ["scope", "state", "environment"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEMORY_STORE_SESSION",
       "risk_class": "LOW",
-      "required_fields": [
-        "key",
-        "value",
-        "memory_scope"
-      ],
+      "required_fields": ["key", "value", "memory_scope"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": ["remember this", "store in memory", "save to session"],
+      "keywordWeights": {
+        "remember": 1.0,
+        "store": 0.8,
+        "session": 0.6,
+        "save": 0.7
+      },
+      "synonymPhrases": {
+        "remember": ["recall", "retain", "memorize"],
+        "store": ["save", "persist", "write"],
+        "session": ["temporary", "transient", "short-term"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEMORY_STORE_PERSISTENT",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "key",
-        "value",
-        "memory_scope",
-        "retention_policy"
-      ],
+      "required_fields": ["key", "value", "memory_scope", "retention_policy"],
       "limits": {
         "max_value_size_kb": 256,
         "max_entries": 1000
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "store persistently",
+        "save to long-term memory",
+        "persist to memory",
+        "write to persistent store"
+      ],
+      "keywordWeights": {
+        "persist": 1.0,
+        "persistent": 0.9,
+        "long-term": 0.9,
+        "store": 0.8,
+        "permanent": 0.7,
+        "save": 0.6
+      },
+      "synonymPhrases": {
+        "persist": ["store", "save", "retain"],
+        "long-term": ["permanent", "durable", "persistent"],
+        "store": ["save", "write", "commit"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEMORY_UPDATE_KNOWLEDGE",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "knowledge_id",
-        "updates",
-        "source_attribution"
-      ],
+      "required_fields": ["knowledge_id", "updates", "source_attribution"],
       "limits": {
         "max_update_size_kb": 100,
         "requires_source": true
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "update knowledge entry",
+        "modify knowledge base",
+        "edit knowledge record",
+        "update stored knowledge"
+      ],
+      "keywordWeights": {
+        "update": 1.0,
+        "knowledge": 0.9,
+        "modify": 0.8,
+        "edit": 0.7,
+        "change": 0.6,
+        "revise": 0.5
+      },
+      "synonymPhrases": {
+        "update": ["modify", "change", "edit", "revise"],
+        "knowledge": ["fact", "information", "record"],
+        "modify": ["update", "change", "alter"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEMORY_DELETE_ENTRY",
       "risk_class": "HIGH",
-      "required_fields": [
-        "key",
-        "memory_scope",
-        "reason"
-      ],
+      "required_fields": ["key", "memory_scope", "reason"],
       "limits": {
         "requires_backup": true
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "delete memory entry",
+        "remove from memory",
+        "erase memory key",
+        "forget this memory"
+      ],
+      "keywordWeights": {
+        "delete": 1.0,
+        "remove": 0.9,
+        "erase": 0.8,
+        "forget": 0.7,
+        "purge": 0.7,
+        "entry": 0.5
+      },
+      "synonymPhrases": {
+        "delete": ["remove", "erase", "purge", "wipe"],
+        "remove": ["delete", "erase", "drop"],
+        "forget": ["discard", "clear", "lose"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEMORY_BULK_MODIFY",
       "risk_class": "HIGH",
-      "required_fields": [
-        "operations",
-        "memory_scope"
-      ],
+      "required_fields": ["operations", "memory_scope"],
       "limits": {
         "max_operations": 100,
         "requires_transaction": true
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "bulk modify memory",
+        "batch update memory",
+        "run multiple memory operations",
+        "apply bulk memory changes"
+      ],
+      "keywordWeights": {
+        "bulk": 1.0,
+        "batch": 0.9,
+        "operations": 0.8,
+        "multiple": 0.7,
+        "modify": 0.6,
+        "mass": 0.6
+      },
+      "synonymPhrases": {
+        "bulk": ["batch", "multiple", "mass", "many"],
+        "modify": ["update", "change", "alter"],
+        "operations": ["actions", "changes", "transactions"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEMORY_CLEAR_SCOPE",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "memory_scope",
-        "confirmation_token",
-        "justification"
-      ],
+      "required_fields": ["memory_scope", "confirmation_token", "justification"],
       "limits": {
         "requires_double_confirmation": true,
         "creates_backup": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "clear memory scope",
+        "wipe memory scope",
+        "erase all memory in scope",
+        "purge entire memory scope"
+      ],
+      "keywordWeights": {
+        "clear": 1.0,
+        "wipe": 0.9,
+        "erase": 0.8,
+        "purge": 0.8,
+        "scope": 0.7,
+        "all": 0.5
+      },
+      "synonymPhrases": {
+        "clear": ["wipe", "erase", "purge", "flush"],
+        "wipe": ["clear", "erase", "delete"],
+        "scope": ["domain", "namespace", "partition"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEMORY_MODIFY_CORE_IDENTITY",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "identity_field",
-        "new_value",
-        "authorization",
-        "audit_reason"
-      ],
+      "required_fields": ["identity_field", "new_value", "authorization", "audit_reason"],
       "limits": {
         "requires_admin_approval": true,
-        "immutable_fields": [
-          "agent_id",
-          "creation_date"
-        ],
+        "immutable_fields": ["agent_id", "creation_date"],
         "requires_full_audit": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "modify core identity",
+        "change agent identity",
+        "update identity field",
+        "alter core agent identity"
+      ],
+      "keywordWeights": {
+        "identity": 1.0,
+        "core": 0.9,
+        "modify": 0.8,
+        "agent": 0.7,
+        "change": 0.6,
+        "alter": 0.6
+      },
+      "synonymPhrases": {
+        "identity": ["persona", "profile", "self"],
+        "core": ["fundamental", "primary", "base"],
+        "modify": ["change", "update", "alter"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -142,25 +312,12 @@
         "description": "Memory entry key/identifier"
       },
       "value": {
-        "type": [
-          "string",
-          "number",
-          "boolean",
-          "object",
-          "array"
-        ],
+        "type": ["string", "number", "boolean", "object", "array"],
         "description": "Value to store in memory"
       },
       "memory_scope": {
         "type": "string",
-        "enum": [
-          "session",
-          "conversation",
-          "user",
-          "project",
-          "global",
-          "system"
-        ],
+        "enum": ["session", "conversation", "user", "project", "global", "system"],
         "description": "Scope of memory operation"
       },
       "retention_policy": {
@@ -213,12 +370,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "enum": [
-                "set",
-                "delete",
-                "update",
-                "append"
-              ]
+              "enum": ["set", "delete", "update", "append"]
             },
             "key": {
               "type": "string"
@@ -241,10 +393,7 @@
         "description": "Core identity field to modify"
       },
       "new_value": {
-        "type": [
-          "string",
-          "object"
-        ],
+        "type": ["string", "object"],
         "description": "New value for identity field"
       },
       "authorization": {
@@ -267,8 +416,6 @@
         "description": "Additional metadata for the memory entry"
       }
     },
-    "required": [
-      "memory_scope"
-    ]
+    "required": ["memory_scope"]
   }
 }

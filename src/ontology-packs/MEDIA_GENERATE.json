@@ -3,6 +3,9 @@
   "pack_version": "1.0.0",
   "stage_id": "MEDIA_GENERATE",
   "description": "Controls the generation of media assets including images, audio, and video content. Governs resource consumption, content safety checks, and output constraints.",
+  "scoring": {
+    "enableSemantic": false
+  },
   "thresholds": {
     "min_confidence_T": 0,
     "dominance_margin_Delta": 0
@@ -11,109 +14,280 @@
     {
       "contract_id": "MEDIA_GENERATE_THUMBNAIL",
       "risk_class": "LOW",
-      "required_fields": [
-        "source_ref",
-        "output_format"
-      ],
+      "required_fields": ["source_ref", "output_format"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "generate thumbnail",
+        "create thumbnail image",
+        "make thumbnail",
+        "generate preview image",
+        "create media thumbnail"
+      ],
+      "keywordWeights": {
+        "thumbnail": 1.0,
+        "generate": 0.8,
+        "create": 0.7,
+        "preview": 0.8,
+        "image": 0.6,
+        "media": 0.5,
+        "make": 0.6
+      },
+      "synonymPhrases": {
+        "thumbnail": ["preview image", "small image", "thumb"],
+        "generate": ["create", "make", "produce"],
+        "preview": ["thumbnail", "miniature", "small version"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_CONVERT_FORMAT",
       "risk_class": "LOW",
-      "required_fields": [
-        "source_ref",
-        "target_format"
-      ],
+      "required_fields": ["source_ref", "target_format"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "convert media format",
+        "convert file format",
+        "convert audio format",
+        "convert video format",
+        "convert image format"
+      ],
+      "keywordWeights": {
+        "convert": 1.0,
+        "format": 1.0,
+        "media": 0.6,
+        "file": 0.6,
+        "transform": 0.8,
+        "transcode": 0.9,
+        "encode": 0.7
+      },
+      "synonymPhrases": {
+        "convert": ["transform", "transcode", "encode", "change format"],
+        "format": ["file type", "codec", "container"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_RESIZE_IMAGE",
       "risk_class": "LOW",
-      "required_fields": [
-        "source_ref",
-        "dimensions"
-      ],
+      "required_fields": ["source_ref", "dimensions"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "resize image",
+        "scale image",
+        "resize photo",
+        "change image dimensions",
+        "scale image size"
+      ],
+      "keywordWeights": {
+        "resize": 1.0,
+        "scale": 0.9,
+        "image": 0.8,
+        "dimensions": 0.9,
+        "size": 0.7,
+        "photo": 0.7,
+        "width": 0.8,
+        "height": 0.8
+      },
+      "synonymPhrases": {
+        "resize": ["scale", "resample", "change size", "adjust size"],
+        "image": ["photo", "picture", "graphic"],
+        "dimensions": ["size", "resolution", "width and height"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_GENERATE_CHART",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "chart_type",
-        "data",
-        "output_format"
-      ],
+      "required_fields": ["chart_type", "data", "output_format"],
       "limits": {
         "max_data_points": 10000,
         "max_output_size_mb": 5
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "generate chart",
+        "create chart",
+        "make chart",
+        "generate data chart",
+        "create visualization chart"
+      ],
+      "keywordWeights": {
+        "chart": 1.0,
+        "generate": 0.8,
+        "create": 0.7,
+        "data": 0.7,
+        "visualization": 0.8,
+        "graph": 0.8,
+        "plot": 0.8
+      },
+      "synonymPhrases": {
+        "chart": ["graph", "plot", "visualization", "data chart"],
+        "generate": ["create", "make", "produce", "render"],
+        "data": ["dataset", "values", "statistics"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_GENERATE_DIAGRAM",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "diagram_type",
-        "definition"
-      ],
+      "required_fields": ["diagram_type", "definition"],
       "limits": {
         "max_nodes": 500,
         "max_complexity": 100
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "generate diagram",
+        "create diagram",
+        "make diagram",
+        "generate flowchart",
+        "create architecture diagram"
+      ],
+      "keywordWeights": {
+        "diagram": 1.0,
+        "generate": 0.8,
+        "create": 0.7,
+        "flowchart": 0.9,
+        "architecture": 0.7,
+        "sequence": 0.8,
+        "mermaid": 0.9
+      },
+      "synonymPhrases": {
+        "diagram": ["flowchart", "chart", "schema", "architecture diagram"],
+        "generate": ["create", "make", "render", "produce"],
+        "flowchart": ["flow diagram", "process diagram", "workflow diagram"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_SYNTHESIZE_AUDIO",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "audio_type",
-        "parameters"
-      ],
+      "required_fields": ["audio_type", "parameters"],
       "limits": {
         "max_duration_seconds": 300,
         "max_output_size_mb": 50
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "synthesize audio",
+        "generate audio",
+        "create audio",
+        "synthesize speech",
+        "generate tts audio"
+      ],
+      "keywordWeights": {
+        "synthesize": 1.0,
+        "audio": 1.0,
+        "generate": 0.7,
+        "speech": 0.9,
+        "tts": 1.0,
+        "sound": 0.7,
+        "voice": 0.8,
+        "music": 0.8
+      },
+      "synonymPhrases": {
+        "synthesize": ["generate", "create", "produce", "render"],
+        "audio": ["sound", "speech", "voice", "tts"],
+        "tts": ["text-to-speech", "speech synthesis", "voice synthesis"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_GENERATE_AI_IMAGE",
       "risk_class": "HIGH",
-      "required_fields": [
-        "prompt",
-        "model",
-        "parameters"
-      ],
+      "required_fields": ["prompt", "model", "parameters"],
       "limits": {
         "max_resolution": 2048,
         "content_filter": true
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "generate ai image",
+        "create ai image",
+        "generate image with ai",
+        "ai image generation",
+        "generate image from prompt"
+      ],
+      "keywordWeights": {
+        "ai": 1.0,
+        "image": 1.0,
+        "generate": 0.9,
+        "prompt": 0.9,
+        "model": 0.8,
+        "diffusion": 0.9,
+        "create": 0.7,
+        "stable": 0.7
+      },
+      "synonymPhrases": {
+        "ai image": ["ai-generated image", "generated image", "diffusion image"],
+        "generate": ["create", "produce", "make"],
+        "prompt": ["text prompt", "image prompt", "description"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_GENERATE_AI_VIDEO",
       "risk_class": "HIGH",
-      "required_fields": [
-        "prompt",
-        "model",
-        "duration_seconds"
-      ],
+      "required_fields": ["prompt", "model", "duration_seconds"],
       "limits": {
         "max_duration_seconds": 60,
         "max_resolution": 1080,
@@ -121,17 +295,41 @@
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "generate ai video",
+        "create ai video",
+        "ai video generation",
+        "generate video from prompt",
+        "create video with ai"
+      ],
+      "keywordWeights": {
+        "ai": 1.0,
+        "video": 1.0,
+        "generate": 0.9,
+        "prompt": 0.9,
+        "model": 0.8,
+        "create": 0.7,
+        "animation": 0.7,
+        "sora": 0.9
+      },
+      "synonymPhrases": {
+        "ai video": ["ai-generated video", "generated video", "synthetic video"],
+        "generate": ["create", "produce", "make"],
+        "video": ["clip", "movie", "animation", "footage"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_DEEPFAKE_GENERATION",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "source_media",
-        "target_likeness",
-        "consent_proof",
-        "authorization"
-      ],
+      "required_fields": ["source_media", "target_likeness", "consent_proof", "authorization"],
       "limits": {
         "requires_consent_verification": true,
         "requires_watermark": true,
@@ -139,24 +337,76 @@
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "generate deepfake",
+        "create deepfake media",
+        "face swap media",
+        "deepfake video generation",
+        "synthesize likeness media"
+      ],
+      "keywordWeights": {
+        "deepfake": 1.0,
+        "generate": 0.8,
+        "face": 0.9,
+        "swap": 0.9,
+        "likeness": 1.0,
+        "consent": 0.9,
+        "synthetic": 0.7
+      },
+      "synonymPhrases": {
+        "deepfake": ["face swap", "synthetic likeness", "likeness generation"],
+        "generate": ["create", "produce", "synthesize"],
+        "likeness": ["face", "identity", "appearance"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "MEDIA_UNRESTRICTED_GENERATION",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "media_type",
-        "parameters",
-        "bypass_reason",
-        "authorization"
-      ],
+      "required_fields": ["media_type", "parameters", "bypass_reason", "authorization"],
       "limits": {
         "requires_approval_chain": true,
         "audit_all_outputs": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "unrestricted media generation",
+        "bypass content filter media",
+        "generate media without restrictions",
+        "unrestricted content generation",
+        "override content filter"
+      ],
+      "keywordWeights": {
+        "unrestricted": 1.0,
+        "bypass": 0.9,
+        "override": 0.9,
+        "content": 0.7,
+        "filter": 0.8,
+        "generation": 0.8,
+        "media": 0.6,
+        "authorization": 0.9
+      },
+      "synonymPhrases": {
+        "unrestricted": ["unfiltered", "without restrictions", "bypass filters"],
+        "bypass": ["override", "circumvent", "disable filter"],
+        "generation": ["create", "generate", "produce"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -169,17 +419,7 @@
       },
       "output_format": {
         "type": "string",
-        "enum": [
-          "png",
-          "jpg",
-          "webp",
-          "gif",
-          "svg",
-          "mp3",
-          "wav",
-          "mp4",
-          "webm"
-        ],
+        "enum": ["png", "jpg", "webp", "gif", "svg", "mp3", "wav", "mp4", "webm"],
         "description": "Desired output format"
       },
       "target_format": {
@@ -203,33 +443,16 @@
       },
       "chart_type": {
         "type": "string",
-        "enum": [
-          "bar",
-          "line",
-          "pie",
-          "scatter",
-          "histogram",
-          "heatmap"
-        ],
+        "enum": ["bar", "line", "pie", "scatter", "histogram", "heatmap"],
         "description": "Type of chart to generate"
       },
       "data": {
-        "type": [
-          "array",
-          "object"
-        ],
+        "type": ["array", "object"],
         "description": "Data for chart generation"
       },
       "diagram_type": {
         "type": "string",
-        "enum": [
-          "flowchart",
-          "sequence",
-          "class",
-          "state",
-          "er",
-          "gantt"
-        ],
+        "enum": ["flowchart", "sequence", "class", "state", "er", "gantt"],
         "description": "Type of diagram to generate"
       },
       "definition": {
@@ -238,12 +461,7 @@
       },
       "audio_type": {
         "type": "string",
-        "enum": [
-          "tts",
-          "music",
-          "sfx",
-          "ambient"
-        ],
+        "enum": ["tts", "music", "sfx", "ambient"],
         "description": "Type of audio to synthesize"
       },
       "parameters": {
@@ -285,22 +503,12 @@
       },
       "media_type": {
         "type": "string",
-        "enum": [
-          "image",
-          "audio",
-          "video",
-          "3d"
-        ],
+        "enum": ["image", "audio", "video", "3d"],
         "description": "Type of media to generate"
       },
       "quality": {
         "type": "string",
-        "enum": [
-          "draft",
-          "standard",
-          "high",
-          "maximum"
-        ],
+        "enum": ["draft", "standard", "high", "maximum"],
         "description": "Output quality level"
       },
       "style": {
@@ -308,8 +516,6 @@
         "description": "Style preset or description"
       }
     },
-    "required": [
-      "output_format"
-    ]
+    "required": ["output_format"]
   }
 }

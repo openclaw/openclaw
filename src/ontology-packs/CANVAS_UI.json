@@ -3,6 +3,9 @@
   "pack_version": "1.0.0",
   "stage_id": "CANVAS_UI",
   "description": "Controls user interface rendering and canvas manipulation operations. Governs visual element creation, layout changes, and user interaction handling.",
+  "scoring": {
+    "enableSemantic": false
+  },
   "thresholds": {
     "min_confidence_T": 0,
     "dominance_margin_Delta": 0
@@ -11,120 +14,329 @@
     {
       "contract_id": "CANVAS_RENDER_TEXT",
       "risk_class": "LOW",
-      "required_fields": [
-        "element_type",
-        "content"
-      ],
+      "required_fields": ["element_type", "content"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "render text element",
+        "display text on canvas",
+        "show text content",
+        "draw text element",
+        "render text to canvas"
+      ],
+      "keywordWeights": {
+        "render": 1.0,
+        "text": 0.9,
+        "display": 0.8,
+        "show": 0.7,
+        "draw": 0.7,
+        "element": 0.6,
+        "content": 0.6,
+        "canvas": 0.5
+      },
+      "synonymPhrases": {
+        "render text": ["show text", "display text", "draw text"],
+        "text": ["label", "string", "content"],
+        "element": ["node", "component", "widget"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "CANVAS_RENDER_STATIC",
       "risk_class": "LOW",
-      "required_fields": [
-        "element_type",
-        "properties"
-      ],
+      "required_fields": ["element_type", "properties"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "render static element",
+        "display static ui element",
+        "show static component",
+        "draw static ui element",
+        "render non-interactive element"
+      ],
+      "keywordWeights": {
+        "render": 1.0,
+        "static": 0.9,
+        "element": 0.8,
+        "display": 0.7,
+        "ui": 0.7,
+        "component": 0.6,
+        "show": 0.6,
+        "non-interactive": 0.8
+      },
+      "synonymPhrases": {
+        "static element": ["fixed element", "non-interactive element", "read-only element"],
+        "render": ["display", "show", "draw"],
+        "component": ["element", "widget", "node"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "CANVAS_UPDATE_LAYOUT",
       "risk_class": "LOW",
-      "required_fields": [
-        "layout_id",
-        "changes"
-      ],
+      "required_fields": ["layout_id", "changes"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "update canvas layout",
+        "change layout arrangement",
+        "modify ui layout",
+        "apply layout changes",
+        "update ui layout structure"
+      ],
+      "keywordWeights": {
+        "layout": 1.0,
+        "update": 0.9,
+        "change": 0.8,
+        "modify": 0.8,
+        "apply": 0.7,
+        "changes": 0.6,
+        "structure": 0.6,
+        "arrangement": 0.7,
+        "ui": 0.5
+      },
+      "synonymPhrases": {
+        "layout": ["arrangement", "structure", "grid layout"],
+        "update layout": ["change layout", "modify layout", "reconfigure layout"],
+        "apply changes": ["set changes", "commit changes", "submit changes"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "CANVAS_RENDER_INTERACTIVE",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "element_type",
-        "properties",
-        "event_handlers"
-      ],
+      "required_fields": ["element_type", "properties", "event_handlers"],
       "limits": {
         "max_handlers": 10,
-        "allowed_events": [
-          "click",
-          "hover",
-          "focus",
-          "blur",
-          "change"
-        ]
+        "allowed_events": ["click", "hover", "focus", "blur", "change"]
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "render interactive element",
+        "display interactive component",
+        "show interactive ui element",
+        "render clickable element",
+        "create interactive widget"
+      ],
+      "keywordWeights": {
+        "interactive": 1.0,
+        "render": 0.9,
+        "element": 0.8,
+        "component": 0.8,
+        "clickable": 0.8,
+        "widget": 0.7,
+        "event": 0.7,
+        "handler": 0.7,
+        "display": 0.6,
+        "create": 0.6
+      },
+      "synonymPhrases": {
+        "interactive": ["clickable", "actionable", "responsive"],
+        "render interactive": ["display interactive", "show interactive", "create interactive"],
+        "event handler": ["event listener", "click handler", "callback"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "CANVAS_BATCH_UPDATE",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "updates"
-      ],
+      "required_fields": ["updates"],
       "limits": {
         "max_updates": 100,
         "max_depth": 10
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "batch update canvas",
+        "apply multiple ui updates",
+        "bulk update canvas elements",
+        "apply batch canvas changes",
+        "submit multiple canvas updates"
+      ],
+      "keywordWeights": {
+        "batch": 1.0,
+        "update": 0.9,
+        "updates": 0.9,
+        "multiple": 0.8,
+        "bulk": 0.8,
+        "canvas": 0.7,
+        "changes": 0.6,
+        "apply": 0.6,
+        "submit": 0.5
+      },
+      "synonymPhrases": {
+        "batch": ["bulk", "multiple", "grouped"],
+        "update": ["change", "modify", "apply"],
+        "batch update": ["bulk update", "multiple updates", "grouped updates"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "CANVAS_EMBED_MEDIA",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "media_type",
-        "source_url"
-      ],
+      "required_fields": ["media_type", "source_url"],
       "limits": {
         "allowed_sources": [],
         "max_media_size_mb": 50
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "embed media in canvas",
+        "insert media element",
+        "embed image in canvas",
+        "embed video in canvas",
+        "add media to canvas"
+      ],
+      "keywordWeights": {
+        "embed": 1.0,
+        "media": 1.0,
+        "canvas": 0.7,
+        "insert": 0.8,
+        "image": 0.8,
+        "video": 0.8,
+        "audio": 0.7,
+        "add": 0.6,
+        "source": 0.6,
+        "url": 0.5
+      },
+      "synonymPhrases": {
+        "embed": ["insert", "add", "include"],
+        "media": ["image", "video", "audio", "iframe"],
+        "embed media": ["add media", "insert media", "include media"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "CANVAS_INJECT_SCRIPT",
       "risk_class": "HIGH",
-      "required_fields": [
-        "script_content",
-        "execution_context"
-      ],
+      "required_fields": ["script_content", "execution_context"],
       "limits": {
         "max_script_size_kb": 100,
         "requires_csp_check": true
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "inject script into canvas",
+        "run script in canvas context",
+        "execute canvas javascript",
+        "inject javascript in canvas",
+        "run javascript in canvas context"
+      ],
+      "keywordWeights": {
+        "inject": 1.0,
+        "script": 1.0,
+        "javascript": 0.9,
+        "canvas": 0.7,
+        "execute": 0.9,
+        "run": 0.8,
+        "code": 0.7,
+        "context": 0.6,
+        "js": 0.9
+      },
+      "synonymPhrases": {
+        "inject": ["insert", "execute", "run"],
+        "script": ["javascript", "js code", "code"],
+        "inject script": ["run script", "execute script", "add script"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "CANVAS_FULL_SCREEN_TAKEOVER",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "takeover_type",
-        "duration",
-        "justification"
-      ],
+      "required_fields": ["takeover_type", "duration", "justification"],
       "limits": {
         "max_duration_seconds": 300,
         "requires_user_gesture": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "canvas full screen takeover",
+        "fullscreen canvas overlay",
+        "take over full screen",
+        "canvas fullscreen mode",
+        "full screen canvas takeover"
+      ],
+      "keywordWeights": {
+        "fullscreen": 1.0,
+        "full-screen": 1.0,
+        "takeover": 1.0,
+        "canvas": 0.7,
+        "overlay": 0.8,
+        "screen": 0.8,
+        "mode": 0.6,
+        "full": 0.7,
+        "justify": 0.5
+      },
+      "synonymPhrases": {
+        "fullscreen": ["full screen", "full-screen", "entire screen"],
+        "takeover": ["overlay", "cover", "occupy screen"],
+        "full screen takeover": ["fullscreen mode", "full screen overlay", "screen takeover"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -205,12 +417,7 @@
       },
       "media_type": {
         "type": "string",
-        "enum": [
-          "image",
-          "video",
-          "audio",
-          "iframe"
-        ],
+        "enum": ["image", "video", "audio", "iframe"],
         "description": "Type of media to embed"
       },
       "source_url": {
@@ -224,20 +431,12 @@
       },
       "execution_context": {
         "type": "string",
-        "enum": [
-          "isolated",
-          "page",
-          "privileged"
-        ],
+        "enum": ["isolated", "page", "privileged"],
         "description": "Context for script execution"
       },
       "takeover_type": {
         "type": "string",
-        "enum": [
-          "fullscreen",
-          "modal",
-          "overlay"
-        ],
+        "enum": ["fullscreen", "modal", "overlay"],
         "description": "Type of screen takeover"
       },
       "duration": {
@@ -280,8 +479,6 @@
         "description": "Accessibility attributes"
       }
     },
-    "required": [
-      "element_type"
-    ]
+    "required": ["element_type"]
   }
 }

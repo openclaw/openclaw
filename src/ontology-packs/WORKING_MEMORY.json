@@ -1,0 +1,51 @@
+{
+  "pack_id": "openclawd.WORKING_MEMORY",
+  "pack_version": "1.0.0",
+  "stage_id": "WORKING_MEMORY",
+  "description": "Memory routing state where working memory layer is loaded.",
+  "thresholds": {
+    "min_confidence_T": 1,
+    "dominance_margin_Delta": 0
+  },
+  "field_schema": {},
+  "scoring": {
+    "enableSemantic": false
+  },
+  "contracts": [
+    {
+      "contract_id": "WORKING_MEMORY",
+      "risk_class": "LOW",
+      "required_fields": [],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": [],
+      "canonicalPhrases": ["working memory"],
+      "keywordWeights": {
+        "working": 1.0,
+        "memory": 0.9,
+        "context": 0.8,
+        "active": 0.7,
+        "buffer": 0.6,
+        "temporary": 0.6,
+        "current": 0.5
+      },
+      "synonymPhrases": {
+        "working": ["active", "in-progress", "current"],
+        "memory": ["context", "buffer", "state"],
+        "active": ["live", "current", "running"],
+        "context": ["working-set", "session", "environment"],
+        "buffer": ["cache", "scratchpad", "transient"],
+        "temporary": ["ephemeral", "short-term", "transient"],
+        "current": ["active", "live", "present"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
+    }
+  ]
+}

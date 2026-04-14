@@ -36,26 +36,20 @@
     "require_capability_declaration": true
   },
   "decision_record_requirements": {
-    "mandatory_fields": [
-      "nextCronTask",
-      "ledger_verification",
-      "task_committed_at"
-    ],
-    "immutable_fields": [
-      "nextCronTask"
-    ],
+    "mandatory_fields": ["nextCronTask", "ledger_verification", "task_committed_at"],
+    "immutable_fields": ["nextCronTask"],
     "persistence": "permanent"
   },
   "failure_mode": "escalate_on_validation_failure",
+  "scoring": {
+    "enableSemantic": false
+  },
   "contracts": [
     {
       "contract_id": "CRON_PREFLIGHT_VALIDATE",
       "risk_class": "CRITICAL",
       "description": "Validate ledger state and select cron task",
-      "required_fields": [
-        "ledger_path",
-        "cron_task_id"
-      ],
+      "required_fields": ["ledger_path", "cron_task_id"],
       "limits": {
         "maxRetries": 0,
         "timeoutMs": 10000,
@@ -64,14 +58,34 @@
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": [
-        "critical_opt_in"
-      ],
+      "capability_requirements": ["critical_opt_in"],
       "escalation_conditions": [
         "ledger_verification_failed",
         "task_selection_ambiguous",
         "task_not_in_enum"
-      ]
+      ],
+      "canonicalPhrases": ["preflight cron validation"],
+      "keywordWeights": {
+        "preflight": 1.0,
+        "cron": 0.9,
+        "validate": 0.8,
+        "ledger": 0.8,
+        "task": 0.6
+      },
+      "synonymPhrases": {
+        "preflight": ["pre-flight", "pre flight", "precheck"],
+        "cron": ["scheduled", "periodic", "recurring"],
+        "validate": ["verify", "check", "confirm"],
+        "ledger": ["log", "record", "audit"],
+        "task": ["job", "operation", "work"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -102,9 +116,6 @@
         "description": "Selected cron task from closed enum"
       }
     },
-    "required": [
-      "ledger_path",
-      "cron_task_id"
-    ]
+    "required": ["ledger_path", "cron_task_id"]
   }
 }

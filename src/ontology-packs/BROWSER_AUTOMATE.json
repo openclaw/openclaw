@@ -3,6 +3,9 @@
   "pack_version": "1.0.0",
   "stage_id": "BROWSER_AUTOMATE",
   "description": "Governs automated browser interactions including navigation, DOM manipulation, and form submissions. Controls access to sensitive browser capabilities like credential input and script execution.",
+  "scoring": {
+    "enableSemantic": false
+  },
   "thresholds": {
     "min_confidence_T": 0,
     "dominance_margin_Delta": 0
@@ -11,195 +14,566 @@
     {
       "contract_id": "BROWSER_NAVIGATE_PUBLIC",
       "risk_class": "LOW",
-      "required_fields": [
-        "url"
-      ],
+      "required_fields": ["url"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "navigate to url",
+        "open page",
+        "go to website",
+        "load url",
+        "visit page"
+      ],
+      "keywordWeights": {
+        "navigate": 1.0,
+        "url": 0.9,
+        "open": 0.7,
+        "page": 0.6,
+        "website": 0.8,
+        "visit": 0.7,
+        "load": 0.6,
+        "browse": 0.7,
+        "go": 0.5
+      },
+      "synonymPhrases": {
+        "navigate to url": ["go to url", "open url", "visit url", "load page"],
+        "open page": ["browse to page", "access page", "visit page"],
+        "website": ["site", "web page", "webpage", "url"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_SCREENSHOT",
       "risk_class": "LOW",
-      "required_fields": [
-        "action"
-      ],
+      "required_fields": ["action"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "take screenshot",
+        "capture screenshot",
+        "screenshot page",
+        "capture page image",
+        "take page snapshot"
+      ],
+      "keywordWeights": {
+        "screenshot": 1.0,
+        "capture": 0.8,
+        "snapshot": 0.8,
+        "image": 0.6,
+        "page": 0.5,
+        "take": 0.5,
+        "screen": 0.7
+      },
+      "synonymPhrases": {
+        "screenshot": ["screen capture", "page capture", "page snapshot"],
+        "capture": ["take", "grab", "save"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_READ_DOM",
       "risk_class": "LOW",
-      "required_fields": [
-        "selectors"
-      ],
+      "required_fields": ["selectors"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "read dom element",
+        "get element content",
+        "extract page content",
+        "read page html",
+        "get dom node"
+      ],
+      "keywordWeights": {
+        "dom": 1.0,
+        "read": 0.8,
+        "element": 0.9,
+        "content": 0.7,
+        "html": 0.8,
+        "selector": 0.9,
+        "extract": 0.7,
+        "node": 0.7,
+        "get": 0.5
+      },
+      "synonymPhrases": {
+        "read dom element": ["get element", "fetch element", "extract element"],
+        "dom": ["html", "document", "page structure"],
+        "selector": ["css selector", "xpath", "query selector"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_CLICK_ELEMENT",
       "risk_class": "LOW",
-      "required_fields": [
-        "action",
-        "selectors"
-      ],
+      "required_fields": ["action", "selectors"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "click element",
+        "click button",
+        "click link",
+        "tap element",
+        "click on selector"
+      ],
+      "keywordWeights": {
+        "click": 1.0,
+        "tap": 0.8,
+        "element": 0.8,
+        "button": 0.9,
+        "link": 0.8,
+        "selector": 0.7,
+        "press": 0.7,
+        "select": 0.6
+      },
+      "synonymPhrases": {
+        "click element": ["press element", "activate element", "trigger element"],
+        "click button": ["press button", "submit button", "activate button"],
+        "click link": ["follow link", "activate link", "open link"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_TYPE_TEXT",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "action",
-        "selectors",
-        "text_content"
-      ],
+      "required_fields": ["action", "selectors", "text_content"],
       "limits": {
         "max_text_length": 10000
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "type text into field",
+        "enter text in input",
+        "fill in text field",
+        "input text value",
+        "type into element"
+      ],
+      "keywordWeights": {
+        "type": 1.0,
+        "text": 0.9,
+        "input": 0.9,
+        "field": 0.8,
+        "fill": 0.8,
+        "enter": 0.8,
+        "write": 0.7,
+        "value": 0.6,
+        "content": 0.6
+      },
+      "synonymPhrases": {
+        "type text into field": ["enter text in field", "fill text field", "input text"],
+        "field": ["input", "text box", "form field", "text area"],
+        "type": ["enter", "fill in", "write", "input"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_SUBMIT_FORM",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "action",
-        "form_selector"
-      ],
+      "required_fields": ["action", "form_selector"],
       "limits": {
         "allowed_domains": []
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "submit form",
+        "submit web form",
+        "submit page form",
+        "send form data",
+        "submit form submission"
+      ],
+      "keywordWeights": {
+        "submit": 1.0,
+        "form": 1.0,
+        "send": 0.7,
+        "data": 0.6,
+        "post": 0.7,
+        "web": 0.5,
+        "page": 0.5
+      },
+      "synonymPhrases": {
+        "submit form": ["send form", "post form", "submit web form"],
+        "form": ["web form", "html form", "form element"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_DOWNLOAD_FILE",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "action",
-        "download_url"
-      ],
+      "required_fields": ["action", "download_url"],
       "limits": {
         "max_file_size_mb": 100,
         "allowed_extensions": []
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "download file from browser",
+        "download file via browser",
+        "browser download file",
+        "download resource from url",
+        "save file from browser"
+      ],
+      "keywordWeights": {
+        "download": 1.0,
+        "file": 0.9,
+        "browser": 0.7,
+        "url": 0.7,
+        "resource": 0.7,
+        "save": 0.6,
+        "fetch": 0.6
+      },
+      "synonymPhrases": {
+        "download file": ["save file", "fetch file", "retrieve file"],
+        "browser": ["web browser", "browser session"],
+        "resource": ["file", "asset", "document"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_MULTI_TAB",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "action",
-        "tab_count"
-      ],
+      "required_fields": ["action", "tab_count"],
       "limits": {
         "max_tabs": 5
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "open multiple tabs",
+        "manage browser tabs",
+        "open new tab",
+        "switch browser tab",
+        "multi-tab browser session"
+      ],
+      "keywordWeights": {
+        "tab": 1.0,
+        "tabs": 1.0,
+        "multi-tab": 1.0,
+        "browser": 0.7,
+        "open": 0.6,
+        "manage": 0.6,
+        "switch": 0.7,
+        "new": 0.5,
+        "multiple": 0.7
+      },
+      "synonymPhrases": {
+        "tabs": ["browser tabs", "tab windows"],
+        "open multiple tabs": ["create multiple tabs", "launch multiple tabs"],
+        "switch browser tab": ["change tab", "navigate to tab", "activate tab"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_UPLOAD_FILE",
       "risk_class": "HIGH",
-      "required_fields": [
-        "action",
-        "selectors",
-        "file_path"
-      ],
+      "required_fields": ["action", "selectors", "file_path"],
       "limits": {
         "max_file_size_mb": 50,
         "allowed_extensions": []
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "upload file via browser",
+        "browser file upload",
+        "attach file in browser",
+        "upload file to website",
+        "send file through browser"
+      ],
+      "keywordWeights": {
+        "upload": 1.0,
+        "file": 0.9,
+        "browser": 0.7,
+        "attach": 0.8,
+        "send": 0.6,
+        "website": 0.6,
+        "path": 0.7
+      },
+      "synonymPhrases": {
+        "upload file": ["attach file", "send file", "submit file"],
+        "browser": ["web browser", "browser session"],
+        "attach": ["upload", "include", "add file"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_RUN_JS",
       "risk_class": "HIGH",
-      "required_fields": [
-        "action",
-        "script_content"
-      ],
+      "required_fields": ["action", "script_content"],
       "limits": {
         "max_script_length": 5000,
         "execution_timeout_ms": 10000
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run javascript in browser",
+        "execute javascript script",
+        "evaluate javascript code",
+        "run js in page context",
+        "execute script in browser"
+      ],
+      "keywordWeights": {
+        "javascript": 1.0,
+        "js": 1.0,
+        "script": 0.9,
+        "execute": 0.9,
+        "run": 0.8,
+        "eval": 0.9,
+        "evaluate": 0.8,
+        "browser": 0.7,
+        "code": 0.7,
+        "page": 0.5
+      },
+      "synonymPhrases": {
+        "run javascript": ["execute javascript", "eval javascript", "run js", "execute js"],
+        "browser": ["browser context", "page context", "web page"],
+        "script": ["javascript", "js code", "code snippet"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_ACCESS_COOKIES",
       "risk_class": "HIGH",
-      "required_fields": [
-        "action",
-        "cookie_scope"
-      ],
+      "required_fields": ["action", "cookie_scope"],
       "limits": {
         "allowed_domains": []
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "access browser cookies",
+        "read browser cookies",
+        "write browser cookies",
+        "delete browser cookies",
+        "manage cookies in browser"
+      ],
+      "keywordWeights": {
+        "cookies": 1.0,
+        "cookie": 1.0,
+        "browser": 0.7,
+        "access": 0.8,
+        "read": 0.7,
+        "write": 0.7,
+        "delete": 0.7,
+        "manage": 0.6,
+        "session": 0.7,
+        "storage": 0.6
+      },
+      "synonymPhrases": {
+        "cookies": ["browser cookies", "http cookies", "session cookies"],
+        "access cookies": ["read cookies", "get cookies", "retrieve cookies"],
+        "write cookies": ["set cookies", "store cookies", "save cookies"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_NAVIGATE_AUTHENTICATED",
       "risk_class": "HIGH",
-      "required_fields": [
-        "url",
-        "auth_context"
-      ],
+      "required_fields": ["url", "auth_context"],
       "limits": {
         "session_timeout_minutes": 30
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "navigate with authentication",
+        "access authenticated page",
+        "browse with session auth",
+        "navigate authenticated url",
+        "visit page with credentials"
+      ],
+      "keywordWeights": {
+        "authenticated": 1.0,
+        "auth": 1.0,
+        "navigate": 0.8,
+        "session": 0.8,
+        "credentials": 0.9,
+        "login": 0.8,
+        "secure": 0.7,
+        "url": 0.6,
+        "page": 0.5,
+        "access": 0.6
+      },
+      "synonymPhrases": {
+        "authenticated": ["auth", "logged in", "with credentials", "with session"],
+        "navigate": ["go to", "visit", "access", "browse to"],
+        "credentials": ["auth context", "session token", "login info"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_TYPE_PASSWORD",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "action",
-        "selectors",
-        "credential_ref"
-      ],
+      "required_fields": ["action", "selectors", "credential_ref"],
       "limits": {
         "requires_secure_context": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "type password into field",
+        "enter password credential",
+        "input password in browser",
+        "fill password field",
+        "enter credential password"
+      ],
+      "keywordWeights": {
+        "password": 1.0,
+        "credential": 1.0,
+        "type": 0.8,
+        "enter": 0.8,
+        "input": 0.8,
+        "fill": 0.7,
+        "secure": 0.7,
+        "field": 0.7,
+        "secret": 0.8
+      },
+      "synonymPhrases": {
+        "password": ["credential", "secret", "passphrase", "auth password"],
+        "type password": ["enter password", "fill password", "input password"],
+        "credential": ["password", "credentials", "login password", "credential ref"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "BROWSER_BYPASS_SECURITY",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "action",
-        "bypass_type",
-        "justification"
-      ],
+      "required_fields": ["action", "bypass_type", "justification"],
       "limits": {
         "requires_audit": true,
         "max_duration_minutes": 5
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "bypass browser security",
+        "ignore ssl certificate warning",
+        "bypass same-origin policy",
+        "override security restriction",
+        "bypass popup blocker"
+      ],
+      "keywordWeights": {
+        "bypass": 1.0,
+        "security": 1.0,
+        "ssl": 0.9,
+        "same-origin": 0.9,
+        "override": 0.8,
+        "ignore": 0.8,
+        "certificate": 0.8,
+        "restriction": 0.7,
+        "popup": 0.7,
+        "warning": 0.7,
+        "justification": 0.7
+      },
+      "synonymPhrases": {
+        "bypass security": ["override security", "disable security", "ignore security"],
+        "ssl": ["ssl warning", "certificate warning", "tls error"],
+        "same-origin": ["same origin policy", "cors bypass", "cross-origin"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -261,12 +635,7 @@
       },
       "cookie_scope": {
         "type": "string",
-        "enum": [
-          "read",
-          "write",
-          "delete",
-          "all"
-        ],
+        "enum": ["read", "write", "delete", "all"],
         "description": "Scope of cookie access"
       },
       "auth_context": {
@@ -287,11 +656,7 @@
       },
       "bypass_type": {
         "type": "string",
-        "enum": [
-          "ssl_warning",
-          "popup_blocker",
-          "same_origin"
-        ],
+        "enum": ["ssl_warning", "popup_blocker", "same_origin"],
         "description": "Type of security bypass requested"
       },
       "justification": {
@@ -335,8 +700,6 @@
         "description": "Action timeout in milliseconds"
       }
     },
-    "required": [
-      "action"
-    ]
+    "required": ["action"]
   }
 }

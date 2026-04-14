@@ -7,147 +7,396 @@
     "min_confidence_T": 0,
     "dominance_margin_Delta": 0
   },
+  "scoring": {
+    "enableSemantic": false
+  },
   "contracts": [
     {
       "contract_id": "SPAWN_READONLY_AGENT",
       "risk_class": "LOW",
-      "required_fields": [
-        "agent_type"
-      ],
+      "required_fields": ["agent_type"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn read-only agent",
+        "create read-only agent",
+        "launch readonly agent",
+        "start read only agent"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "readonly": 1.0,
+        "read-only": 1.0,
+        "agent": 0.8,
+        "create": 0.7,
+        "launch": 0.7,
+        "start": 0.6
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "readonly": ["read-only", "non-writing", "safe"],
+        "agent": ["subagent", "worker", "instance"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_EPHEMERAL_WORKER",
       "risk_class": "LOW",
-      "required_fields": [
-        "agent_type",
-        "ttl_seconds"
-      ],
+      "required_fields": ["agent_type", "ttl_seconds"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn ephemeral worker",
+        "create ephemeral agent",
+        "launch short-lived agent",
+        "start temporary worker"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "ephemeral": 1.0,
+        "worker": 0.9,
+        "temporary": 0.9,
+        "short-lived": 0.9,
+        "agent": 0.7,
+        "create": 0.6,
+        "ttl": 0.8
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "ephemeral": ["temporary", "short-lived", "transient"],
+        "worker": ["agent", "subagent", "task"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_SANDBOXED_AGENT",
       "risk_class": "LOW",
-      "required_fields": [
-        "agent_type",
-        "sandbox_profile"
-      ],
+      "required_fields": ["agent_type", "sandbox_profile"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn sandboxed agent",
+        "create sandboxed agent",
+        "launch agent in sandbox",
+        "start isolated agent"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "sandboxed": 1.0,
+        "sandbox": 1.0,
+        "isolated": 0.9,
+        "agent": 0.8,
+        "create": 0.6,
+        "profile": 0.7,
+        "restricted": 0.7
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "sandboxed": ["isolated", "contained", "restricted"],
+        "sandbox": ["isolation", "container", "jail"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_WITH_RESOURCE_LIMITS",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "agent_type",
-        "resource_quota"
-      ],
+      "required_fields": ["agent_type", "resource_quota"],
       "limits": {
         "max_memory_mb": 512,
         "max_cpu_percent": 25
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn agent with resource limits",
+        "create agent with resource quota",
+        "launch resource-constrained agent",
+        "start agent with memory limits"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "resource": 1.0,
+        "limits": 0.9,
+        "quota": 0.9,
+        "constrained": 0.8,
+        "memory": 0.8,
+        "cpu": 0.8,
+        "agent": 0.7,
+        "create": 0.6
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "resource": ["memory", "cpu", "quota"],
+        "limits": ["quota", "cap", "constraints"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_PERSISTENT_AGENT",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "agent_type",
-        "persistence_scope"
-      ],
+      "required_fields": ["agent_type", "persistence_scope"],
       "limits": {
         "max_lifetime_hours": 24
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn persistent agent",
+        "create long-running agent",
+        "launch persistent subagent",
+        "start agent with persistence"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "persistent": 1.0,
+        "persistence": 1.0,
+        "long-running": 0.9,
+        "agent": 0.8,
+        "scope": 0.7,
+        "durable": 0.8,
+        "create": 0.6
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "persistent": ["long-running", "durable", "permanent"],
+        "persistence": ["durability", "lifetime", "scope"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_NETWORKED_AGENT",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "agent_type",
-        "network_policy"
-      ],
+      "required_fields": ["agent_type", "network_policy"],
       "limits": {
-        "allowed_outbound_ports": [
-          80,
-          443
-        ]
+        "allowed_outbound_ports": [80, 443]
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn networked agent",
+        "create agent with network access",
+        "launch agent with outbound access",
+        "start network-enabled agent"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "networked": 1.0,
+        "network": 1.0,
+        "outbound": 0.9,
+        "agent": 0.8,
+        "access": 0.7,
+        "policy": 0.7,
+        "create": 0.6
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "networked": ["network-enabled", "connected", "online"],
+        "network": ["outbound", "internet", "connectivity"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_WITH_CREDENTIAL_ACCESS",
       "risk_class": "HIGH",
-      "required_fields": [
-        "agent_type",
-        "credential_scope"
-      ],
+      "required_fields": ["agent_type", "credential_scope"],
       "limits": {
         "credential_ttl_minutes": 60
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn agent with credential access",
+        "create agent with credentials",
+        "launch agent with secret access",
+        "start credentialed agent"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "credential": 1.0,
+        "credentials": 1.0,
+        "credentialed": 0.9,
+        "secret": 0.9,
+        "access": 0.8,
+        "scope": 0.7,
+        "agent": 0.7,
+        "create": 0.6
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "credential": ["secret", "token", "key"],
+        "access": ["scope", "permission", "rights"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_ELEVATED_AGENT",
       "risk_class": "HIGH",
-      "required_fields": [
-        "agent_type",
-        "elevation_level",
-        "justification"
-      ],
+      "required_fields": ["agent_type", "elevation_level", "justification"],
       "limits": {
         "max_elevation": 2
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn elevated agent",
+        "create agent with elevated privileges",
+        "launch elevated subagent",
+        "start agent with elevation"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "elevated": 1.0,
+        "elevation": 1.0,
+        "privileges": 0.9,
+        "privileged": 0.9,
+        "justification": 0.8,
+        "agent": 0.7,
+        "create": 0.6
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "elevated": ["privileged", "escalated", "elevated-privilege"],
+        "justification": ["reason", "rationale", "explanation"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_PRIVILEGED_AGENT",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "agent_type",
-        "privilege_set",
-        "authorization"
-      ],
+      "required_fields": ["agent_type", "privilege_set", "authorization"],
       "limits": {
         "requires_approval": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn privileged agent",
+        "create agent with full privileges",
+        "launch privileged subagent",
+        "start fully privileged agent"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "privileged": 1.0,
+        "privilege": 1.0,
+        "authorization": 0.9,
+        "approval": 0.9,
+        "agent": 0.7,
+        "full": 0.7,
+        "create": 0.6
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "privileged": ["elevated", "root-level", "unrestricted"],
+        "authorization": ["approval", "token", "grant"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SPAWN_UNRESTRICTED_AGENT",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "agent_type",
-        "unrestricted_scope",
-        "emergency_override"
-      ],
+      "required_fields": ["agent_type", "unrestricted_scope", "emergency_override"],
       "limits": {
         "max_concurrent": 1,
         "requires_audit": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn unrestricted agent",
+        "create agent with no restrictions",
+        "launch unrestricted subagent",
+        "start agent with emergency override"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "unrestricted": 1.0,
+        "emergency": 1.0,
+        "override": 0.9,
+        "audit": 0.8,
+        "agent": 0.7,
+        "scope": 0.7,
+        "create": 0.6
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "launch", "start"],
+        "unrestricted": ["unconstrained", "unlimited", "unconfined"],
+        "emergency": ["override", "bypass", "escalate"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -169,11 +418,7 @@
       },
       "sandbox_profile": {
         "type": "string",
-        "enum": [
-          "strict",
-          "moderate",
-          "permissive"
-        ],
+        "enum": ["strict", "moderate", "permissive"],
         "description": "Sandbox isolation profile"
       },
       "resource_quota": {
@@ -193,11 +438,7 @@
       },
       "persistence_scope": {
         "type": "string",
-        "enum": [
-          "session",
-          "task",
-          "permanent"
-        ],
+        "enum": ["session", "task", "permanent"],
         "description": "How long agent state should persist"
       },
       "network_policy": {
@@ -265,8 +506,6 @@
         "description": "Maximum number of child agents this agent can spawn"
       }
     },
-    "required": [
-      "agent_type"
-    ]
+    "required": ["agent_type"]
   }
 }

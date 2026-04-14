@@ -7,232 +7,563 @@
     "min_confidence_T": 0,
     "dominance_margin_Delta": 0
   },
+  "scoring": {
+    "enableSemantic": false
+  },
   "contracts": [
     {
       "contract_id": "SHELL_RUN_READONLY",
       "risk_class": "LOW",
-      "required_fields": [
-        "command"
-      ],
+      "required_fields": ["command"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run read-only command",
+        "execute safe command",
+        "run command read only",
+        "safe shell command"
+      ],
+      "keywordWeights": {
+        "run": 0.8,
+        "read": 0.9,
+        "readonly": 1.0,
+        "safe": 0.7,
+        "execute": 0.8,
+        "command": 0.6
+      },
+      "synonymPhrases": {
+        "run": ["execute", "invoke", "launch"],
+        "read": ["inspect", "view", "show"],
+        "safe": ["non-destructive", "harmless", "benign"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_LIST_PROCESSES",
       "risk_class": "LOW",
-      "required_fields": [
-        "command"
-      ],
+      "required_fields": ["command"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "list processes",
+        "show running processes",
+        "list running processes",
+        "show process list"
+      ],
+      "keywordWeights": {
+        "list": 1.0,
+        "processes": 1.0,
+        "running": 0.8,
+        "show": 0.6,
+        "ps": 0.9,
+        "process": 0.9
+      },
+      "synonymPhrases": {
+        "list": ["show", "display", "enumerate"],
+        "processes": ["tasks", "jobs", "programs"],
+        "running": ["active", "live", "executing"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_PRINT_ENV",
       "risk_class": "LOW",
-      "required_fields": [
-        "command"
-      ],
+      "required_fields": ["command"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "print environment variables",
+        "show environment",
+        "print env",
+        "list environment variables"
+      ],
+      "keywordWeights": {
+        "print": 0.8,
+        "environment": 1.0,
+        "env": 1.0,
+        "variables": 0.9,
+        "show": 0.6,
+        "list": 0.5
+      },
+      "synonymPhrases": {
+        "print": ["show", "display", "dump"],
+        "environment": ["env", "variables", "settings"],
+        "variables": ["vars", "keys", "entries"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_RUN_BUILD_TOOL",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "command",
-        "cwd"
-      ],
+      "required_fields": ["command", "cwd"],
       "limits": {
-        "allowed_commands": [
-          "npm",
-          "yarn",
-          "pnpm",
-          "pip",
-          "cargo",
-          "go",
-          "make",
-          "gradle",
-          "mvn"
-        ],
+        "allowed_commands": ["npm", "yarn", "pnpm", "pip", "cargo", "go", "make", "gradle", "mvn"],
         "max_runtime_seconds": 600
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run build tool",
+        "build the project",
+        "compile the project",
+        "run npm build",
+        "run make",
+        "install dependencies"
+      ],
+      "keywordWeights": {
+        "build": 1.0,
+        "compile": 0.9,
+        "install": 0.8,
+        "npm": 0.9,
+        "yarn": 0.9,
+        "pnpm": 0.9,
+        "make": 0.8,
+        "cargo": 0.8,
+        "gradle": 0.8,
+        "mvn": 0.8,
+        "pip": 0.7,
+        "go": 0.6,
+        "dependencies": 0.7
+      },
+      "synonymPhrases": {
+        "build": ["compile", "assemble", "package"],
+        "install": ["add", "fetch", "download"],
+        "dependencies": ["packages", "modules", "libs"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_RUN_LINTER",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "command",
-        "cwd"
-      ],
+      "required_fields": ["command", "cwd"],
       "limits": {
-        "allowed_commands": [
-          "eslint",
-          "prettier",
-          "black",
-          "flake8",
-          "rubocop",
-          "clippy"
-        ]
+        "allowed_commands": ["eslint", "prettier", "black", "flake8", "rubocop", "clippy"]
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run linter",
+        "lint the code",
+        "run code formatter",
+        "check code style",
+        "run eslint",
+        "run prettier"
+      ],
+      "keywordWeights": {
+        "lint": 1.0,
+        "linter": 1.0,
+        "eslint": 0.9,
+        "prettier": 0.9,
+        "black": 0.8,
+        "flake8": 0.8,
+        "rubocop": 0.8,
+        "clippy": 0.8,
+        "format": 0.7,
+        "style": 0.6,
+        "code": 0.5
+      },
+      "synonymPhrases": {
+        "lint": ["check", "analyze", "scan"],
+        "format": ["style", "prettify", "normalize"],
+        "code": ["source", "files", "codebase"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_RUN_TEST",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "command",
-        "cwd"
-      ],
+      "required_fields": ["command", "cwd"],
       "limits": {
         "max_runtime_seconds": 300
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run tests",
+        "execute test suite",
+        "run unit tests",
+        "run integration tests",
+        "run test suite"
+      ],
+      "keywordWeights": {
+        "test": 1.0,
+        "tests": 1.0,
+        "suite": 0.8,
+        "unit": 0.7,
+        "integration": 0.7,
+        "run": 0.5,
+        "execute": 0.5,
+        "vitest": 0.8,
+        "jest": 0.8,
+        "spec": 0.6
+      },
+      "synonymPhrases": {
+        "test": ["spec", "check", "verify"],
+        "run": ["execute", "invoke", "launch"],
+        "suite": ["suite", "harness", "batch"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_SET_ENV",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "command",
-        "env"
-      ],
+      "required_fields": ["command", "env"],
       "limits": {
-        "forbidden_vars": [
-          "PATH",
-          "LD_PRELOAD",
-          "LD_LIBRARY_PATH"
-        ]
+        "forbidden_vars": ["PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"]
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "set environment variable",
+        "set env var",
+        "export environment variable",
+        "configure environment"
+      ],
+      "keywordWeights": {
+        "set": 0.9,
+        "env": 1.0,
+        "environment": 1.0,
+        "variable": 0.9,
+        "export": 0.8,
+        "configure": 0.6,
+        "var": 0.8
+      },
+      "synonymPhrases": {
+        "set": ["assign", "define", "configure"],
+        "environment": ["env", "context", "shell"],
+        "variable": ["var", "key", "setting"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_RUN_WITH_ARGS",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "command",
-        "args"
-      ],
+      "required_fields": ["command", "args"],
       "limits": {
         "max_args": 50,
         "max_arg_length": 1000
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run command with arguments",
+        "execute command with args",
+        "run with flags",
+        "run command with flags"
+      ],
+      "keywordWeights": {
+        "args": 1.0,
+        "arguments": 1.0,
+        "flags": 0.9,
+        "parameters": 0.8,
+        "options": 0.7,
+        "run": 0.5,
+        "execute": 0.5,
+        "command": 0.5
+      },
+      "synonymPhrases": {
+        "args": ["arguments", "flags", "parameters"],
+        "run": ["execute", "invoke", "call"],
+        "flags": ["options", "switches", "parameters"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_PIPE_COMMANDS",
       "risk_class": "HIGH",
-      "required_fields": [
-        "command",
-        "pipeline"
-      ],
+      "required_fields": ["command", "pipeline"],
       "limits": {
         "max_pipe_stages": 5
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "pipe commands together",
+        "run piped commands",
+        "chain commands with pipe",
+        "execute command pipeline"
+      ],
+      "keywordWeights": {
+        "pipe": 1.0,
+        "pipeline": 1.0,
+        "chain": 0.8,
+        "piped": 0.9,
+        "commands": 0.7,
+        "stdin": 0.6,
+        "stdout": 0.6
+      },
+      "synonymPhrases": {
+        "pipe": ["chain", "connect", "link"],
+        "pipeline": ["chain", "sequence", "composition"],
+        "commands": ["programs", "tools", "executables"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_RUN_ARBITRARY",
       "risk_class": "HIGH",
-      "required_fields": [
-        "command",
-        "justification"
-      ],
+      "required_fields": ["command", "justification"],
       "limits": {
         "max_runtime_seconds": 60,
         "requires_sandbox": true
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run arbitrary command",
+        "execute arbitrary shell command",
+        "run unconstrained command",
+        "execute any command"
+      ],
+      "keywordWeights": {
+        "arbitrary": 1.0,
+        "unconstrained": 0.9,
+        "any": 0.7,
+        "justification": 0.8,
+        "sandbox": 0.7,
+        "custom": 0.6,
+        "command": 0.5
+      },
+      "synonymPhrases": {
+        "arbitrary": ["unconstrained", "custom", "freeform"],
+        "justification": ["reason", "rationale", "explanation"],
+        "sandbox": ["isolated", "contained", "restricted"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_BACKGROUND_PROCESS",
       "risk_class": "HIGH",
-      "required_fields": [
-        "command",
-        "daemon_mode"
-      ],
+      "required_fields": ["command", "daemon_mode"],
       "limits": {
         "max_background_processes": 3,
         "max_lifetime_hours": 24
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run background process",
+        "start background process",
+        "run as daemon",
+        "start daemon process"
+      ],
+      "keywordWeights": {
+        "background": 1.0,
+        "daemon": 1.0,
+        "process": 0.8,
+        "detached": 0.8,
+        "nohup": 0.9,
+        "start": 0.5,
+        "run": 0.4
+      },
+      "synonymPhrases": {
+        "background": ["detached", "daemon", "long-running"],
+        "daemon": ["service", "background", "detached"],
+        "process": ["job", "task", "program"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_KILL_PROCESS",
       "risk_class": "HIGH",
-      "required_fields": [
-        "command",
-        "pid",
-        "signal"
-      ],
+      "required_fields": ["command", "pid", "signal"],
       "limits": {
-        "allowed_signals": [
-          "SIGTERM",
-          "SIGINT",
-          "SIGHUP"
-        ]
+        "allowed_signals": ["SIGTERM", "SIGINT", "SIGHUP"]
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "kill process",
+        "terminate process",
+        "send signal to process",
+        "stop process by pid"
+      ],
+      "keywordWeights": {
+        "kill": 1.0,
+        "terminate": 1.0,
+        "signal": 0.9,
+        "pid": 1.0,
+        "stop": 0.7,
+        "sigterm": 0.8,
+        "sigint": 0.8,
+        "sighup": 0.7,
+        "process": 0.6
+      },
+      "synonymPhrases": {
+        "kill": ["terminate", "stop", "end"],
+        "process": ["job", "task", "program"],
+        "signal": ["sigterm", "sigint", "sighup"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_RUN_SUDO",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "command",
-        "allows_sudo",
-        "justification"
-      ],
+      "required_fields": ["command", "allows_sudo", "justification"],
       "limits": {
         "requires_approval": true,
         "audit_all": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run command as sudo",
+        "execute with sudo",
+        "run with elevated privileges",
+        "run as root"
+      ],
+      "keywordWeights": {
+        "sudo": 1.0,
+        "root": 0.9,
+        "elevated": 0.9,
+        "privilege": 0.9,
+        "privileges": 0.9,
+        "superuser": 0.8,
+        "admin": 0.7,
+        "justification": 0.6
+      },
+      "synonymPhrases": {
+        "sudo": ["root", "superuser", "elevated"],
+        "elevated": ["privileged", "admin", "root"],
+        "privilege": ["permissions", "rights", "access"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "SHELL_MODIFY_SYSTEM",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "command",
-        "system_scope",
-        "authorization"
-      ],
+      "required_fields": ["command", "system_scope", "authorization"],
       "limits": {
-        "forbidden_paths": [
-          "/etc",
-          "/usr",
-          "/bin",
-          "/sbin"
-        ],
+        "forbidden_paths": ["/etc", "/usr", "/bin", "/sbin"],
         "requires_rollback_plan": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "modify system configuration",
+        "change system settings",
+        "system-level modification",
+        "modify system services"
+      ],
+      "keywordWeights": {
+        "modify": 1.0,
+        "system": 1.0,
+        "configuration": 0.9,
+        "settings": 0.8,
+        "services": 0.8,
+        "packages": 0.7,
+        "network": 0.7,
+        "kernel": 0.9,
+        "authorization": 0.7,
+        "rollback": 0.6
+      },
+      "synonymPhrases": {
+        "modify": ["change", "update", "configure"],
+        "system": ["os", "host", "machine"],
+        "configuration": ["config", "settings", "setup"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -288,25 +619,12 @@
       },
       "signal": {
         "type": "string",
-        "enum": [
-          "SIGTERM",
-          "SIGINT",
-          "SIGKILL",
-          "SIGHUP",
-          "SIGUSR1",
-          "SIGUSR2"
-        ],
+        "enum": ["SIGTERM", "SIGINT", "SIGKILL", "SIGHUP", "SIGUSR1", "SIGUSR2"],
         "description": "Signal to send to process"
       },
       "system_scope": {
         "type": "string",
-        "enum": [
-          "services",
-          "packages",
-          "network",
-          "users",
-          "kernel"
-        ],
+        "enum": ["services", "packages", "network", "users", "kernel"],
         "description": "Category of system modification"
       },
       "authorization": {
@@ -325,13 +643,7 @@
       },
       "shell": {
         "type": "string",
-        "enum": [
-          "bash",
-          "sh",
-          "zsh",
-          "powershell",
-          "cmd"
-        ],
+        "enum": ["bash", "sh", "zsh", "powershell", "cmd"],
         "description": "Shell to use for execution"
       },
       "interactive": {
@@ -340,8 +652,6 @@
         "description": "Whether command requires interactive input"
       }
     },
-    "required": [
-      "command"
-    ]
+    "required": ["command"]
   }
 }

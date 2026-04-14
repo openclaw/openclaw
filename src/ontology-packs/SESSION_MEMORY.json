@@ -1,0 +1,48 @@
+{
+  "pack_id": "openclawd.SESSION_MEMORY",
+  "pack_version": "1.0.0",
+  "stage_id": "SESSION_MEMORY",
+  "description": "Memory routing state where session memory layer is loaded.",
+  "thresholds": {
+    "min_confidence_T": 1,
+    "dominance_margin_Delta": 0
+  },
+  "field_schema": {},
+  "scoring": {
+    "enableSemantic": false
+  },
+  "contracts": [
+    {
+      "contract_id": "SESSION_MEMORY",
+      "risk_class": "LOW",
+      "required_fields": [],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": [],
+      "canonicalPhrases": ["session memory"],
+      "keywordWeights": {
+        "session": 1.0,
+        "memory": 0.9,
+        "context": 0.7,
+        "active": 0.6,
+        "temporary": 0.5,
+        "state": 0.5,
+        "current": 0.4
+      },
+      "synonymPhrases": {
+        "session": ["current session", "active session", "running session"],
+        "memory": ["memory layer", "session memory", "recall"],
+        "context": ["session context", "working context"],
+        "temporary": ["short-term", "ephemeral", "transient"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
+    }
+  ]
+}

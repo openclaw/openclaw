@@ -1,0 +1,45 @@
+{
+  "pack_id": "openclawd.NO_MEMORY",
+  "pack_version": "1.0.0",
+  "stage_id": "NO_MEMORY",
+  "description": "Memory routing state where no memory layers are loaded.",
+  "scoring": {
+    "enableSemantic": false
+  },
+  "thresholds": {
+    "min_confidence_T": 1,
+    "dominance_margin_Delta": 0
+  },
+  "field_schema": {},
+  "contracts": [
+    {
+      "contract_id": "NO_MEMORY",
+      "risk_class": "LOW",
+      "required_fields": [],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": [],
+      "canonicalPhrases": ["no memory"],
+      "keywordWeights": {
+        "stateless": 1.0,
+        "no-memory": 0.9,
+        "ephemeral": 0.8,
+        "fresh": 0.7,
+        "reset": 0.6
+      },
+      "synonymPhrases": {
+        "stateless": ["no memory", "without memory", "memory-free"],
+        "no-memory": ["zero memory", "empty memory", "no memory state"],
+        "ephemeral": ["transient", "temporary", "non-persistent"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
+    }
+  ]
+}

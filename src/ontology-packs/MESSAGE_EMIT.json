@@ -3,6 +3,9 @@
   "pack_version": "1.0.0",
   "stage_id": "MESSAGE_EMIT",
   "description": "Controls outbound message emission to users, systems, and external channels. Governs content filtering, rate limiting, and delivery confirmation.",
+  "scoring": {
+    "enableSemantic": false
+  },
   "thresholds": {
     "min_confidence_T": 0,
     "dominance_margin_Delta": 0
@@ -11,170 +14,439 @@
     {
       "contract_id": "EMIT_LOG_MESSAGE",
       "risk_class": "LOW",
-      "required_fields": [
-        "message_type",
-        "content"
-      ],
+      "required_fields": ["message_type", "content"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "log a message",
+        "emit log message",
+        "write log entry",
+        "log this message"
+      ],
+      "keywordWeights": {
+        "log": 1.0,
+        "message": 0.8,
+        "emit": 0.7,
+        "write": 0.6,
+        "entry": 0.5
+      },
+      "synonymPhrases": {
+        "log": ["record", "write", "trace"],
+        "message": ["text", "content", "output"],
+        "emit": ["send", "dispatch", "publish"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_INTERNAL_EVENT",
       "risk_class": "LOW",
-      "required_fields": [
-        "event_type",
-        "payload"
-      ],
+      "required_fields": ["event_type", "payload"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit internal event",
+        "fire internal event",
+        "raise internal event",
+        "dispatch internal event"
+      ],
+      "keywordWeights": {
+        "emit": 1.0,
+        "internal": 0.9,
+        "event": 0.9,
+        "fire": 0.7,
+        "raise": 0.6,
+        "dispatch": 0.6
+      },
+      "synonymPhrases": {
+        "emit": ["fire", "raise", "dispatch", "trigger"],
+        "internal": ["system", "local", "private"],
+        "event": ["signal", "notification", "trigger"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_STATUS_UPDATE",
       "risk_class": "LOW",
-      "required_fields": [
-        "status_type",
-        "content"
-      ],
+      "required_fields": ["status_type", "content"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit status update",
+        "send status update",
+        "push status update",
+        "report status"
+      ],
+      "keywordWeights": {
+        "status": 1.0,
+        "update": 0.9,
+        "emit": 0.7,
+        "send": 0.6,
+        "report": 0.6,
+        "progress": 0.5
+      },
+      "synonymPhrases": {
+        "status": ["state", "progress", "condition"],
+        "update": ["report", "notify", "inform"],
+        "emit": ["send", "push", "dispatch"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_USER_RESPONSE",
       "risk_class": "LOW",
-      "required_fields": [
-        "recipient_id",
-        "content"
-      ],
+      "required_fields": ["recipient_id", "content"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit user response",
+        "send user response",
+        "reply to user",
+        "send reply to user"
+      ],
+      "keywordWeights": {
+        "user": 1.0,
+        "response": 0.9,
+        "reply": 0.9,
+        "emit": 0.7,
+        "send": 0.6,
+        "message": 0.5
+      },
+      "synonymPhrases": {
+        "user": ["recipient", "client", "person"],
+        "response": ["reply", "answer", "message"],
+        "emit": ["send", "deliver", "dispatch"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_BATCH_MESSAGES",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "recipients",
-        "content"
-      ],
+      "required_fields": ["recipients", "content"],
       "limits": {
         "max_recipients": 100,
         "rate_per_minute": 60
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit batch messages",
+        "send batch messages",
+        "send messages to multiple recipients",
+        "bulk send messages"
+      ],
+      "keywordWeights": {
+        "batch": 1.0,
+        "bulk": 0.9,
+        "multiple": 0.7,
+        "messages": 0.8,
+        "emit": 0.6,
+        "send": 0.5
+      },
+      "synonymPhrases": {
+        "batch": ["bulk", "multiple", "group"],
+        "messages": ["notifications", "alerts", "posts"],
+        "emit": ["send", "dispatch", "deliver"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_WEBHOOK_PAYLOAD",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "webhook_url",
-        "payload"
-      ],
+      "required_fields": ["webhook_url", "payload"],
       "limits": {
         "max_payload_kb": 256,
         "allowed_domains": []
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit webhook payload",
+        "send webhook payload",
+        "post to webhook",
+        "deliver webhook payload"
+      ],
+      "keywordWeights": {
+        "webhook": 1.0,
+        "payload": 0.9,
+        "emit": 0.7,
+        "send": 0.6,
+        "post": 0.6,
+        "deliver": 0.5
+      },
+      "synonymPhrases": {
+        "webhook": ["endpoint", "callback", "http-hook"],
+        "payload": ["data", "body", "content"],
+        "emit": ["send", "post", "deliver"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_EXTERNAL_NOTIFICATION",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "channel",
-        "recipient",
-        "content"
-      ],
+      "required_fields": ["channel", "recipient", "content"],
       "limits": {
         "rate_per_hour": 100
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit external notification",
+        "send external notification",
+        "notify external channel",
+        "send notification to external channel"
+      ],
+      "keywordWeights": {
+        "external": 1.0,
+        "notification": 0.9,
+        "notify": 0.8,
+        "channel": 0.7,
+        "emit": 0.7,
+        "send": 0.5
+      },
+      "synonymPhrases": {
+        "external": ["outbound", "outside", "third-party"],
+        "notification": ["alert", "message", "notice"],
+        "emit": ["send", "dispatch", "deliver"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_WITH_ATTACHMENT",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "recipient_id",
-        "content",
-        "attachment_ref"
-      ],
+      "required_fields": ["recipient_id", "content", "attachment_ref"],
       "limits": {
         "max_attachment_mb": 10
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit message with attachment",
+        "send message with attachment",
+        "attach file to message",
+        "send file attachment"
+      ],
+      "keywordWeights": {
+        "attachment": 1.0,
+        "attach": 0.9,
+        "file": 0.8,
+        "emit": 0.7,
+        "send": 0.6,
+        "message": 0.5
+      },
+      "synonymPhrases": {
+        "attachment": ["file", "document", "media"],
+        "attach": ["include", "append", "add"],
+        "send": ["emit", "deliver", "dispatch"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_SENSITIVE_CONTENT",
       "risk_class": "HIGH",
-      "required_fields": [
-        "recipient_id",
-        "content",
-        "sensitivity_level"
-      ],
+      "required_fields": ["recipient_id", "content", "sensitivity_level"],
       "limits": {
         "requires_encryption": true
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit sensitive content",
+        "send sensitive content",
+        "transmit sensitive data",
+        "deliver sensitive message"
+      ],
+      "keywordWeights": {
+        "sensitive": 1.0,
+        "confidential": 0.9,
+        "secure": 0.8,
+        "content": 0.7,
+        "emit": 0.7,
+        "send": 0.5
+      },
+      "synonymPhrases": {
+        "sensitive": ["confidential", "private", "restricted"],
+        "content": ["data", "message", "information"],
+        "emit": ["send", "transmit", "deliver"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_BROADCAST_MESSAGE",
       "risk_class": "HIGH",
-      "required_fields": [
-        "broadcast_scope",
-        "content"
-      ],
+      "required_fields": ["broadcast_scope", "content"],
       "limits": {
         "max_recipients": 10000
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit broadcast message",
+        "send broadcast message",
+        "broadcast to all",
+        "send mass message"
+      ],
+      "keywordWeights": {
+        "broadcast": 1.0,
+        "announce": 0.8,
+        "mass": 0.8,
+        "emit": 0.7,
+        "all": 0.5,
+        "send": 0.5
+      },
+      "synonymPhrases": {
+        "broadcast": ["mass-send", "blast", "announce"],
+        "all": ["everyone", "organization", "public"],
+        "emit": ["send", "publish", "dispatch"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_IMPERSONATED_MESSAGE",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "sender_identity",
-        "recipient_id",
-        "content",
-        "authorization"
-      ],
+      "required_fields": ["sender_identity", "recipient_id", "content", "authorization"],
       "limits": {
         "requires_audit": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit impersonated message",
+        "send as another identity",
+        "send message as user",
+        "impersonate sender"
+      ],
+      "keywordWeights": {
+        "impersonated": 1.0,
+        "impersonate": 0.9,
+        "identity": 0.8,
+        "sender": 0.7,
+        "spoof": 0.7,
+        "emit": 0.5
+      },
+      "synonymPhrases": {
+        "impersonated": ["spoofed", "delegated", "as-another"],
+        "identity": ["persona", "account", "user"],
+        "sender": ["source", "originator", "from"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "EMIT_SYSTEM_ALERT",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "alert_level",
-        "alert_scope",
-        "content"
-      ],
+      "required_fields": ["alert_level", "alert_scope", "content"],
       "limits": {
         "requires_confirmation_chain": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "emit system alert",
+        "send system alert",
+        "raise system alert",
+        "trigger system alert"
+      ],
+      "keywordWeights": {
+        "system": 1.0,
+        "alert": 0.9,
+        "critical": 0.8,
+        "emergency": 0.7,
+        "emit": 0.7,
+        "raise": 0.6
+      },
+      "synonymPhrases": {
+        "system": ["platform", "infrastructure", "service"],
+        "alert": ["alarm", "warning", "notification"],
+        "emit": ["send", "raise", "trigger"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -183,13 +455,7 @@
     "properties": {
       "message_type": {
         "type": "string",
-        "enum": [
-          "info",
-          "warning",
-          "error",
-          "debug",
-          "trace"
-        ],
+        "enum": ["info", "warning", "error", "debug", "trace"],
         "description": "Type of log message"
       },
       "content": {
@@ -206,12 +472,7 @@
       },
       "status_type": {
         "type": "string",
-        "enum": [
-          "progress",
-          "completion",
-          "failure",
-          "pending"
-        ],
+        "enum": ["progress", "completion", "failure", "pending"],
         "description": "Type of status update"
       },
       "recipient_id": {
@@ -232,14 +493,7 @@
       },
       "channel": {
         "type": "string",
-        "enum": [
-          "email",
-          "sms",
-          "push",
-          "slack",
-          "teams",
-          "discord"
-        ],
+        "enum": ["email", "sms", "push", "slack", "teams", "discord"],
         "description": "External notification channel"
       },
       "attachment_ref": {
@@ -248,21 +502,12 @@
       },
       "sensitivity_level": {
         "type": "string",
-        "enum": [
-          "public",
-          "internal",
-          "confidential",
-          "secret"
-        ],
+        "enum": ["public", "internal", "confidential", "secret"],
         "description": "Content sensitivity classification"
       },
       "broadcast_scope": {
         "type": "string",
-        "enum": [
-          "team",
-          "organization",
-          "public"
-        ],
+        "enum": ["team", "organization", "public"],
         "description": "Scope of broadcast message"
       },
       "sender_identity": {
@@ -275,12 +520,7 @@
       },
       "alert_level": {
         "type": "string",
-        "enum": [
-          "info",
-          "warning",
-          "critical",
-          "emergency"
-        ],
+        "enum": ["info", "warning", "critical", "emergency"],
         "description": "Severity level of system alert"
       },
       "alert_scope": {
@@ -289,11 +529,7 @@
       },
       "delivery_mode": {
         "type": "string",
-        "enum": [
-          "immediate",
-          "queued",
-          "scheduled"
-        ],
+        "enum": ["immediate", "queued", "scheduled"],
         "description": "When to deliver the message"
       },
       "scheduled_time": {
@@ -307,8 +543,6 @@
         "description": "Whether to retry failed deliveries"
       }
     },
-    "required": [
-      "content"
-    ]
+    "required": ["content"]
   }
 }

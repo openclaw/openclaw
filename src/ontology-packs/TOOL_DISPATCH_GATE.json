@@ -5,7 +5,10 @@
   "description": "Controls permission slips for distinct tool action regimes. Governs what categories of operations an agent is allowed to dispatch.",
   "thresholds": {
     "min_confidence_T": 0.55,
-    "dominance_margin_Delta": 0.10
+    "dominance_margin_Delta": 0.1
+  },
+  "scoring": {
+    "enableSemantic": false
   },
   "abstain_policy": {
     "description": "Controls dispatch blocking when classifier abstains due to low confidence or ambiguity",
@@ -41,7 +44,34 @@
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "dispatch no-op tool",
+        "run noop tool",
+        "execute no operation tool",
+        "invoke noop"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "noop": 1.0,
+        "no-op": 1.0,
+        "tool": 0.7,
+        "run": 0.6,
+        "execute": 0.6,
+        "invoke": 0.6
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "noop": ["no-op", "null-op", "passthrough"],
+        "tool": ["function", "command", "action"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "DISPATCH_READ_ONLY",
@@ -55,7 +85,36 @@
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "dispatch read-only tool",
+        "run read only tool",
+        "execute read tool",
+        "invoke read-only operation",
+        "execute read operation"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "read-only": 1.0,
+        "read": 0.9,
+        "tool": 0.7,
+        "resource": 0.8,
+        "run": 0.6,
+        "execute": 0.6,
+        "invoke": 0.6
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "read-only": ["read", "non-mutating", "safe", "view"],
+        "resource": ["target", "file", "data", "endpoint"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "DISPATCH_WRITE",
@@ -70,7 +129,37 @@
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": ["fs_write"]
+      "capability_requirements": ["fs_write"],
+      "canonicalPhrases": [
+        "dispatch write tool",
+        "run write operation",
+        "execute file write",
+        "invoke write tool",
+        "run file save operation"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "write": 1.0,
+        "tool": 0.7,
+        "file": 0.8,
+        "path": 0.7,
+        "run": 0.6,
+        "execute": 0.6,
+        "create": 0.7,
+        "save": 0.7
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "write": ["save", "create", "store", "persist"],
+        "file": ["path", "target", "document", "resource"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "DISPATCH_DELETE",
@@ -85,7 +174,37 @@
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": ["fs_write"]
+      "capability_requirements": ["fs_write"],
+      "canonicalPhrases": [
+        "dispatch delete tool",
+        "run delete operation",
+        "execute file delete",
+        "invoke delete tool",
+        "run remove file operation"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "delete": 1.0,
+        "tool": 0.7,
+        "file": 0.8,
+        "path": 0.7,
+        "remove": 0.9,
+        "confirmation": 0.8,
+        "token": 0.7,
+        "execute": 0.6
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "delete": ["remove", "erase", "destroy", "purge"],
+        "file": ["path", "target", "document", "resource"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "DISPATCH_SHELL_EXEC",
@@ -100,7 +219,37 @@
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": ["shell"]
+      "capability_requirements": ["shell"],
+      "canonicalPhrases": [
+        "dispatch shell command",
+        "run shell exec",
+        "execute shell command",
+        "invoke shell execution",
+        "run bash script execution"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "shell": 1.0,
+        "command": 0.9,
+        "exec": 0.9,
+        "execute": 0.8,
+        "run": 0.7,
+        "terminal": 0.8,
+        "bash": 0.8,
+        "script": 0.7
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "shell": ["bash", "terminal", "cli", "command-line"],
+        "command": ["script", "program", "executable", "binary"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "DISPATCH_NETWORK_REQUEST",
@@ -116,7 +265,37 @@
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": ["network"]
+      "capability_requirements": ["network"],
+      "canonicalPhrases": [
+        "dispatch network request",
+        "run http request",
+        "execute network call",
+        "invoke api request",
+        "run http api call"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "network": 1.0,
+        "request": 0.9,
+        "http": 0.9,
+        "url": 0.8,
+        "api": 0.8,
+        "call": 0.7,
+        "fetch": 0.8,
+        "method": 0.7
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "network": ["http", "api", "web", "internet"],
+        "request": ["call", "fetch", "query", "invoke"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "DISPATCH_BROWSER_AUTOMATE",
@@ -132,7 +311,36 @@
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": ["browser"]
+      "capability_requirements": ["browser"],
+      "canonicalPhrases": [
+        "dispatch browser automation",
+        "run browser action",
+        "execute browser automation",
+        "invoke browser tool"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "browser": 1.0,
+        "automate": 0.9,
+        "automation": 0.9,
+        "navigate": 0.8,
+        "click": 0.8,
+        "screenshot": 0.7,
+        "action": 0.7,
+        "run": 0.6
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "browser": ["web", "chrome", "headless", "playwright"],
+        "automate": ["control", "drive", "interact", "operate"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "DISPATCH_SENSITIVE_DATA",
@@ -147,7 +355,36 @@
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": ["sensitive_access"]
+      "capability_requirements": ["sensitive_access"],
+      "canonicalPhrases": [
+        "dispatch sensitive data tool",
+        "access sensitive data",
+        "run confidential data operation",
+        "invoke sensitive data access"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "sensitive": 1.0,
+        "data": 0.9,
+        "confidential": 0.9,
+        "access": 0.8,
+        "classification": 0.8,
+        "justification": 0.7,
+        "restricted": 0.8,
+        "internal": 0.7
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "sensitive": ["confidential", "restricted", "private", "classified"],
+        "data": ["information", "record", "payload", "content"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "DISPATCH_PRIVILEGED_ADMIN",
@@ -163,7 +400,37 @@
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": ["shell", "critical_opt_in"]
+      "capability_requirements": ["shell", "critical_opt_in"],
+      "canonicalPhrases": [
+        "dispatch privileged admin tool",
+        "run privileged admin operation",
+        "execute admin tool with authorization",
+        "invoke privileged administrative action",
+        "run admin authorization operation"
+      ],
+      "keywordWeights": {
+        "dispatch": 1.0,
+        "privileged": 1.0,
+        "admin": 1.0,
+        "authorization": 0.9,
+        "token": 0.8,
+        "scope": 0.8,
+        "justification": 0.8,
+        "critical": 0.9,
+        "audit": 0.7
+      },
+      "synonymPhrases": {
+        "dispatch": ["run", "execute", "invoke", "call"],
+        "privileged": ["elevated", "root", "superuser", "administrative"],
+        "admin": ["administrator", "superadmin", "system-admin", "ops"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {

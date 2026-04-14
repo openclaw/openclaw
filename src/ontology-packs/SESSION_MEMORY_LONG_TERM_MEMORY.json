@@ -1,0 +1,55 @@
+{
+  "pack_id": "openclawd.SESSION_MEMORY_LONG_TERM_MEMORY",
+  "pack_version": "1.0.0",
+  "stage_id": "SESSION_MEMORY_LONG_TERM_MEMORY",
+  "description": "Memory routing state where session and long-term memory layers are loaded.",
+  "thresholds": {
+    "min_confidence_T": 1,
+    "dominance_margin_Delta": 0
+  },
+  "field_schema": {},
+  "scoring": {
+    "enableSemantic": false
+  },
+  "contracts": [
+    {
+      "contract_id": "SESSION_MEMORY_LONG_TERM_MEMORY",
+      "risk_class": "LOW",
+      "required_fields": [],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": [],
+      "canonicalPhrases": ["session memory long-term memory"],
+      "keywordWeights": {
+        "session": 1.0,
+        "long-term": 0.9,
+        "memory": 0.8,
+        "recall": 0.7,
+        "persist": 0.6,
+        "retrieve": 0.6,
+        "store": 0.5,
+        "context": 0.5,
+        "history": 0.4
+      },
+      "synonymPhrases": {
+        "session": ["current session", "active session", "session context"],
+        "long-term": ["long term", "persistent memory", "durable memory"],
+        "memory": ["memories", "stored data", "knowledge base"],
+        "recall": ["remember", "look up", "fetch from memory"],
+        "persist": ["save", "retain", "keep in memory"],
+        "retrieve": ["get from memory", "load memory", "pull from store"],
+        "store": ["save to memory", "write to memory", "commit to store"],
+        "context": ["background context", "prior context", "working context"],
+        "history": ["past interactions", "previous context", "prior state"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
+    }
+  ]
+}

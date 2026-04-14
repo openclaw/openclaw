@@ -3,6 +3,9 @@
   "pack_version": "1.0.0",
   "stage_id": "NODE_INVOKE",
   "description": "Manages invocation of Node.js modules, scripts, and runtime operations. Controls module loading, script execution contexts, and resource access boundaries.",
+  "scoring": {
+    "enableSemantic": false
+  },
   "thresholds": {
     "min_confidence_T": 0,
     "dominance_margin_Delta": 0
@@ -11,150 +14,361 @@
     {
       "contract_id": "NODE_REQUIRE_BUILTIN",
       "risk_class": "LOW",
-      "required_fields": [
-        "module_name"
-      ],
+      "required_fields": ["module_name"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "require builtin module",
+        "load builtin module",
+        "import builtin",
+        "use builtin module",
+        "load builtin from node",
+        "include standard library",
+        "import core module"
+      ],
+      "keywordWeights": {
+        "require": 1.0,
+        "builtin": 0.9,
+        "module": 0.7,
+        "load": 0.6,
+        "import": 0.5
+      },
+      "synonymPhrases": {
+        "require": ["load", "import", "include"],
+        "builtin": ["core", "native", "built-in", "standard"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_REQUIRE_LOCAL",
       "risk_class": "LOW",
-      "required_fields": [
-        "module_path"
-      ],
+      "required_fields": ["module_path"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "require local module",
+        "load local file",
+        "import local path",
+        "require from path"
+      ],
+      "keywordWeights": {
+        "local": 1.0,
+        "require": 0.9,
+        "path": 0.8,
+        "file": 0.7,
+        "module": 0.6
+      },
+      "synonymPhrases": {
+        "local": ["relative", "nearby", "path-based"],
+        "require": ["load", "import", "include"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_RUN_SCRIPT",
       "risk_class": "LOW",
-      "required_fields": [
-        "script_path"
-      ],
+      "required_fields": ["script_path"],
       "limits": {},
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "run script",
+        "execute script",
+        "run node script",
+        "execute node script",
+        "launch node program"
+      ],
+      "keywordWeights": {
+        "run": 1.0,
+        "script": 0.9,
+        "execute": 0.8,
+        "node": 0.6,
+        "launch": 0.5
+      },
+      "synonymPhrases": {
+        "run": ["execute", "launch", "start"],
+        "script": ["file", "program", "code"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_REQUIRE_NPM_PACKAGE",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "module_name",
-        "version_constraint"
-      ],
+      "required_fields": ["module_name", "version_constraint"],
       "limits": {
         "allowed_packages": [],
-        "blocked_packages": [
-          "eval",
-          "vm2"
-        ]
+        "blocked_packages": ["eval", "vm2"]
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "require npm package",
+        "load npm module",
+        "load npm dependency",
+        "import npm dependency",
+        "use npm package",
+        "import third-party module"
+      ],
+      "keywordWeights": {
+        "npm": 1.0,
+        "package": 0.9,
+        "require": 0.8,
+        "install": 0.7,
+        "dependency": 0.6
+      },
+      "synonymPhrases": {
+        "npm": ["node-module", "registry-package", "third-party"],
+        "package": ["module", "library", "dependency"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_SPAWN_WORKER",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "worker_script",
-        "worker_data"
-      ],
+      "required_fields": ["worker_script", "worker_data"],
       "limits": {
         "max_workers": 4,
         "max_memory_mb": 256
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "spawn worker",
+        "create worker thread",
+        "start worker",
+        "launch worker thread"
+      ],
+      "keywordWeights": {
+        "spawn": 1.0,
+        "worker": 0.9,
+        "thread": 0.8,
+        "parallel": 0.6,
+        "background": 0.5
+      },
+      "synonymPhrases": {
+        "spawn": ["create", "start", "launch"],
+        "worker": ["thread", "process", "background-task"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_DYNAMIC_IMPORT",
       "risk_class": "MEDIUM",
-      "required_fields": [
-        "module_specifier"
-      ],
+      "required_fields": ["module_specifier"],
       "limits": {
-        "allowed_protocols": [
-          "file",
-          "node"
-        ],
+        "allowed_protocols": ["file", "node"],
         "max_module_size_kb": 1024
       },
       "needs_confirmation": false,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "dynamic import",
+        "import module dynamically",
+        "lazy import",
+        "lazy load module",
+        "dynamic module load"
+      ],
+      "keywordWeights": {
+        "dynamic": 1.0,
+        "import": 0.9,
+        "lazy": 0.7,
+        "module": 0.6,
+        "load": 0.5
+      },
+      "synonymPhrases": {
+        "dynamic": ["runtime", "lazy", "deferred"],
+        "import": ["load", "require", "fetch"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_EVAL_CODE",
       "risk_class": "HIGH",
-      "required_fields": [
-        "code",
-        "context_type"
-      ],
+      "required_fields": ["code", "context_type"],
       "limits": {
         "max_code_length": 10000,
         "timeout_ms": 5000
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "eval code",
+        "evaluate javascript",
+        "run dynamic code",
+        "execute inline code"
+      ],
+      "keywordWeights": {
+        "eval": 1.0,
+        "evaluate": 0.9,
+        "code": 0.8,
+        "execute": 0.7,
+        "dynamic": 0.6
+      },
+      "synonymPhrases": {
+        "eval": ["evaluate", "execute", "run"],
+        "code": ["script", "expression", "snippet"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_CREATE_VM_CONTEXT",
       "risk_class": "HIGH",
-      "required_fields": [
-        "context_options",
-        "sandbox_level"
-      ],
+      "required_fields": ["context_options", "sandbox_level"],
       "limits": {
         "max_contexts": 3,
         "memory_limit_mb": 128
       },
       "needs_confirmation": true,
       "deny_by_default": false,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "create vm context",
+        "create sandbox",
+        "new vm context",
+        "create isolated context"
+      ],
+      "keywordWeights": {
+        "vm": 1.0,
+        "context": 0.9,
+        "sandbox": 0.8,
+        "isolate": 0.7,
+        "create": 0.5
+      },
+      "synonymPhrases": {
+        "vm": ["virtual-machine", "sandbox", "isolated-env"],
+        "context": ["environment", "scope", "container"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_NATIVE_ADDON",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "addon_path",
-        "justification"
-      ],
+      "required_fields": ["addon_path", "justification"],
       "limits": {
         "allowed_addons": [],
         "requires_signature_check": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "load native addon",
+        "require native addon",
+        "use native addon",
+        "load node addon",
+        "use native modules"
+      ],
+      "keywordWeights": {
+        "native": 1.0,
+        "addon": 0.9,
+        "napi": 0.8,
+        "binding": 0.7,
+        "node": 0.5
+      },
+      "synonymPhrases": {
+        "native": ["c++", "compiled", "binary"],
+        "addon": ["plugin", "binding", "extension"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     },
     {
       "contract_id": "NODE_MODIFY_PROCESS",
       "risk_class": "CRITICAL",
-      "required_fields": [
-        "process_property",
-        "new_value",
-        "authorization"
-      ],
+      "required_fields": ["process_property", "new_value", "authorization"],
       "limits": {
-        "forbidden_properties": [
-          "env",
-          "execPath",
-          "argv0"
-        ],
+        "forbidden_properties": ["env", "execPath", "argv0"],
         "requires_audit": true
       },
       "needs_confirmation": true,
       "deny_by_default": true,
-      "capability_requirements": []
+      "capability_requirements": [],
+      "canonicalPhrases": [
+        "modify process",
+        "change process property",
+        "update process env",
+        "set process property"
+      ],
+      "keywordWeights": {
+        "process": 1.0,
+        "modify": 0.9,
+        "property": 0.8,
+        "environment": 0.7,
+        "configure": 0.5
+      },
+      "synonymPhrases": {
+        "process": ["runtime", "node-process", "global-process"],
+        "modify": ["change", "update", "set"]
+      },
+      "scoring": {
+        "lambdas": {
+          "lambda_phrase": 0.6,
+          "lambda_keyword": 0.4,
+          "lambda_semantic": 0.0
+        }
+      }
     }
   ],
   "field_schema": {
@@ -195,11 +409,7 @@
       },
       "context_type": {
         "type": "string",
-        "enum": [
-          "isolated",
-          "shared",
-          "privileged"
-        ],
+        "enum": ["isolated", "shared", "privileged"],
         "description": "Type of evaluation context"
       },
       "context_options": {
@@ -219,11 +429,7 @@
       },
       "sandbox_level": {
         "type": "string",
-        "enum": [
-          "strict",
-          "moderate",
-          "none"
-        ],
+        "enum": ["strict", "moderate", "none"],
         "description": "Level of sandbox isolation"
       },
       "addon_path": {
@@ -239,12 +445,7 @@
         "description": "Process property to modify"
       },
       "new_value": {
-        "type": [
-          "string",
-          "number",
-          "boolean",
-          "object"
-        ],
+        "type": ["string", "number", "boolean", "object"],
         "description": "New value for process property"
       },
       "authorization": {
@@ -270,8 +471,6 @@
         "description": "Node.js CLI options"
       }
     },
-    "required": [
-      "module_name"
-    ]
+    "required": ["module_name"]
   }
 }
