@@ -301,7 +301,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("allows npm update compatibility sidecar directories without package.json", () => {
+  it("rejects private qa sidecar directories that are missing package.json", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -322,7 +322,10 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
+        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-channel/package.json")}.`,
+        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-lab/package.json")}.`,
+      ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

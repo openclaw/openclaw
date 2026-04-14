@@ -7,6 +7,11 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 ]);
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
+const DIST_DEPENDENT_NODE_SHARD_NAMES = new Set([
+  "core-support-boundary",
+  "core-runtime",
+  "agentic",
+]);
 
 function formatNodeTestShardCheckName(shardName) {
   const normalizedShardName = shardName.startsWith("core-unit-")
@@ -31,6 +36,7 @@ export function createNodeTestShards() {
         checkName: formatNodeTestShardCheckName(shard.name),
         shardName: shard.name,
         configs,
+        requiresDist: DIST_DEPENDENT_NODE_SHARD_NAMES.has(shard.name),
       },
     ];
   });
