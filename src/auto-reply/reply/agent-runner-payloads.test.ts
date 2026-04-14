@@ -246,6 +246,20 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("extracts markdown image replies into final payload media urls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "Here you go\n\n![chart](https://example.com/chart.png)" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "Here you go",
+      mediaUrl: "https://example.com/chart.png",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
   it("deduplicates final payloads against directly sent block keys regardless of replyToId", async () => {
     // When block streaming is not active but directlySentBlockKeys has entries
     // (e.g. from pre-tool flush), the key should match even if replyToId differs.

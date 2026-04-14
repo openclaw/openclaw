@@ -5,6 +5,7 @@ import { parseAudioTag } from "./audio-tags.js";
 
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+const MARKDOWN_IMAGE_RE = /!\[[^\]]*]\(([^)\n]+)\)/g;
 
 export type ParsedMediaOutputSegment =
   | {
@@ -125,6 +126,59 @@ function mayContainFenceMarkers(input: string): boolean {
   return input.includes("```") || input.includes("~~~");
 }
 
+function cleanLineText(text: string): string {
+  return text.replace(/[ \t]{2,}/g, " ").trim();
+}
+
+function collectMarkdownImageSegments(params: { line: string; media: string[] }): {
+  cleanedLine?: string;
+  lineSegments: ParsedMediaOutputSegment[];
+  foundMedia: boolean;
+} {
+  const matches = Array.from(params.line.matchAll(MARKDOWN_IMAGE_RE));
+  if (matches.length === 0) {
+    return { lineSegments: [], foundMedia: false };
+  }
+
+  const pieces: string[] = [];
+  const lineSegments: ParsedMediaOutputSegment[] = [];
+  let cursor = 0;
+  let foundMedia = false;
+
+  for (const match of matches) {
+    const start = match.index ?? 0;
+    pieces.push(params.line.slice(cursor, start));
+
+    const target = normalizeMediaSource(cleanCandidate(unwrapQuoted(match[1]) ?? match[1] ?? ""));
+    if (isValidMedia(target, { allowSpaces: true, allowBareFilename: true })) {
+      const beforeText = cleanLineText(pieces.join(""));
+      if (beforeText) {
+        lineSegments.push({ type: "text", text: beforeText });
+      }
+      pieces.length = 0;
+      params.media.push(target);
+      lineSegments.push({ type: "media", url: target });
+      foundMedia = true;
+    } else {
+      pieces.push(match[0]);
+    }
+
+    cursor = start + match[0].length;
+  }
+
+  pieces.push(params.line.slice(cursor));
+  const cleanedLine = cleanLineText(pieces.join(""));
+  if (cleanedLine) {
+    lineSegments.push({ type: "text", text: cleanedLine });
+  }
+
+  return {
+    cleanedLine: cleanedLine || undefined,
+    lineSegments,
+    foundMedia,
+  };
+}
+
 // Check if a character offset is inside any fenced code block
 function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset: number): boolean {
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
@@ -144,8 +198,9 @@ export function splitMediaFromOutput(raw: string): {
     return { text: "" };
   }
   const mayContainMediaToken = /media:/i.test(trimmedRaw);
+  const mayContainMarkdownImage = /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
-  if (!mayContainMediaToken && !mayContainAudioTag) {
+  if (!mayContainMediaToken && !mayContainMarkdownImage && !mayContainAudioTag) {
     return { text: trimmedRaw };
   }
 
@@ -185,8 +240,23 @@ export function splitMediaFromOutput(raw: string): {
 
     const trimmedStart = line.trimStart();
     if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
-      keptLines.push(line);
-      pushTextSegment(line);
+      const markdownImageResult = collectMarkdownImageSegments({ line, media });
+      if (!markdownImageResult.foundMedia) {
+        keptLines.push(line);
+        pushTextSegment(line);
+      } else {
+        foundMediaToken = true;
+        if (markdownImageResult.cleanedLine) {
+          keptLines.push(markdownImageResult.cleanedLine);
+        }
+        for (const segment of markdownImageResult.lineSegments) {
+          if (segment.type === "text") {
+            pushTextSegment(segment.text);
+            continue;
+          }
+          segments.push(segment);
+        }
+      }
       lineOffset += line.length + 1; // +1 for newline
       continue;
     }
@@ -269,10 +339,7 @@ export function splitMediaFromOutput(raw: string): {
       }
 
       if (hasValidMedia) {
-        const beforeText = pieces
-          .join("")
-          .replace(/[ \t]{2,}/g, " ")
-          .trim();
+        const beforeText = cleanLineText(pieces.join(""));
         if (beforeText) {
           lineSegments.push({ type: "text", text: beforeText });
         }
@@ -297,10 +364,7 @@ export function splitMediaFromOutput(raw: string): {
 
     pieces.push(line.slice(cursor));
 
-    const cleanedLine = pieces
-      .join("")
-      .replace(/[ \t]{2,}/g, " ")
-      .trim();
+    const cleanedLine = cleanLineText(pieces.join(""));
 
     // If the line becomes empty, drop it.
     if (cleanedLine) {

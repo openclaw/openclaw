@@ -103,4 +103,21 @@ describe("splitMediaFromOutput", () => {
       { type: "text", text: "```text\nMEDIA:https://example.com/ignored.png\n```\nAfter" },
     ]);
   });
+
+  it("extracts markdown image urls while keeping surrounding caption text", () => {
+    expectParsedMediaOutputCase("Caption\n\n![chart](https://example.com/chart.png)", {
+      text: "Caption",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("extracts multiple markdown image urls in order", () => {
+    expectParsedMediaOutputCase(
+      "Before\n![one](https://example.com/one.png)\nMiddle\n![two](./out/two.png)\nAfter",
+      {
+        text: "Before\nMiddle\nAfter",
+        mediaUrls: ["https://example.com/one.png", "./out/two.png"],
+      },
+    );
+  });
 });
