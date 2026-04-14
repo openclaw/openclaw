@@ -530,16 +530,24 @@ function buildDesc(desc){
 function loadFiles(files){
   const arr=[...files].filter(f=>f.name.endsWith('.json'));
   if(!arr.length)return;
-  let loaded=0;const tmp={};
+  function safeKey(k){
+    k=String(k);
+    if(k==='__proto__'||k==='constructor'||k==='prototype')throw new Error('Invalid packageId');
+    return k;
+  }
+  let loaded=0;const tmp=Object.create(null);
   arr.forEach(f=>{
     const reader=new FileReader();
     reader.onload=e=>{
       try{
         const data=JSON.parse(e.target.result);
         if(data?.stickers&&Array.isArray(data.stickers)){
-          tmp[String(data.packageId||f.name.replace(/\.json$/,''))]=data;
+          tmp[safeKey(String(data.packageId||f.name.replace(/\.json$/,'')))]=data;
         }else if(Array.isArray(data)&&data[0]?.packageId!==undefined){
-          data.forEach(p=>{const k=String(p.packageId);tmp[k]=tmp[k]?Object.assign(tmp[k],p):{...p,stickers:[]};});
+          data.forEach(p=>{
+            const k=safeKey(String(p.packageId));
+            tmp[k]=tmp[k]?Object.assign(tmp[k],p):{...p,stickers:[]};
+          });
         }
       }catch(_){}
       if(++loaded===arr.length){packages=tmp;editedPkgs=new Set();goTo('pkgs');}

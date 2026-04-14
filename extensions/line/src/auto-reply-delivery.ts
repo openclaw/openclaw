@@ -113,7 +113,8 @@ export async function deliverLineAutoReply(params: {
   // Sticker-only sending policy: if a valid sticker is present, send only the sticker (drop text).
   // payload.sticker comes from the common STICKER: directive parser.
   if (payload.sticker) {
-    logVerbose(`line: sticker directive received (raw: ${payload.sticker.raw})`);
+    const safeRaw = payload.sticker.raw.replace(/[\r\n\t]/g, " ");
+    logVerbose(`line: sticker directive received (raw: ${safeRaw})`);
     const parsed = parseLineStickerRaw(payload.sticker.raw);
     if (parsed) {
       logVerbose(
@@ -123,7 +124,7 @@ export async function deliverLineAutoReply(params: {
       try {
         await sendLineMessages([stickerMsg], true);
       } catch (err) {
-        logVerbose(`line: sticker send failed (${payload.sticker.raw}): ${String(err)}`);
+        logVerbose(`line: sticker send failed (${safeRaw}): ${String(err)}`);
         try {
           await pushLineMessages([{ type: "text", text: stickerSendErrorText }]);
         } catch (pushErr) {
@@ -142,15 +143,28 @@ export async function deliverLineAutoReply(params: {
 
   // lineData.sticker: direct channelData path (packageId/stickerId already parsed).
   if (lineData.sticker) {
-    const stickerMsg = createStickerMessage(lineData.sticker.packageId, lineData.sticker.stickerId);
-    try {
-      await sendLineMessages([stickerMsg], true);
-    } catch (err) {
-      logVerbose(`line: sticker send failed (channelData): ${String(err)}`);
+    const parsedChannelSticker = parseLineStickerRaw(
+      `${lineData.sticker.packageId}:${lineData.sticker.stickerId}`,
+    );
+    if (!parsedChannelSticker) {
+      await sendLineMessages(
+        [{ type: "text", text: "[Sticker send error: invalid sticker format]" }],
+        true,
+      );
+    } else {
+      const stickerMsg = createStickerMessage(
+        parsedChannelSticker.packageId,
+        parsedChannelSticker.stickerId,
+      );
       try {
-        await pushLineMessages([{ type: "text", text: stickerSendErrorText }]);
-      } catch (pushErr) {
-        logVerbose(`line: sticker error text push also failed: ${String(pushErr)}`);
+        await sendLineMessages([stickerMsg], true);
+      } catch (err) {
+        logVerbose(`line: sticker send failed (channelData): ${String(err)}`);
+        try {
+          await pushLineMessages([{ type: "text", text: stickerSendErrorText }]);
+        } catch (pushErr) {
+          logVerbose(`line: sticker error text push also failed: ${String(pushErr)}`);
+        }
       }
     }
     return { replyTokenUsed };
