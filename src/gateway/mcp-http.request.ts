@@ -1,12 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
+import { isLoopbackAddress } from "./net.js";
+import { checkBrowserOrigin } from "./origin-check.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
 
@@ -20,6 +23,24 @@ export type McpRequestContext = {
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
   const trimmed = normalizeOptionalString(rawSessionKey);
   return !trimmed || trimmed === "main" ? resolveMainSessionKey(cfg) : trimmed;
+}
+
+function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
+  const fetchSite = normalizeOptionalLowercaseString(getHeader(req, "sec-fetch-site"));
+  if (fetchSite === "cross-site") {
+    return true;
+  }
+
+  const origin = getHeader(req, "origin");
+  if (!origin) {
+    return false;
+  }
+
+  return !checkBrowserOrigin({
+    requestHost: getHeader(req, "host"),
+    origin,
+    isLocalClient: isLoopbackAddress(req.socket?.remoteAddress),
+  }).ok;
 }
 
 export function validateMcpLoopbackRequest(params: {
@@ -54,8 +75,14 @@ export function validateMcpLoopbackRequest(params: {
     return false;
   }
 
+  if (rejectsBrowserLoopbackRequest(params.req)) {
+    params.res.writeHead(403, { "Content-Type": "application/json" });
+    params.res.end(JSON.stringify({ error: "forbidden" }));
+    return false;
+  }
+
   const authHeader = getHeader(params.req, "authorization") ?? "";
-  if (authHeader !== `Bearer ${params.token}`) {
+  if (!safeEqualSecret(authHeader, `Bearer ${params.token}`)) {
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
     return false;
