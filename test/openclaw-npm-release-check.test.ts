@@ -325,6 +325,8 @@ describe("collectForbiddenPackedPathErrors", () => {
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
     ]);
   });

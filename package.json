@@ -30,7 +30,6 @@
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
     "!dist/extensions/qa-channel/**",
-    "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
     "!dist/extensions/qa-matrix/**",
     "docs/",
