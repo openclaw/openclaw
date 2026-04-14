@@ -14,6 +14,7 @@ type AjvLike = {
           validate: (value: string) => boolean;
         },
   ) => AjvLike;
+  addMetaSchema: (schema: Record<string, unknown>) => AjvLike;
   compile: (schema: Record<string, unknown>) => ValidateFunction;
 };
 const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
@@ -23,7 +24,7 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
   if (cached) {
     return cached;
   }
-  const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
+  const ajvModule = require("ajv/dist/2020.js") as { default?: new (opts?: object) => AjvLike };
   const AjvCtor =
     typeof ajvModule.default === "function"
       ? ajvModule.default
@@ -34,6 +35,12 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
     removeAdditional: false,
     ...(mode === "defaults" ? { useDefaults: true } : {}),
   });
+  // Ajv2020 only ships the draft/2020-12 meta-schema; register draft-07 so that
+  // schemas tagged `$schema: "http://json-schema.org/draft-07/schema#"` (e.g. the
+  // bundled channel config schemas) still compile alongside MCP tool schemas.
+  instance.addMetaSchema(
+    require("ajv/dist/refs/json-schema-draft-07.json") as Record<string, unknown>,
+  );
   instance.addFormat("uri", {
     type: "string",
     validate: (value: string) => {

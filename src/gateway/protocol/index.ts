@@ -1,4 +1,11 @@
-import AjvPkg, { type ErrorObject } from "ajv";
+import { createRequire } from "node:module";
+import AjvPkg from "ajv/dist/2020.js";
+import type { ErrorObject } from "ajv";
+
+const requireDraft07 = createRequire(import.meta.url);
+const draft07MetaSchema = requireDraft07(
+  "ajv/dist/refs/json-schema-draft-07.json",
+) as Record<string, unknown>;
 import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
   type AgentEvent,
@@ -301,6 +308,10 @@ const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").defau
   strict: false,
   removeAdditional: false,
 });
+// Gateway protocol schemas declare `$schema: draft-07`; Ajv2020 only loads the
+// draft/2020-12 meta-schema by default, so register draft-07 explicitly to keep
+// those schemas compilable while accepting incoming draft/2020-12 MCP schemas.
+ajv.addMetaSchema(draft07MetaSchema);
 
 export const validateCommandsListParams = ajv.compile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = ajv.compile<ConnectParams>(ConnectParamsSchema);

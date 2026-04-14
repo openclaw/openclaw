@@ -118,6 +118,40 @@ const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]event
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
 
+// Hotfix for @mariozechner/pi-ai's per-call tool-argument validator: it imports
+// the default `ajv` build, which only loads the draft-07 meta-schema. Zod-emitted
+// tool schemas and pydantic-v2 MCP servers declare `$schema: draft/2020-12`, so
+// every such tool call throws `no schema with key or ref ...draft/2020-12/schema`.
+// Swap the entrypoint to `ajv/dist/2020.js` and register the draft-07 meta so
+// both dialects compile. pnpm source checkouts also get this via
+// pnpm.patchedDependencies; published npm/pnpm installs rely on this postinstall
+// hook to reach the same state.
+const PI_AI_VALIDATION_FILE = join(
+  "node_modules",
+  "@mariozechner",
+  "pi-ai",
+  "dist",
+  "utils",
+  "validation.js",
+);
+const PI_AI_AJV_IMPORT_NEEDLE = 'import AjvModule from "ajv";';
+const PI_AI_AJV_IMPORT_REPLACEMENT = [
+  'import AjvModule from "ajv/dist/2020.js";',
+  'import draft07MetaSchema from "ajv/dist/refs/json-schema-draft-07.json" with { type: "json" };',
+].join("\n");
+const PI_AI_ADD_META_NEEDLE = [
+  "        });",
+  "        addFormats(ajv);",
+].join("\n");
+const PI_AI_ADD_META_REPLACEMENT = [
+  "        });",
+  "        // Ajv2020 only ships the draft/2020-12 meta-schema; register draft-07 so",
+  "        // legacy TypeBox/zod tools carrying `$schema: draft-07` still compile.",
+  "        ajv.addMetaSchema(draft07MetaSchema);",
+  "        addFormats(ajv);",
+].join("\n");
+const PI_AI_ALREADY_PATCHED_MARKER = 'import AjvModule from "ajv/dist/2020.js";';
+
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
@@ -602,16 +636,119 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
   }
 }
 
+export function applyPiAiAjv2020Hotfix(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const pathLstat = params.lstatSync ?? lstatSync;
+  const readFile = params.readFileSync ?? readFileSync;
+  const resolveRealPath = params.realpathSync ?? realpathSync;
+  const chmodFile = params.chmodSync ?? chmodSync;
+  const openFile = params.openSync ?? openSync;
+  const closeFile = params.closeSync ?? closeSync;
+  const renameFile = params.renameSync ?? renameSync;
+  const removePath = params.rmSync ?? rmSync;
+  const createTempPath =
+    params.createTempPath ??
+    ((unsafeTargetPath) =>
+      join(
+        dirname(unsafeTargetPath),
+        `.${basename(unsafeTargetPath)}.openclaw-hotfix-${randomUUID()}`,
+      ));
+  const writeFile =
+    params.writeFileSync ?? ((filePath, value) => writeFileSync(filePath, value, "utf8"));
+  const targetPath = join(packageRoot, PI_AI_VALIDATION_FILE);
+  const nodeModulesRoot = join(packageRoot, "node_modules");
+
+  function validateTargetPath() {
+    if (!pathExists(targetPath)) {
+      return { ok: false, reason: "missing" };
+    }
+    const targetStats = pathLstat(targetPath);
+    if (!targetStats.isFile() || targetStats.isSymbolicLink()) {
+      return { ok: false, reason: "unsafe_target", targetPath };
+    }
+    const nodeModulesRootReal = resolveRealPath(nodeModulesRoot);
+    const targetPathReal = resolveRealPath(targetPath);
+    const relativeTargetPath = relative(nodeModulesRootReal, targetPathReal);
+    if (relativeTargetPath.startsWith("..") || isAbsolute(relativeTargetPath)) {
+      return { ok: false, reason: "path_escape", targetPath };
+    }
+    return { ok: true, targetPathReal, mode: targetStats.mode & 0o777 };
+  }
+
+  try {
+    const initialTargetValidation = validateTargetPath();
+    if (!initialTargetValidation.ok) {
+      return { applied: false, reason: initialTargetValidation.reason, targetPath };
+    }
+    const currentText = readFile(targetPath, "utf8");
+    if (currentText.includes(PI_AI_ALREADY_PATCHED_MARKER)) {
+      return { applied: false, reason: "already_patched" };
+    }
+    if (
+      !currentText.includes(PI_AI_AJV_IMPORT_NEEDLE) ||
+      !currentText.includes(PI_AI_ADD_META_NEEDLE)
+    ) {
+      return { applied: false, reason: "unexpected_content", targetPath };
+    }
+    const patchedText = currentText
+      .replace(PI_AI_AJV_IMPORT_NEEDLE, PI_AI_AJV_IMPORT_REPLACEMENT)
+      .replace(PI_AI_ADD_META_NEEDLE, PI_AI_ADD_META_REPLACEMENT);
+    const tempPath = createTempPath(targetPath);
+    const tempFd = openFile(tempPath, "wx", initialTargetValidation.mode);
+    let tempFdClosed = false;
+    try {
+      writeFile(tempFd, patchedText, "utf8");
+      closeFile(tempFd);
+      tempFdClosed = true;
+      const finalTargetValidation = validateTargetPath();
+      if (!finalTargetValidation.ok) {
+        return { applied: false, reason: finalTargetValidation.reason, targetPath };
+      }
+      renameFile(tempPath, targetPath);
+      chmodFile(targetPath, initialTargetValidation.mode);
+    } finally {
+      if (!tempFdClosed) {
+        try {
+          closeFile(tempFd);
+        } catch {
+          // ignore failed-open cleanup
+        }
+      }
+      removePath(tempPath, { force: true });
+    }
+    return { applied: true, reason: "patched", targetPath };
+  } catch (error) {
+    return {
+      applied: false,
+      reason: "error",
+      targetPath,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 function applyBundledPluginRuntimeHotfixes(params = {}) {
   const log = params.log ?? console;
   const baileysResult = applyBaileysEncryptedStreamFinishHotfix(params);
   if (baileysResult.applied) {
     log.log("[postinstall] patched @whiskeysockets/baileys runtime hotfixes");
-    return;
-  }
-  if (baileysResult.reason !== "missing" && baileysResult.reason !== "already_patched") {
+  } else if (
+    baileysResult.reason !== "missing" &&
+    baileysResult.reason !== "already_patched"
+  ) {
     log.warn(
       `[postinstall] could not patch @whiskeysockets/baileys runtime hotfixes: ${baileysResult.reason}`,
+    );
+  }
+  const piAiResult = applyPiAiAjv2020Hotfix(params);
+  if (piAiResult.applied) {
+    log.log(
+      "[postinstall] patched @mariozechner/pi-ai tool-argument validator for draft/2020-12",
+    );
+  } else if (piAiResult.reason !== "missing" && piAiResult.reason !== "already_patched") {
+    log.warn(
+      `[postinstall] could not patch @mariozechner/pi-ai validator: ${piAiResult.reason}`,
     );
   }
 }

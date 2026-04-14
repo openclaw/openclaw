@@ -1,0 +1,22 @@
+diff --git a/dist/utils/validation.js b/dist/utils/validation.js
+index 52c74b2a5d8bed50546fba675f3c3f8c5c815127..2260fead0ed0db256753e82ea8dce4522205fa51 100644
+--- a/dist/utils/validation.js
++++ b/dist/utils/validation.js
+@@ -1,5 +1,6 @@
+-import AjvModule from "ajv";
++import AjvModule from "ajv/dist/2020.js";
+ import addFormatsModule from "ajv-formats";
++import draft07MetaSchema from "ajv/dist/refs/json-schema-draft-07.json" with { type: "json" };
+ // Handle both default and named exports
+ const Ajv = AjvModule.default || AjvModule;
+ const addFormats = addFormatsModule.default || addFormatsModule;
+@@ -27,6 +28,9 @@ if (canUseRuntimeCodegen()) {
+             strict: false,
+             coerceTypes: true,
+         });
++        // Ajv2020 only ships the draft/2020-12 meta-schema; register draft-07 so
++        // legacy TypeBox/zod tools carrying `$schema: draft-07` still compile.
++        ajv.addMetaSchema(draft07MetaSchema);
+         addFormats(ajv);
+     }
+     catch (_e) {

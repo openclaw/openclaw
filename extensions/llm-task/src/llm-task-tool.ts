@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import Ajv from "ajv";
+import Ajv from "ajv/dist/2020.js";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatXHighModelHint,
@@ -12,6 +13,9 @@ import {
 import type { OpenClawPluginApi } from "../api.js";
 
 const AjvCtor = Ajv as unknown as typeof import("ajv").default;
+const draft07MetaSchema = createRequire(import.meta.url)(
+  "ajv/dist/refs/json-schema-draft-07.json",
+) as Record<string, unknown>;
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -229,6 +233,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         const schema = params.schema;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
           const ajv = new AjvCtor({ allErrors: true, strict: false });
+          // User-supplied schemas may declare any JSON Schema draft; register
+          // draft-07 so Ajv2020 can compile both modern MCP-style 2020-12
+          // schemas and legacy draft-07 ones without throwing.
+          ajv.addMetaSchema(draft07MetaSchema);
           const validate = ajv.compile(schema);
           const ok = validate(parsed);
           if (!ok) {
