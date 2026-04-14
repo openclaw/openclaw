@@ -90,11 +90,7 @@ async function ensureFfmpeg(): Promise<void> {
   try {
     await execAsync('ffmpeg -version');
   } catch {
-    if (process.platform === 'linux') {
-      await execAsync('sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg');
-    } else {
-      throw new Error(`ffmpeg required for merging video/audio.`);
-    }
+    throw new Error(`ffmpeg is required for merging video/audio but was not found in the system PATH. Please install ffmpeg and ensure it's available in your PATH.`);
   }
 }
 
