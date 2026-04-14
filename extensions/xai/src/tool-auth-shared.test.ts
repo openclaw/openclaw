@@ -137,4 +137,56 @@ describe("xai tool auth helpers", () => {
     expect(isXaiToolEnabled({ enabled: false })).toBe(false);
     expect(isXaiToolEnabled({ enabled: true })).toBe(true);
   });
+
+  it("does not throw on unresolved source SecretRefs and still falls back to env", () => {
+    vi.stubEnv("XAI_API_KEY", "env-key");
+
+    expect(
+      resolveXaiToolApiKey({
+        sourceConfig: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "file",
+                      provider: "vault",
+                      id: "/xai/tool-key",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("env-key");
+  });
+
+  it("resolves env SecretRefs from source config when runtime snapshot is unavailable", () => {
+    vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
+
+    expect(
+      resolveXaiToolApiKey({
+        sourceConfig: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "XAI_API_KEY",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("xai-secretref-key");
+  });
 });

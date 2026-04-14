@@ -5,10 +5,12 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderEnvValue,
-  readConfiguredSecretString,
   resolveProviderWebSearchPluginConfig,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  normalizeSecretInputString,
+  resolveSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 
 export type XaiFallbackAuth = {
   apiKey: string;
@@ -36,20 +38,35 @@ function readLegacyGrokFallbackAuth(cfg?: OpenClawConfig): XaiFallbackAuth | und
   return apiKey ? { apiKey, source: "tools.web.search.grok.apiKey" } : undefined;
 }
 
+function readConfiguredRuntimeApiKey(value: unknown, path: string): string | undefined {
+  const resolved = resolveSecretInputString({
+    value,
+    path,
+    mode: "inspect",
+  });
+  if (resolved.status === "available") {
+    return resolved.value;
+  }
+  if (resolved.status !== "configured_unavailable" || resolved.ref.source !== "env") {
+    return undefined;
+  }
+  return normalizeSecretInputString(process.env[resolved.ref.id]);
+}
+
 export function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {
     return undefined;
   }
   const grok = (search as Record<string, unknown>).grok;
-  return readConfiguredSecretString(
+  return readConfiguredRuntimeApiKey(
     grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
     "tools.web.search.grok.apiKey",
   );
 }
 
 export function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | undefined {
-  return readConfiguredSecretString(
+  return readConfiguredRuntimeApiKey(
     resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,
     "plugins.entries.xai.config.webSearch.apiKey",
   );

@@ -474,6 +474,52 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_FIRECRAWL_BASE_URL);
   });
 
+  it("resolves env SecretRefs for Firecrawl API key without requiring a runtime snapshot", () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-ref-key");
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "FIRECRAWL_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBe("firecrawl-env-ref-key");
+  });
+
+  it("does not throw on unresolved non-env SecretRefs and can still fall back to env", () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-fallback");
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "file",
+                  provider: "vault",
+                  id: "/firecrawl/api-key",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBe("firecrawl-env-fallback");
+  });
+
   it("only allows the official Firecrawl API host for fetch endpoints", () => {
     expect(firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape")).toBe(
       "https://api.firecrawl.dev/v2/scrape",

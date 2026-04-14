@@ -1,8 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  normalizeResolvedSecretInputString,
-  normalizeSecretInput,
-} from "openclaw/plugin-sdk/secret-input";
+import { resolveSecretInputString, normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 export const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;
@@ -105,12 +102,18 @@ export function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetc
 }
 
 function normalizeConfiguredSecret(value: unknown, path: string): string | undefined {
-  return normalizeSecretInput(
-    normalizeResolvedSecretInputString({
-      value,
-      path,
-    }),
-  );
+  const resolved = resolveSecretInputString({
+    value,
+    path,
+    mode: "inspect",
+  });
+  if (resolved.status === "available") {
+    return normalizeSecretInput(resolved.value);
+  }
+  if (resolved.status !== "configured_unavailable" || resolved.ref.source !== "env") {
+    return undefined;
+  }
+  return normalizeSecretInput(process.env[resolved.ref.id]);
 }
 
 export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
