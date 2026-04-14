@@ -493,7 +493,9 @@ img.chat-avatar {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-summary {
+/* Scope summary styling to chat bubbles and tool messages only */
+.chat-bubble summary,
+.chat-tool-msg-collapse > summary {
   margin: 0;
   padding: 4px 8px;
 }

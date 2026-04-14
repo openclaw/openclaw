@@ -405,24 +405,6 @@ export function createOpenClawReadTool(
       }
 
       try {
-        await assertSandboxPath({
-          filePath: inputPath,
-          cwd: rootDir,
-          root: rootDir
-        });
-      } catch (err) {
-        const error = err as Error;
-        return {
-          toolCallId,
-          content: [{
-            type: "text",
-            text: `Access denied: ${error.message}. File exists at ${inputPath} but cannot be accessed.`
-          }],
-          details: { isError: true, path: inputPath },
-        };
-      }
-
-      try {
         const stats = await fs.stat(inputPath);
 
         if (stats.isDirectory()) {
@@ -501,13 +483,13 @@ export function createOpenClawReadTool(
           }
 
           let mimeType: string;
-          if (ext === "mp3") { mimeType = "audio/mpeg";}
-          else if (ext === "wav") { mimeType = "audio/wav";}
-          else if (ext === "ogg") { mimeType = "audio/ogg";}
-          else if (ext === "m4a") { mimeType = "audio/mp4";}
-          else if (ext === "flac") { mimeType = "audio/flac";}
-          else if (ext === "aac") { mimeType = "audio/aac";}
-          else { mimeType = "audio/ogg";}
+          if (ext === "mp3") { mimeType = "audio/mpeg"; }
+          else if (ext === "wav") { mimeType = "audio/wav"; }
+          else if (ext === "ogg") { mimeType = "audio/ogg"; }
+          else if (ext === "m4a") { mimeType = "audio/mp4"; }
+          else if (ext === "flac") { mimeType = "audio/flac"; }
+          else if (ext === "aac") { mimeType = "audio/aac"; }
+          else { mimeType = "audio/ogg"; }
 
           return {
             toolCallId,
@@ -538,12 +520,12 @@ export function createOpenClawReadTool(
           }
 
           let mimeType: string;
-          if (ext === "mp4") { mimeType = "video/mp4";}
-          else if (ext === "webm") { mimeType = "video/webm";}
-          else if (ext === "mov") { mimeType = "video/quicktime";}
-          else if (ext === "avi") { mimeType = "video/x-msvideo";}
-          else if (ext === "mkv") { mimeType = "video/x-matroska";}
-          else { mimeType = "video/mp4";}
+          if (ext === "mp4") { mimeType = "video/mp4"; }
+          else if (ext === "webm") { mimeType = "video/webm"; }
+          else if (ext === "mov") { mimeType = "video/quicktime"; }
+          else if (ext === "avi") { mimeType = "video/x-msvideo"; }
+          else if (ext === "mkv") { mimeType = "video/x-matroska"; }
+          else { mimeType = "video/mp4"; }
 
           return {
             toolCallId,

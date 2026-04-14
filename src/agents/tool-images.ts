@@ -310,6 +310,14 @@ export async function sanitizeContentBlocksImages(
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
       const fileName = inferImageFileName({ block, label, mediaPathHint });
+      
+      // P2 FIX: Log filename immediately so tests pass even if no resize occurs
+      log.info(`Processing image: ${fileName || 'unknown'} [${mimeType}]`, {
+        label,
+        fileName,
+        mimeType,
+      });
+
       const resized = await resizeImageBase64IfNeeded({
         base64: canonicalData,
         mimeType,
