@@ -1131,7 +1131,9 @@ export function buildGatewaySessionRow(params: {
   const space = entry?.space;
   const id = parsed?.id;
   const origin = entry?.origin;
-  const originLabel = origin?.label;
+  // Exclude internal system sender IDs (e.g. "heartbeat") from the display
+  // name fallback chain so the webchat session selector stays meaningful.
+  const originLabel = origin?.label && origin.label !== "heartbeat" ? origin.label : undefined;
   const displayName =
     entry?.displayName ??
     (channel
