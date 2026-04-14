@@ -980,7 +980,14 @@ export function createAgentEventHandler({
           isToolEvent ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
         );
       }
-      if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
+      const assistantPhase =
+        evt.stream === "assistant" && typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (
+        !isAborted &&
+        evt.stream === "assistant" &&
+        assistantPhase !== "commentary" &&
+        typeof evt.data?.text === "string"
+      ) {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
       }
     }

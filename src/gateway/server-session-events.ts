@@ -5,6 +5,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
+import { sanitizeChatHistoryMessages } from "./server-methods/chat.js";
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -16,6 +17,18 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
+
+function sanitizeTranscriptUpdateMessage(message: unknown): Record<string, unknown> | null {
+  const [sanitizedMessage] = sanitizeChatHistoryMessages([message]);
+  if (
+    !sanitizedMessage ||
+    typeof sanitizedMessage !== "object" ||
+    Array.isArray(sanitizedMessage)
+  ) {
+    return null;
+  }
+  return sanitizedMessage as Record<string, unknown>;
+}
 
 function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
@@ -108,22 +121,25 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       sessionRow: loadGatewaySessionRow(sessionKey),
       includeSession: true,
     });
-    const message = attachOpenClawTranscriptMeta(update.message, {
-      ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
-      ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
-    });
-    params.broadcastToConnIds(
-      "session.message",
-      {
-        sessionKey,
-        message,
-        ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-        ...(typeof messageSeq === "number" ? { messageSeq } : {}),
-        ...sessionSnapshot,
-      },
-      connIds,
-      { dropIfSlow: true },
-    );
+    const sanitizedMessage = sanitizeTranscriptUpdateMessage(update.message);
+    if (sanitizedMessage) {
+      const message = attachOpenClawTranscriptMeta(sanitizedMessage, {
+        ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+        ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
+      });
+      params.broadcastToConnIds(
+        "session.message",
+        {
+          sessionKey,
+          message,
+          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+          ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+          ...sessionSnapshot,
+        },
+        connIds,
+        { dropIfSlow: true },
+      );
+    }
 
     const sessionEventConnIds = params.sessionEventSubscribers.getAll();
     if (sessionEventConnIds.size === 0) {

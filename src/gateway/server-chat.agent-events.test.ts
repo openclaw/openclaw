@@ -215,6 +215,63 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("suppresses commentary-phase assistant text but still emits later final_answer text", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_250,
+    });
+    chatRunState.registry.add("run-commentary", {
+      sessionKey: "session-commentary",
+      clientRunId: "client-commentary",
+    });
+
+    handler({
+      runId: "run-commentary",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "Checking thread context before I answer.",
+        delta: "Checking thread context before I answer.",
+        phase: "commentary",
+      },
+    });
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+
+    handler({
+      runId: "run-commentary",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "Final answer",
+        delta: "Final answer",
+        phase: "final_answer",
+      },
+    });
+    emitLifecycleEnd(handler, "run-commentary", 3);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    expect(chatCalls.map(([, payload]) => (payload as { state?: string }).state)).toEqual([
+      "delta",
+      "final",
+    ]);
+    expect(
+      chatCalls.every(([, payload]) => {
+        const text = (payload as { message?: { content?: Array<{ text?: string }> } }).message
+          ?.content?.[0]?.text;
+        return !text || !text.includes("Checking thread context");
+      }),
+    ).toBe(true);
+    const finalPayload = chatCalls.at(-1)?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalPayload.message?.content?.[0]?.text).toBe("Final answer");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
+    nowSpy?.mockRestore();
+  });
+
   it.each([" NO_REPLY  ", " ANNOUNCE_SKIP ", " REPLY_SKIP "])(
     "does not emit chat delta for suppressed control text %s",
     (replyText) => {
