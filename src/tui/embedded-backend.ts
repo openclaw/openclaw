@@ -10,12 +10,22 @@ import { updateSessionStore } from "../config/sessions.js";
 import { stripEnvelopeFromMessages } from "../gateway/chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../gateway/cli-session-history.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
+import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
 import {
   injectTimestamp,
   timestampOptsFromConfig,
 } from "../gateway/server-methods/agent-timestamp.js";
+import {
+  augmentChatHistoryWithCanvasBlocks,
+  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+  enforceChatHistoryFinalBudget,
+  replaceOversizedChatHistoryMessages,
+  resolveEffectiveChatHistoryMaxChars,
+  sanitizeChatHistoryMessages,
+} from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
+import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
 import {
   listAgentsForGateway,
   listSessionsFromStore,
@@ -225,9 +235,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
       localMessages,
     });
     const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
-    const messages = stripEnvelopeFromMessages(
-      rawMessages.length > max ? rawMessages.slice(-max) : rawMessages,
+    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
+    const sanitized = stripEnvelopeFromMessages(sliced);
+    const normalized = augmentChatHistoryWithCanvasBlocks(
+      sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
     );
+    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
+    const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
+    const replaced = replaceOversizedChatHistoryMessages({
+      messages: normalized,
+      maxSingleMessageBytes: perMessageHardCap,
+    });
+    const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+    const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const messages = bounded.messages;
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {

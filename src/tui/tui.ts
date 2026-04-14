@@ -63,7 +63,10 @@ const OPENAI_CODEX_PROVIDER = "openai-codex";
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
   try {
-    return execFileSync("which", ["codex"], { encoding: "utf8" }).trim() || null;
+    const lookupCmd = process.platform === "win32" ? "where" : "which";
+    // `where` on Windows can return multiple lines; take the first match.
+    const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
+    return raw.split(/\r?\n/)[0] || null;
   } catch {
     return null;
   }
