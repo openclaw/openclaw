@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { VoiceCallTtsConfig } from "./config.js";
 
 function resolveProviderVoiceSetting(providerConfig: unknown): string | undefined {
@@ -8,13 +9,7 @@ function resolveProviderVoiceSetting(providerConfig: unknown): string | undefine
     voice?: unknown;
     voiceId?: unknown;
   };
-  if (typeof candidate.voice === "string" && candidate.voice.trim()) {
-    return candidate.voice;
-  }
-  if (typeof candidate.voiceId === "string" && candidate.voiceId.trim()) {
-    return candidate.voiceId;
-  }
-  return undefined;
+  return normalizeOptionalString(candidate.voice) ?? normalizeOptionalString(candidate.voiceId);
 }
 
 export function resolvePreferredTtsVoice(config: { tts?: VoiceCallTtsConfig }): string | undefined {

@@ -1,23 +1,23 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
-import { refreshChat } from "./app-chat.ts";
+import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { OpenClawApp } from "./app.ts";
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "./chat-model-select-state.ts";
+import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
-import type { ThemeTransitionContext } from "./theme-transition.ts";
-import type { ThemeMode, ThemeName } from "./theme.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
+import type { ThemeMode } from "./theme.ts";
 import {
   listThinkingLevelLabels,
   normalizeThinkLevel,
@@ -30,15 +30,38 @@ type SessionDefaultsSnapshot = {
   mainKey?: string;
 };
 
+type SessionSwitchHost = AppViewState & {
+  chatStreamStartedAt: number | null;
+  chatSideResultTerminalRuns: Set<string>;
+  resetToolStream(): void;
+  resetChatScroll(): void;
+};
+
+type ChatRefreshHost = AppViewState & {
+  chatManualRefreshInFlight: boolean;
+  chatNewMessagesBelow: boolean;
+  resetToolStream(): void;
+  scrollToBottom(opts?: { smooth?: boolean }): void;
+  updateComplete?: Promise<unknown>;
+};
+
+export function resolveAssistantAttachmentAuthToken(
+  state: Pick<AppViewState, "settings" | "password">,
+) {
+  return (
+    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
+  );
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;
-  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  const mainSessionKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainSessionKey);
   if (mainSessionKey) {
     return mainSessionKey;
   }
-  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
+  const mainKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainKey);
   if (mainKey) {
     return mainKey;
   }
@@ -46,13 +69,26 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+  const host = state as unknown as SessionSwitchHost;
   state.sessionKey = sessionKey;
   state.chatMessage = "";
+  state.chatAttachments = [];
+  state.chatMessages = [];
+  state.chatToolMessages = [];
+  state.chatStreamSegments = [];
+  state.chatThinkingLevel = null;
   state.chatStream = null;
-  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+  state.chatSideResult = null;
+  state.lastError = null;
+  state.compactionStatus = null;
+  state.fallbackStatus = null;
+  state.chatAvatarUrl = null;
+  state.chatQueue = [];
+  host.chatStreamStartedAt = null;
   state.chatRunId = null;
-  (state as unknown as OpenClawApp).resetToolStream();
-  (state as unknown as OpenClawApp).resetChatScroll();
+  host.chatSideResultTerminalRuns.clear();
+  host.resetToolStream();
+  host.resetChatScroll();
   state.applySettings({
     ...state.settings,
     sessionKey,
@@ -81,9 +117,11 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
         }
         event.preventDefault();
         if (tab === "chat") {
-          const mainSessionKey = resolveSidebarChatSessionKey(state);
-          if (state.sessionKey !== mainSessionKey) {
+          if (!state.sessionKey) {
+            const mainSessionKey = resolveSidebarChatSessionKey(state);
             resetChatStateForSessionSwitch(state, mainSessionKey);
+          }
+          if (state.tab !== "chat") {
             void state.loadAssistantIdentity();
           }
         }
@@ -166,7 +204,13 @@ export function renderChatSessionSelect(state: AppViewState) {
                   group.options,
                   (entry) => entry.key,
                   (entry) =>
-                    html`<option value=${entry.key} title=${entry.title}>${entry.label}</option>`,
+                    html`<option
+                      value=${entry.key}
+                      title=${entry.title}
+                      ?selected=${entry.key === state.sessionKey}
+                    >
+                      ${entry.label}
+                    </option>`,
                 )}
               </optgroup>`,
           )}
@@ -242,7 +286,7 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
         @click=${async () => {
-          const app = state as unknown as OpenClawApp;
+          const app = state as unknown as ChatRefreshHost;
           app.chatManualRefreshInFlight = true;
           app.chatNewMessagesBelow = false;
           await app.updateComplete;
@@ -438,7 +482,13 @@ export function renderChatMobileToggle(state: AppViewState) {
                   <optgroup label=${group.label}>
                     ${group.options.map(
                       (opt) => html`
-                        <option value=${opt.key} title=${opt.title}>${opt.label}</option>
+                        <option
+                          value=${opt.key}
+                          title=${opt.title}
+                          ?selected=${opt.key === state.sessionKey}
+                        >
+                          ${opt.label}
+                        </option>
                       `,
                     )}
                   </optgroup>
@@ -504,21 +554,13 @@ export function renderChatMobileToggle(state: AppViewState) {
 }
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
-  state.sessionKey = nextSessionKey;
-  state.chatMessage = "";
-  state.chatStream = null;
-  // P1: Clear queued chat items from the previous session
-  (state as unknown as { chatQueue: unknown[] }).chatQueue = [];
-  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-  state.chatRunId = null;
-  (state as unknown as OpenClawApp).resetToolStream();
-  (state as unknown as OpenClawApp).resetChatScroll();
-  state.applySettings({
-    ...state.settings,
-    sessionKey: nextSessionKey,
-    lastActiveSessionKey: nextSessionKey,
-  });
+  resetChatStateForSessionSwitch(state, nextSessionKey);
   void state.loadAssistantIdentity();
+  void refreshChatAvatar(state);
+  void refreshSlashCommands({
+    client: state.client,
+    agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
+  });
   syncUrlWithSessionKey(
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,
@@ -608,7 +650,7 @@ function buildThinkingOptions(
     if (!trimmed) {
       return;
     }
-    const key = trimmed.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(trimmed);
     if (seen.has(key)) {
       return;
     }
@@ -625,7 +667,7 @@ function buildThinkingOptions(
   };
 
   for (const label of listThinkingLevelLabels(provider)) {
-    const normalized = normalizeThinkLevel(label) ?? label.trim().toLowerCase();
+    const normalized = normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label);
     addOption(normalized);
   }
   if (currentOverride) {
@@ -808,7 +850,7 @@ function capitalize(s: string): string {
  * fallback display name.  Exported for testing.
  */
 export function parseSessionKey(key: string): SessionKeyInfo {
-  const normalized = key.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // ── Main session ─────────────────────────────────
   if (key === "main" || key === "agent:main:main") {
@@ -857,8 +899,8 @@ export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
 ): string {
-  const label = row?.label?.trim() || "";
-  const displayName = row?.displayName?.trim() || "";
+  const label = normalizeOptionalString(row?.label) ?? "";
+  const displayName = normalizeOptionalString(row?.displayName) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
@@ -879,7 +921,7 @@ export function resolveSessionDisplayName(
 }
 
 export function isCronSessionKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(key);
   if (!normalized) {
     return false;
   }
@@ -947,11 +989,11 @@ export function resolveSessionOptionGroups(
     const parsed = parseAgentSessionKey(key);
     const group = parsed
       ? ensureGroup(
-          `agent:${parsed.agentId.toLowerCase()}`,
+          `agent:${normalizeLowercaseStringOrEmpty(parsed.agentId)}`,
           resolveAgentGroupLabel(state, parsed.agentId),
         )
       : ensureGroup("other", "Other Sessions");
-    const scopeLabel = parsed?.rest?.trim() || key;
+    const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
     const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
     group.options.push({
       key,
@@ -1061,11 +1103,12 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
 }
 
 function resolveAgentGroupLabel(state: AppViewState, agentIdRaw: string): string {
-  const normalized = agentIdRaw.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(agentIdRaw);
   const agent = (state.agentsList?.agents ?? []).find(
-    (entry) => entry.id.trim().toLowerCase() === normalized,
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalized,
   );
-  const name = agent?.identity?.name?.trim() || agent?.name?.trim() || "";
+  const name =
+    normalizeOptionalString(agent?.identity?.name) ?? normalizeOptionalString(agent?.name) ?? "";
   return name && name !== agentIdRaw ? `${name} (${agentIdRaw})` : agentIdRaw;
 }
 
@@ -1074,13 +1117,13 @@ function resolveSessionScopedOptionLabel(
   row?: SessionsListResult["sessions"][number],
   rest?: string,
 ) {
-  const base = rest?.trim() || key;
+  const base = normalizeOptionalString(rest) ?? key;
   if (!row) {
     return base;
   }
 
-  const label = row.label?.trim() || "";
-  const displayName = row.displayName?.trim() || "";
+  const label = normalizeOptionalString(row.label) ?? "";
+  const displayName = normalizeOptionalString(row.displayName) ?? "";
   if ((label && label !== key) || (displayName && displayName !== key)) {
     return resolveSessionDisplayName(key, row);
   }
@@ -1088,23 +1131,12 @@ function resolveSessionScopedOptionLabel(
   return base;
 }
 
-type ThemeOption = { id: ThemeName; label: string; icon: string };
-const THEME_OPTIONS: ThemeOption[] = [
-  { id: "claw", label: "Claw", icon: "🦀" },
-  { id: "knot", label: "Knot", icon: "🪢" },
-  { id: "dash", label: "Dash", icon: "📊" },
-];
-
 type ThemeModeOption = { id: ThemeMode; label: string; short: string };
 const THEME_MODE_OPTIONS: ThemeModeOption[] = [
   { id: "system", label: "System", short: "SYS" },
   { id: "light", label: "Light", short: "LIGHT" },
   { id: "dark", label: "Dark", short: "DARK" },
 ];
-
-function currentThemeIcon(theme: ThemeName): string {
-  return THEME_OPTIONS.find((o) => o.id === theme)?.icon ?? "🎨";
-}
 
 export function renderTopbarThemeModeToggle(state: AppViewState) {
   const modeIcon = (mode: ThemeMode) => {
@@ -1160,80 +1192,5 @@ export function renderSidebarConnectionStatus(state: AppViewState) {
       aria-label="Gateway status: ${label}"
       title="Gateway status: ${label}"
     ></span>
-  `;
-}
-
-export function renderThemeToggle(state: AppViewState) {
-  const setOpen = (orb: HTMLElement, nextOpen: boolean) => {
-    orb.classList.toggle("theme-orb--open", nextOpen);
-    const trigger = orb.querySelector<HTMLButtonElement>(".theme-orb__trigger");
-    const menu = orb.querySelector<HTMLElement>(".theme-orb__menu");
-    if (trigger) {
-      trigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
-    }
-    if (menu) {
-      menu.setAttribute("aria-hidden", nextOpen ? "false" : "true");
-    }
-  };
-
-  const toggleOpen = (e: Event) => {
-    const orb = (e.currentTarget as HTMLElement).closest<HTMLElement>(".theme-orb");
-    if (!orb) {
-      return;
-    }
-    const isOpen = orb.classList.contains("theme-orb--open");
-    if (isOpen) {
-      setOpen(orb, false);
-    } else {
-      setOpen(orb, true);
-      const close = (ev: MouseEvent) => {
-        if (!orb.contains(ev.target as Node)) {
-          setOpen(orb, false);
-          document.removeEventListener("click", close);
-        }
-      };
-      requestAnimationFrame(() => document.addEventListener("click", close));
-    }
-  };
-
-  const pick = (opt: ThemeOption, e: Event) => {
-    const orb = (e.currentTarget as HTMLElement).closest<HTMLElement>(".theme-orb");
-    if (orb) {
-      setOpen(orb, false);
-    }
-    if (opt.id !== state.theme) {
-      const context: ThemeTransitionContext = { element: orb ?? undefined };
-      state.setTheme(opt.id, context);
-    }
-  };
-
-  return html`
-    <div class="theme-orb" aria-label="Theme">
-      <button
-        type="button"
-        class="theme-orb__trigger"
-        title="Theme"
-        aria-haspopup="menu"
-        aria-expanded="false"
-        @click=${toggleOpen}
-      >
-        ${currentThemeIcon(state.theme)}
-      </button>
-      <div class="theme-orb__menu" role="menu" aria-hidden="true">
-        ${THEME_OPTIONS.map(
-          (opt) => html` <button
-            type="button"
-            class="theme-orb__option ${opt.id === state.theme ? "theme-orb__option--active" : ""}"
-            title=${opt.label}
-            role="menuitemradio"
-            aria-checked=${opt.id === state.theme}
-            aria-label=${opt.label}
-            @click=${(e: Event) => pick(opt, e)}
-          >
-            ${opt.icon}
-          </button>`,
-        )}
-      </div>
-    </div>
   `;
 }

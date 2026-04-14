@@ -72,6 +72,8 @@ Schema tooling notes:
 
 - `openclaw config schema` prints the same JSON Schema family used by Control UI
   and config validation.
+- Treat that schema output as the canonical machine-readable contract for
+  `openclaw.json`; this overview and the configuration reference summarize it.
 - Field `title` and `description` values are carried into the schema output for
   editor and form tooling.
 - Nested object, wildcard (`*`), and array-item (`[]`) entries inherit the same
@@ -84,6 +86,8 @@ Schema tooling notes:
   summaries for drill-down tooling.
 - Runtime plugin/channel schemas are merged in when the gateway can load the
   current manifest registry.
+- `pnpm config:docs:check` detects drift between docs-facing config baseline
+  artifacts and the current schema surface.
 
 When validation fails:
 
@@ -220,7 +224,7 @@ When validation fails:
     - Omit `agents.list[].skills` to inherit the defaults.
     - Set `agents.list[].skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/configuration-reference#agentsdefaultsskills).
+      the [Configuration Reference](/gateway/configuration-reference#agents-defaults-skills).
 
   </Accordion>
 

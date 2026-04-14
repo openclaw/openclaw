@@ -1,5 +1,5 @@
 import { isTruthyEnvValue } from "../infra/env.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
+import type { DoctorOptions } from "./doctor.types.js";
 
 export type DoctorRepairMode = {
   shouldRepair: boolean;
@@ -14,7 +14,7 @@ export function resolveDoctorRepairMode(options: DoctorOptions): DoctorRepairMod
   const requestedNonInteractive = options.nonInteractive === true;
   const shouldRepair = options.repair === true || yes;
   const shouldForce = options.force === true;
-  const isTty = Boolean(process.stdin.isTTY);
+  const isTty = process.stdin.isTTY;
   const nonInteractive = requestedNonInteractive || (!isTty && !yes);
   const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
   const canPrompt = isTty && !yes && !nonInteractive;

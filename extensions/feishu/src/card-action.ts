@@ -35,6 +35,13 @@ const processedCardActionTokens = new Map<
   { status: "inflight" | "completed"; expiresAt: number }
 >();
 
+export class FeishuRetryableCardActionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "FeishuRetryableCardActionError";
+  }
+}
+
 export function resetProcessedFeishuCardActionTokensForTests(): void {
   processedCardActionTokens.clear();
 }
@@ -56,7 +63,7 @@ function beginFeishuCardActionToken(params: {
   pruneProcessedCardActionTokens(now);
   const normalizedToken = params.token.trim();
   if (!normalizedToken) {
-    return true;
+    return false;
   }
   const key = `${params.accountId}:${normalizedToken}`;
   const existing = processedCardActionTokens.get(key);
@@ -176,6 +183,12 @@ export async function handleFeishuCardAction(params: {
   const { cfg, event, runtime, accountId } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
+  if (!event.token.trim()) {
+    log(
+      `feishu[${account.accountId}]: rejected card action from ${event.operator.open_id}: missing token`,
+    );
+    return;
+  }
   const decoded = decodeFeishuCardAction({ event });
   const claimedToken = beginFeishuCardActionToken({
     token: event.token,
@@ -304,7 +317,11 @@ export async function handleFeishuCardAction(params: {
     });
     completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
   } catch (err) {
-    releaseFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+    if (err instanceof FeishuRetryableCardActionError) {
+      releaseFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+    } else {
+      completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+    }
     throw err;
   }
 }

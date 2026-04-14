@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { callGateway } from "../../gateway/call.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -16,10 +16,13 @@ import {
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = <T = unknown>(opts: CallGatewayOptions) => Promise<T>;
 
 const defaultSessionsSendA2ADeps = {
-  callGateway,
+  callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+    const { callGateway } = await import("../../gateway/call.js");
+    return callGateway<T>(opts);
+  },
 };
 
 let sessionsSendA2ADeps: {
@@ -134,6 +137,7 @@ export async function runSessionsSendA2AFlow(params: {
             message: announceReply.trim(),
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
+            threadId: announceTarget.threadId,
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: 10_000,

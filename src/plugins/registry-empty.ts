@@ -1,4 +1,4 @@
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 export function createEmptyPluginRegistry(): PluginRegistry {
   return {
@@ -9,6 +9,8 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channels: [],
     channelSetups: [],
     providers: [],
+    cliBackends: [],
+    textTransforms: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],
@@ -19,6 +21,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     webFetchProviders: [],
     webSearchProviders: [],
     memoryEmbeddingProviders: [],
+    agentHarnesses: [],
     gatewayHandlers: {},
     gatewayMethodScopes: {},
     httpRoutes: [],

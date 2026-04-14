@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 
 export type VoiceWakeConfig = {
@@ -16,7 +17,7 @@ function resolvePath(baseDir?: string) {
 
 function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
   const cleaned = (triggers ?? [])
-    .map((w) => (typeof w === "string" ? w.trim() : ""))
+    .map((w) => normalizeOptionalString(w) ?? "")
     .filter((w) => w.length > 0);
   return cleaned.length > 0 ? cleaned : DEFAULT_TRIGGERS;
 }

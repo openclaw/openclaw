@@ -1,5 +1,6 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MediaNormalizationEntry } from "../media-generation/normalization.types.js";
 
 export type GeneratedImageAsset = {
   buffer: Buffer;
@@ -67,6 +68,12 @@ export type ImageGenerationGeometryCapabilities = {
   sizes?: string[];
   aspectRatios?: string[];
   resolutions?: ImageGenerationResolution[];
+};
+
+export type ImageGenerationNormalization = {
+  size?: MediaNormalizationEntry<string>;
+  aspectRatio?: MediaNormalizationEntry<string>;
+  resolution?: MediaNormalizationEntry<ImageGenerationResolution>;
 };
 
 export type ImageGenerationProviderCapabilities = {

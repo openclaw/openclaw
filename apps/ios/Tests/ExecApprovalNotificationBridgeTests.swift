@@ -49,6 +49,32 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
         #expect(prompt == ExecApprovalNotificationPrompt(approvalId: "approval-123"))
     }
 
+    @Test func parsePromptMapsReviewAction() {
+        let prompt = ExecApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: ExecApprovalNotificationBridge.reviewActionIdentifier,
+            userInfo: [
+                "openclaw": [
+                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "approvalId": "approval-456",
+                ],
+            ])
+
+        #expect(prompt == ExecApprovalNotificationPrompt(approvalId: "approval-456"))
+    }
+
+    @Test func parsePromptIgnoresUnexpectedActionIdentifiers() {
+        let prompt = ExecApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: "openclaw.exec-approval.allow-once",
+            userInfo: [
+                "openclaw": [
+                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "approvalId": "approval-789",
+                ],
+            ])
+
+        #expect(prompt == nil)
+    }
+
     @Test @MainActor func handleResolvedPushRemovesMatchingNotifications() async {
         let center = MockNotificationCenter()
         center.delivered = [

@@ -1,15 +1,12 @@
 import os from "node:os";
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-  resolveSecretInputRef,
-} from "../config/types.secrets.js";
+import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
+import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
-import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -23,6 +20,10 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "../shared/net/ip.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
@@ -81,7 +82,7 @@ function describeSecureMobilePairingFix(source?: string): string {
 }
 
 function isPrivateLanHostname(host: string): boolean {
-  const normalized = host.trim().toLowerCase().replace(/\.+$/, "");
+  const normalized = normalizeHostname(host);
   if (!normalized) {
     return false;
   }
@@ -103,7 +104,7 @@ function isPrivateLanIpHost(host: string): boolean {
   if (!isIpv6Address(parsed)) {
     return false;
   }
-  const normalized = parsed.toString().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(parsed.toString());
   return (
     normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")
   );
@@ -217,14 +218,6 @@ function pickTailnetIPv4(
   return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
 }
 
-function resolveGatewayTokenFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
-}
-
-function resolveGatewayPasswordFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
-}
-
 function resolvePairingSetupAuthLabel(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -239,8 +232,8 @@ function resolvePairingSetupAuthLabel(
     value: cfg.gateway?.auth?.password,
     defaults,
   }).ref;
-  const envToken = resolveGatewayTokenFromEnv(env);
-  const envPassword = resolveGatewayPasswordFromEnv(env);
+  const envToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
+  const envPassword = normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
   const token =
     envToken || (tokenRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.token));
   const password =
@@ -266,94 +259,6 @@ function resolvePairingSetupAuthLabel(
     return { label: "password" };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
-}
-
-async function resolveGatewayTokenSecretRef(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<OpenClawConfig> {
-  const hasTokenEnvCandidate = Boolean(resolveGatewayTokenFromEnv(env));
-  if (hasTokenEnvCandidate) {
-    return cfg;
-  }
-  const mode = cfg.gateway?.auth?.mode;
-  if (mode === "password" || mode === "none" || mode === "trusted-proxy") {
-    return cfg;
-  }
-  if (mode !== "token") {
-    const hasPasswordEnvCandidate = Boolean(env.OPENCLAW_GATEWAY_PASSWORD?.trim());
-    if (hasPasswordEnvCandidate) {
-      return cfg;
-    }
-  }
-  const token = await resolveRequiredConfiguredSecretRefInputString({
-    config: cfg,
-    env,
-    value: cfg.gateway?.auth?.token,
-    path: "gateway.auth.token",
-  });
-  if (!token) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    gateway: {
-      ...cfg.gateway,
-      auth: {
-        ...cfg.gateway?.auth,
-        token,
-      },
-    },
-  };
-}
-
-async function resolveGatewayPasswordSecretRef(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<OpenClawConfig> {
-  const hasPasswordEnvCandidate = Boolean(resolveGatewayPasswordFromEnv(env));
-  if (hasPasswordEnvCandidate) {
-    return cfg;
-  }
-  const mode = cfg.gateway?.auth?.mode;
-  if (mode === "token" || mode === "none" || mode === "trusted-proxy") {
-    return cfg;
-  }
-  if (mode !== "password") {
-    const hasTokenCandidate =
-      Boolean(resolveGatewayTokenFromEnv(env)) ||
-      hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
-    if (hasTokenCandidate) {
-      return cfg;
-    }
-  }
-  const password = await resolveRequiredConfiguredSecretRefInputString({
-    config: cfg,
-    env,
-    value: cfg.gateway?.auth?.password,
-    path: "gateway.auth.password",
-  });
-  if (!password) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    gateway: {
-      ...cfg.gateway,
-      auth: {
-        ...cfg.gateway?.auth,
-        password,
-      },
-    },
-  };
-}
-
-async function materializePairingSetupAuthConfig(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<OpenClawConfig> {
-  const cfgWithToken = await resolveGatewayTokenSecretRef(cfg, env);
-  return await resolveGatewayPasswordSecretRef(cfgWithToken, env);
 }
 
 async function resolveGatewayUrl(
@@ -430,7 +335,13 @@ export async function resolvePairingSetupFromConfig(
 ): Promise<PairingSetupResolution> {
   assertExplicitGatewayAuthModeWhenBothConfigured(cfg);
   const env = options.env ?? process.env;
-  const cfgForAuth = await materializePairingSetupAuthConfig(cfg, env);
+  const cfgForAuth = await materializeGatewayAuthSecretRefs({
+    cfg,
+    env,
+    mode: cfg.gateway?.auth?.mode,
+    hasTokenCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
+  });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
   if (authLabel.error) {
     return { ok: false, error: authLabel.error };

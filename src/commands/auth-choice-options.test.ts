@@ -318,6 +318,14 @@ describe("buildAuthChoiceOptions", () => {
   it("can include legacy aliases in cli help choices", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
+        pluginId: "anthropic",
+        providerId: "anthropic",
+        methodId: "cli",
+        choiceId: "anthropic-cli",
+        choiceLabel: "Anthropic Claude CLI",
+        deprecatedChoiceIds: ["claude-cli"],
+      },
+      {
         pluginId: "openai",
         providerId: "openai-codex",
         methodId: "oauth",
@@ -332,6 +340,7 @@ describe("buildAuthChoiceOptions", () => {
       includeSkip: true,
     }).split("|");
 
+    expect(cliChoices).toContain("claude-cli");
     expect(cliChoices).toContain("codex-cli");
   });
 
@@ -412,7 +421,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(litellmGroup?.options.some((opt) => opt.value === "litellm-api-key")).toBe(true);
   });
 
-  it("sorts grouped provider options by assistant priority", () => {
+  it("prefers Anthropic Claude CLI over API key in grouped selection", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "anthropic",
@@ -426,9 +435,9 @@ describe("buildAuthChoiceOptions", () => {
       {
         pluginId: "anthropic",
         providerId: "anthropic",
-        methodId: "setup-token",
-        choiceId: "setup-token",
-        choiceLabel: "Anthropic setup-token",
+        methodId: "cli",
+        choiceId: "anthropic-cli",
+        choiceLabel: "Anthropic Claude CLI",
         assistantPriority: -20,
         groupId: "anthropic",
         groupLabel: "Anthropic",
@@ -442,7 +451,7 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(anthropicGroup).toBeDefined();
     expect(anthropicGroup?.options.map((option) => option.value)).toEqual([
-      "setup-token",
+      "anthropic-cli",
       "apiKey",
     ]);
   });

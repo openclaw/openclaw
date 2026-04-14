@@ -1,8 +1,7 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSecretInputRef } from "../../config/types.secrets.js";
-import { createGatewayCredentialPlan, trimToUndefined } from "../../gateway/credential-planner.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
+import { createGatewayCredentialPlan } from "../../gateway/credential-planner.js";
 import { GatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
-import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 
 function authModeDisablesToken(mode: string | undefined): boolean {
   return mode === "password" || mode === "none" || mode === "trusted-proxy";
@@ -35,24 +34,17 @@ export async function resolveGatewayTokenForDriftCheck(params: {
     return undefined;
   }
 
-  const tokenInput = params.cfg.gateway?.auth?.token;
-  const tokenRef = resolveSecretInputRef({
-    value: tokenInput,
-    defaults: params.cfg.secrets?.defaults,
-  }).ref;
-  if (!tokenRef) {
-    return trimToUndefined(tokenInput);
-  }
-
-  const resolved = await resolveConfiguredSecretInputString({
-    config: params.cfg,
+  const resolved = await resolveGatewayAuthToken({
+    cfg: params.cfg,
     env,
-    value: tokenInput,
-    path: "gateway.auth.token",
+    envFallback: "never",
     unresolvedReasonStyle: "detailed",
   });
-  if (resolved.value) {
-    return resolved.value;
+  if (resolved.token) {
+    return resolved.token;
+  }
+  if (!resolved.secretRefConfigured) {
+    return undefined;
   }
   throw new GatewaySecretRefUnavailableError("gateway.auth.token");
 }

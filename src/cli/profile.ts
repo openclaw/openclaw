@@ -2,7 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { getPrimaryCommand } from "./argv.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
 import { forwardConsumedCliRootOption } from "./root-option-forward.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
@@ -32,7 +36,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--dev") {
-      if (getPrimaryCommand(out) === "gateway") {
+      if (resolveCliArgvInvocation(out).primary === "gateway") {
         out.push(arg);
         continue;
       }
@@ -83,7 +87,7 @@ function resolveProfileStateDir(
   env: Record<string, string | undefined>,
   homedir: () => string,
 ): string {
-  const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
+  const suffix = normalizeLowercaseStringOrEmpty(profile) === "default" ? "" : `-${profile}`;
   return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.openclaw${suffix}`);
 }
 
@@ -102,12 +106,13 @@ export function applyCliProfileEnv(params: {
   // Convenience only: fill defaults, never override explicit env values.
   env.OPENCLAW_PROFILE = profile;
 
-  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
-  if (!env.OPENCLAW_STATE_DIR?.trim()) {
+  const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
+  const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
+  if (!existingStateDir) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 
-  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
+  if (!normalizeOptionalString(env.OPENCLAW_CONFIG_PATH)) {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   }
 

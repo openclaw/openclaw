@@ -6,14 +6,19 @@
  */
 
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
-import type { SessionsPatchParams } from "../gateway/protocol/index.js";
+import type { CliDeps } from "../cli/outbound-send-deps.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SessionsPatchParams } from "../gateway/protocol/schema/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+import type {
+  InternalHookEvent,
+  InternalHookEventType,
+  InternalHookHandler,
+} from "./internal-hook-types.js";
+export type { InternalHookEvent, InternalHookEventType, InternalHookHandler };
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -209,6 +214,11 @@ const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
   INTERNAL_HOOK_HANDLERS_KEY,
   () => new Map<string, InternalHookHandler[]>(),
 );
+const INTERNAL_HOOKS_ENABLED_KEY = Symbol.for("openclaw.internalHooksEnabled");
+const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
+  INTERNAL_HOOKS_ENABLED_KEY,
+  () => ({ enabled: true }),
+);
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -267,6 +277,10 @@ export function clearInternalHooks(): void {
   handlers.clear();
 }
 
+export function setInternalHooksEnabled(enabled: boolean): void {
+  internalHooksEnabledState.enabled = enabled;
+}
+
 /**
  * Get all registered event keys (useful for debugging)
  */
@@ -293,6 +307,9 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+  if (!internalHooksEnabledState.enabled) {
+    return;
+  }
   if (!hasInternalHookListeners(event.type, event.action)) {
     // No handlers, but still drain any pre-populated postHookActions.
     if (event.postHookActions?.length) {
@@ -318,7 +335,7 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     try {
       await handler(event);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
     }
   }
