@@ -30,6 +30,43 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .filter((shard) => shard.requiresDist)
       .map((shard) => shard.shardName);
 
-    expect(requiresDistShardNames).toEqual(["core-support-boundary", "core-runtime", "agentic"]);
+    expect(requiresDistShardNames).toEqual([
+      "core-support-boundary",
+      "core-runtime",
+      "agentic-agents-plugins",
+    ]);
+  });
+
+  it("splits the agentic lane into control-plane and agent/plugin shards", () => {
+    const shards = createNodeTestShards();
+    const controlPlaneShard = shards.find((shard) => shard.shardName === "agentic-control-plane");
+    const agentPluginShard = shards.find((shard) => shard.shardName === "agentic-agents-plugins");
+
+    expect(controlPlaneShard).toEqual({
+      checkName: "checks-node-agentic-control-plane",
+      shardName: "agentic-control-plane",
+      configs: [
+        "test/vitest/vitest.gateway-core.config.ts",
+        "test/vitest/vitest.gateway-client.config.ts",
+        "test/vitest/vitest.gateway-methods.config.ts",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "test/vitest/vitest.cli.config.ts",
+        "test/vitest/vitest.commands-light.config.ts",
+        "test/vitest/vitest.commands.config.ts",
+        "test/vitest/vitest.daemon.config.ts",
+      ],
+      requiresDist: false,
+    });
+    expect(agentPluginShard).toEqual({
+      checkName: "checks-node-agentic-agents-plugins",
+      shardName: "agentic-agents-plugins",
+      configs: [
+        "test/vitest/vitest.agents.config.ts",
+        "test/vitest/vitest.plugin-sdk-light.config.ts",
+        "test/vitest/vitest.plugin-sdk.config.ts",
+        "test/vitest/vitest.plugins.config.ts",
+      ],
+      requiresDist: true,
+    });
   });
 });
