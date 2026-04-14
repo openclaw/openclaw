@@ -68,6 +68,7 @@ export type SlackMonitorContext = {
 
   logger: ReturnType<typeof getChildLogger>;
   markMessageSeen: (channelId: string | undefined, ts?: string) => boolean;
+  releaseSeenMessage: (channelId: string | undefined, ts?: string) => void;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
   resolveSlackSystemEventSessionKey: (params: {
     channelId?: string | null;
@@ -158,6 +159,13 @@ export function createSlackMonitorContext(params: {
       return false;
     }
     return seenMessages.check(`${channelId}:${ts}`);
+  };
+
+  const releaseSeenMessage = (channelId: string | undefined, ts?: string) => {
+    if (!channelId || !ts) {
+      return;
+    }
+    seenMessages.delete(`${channelId}:${ts}`);
   };
 
   const resolveSlackSystemEventSessionKey = (p: {
@@ -266,28 +274,13 @@ export function createSlackMonitorContext(params: {
     if (!p.threadTs) {
       return;
     }
-    const payload = {
-      token: params.botToken,
-      channel_id: p.channelId,
-      thread_ts: p.threadTs,
-      status: p.status,
-    };
-    const client = params.app.client as unknown as {
-      assistant?: {
-        threads?: {
-          setStatus?: (args: typeof payload) => Promise<unknown>;
-        };
-      };
-      apiCall?: (method: string, args: typeof payload) => Promise<unknown>;
-    };
     try {
-      if (client.assistant?.threads?.setStatus) {
-        await client.assistant.threads.setStatus(payload);
-        return;
-      }
-      if (typeof client.apiCall === "function") {
-        await client.apiCall("assistant.threads.setStatus", payload);
-      }
+      await params.app.client.assistant.threads.setStatus({
+        token: params.botToken,
+        channel_id: p.channelId,
+        thread_ts: p.threadTs,
+        status: p.status,
+      });
     } catch (err) {
       logVerbose(`slack status update failed for channel ${p.channelId}: ${String(err)}`);
     }
@@ -433,6 +426,7 @@ export function createSlackMonitorContext(params: {
     removeAckAfterReply: params.removeAckAfterReply,
     logger,
     markMessageSeen,
+    releaseSeenMessage,
     shouldDropMismatchedSlackEvent,
     resolveSlackSystemEventSessionKey,
     isChannelAllowed,

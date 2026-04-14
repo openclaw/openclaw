@@ -12,8 +12,8 @@ import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -26,7 +26,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -37,6 +42,7 @@ import {
 import type { OutboundSendDeps } from "./deliver.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
+  collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
@@ -46,6 +52,7 @@ import {
   parseInteractiveParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
+  resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import {
   prepareOutboundMirrorRoute,
@@ -72,6 +79,15 @@ export type MessageActionRunnerGateway = {
   clientDisplayName?: string;
   mode: GatewayClientMode;
 };
+
+let messageActionGatewayRuntimePromise: Promise<
+  typeof import("./message.gateway.runtime.js")
+> | null = null;
+
+function loadMessageActionGatewayRuntime() {
+  messageActionGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
+  return messageActionGatewayRuntimePromise;
+}
 
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
@@ -150,18 +166,45 @@ export function getToolResult(
   return "toolResult" in result ? result.toolResult : undefined;
 }
 
-function collectActionMediaSourceHints(params: Record<string, unknown>): string[] {
-  const sources: string[] = [];
-  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
-    const source = typeof params[key] === "string" ? params[key] : undefined;
-    const normalized = normalizeOptionalString(source);
-    if (normalized && source) {
-      sources.push(source);
-    }
-  }
-  return sources;
+function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
+  return {
+    url: gateway?.url,
+    token: gateway?.token,
+    timeoutMs:
+      typeof gateway?.timeoutMs === "number" && Number.isFinite(gateway.timeoutMs)
+        ? Math.max(1, Math.floor(gateway.timeoutMs))
+        : 10_000,
+    clientName: gateway?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+    clientDisplayName: gateway?.clientDisplayName,
+    mode: gateway?.mode ?? GATEWAY_CLIENT_MODES.CLI,
+  };
 }
 
+async function callGatewayMessageAction<T>(params: {
+  gateway?: MessageActionRunnerGateway;
+  actionParams: Record<string, unknown>;
+}): Promise<T> {
+  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const gateway = resolveGatewayActionOptions(params.gateway);
+  return await callGatewayLeastPrivilege<T>({
+    url: gateway.url,
+    token: gateway.token,
+    method: "message.action",
+    params: params.actionParams,
+    timeoutMs: gateway.timeoutMs,
+    clientName: gateway.clientName,
+    clientDisplayName: gateway.clientDisplayName,
+    mode: gateway.mode,
+  });
+}
+
+async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
+  if (idempotencyKey) {
+    return idempotencyKey;
+  }
+  const { randomIdempotencyKey } = await loadMessageActionGatewayRuntime();
+  return randomIdempotencyKey();
+}
 function applyCrossContextMessageDecoration({
   params,
   message,
@@ -702,6 +745,36 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!plugin?.actions?.handleAction) {
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
   }
+  const executionMode = plugin.actions.resolveExecutionMode?.({ action }) ?? "local";
+  if (executionMode === "gateway" && gateway) {
+    // Gateway-owned actions must execute where the live channel runtime exists.
+    const payload = await callGatewayMessageAction<unknown>({
+      gateway,
+      actionParams: {
+        channel,
+        action,
+        params,
+        accountId: accountId ?? undefined,
+        requesterSenderId: input.requesterSenderId ?? undefined,
+        senderIsOwner: input.senderIsOwner,
+        sessionKey: input.sessionKey,
+        sessionId: input.sessionId,
+        agentId,
+        toolContext: input.toolContext,
+        idempotencyKey: await resolveGatewayActionIdempotencyKey(
+          normalizeOptionalString(params.idempotencyKey),
+        ),
+      },
+    });
+    return {
+      kind: "action",
+      channel,
+      action,
+      handledBy: "plugin",
+      payload,
+      dryRun,
+    };
+  }
 
   const handled = await dispatchChannelMessageAction({
     channel,
@@ -777,16 +850,28 @@ export async function runMessageAction(
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
   });
+  const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
+    cfg,
+    action,
+    channel,
+    accountId,
+    sessionKey: input.sessionKey,
+    sessionId: input.sessionId,
+    agentId: resolvedAgentId,
+    requesterSenderId: input.requesterSenderId,
+    senderIsOwner: input.senderIsOwner,
+  });
 
   await normalizeSandboxMediaParams({
     args: params,
     mediaPolicy: normalizationPolicy,
+    extraParamKeys: extraActionMediaSourceParamKeys,
   });
 
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
     agentId: resolvedAgentId,
-    mediaSources: collectActionMediaSourceHints(params),
+    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,

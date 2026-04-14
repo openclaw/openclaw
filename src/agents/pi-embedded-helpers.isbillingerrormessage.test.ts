@@ -684,6 +684,12 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
   });
 
+  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+    const message = "Unknown error (no error details in response)";
+    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(isFailoverErrorMessage(message)).toBe(true);
+  });
+
   it("classifies provider-scoped generic upstream messages", () => {
     expect(classifyFailoverReason("An unknown error occurred", { provider: "anthropic" })).toBe(
       "timeout",
@@ -770,6 +776,14 @@ describe("isFailoverErrorMessage", () => {
       "Unhandled stop reason: network_error",
       "stop reason: network_error",
       "reason: network_error",
+    ]);
+  });
+
+  it("matches Provider finish_reason: network_error as timeout (#61281)", () => {
+    expectTimeoutFailoverSamples([
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: abort",
+      "Provider finish_reason: malformed_response",
     ]);
   });
 

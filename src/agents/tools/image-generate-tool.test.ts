@@ -172,7 +172,23 @@ function createFalEditProvider(params?: {
 
 describe("createImageGenerateTool", () => {
   beforeAll(async () => {
-    vi.doUnmock("../../secrets/provider-env-vars.js");
+    vi.doMock("../../secrets/provider-env-vars.js", async () => {
+      const actual = await vi.importActual<typeof import("../../secrets/provider-env-vars.js")>(
+        "../../secrets/provider-env-vars.js",
+      );
+      return {
+        ...actual,
+        getProviderEnvVars: (providerId: string) => {
+          if (providerId === "google") {
+            return ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
+          }
+          if (providerId === "openai") {
+            return ["OPENAI_API_KEY"];
+          }
+          return [];
+        },
+      };
+    });
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
     imageOps = await import("../../media/image-ops.js");
     mediaStore = await import("../../media/store.js");
@@ -332,6 +348,7 @@ describe("createImageGenerateTool", () => {
       config: {
         agents: {
           defaults: {
+            mediaMaxMb: 8,
             imageGenerationModel: {
               primary: "openai/gpt-image-1",
             },
@@ -359,6 +376,7 @@ describe("createImageGenerateTool", () => {
         cfg: {
           agents: {
             defaults: {
+              mediaMaxMb: 8,
               imageGenerationModel: {
                 primary: "openai/gpt-image-1",
               },
@@ -378,7 +396,7 @@ describe("createImageGenerateTool", () => {
       Buffer.from("png-1"),
       "image/png",
       "tool-image-generation",
-      undefined,
+      8 * 1024 * 1024,
       "cats/output.png",
     );
     expect(saveMediaBuffer).toHaveBeenNthCalledWith(
@@ -386,7 +404,7 @@ describe("createImageGenerateTool", () => {
       Buffer.from("png-2"),
       "image/png",
       "tool-image-generation",
-      undefined,
+      8 * 1024 * 1024,
       "cats/output.png",
     );
     expect(result).toMatchObject({

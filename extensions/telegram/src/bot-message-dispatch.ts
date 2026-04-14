@@ -811,7 +811,10 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onToolStart: statusReactionController
           ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
+              const toolName = payload.name?.trim();
+              if (toolName) {
+                await statusReactionController.setTool(toolName);
+              }
             }
           : undefined,
         onCompactionStart: statusReactionController
@@ -915,7 +918,7 @@ export const dispatchTelegramMessage = async ({
   const hasFinalResponse = queuedFinal || sentFallback;
 
   if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
+    void Promise.resolve(statusReactionController.setError()).catch((err: unknown) => {
       logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
     });
   }
@@ -964,7 +967,7 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void statusReactionController.setDone().catch((err) => {
+    void Promise.resolve(statusReactionController.setDone()).catch((err: unknown) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });
   } else {

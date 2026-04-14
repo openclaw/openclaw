@@ -1,16 +1,12 @@
-import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
   toAgentModelListLike,
 } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
-import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
@@ -21,8 +17,9 @@ import {
 } from "./agent-scope.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+export { resolveThinkingDefault } from "./model-thinking-default.js";
 import {
   type ModelRef,
   findNormalizedProviderKey,
@@ -76,19 +73,7 @@ export {
   parseModelRef,
 };
 export type { ModelRef };
-
-export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
-  const normalized = normalizeProviderId(provider);
-  const cliBackends = resolveRuntimeCliBackends();
-  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
-    return true;
-  }
-  if (resolvePluginSetupCliBackendRuntime({ backend: normalized })) {
-    return true;
-  }
-  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
-}
+export { isCliProvider } from "./model-selection-cli.js";
 
 export function resolvePersistedOverrideModelRef(params: {
   defaultProvider: string;
@@ -773,65 +758,6 @@ export function resolveAllowedModelRef(params: {
   }
 
   return { ref: resolved.ref, key: status.key };
-}
-
-export function resolveThinkingDefault(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  catalog?: ModelCatalogEntry[];
-}): ThinkLevel {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
-  const catalogCandidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  const normalizedCanonicalKey = normalizeLowercaseStringOrEmpty(canonicalKey);
-  const normalizedLegacyKey = normalizeOptionalLowercaseString(legacyKey);
-  const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
-  const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
-  const explicitModelConfigured =
-    (configuredModels ? canonicalKey in configuredModels : false) ||
-    Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
-    normalizedPrimarySelection === normalizedCanonicalKey ||
-    Boolean(normalizedLegacyKey && normalizedPrimarySelection === normalizedLegacyKey) ||
-    normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
-  const perModelThinking =
-    configuredModels?.[canonicalKey]?.params?.thinking ??
-    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
-  if (
-    perModelThinking === "off" ||
-    perModelThinking === "minimal" ||
-    perModelThinking === "low" ||
-    perModelThinking === "medium" ||
-    perModelThinking === "high" ||
-    perModelThinking === "xhigh" ||
-    perModelThinking === "adaptive"
-  ) {
-    return perModelThinking;
-  }
-  const configured = params.cfg.agents?.defaults?.thinkingDefault;
-  if (configured) {
-    return configured;
-  }
-  if (
-    normalizedProvider === "anthropic" &&
-    explicitModelConfigured &&
-    typeof catalogCandidate?.name === "string" &&
-    /4\.6\b/.test(catalogCandidate.name) &&
-    (normalizedModel.startsWith("claude-opus-4-6") ||
-      normalizedModel.startsWith("claude-sonnet-4-6"))
-  ) {
-    return "adaptive";
-  }
-  return resolveThinkingDefaultForModel({
-    provider: params.provider,
-    model: params.model,
-    catalog: params.catalog,
-  });
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */

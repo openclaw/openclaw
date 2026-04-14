@@ -13,6 +13,7 @@ import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
+export type LocalModelMode = "default" | "lean";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -48,6 +49,21 @@ export type AgentContextPruningConfig = {
     enabled?: boolean;
     placeholder?: string;
   };
+};
+
+export type AgentStartupContextConfig = {
+  /** Enable runtime-owned startup-context prelude on bare session resets (default: true). */
+  enabled?: boolean;
+  /** Which bare reset commands should receive startup context (default: ["new", "reset"]). */
+  applyOn?: Array<"new" | "reset">;
+  /** How many dated memory files to load counting backward from today (default: 2). */
+  dailyMemoryDays?: number;
+  /** Max bytes to read from each daily memory file before skipping (default: 16384). */
+  maxFileBytes?: number;
+  /** Max characters retained from each daily memory file (default: 2000). */
+  maxFileChars?: number;
+  /** Max total characters retained across the startup prelude (default: 4500). */
+  maxTotalChars?: number;
 };
 
 export type CliBackendConfig = {
@@ -184,6 +200,12 @@ export type AgentDefaultsConfig = {
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
   /**
+   * Optional local-model prompt profile:
+   * - default: keep the standard tool surface
+   * - lean: drop heavyweight non-essential tools for smaller or weaker models
+   */
+  localModelMode?: LocalModelMode;
+  /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
    * - once: inject once per unique truncation signature (default)
@@ -192,6 +214,8 @@ export type AgentDefaultsConfig = {
   bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
+  /** Runtime-owned first-turn startup context for bare /new and /reset. */
+  startupContext?: AgentStartupContextConfig;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
   timeFormat?: "auto" | "12" | "24";
   /**
@@ -442,7 +466,7 @@ export type AgentLlmConfig = {
    * Idle timeout for LLM streaming responses in seconds.
    * If no token is received within this time, the request is aborted.
    * Set to 0 to disable (never timeout).
-   * Default: 60 seconds.
+   * If unset, OpenClaw uses the default LLM idle timeout.
    */
   idleTimeoutSeconds?: number;
 };

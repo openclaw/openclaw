@@ -53,11 +53,19 @@ export type SafeLocalReadResult = {
 export type FsSafeTestHooks = {
   afterPreOpenLstat?: (filePath: string) => Promise<void> | void;
   beforeOpen?: (filePath: string, flags: number) => Promise<void> | void;
+  afterOpen?: (filePath: string, handle: FileHandle) => Promise<void> | void;
 };
 
 let fsSafeTestHooks: FsSafeTestHooks | undefined;
 
+function allowFsSafeTestHooks(): boolean {
+  return process.env.NODE_ENV === "test" || process.env.VITEST === "true";
+}
+
 export function __setFsSafeTestHooksForTest(hooks?: FsSafeTestHooks): void {
+  if (hooks && !allowFsSafeTestHooks()) {
+    throw new Error("__setFsSafeTestHooksForTest is only available in tests");
+  }
   fsSafeTestHooks = hooks;
 }
 
@@ -129,6 +137,12 @@ async function openVerifiedLocalFile(
         : OPEN_READ_FLAGS;
     await fsSafeTestHooks?.beforeOpen?.(filePath, openFlags);
     handle = await fs.open(filePath, openFlags);
+    try {
+      await fsSafeTestHooks?.afterOpen?.(filePath, handle);
+    } catch (err) {
+      await handle.close().catch(() => {});
+      throw err;
+    }
   } catch (err) {
     if (isNotFoundPathError(err)) {
       throw new SafeOpenError("not-found", "file not found");
@@ -144,24 +158,30 @@ async function openVerifiedLocalFile(
   }
 
   try {
-    const [stat, pathStat] = await Promise.all([
-      handle.stat(),
-      options?.allowSymlinkTargetWithinRoot ? fs.stat(filePath) : fs.lstat(filePath),
-    ]);
-    if (!options?.allowSymlinkTargetWithinRoot && pathStat.isSymbolicLink()) {
-      throw new SafeOpenError("symlink", "symlink not allowed");
-    }
+    const stat = await handle.stat();
     if (!stat.isFile()) {
       throw new SafeOpenError("not-file", "not a file");
     }
     if (options?.rejectHardlinks && stat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
     }
-    if (!sameFileIdentity(stat, pathStat)) {
-      throw new SafeOpenError("path-mismatch", "path changed during read");
+
+    if (options?.allowSymlinkTargetWithinRoot) {
+      const pathStat = await fs.stat(filePath);
+      if (!sameFileIdentity(stat, pathStat)) {
+        throw new SafeOpenError("path-mismatch", "path changed during read");
+      }
+    } else {
+      const pathStat = await fs.lstat(filePath);
+      if (pathStat.isSymbolicLink()) {
+        throw new SafeOpenError("symlink", "symlink not allowed");
+      }
+      if (!sameFileIdentity(stat, pathStat)) {
+        throw new SafeOpenError("path-mismatch", "path changed during read");
+      }
     }
 
-    const realPath = await fs.realpath(filePath);
+    const realPath = await resolveOpenedFileRealPathForHandle(handle, filePath);
     const realStat = await fs.stat(realPath);
     if (options?.rejectHardlinks && realStat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
@@ -307,12 +327,16 @@ export async function readLocalFileSafely(params: {
   filePath: string;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
-  const opened = await openVerifiedLocalFile(params.filePath);
+  const opened = await openLocalFileSafely({ filePath: params.filePath });
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
   } finally {
     await opened.handle.close().catch(() => {});
   }
+}
+
+export async function openLocalFileSafely(params: { filePath: string }): Promise<SafeOpenResult> {
+  return await openVerifiedLocalFile(params.filePath);
 }
 
 async function readOpenedFileSafely(params: {
@@ -393,14 +417,6 @@ export async function resolveOpenedFileRealPathForHandle(
   handle: FileHandle,
   ioPath: string,
 ): Promise<string> {
-  try {
-    return await fs.realpath(ioPath);
-  } catch (err) {
-    if (!isNotFoundPathError(err)) {
-      throw err;
-    }
-  }
-
   const fdCandidates =
     process.platform === "linux"
       ? [`/proc/self/fd/${handle.fd}`, `/dev/fd/${handle.fd}`]
@@ -412,6 +428,14 @@ export async function resolveOpenedFileRealPathForHandle(
       return await fs.realpath(fdPath);
     } catch {
       // try next fd path
+    }
+  }
+
+  try {
+    return await fs.realpath(ioPath);
+  } catch (err) {
+    if (!isNotFoundPathError(err)) {
+      throw err;
     }
   }
   throw new SafeOpenError("path-mismatch", "unable to resolve opened file path");
@@ -788,6 +812,7 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
       rootDir: params.rootDir,
       relativePath: params.relativePath,
       rejectHardlinks: true,
+      nonBlockingRead: true,
     });
     try {
       mode = opened.stat.mode & 0o777;

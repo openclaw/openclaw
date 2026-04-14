@@ -32,7 +32,9 @@ vi.mock("./tool-resolution.js", () => ({
 
 import {
   createMcpLoopbackServerConfig,
+  closeMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
+  ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
 
@@ -162,6 +164,19 @@ describe("mcp loopback server", () => {
     expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
   });
 
+  it("starts the loopback server lazily and reuses the same singleton", async () => {
+    expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+
+    const first = await ensureMcpLoopbackServer(0);
+    const second = await ensureMcpLoopbackServer(0);
+
+    expect(second).toBe(first);
+    expect(getActiveMcpLoopbackRuntime()?.port).toBe(first.port);
+
+    await closeMcpLoopbackServer();
+    expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+  });
+
   it("returns 401 when the bearer token is missing", async () => {
     server = await startMcpLoopbackServer(0);
     const response = await sendRaw({
@@ -182,6 +197,91 @@ describe("mcp loopback server", () => {
       body: "{}",
     });
     expect(response.status).toBe(415);
+  });
+
+  it("rejects cross-origin browser requests before auth", async () => {
+    server = await startMcpLoopbackServer(0);
+    const response = await sendRaw({
+      port: server.port,
+      headers: {
+        "content-type": "application/json",
+        origin: "https://evil.example",
+        "sec-fetch-site": "cross-site",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects non-loopback origins even without fetch metadata", async () => {
+    server = await startMcpLoopbackServer(0);
+    const response = await sendRaw({
+      port: server.port,
+      headers: {
+        "content-type": "application/json",
+        origin: "https://evil.example",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  it("allows loopback browser origins for local clients", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.token,
+      headers: {
+        "content-type": "application/json",
+        origin: "http://127.0.0.1:43123",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("allows same-origin browser requests from loopback clients", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.token,
+      headers: {
+        "content-type": "application/json",
+        origin: `http://127.0.0.1:${server.port}`,
+        "sec-fetch-site": "same-origin",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("allows cross-site fetch metadata when both ends are loopback (localhost ↔ 127.0.0.1)", async () => {
+    // Browsers report a request from a `http://localhost:<ui-port>`
+    // page to `http://127.0.0.1:<mcp-port>` as Sec-Fetch-Site:
+    // cross-site even though both ends are loopback. The gate must
+    // not blanket-reject on the cross-site signal — checkBrowserOrigin
+    // already authorizes loopback origins from loopback peers via
+    // its `local-loopback` matcher.
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.token,
+      headers: {
+        "content-type": "application/json",
+        origin: "http://localhost:43123",
+        "sec-fetch-site": "cross-site",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(200);
   });
 });
 

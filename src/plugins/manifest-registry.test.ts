@@ -423,6 +423,60 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("preserves activation and setup descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai"],
+      activation: {
+        onProviders: ["openai"],
+        onCommands: ["models"],
+        onChannels: ["web"],
+        onRoutes: ["gateway-webhook"],
+        onCapabilities: ["provider", "tool"],
+      },
+      setup: {
+        providers: [
+          {
+            id: "openai",
+            authMethods: ["api-key"],
+            envVars: ["OPENAI_API_KEY"],
+          },
+        ],
+        cliBackends: ["openai-cli"],
+        configMigrations: ["legacy-openai-auth"],
+        requiresRuntime: false,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.activation).toEqual({
+      onProviders: ["openai"],
+      onCommands: ["models"],
+      onChannels: ["web"],
+      onRoutes: ["gateway-webhook"],
+      onCapabilities: ["provider", "tool"],
+    });
+    expect(registry.plugins[0]?.setup).toEqual({
+      providers: [
+        {
+          id: "openai",
+          authMethods: ["api-key"],
+          envVars: ["OPENAI_API_KEY"],
+        },
+      ],
+      cliBackends: ["openai-cli"],
+      configMigrations: ["legacy-openai-auth"],
+      requiresRuntime: false,
+    });
+  });
+
   it("preserves channel env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -443,6 +497,33 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.channelEnvVars).toEqual({
       slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
     });
+  });
+
+  it("preserves qa runner descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "qa-matrix",
+      qaRunners: [
+        {
+          commandName: "matrix",
+          description: "Run the Matrix live QA lane",
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "qa-matrix",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.qaRunners).toEqual([
+      {
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
+      },
+    ]);
   });
 
   it("preserves channel config metadata from plugin manifests", () => {

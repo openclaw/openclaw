@@ -9,7 +9,7 @@
  *  - Connection lifecycle cleanup via releaseWsSession
  *
  * Run manually with a valid OPENAI_API_KEY:
- *   OPENCLAW_LIVE_TEST=1 pnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/openai-ws-stream.e2e.test.ts
+ *   OPENCLAW_LIVE_TEST=1 pnpm test:e2e -- src/agents/openai-ws-stream.e2e.test.ts
  *
  * Skipped in CI — no API key available and we avoid billable external calls.
  */
@@ -86,6 +86,32 @@ function makeToolResultMessage(
     isError: false,
     timestamp: Date.now(),
   } as unknown as StreamFnParams[1]["messages"][number];
+}
+
+async function runWebsocketToolFollowupTurn(params: {
+  streamFn: ReturnType<StreamFactory>;
+  context: StreamFnParams[1];
+  firstDone: AssistantMessage;
+  toolCallId: string;
+  output: string;
+}) {
+  const secondContext = {
+    ...params.context,
+    messages: [
+      ...params.context.messages,
+      params.firstDone,
+      makeToolResultMessage(params.toolCallId, params.output),
+    ],
+  } as unknown as StreamFnParams[1];
+
+  return expectDone(
+    await collectEvents(
+      params.streamFn(model, secondContext, {
+        transport: "websocket",
+        maxTokens: 128,
+      }),
+    ),
+  );
 }
 
 async function collectEvents(stream: StreamReturn): Promise<AssistantMessageEvent[]> {
@@ -256,22 +282,13 @@ describe("OpenAI WebSocket e2e", () => {
       expect(toolCall?.name).toBe("noop");
       expect(toolCall?.id).toBeTruthy();
 
-      const secondContext = {
-        ...firstContext,
-        messages: [
-          ...firstContext.messages,
-          firstDone,
-          makeToolResultMessage(toolCall!.id, "TOOL_OK"),
-        ],
-      } as unknown as StreamFnParams[1];
-      const secondDone = expectDone(
-        await collectEvents(
-          streamFn(model, secondContext, {
-            transport: "websocket",
-            maxTokens: 128,
-          }),
-        ),
-      );
+      const secondDone = await runWebsocketToolFollowupTurn({
+        streamFn,
+        context: firstContext,
+        firstDone,
+        toolCallId: toolCall!.id,
+        output: "TOOL_OK",
+      });
 
       expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
     },
@@ -340,22 +357,13 @@ describe("OpenAI WebSocket e2e", () => {
         rawToolCall ? `${rawToolCall.call_id}|${rawToolCall.id}` : undefined,
       );
 
-      const secondContext = {
-        ...firstContext,
-        messages: [
-          ...firstContext.messages,
-          firstDone,
-          makeToolResultMessage(toolCall!.id, "TOOL_OK"),
-        ],
-      } as unknown as StreamFnParams[1];
-      const secondDone = expectDone(
-        await collectEvents(
-          streamFn(model, secondContext, {
-            transport: "websocket",
-            maxTokens: 128,
-          }),
-        ),
-      );
+      const secondDone = await runWebsocketToolFollowupTurn({
+        streamFn,
+        context: firstContext,
+        firstDone,
+        toolCallId: toolCall!.id,
+        output: "TOOL_OK",
+      });
 
       expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
     },
