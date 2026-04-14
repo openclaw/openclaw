@@ -335,6 +335,7 @@ export const FIELD_LABELS: Record<string, string> = {
   broadcast: "Broadcast",
   "broadcast.strategy": "Broadcast Strategy",
   "broadcast.*": "Broadcast Destination List",
+  "skills.allowExternalSkillsIn": "Allow External Skills In",
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
   "agents.defaults.skills": "Skills",

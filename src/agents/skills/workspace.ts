@@ -251,12 +251,17 @@ function resolveContainedSkillPath(params: {
   rootDir: string;
   rootRealPath: string;
   candidatePath: string;
+  allowExternalSkillsIn?: string[];
 }): string | null {
   const candidateRealPath = tryRealpath(params.candidatePath);
   if (!candidateRealPath) {
     return null;
   }
   if (isPathInside(params.rootRealPath, candidateRealPath)) {
+    return candidateRealPath;
+  }
+  // Allow paths under explicitly configured external prefixes (e.g. /nix/store).
+  if (params.allowExternalSkillsIn?.some((prefix) => isPathInside(prefix, candidateRealPath))) {
     return candidateRealPath;
   }
   warnEscapedSkillPath({
@@ -274,6 +279,7 @@ function filterLoadedSkillsInsideRoot(params: {
   source: string;
   rootDir: string;
   rootRealPath: string;
+  allowExternalSkillsIn?: string[];
 }): Skill[] {
   return params.skills.filter((skill) => {
     const baseDirRealPath = resolveContainedSkillPath({
@@ -281,6 +287,7 @@ function filterLoadedSkillsInsideRoot(params: {
       rootDir: params.rootDir,
       rootRealPath: params.rootRealPath,
       candidatePath: skill.baseDir,
+      allowExternalSkillsIn: params.allowExternalSkillsIn,
     });
     if (!baseDirRealPath) {
       return false;
@@ -290,6 +297,7 @@ function filterLoadedSkillsInsideRoot(params: {
       rootDir: params.rootDir,
       rootRealPath: params.rootRealPath,
       candidatePath: skill.filePath,
+      allowExternalSkillsIn: params.allowExternalSkillsIn,
     });
     return Boolean(skillFileRealPath);
   });
@@ -347,6 +355,9 @@ function loadSkillEntries(
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config);
+  const allowExternalSkillsIn = opts?.config?.skills?.allowExternalSkillsIn
+    ?.filter((p) => p.trim().length > 0)
+    .map((p) => tryRealpath(resolveUserPath(p)) ?? path.resolve(p));
 
   const loadSkills = (params: { dir: string; source: string }): Skill[] => {
     const rootDir = path.resolve(params.dir);
@@ -360,6 +371,7 @@ function loadSkillEntries(
       rootDir,
       rootRealPath,
       candidatePath: baseDir,
+      allowExternalSkillsIn,
     });
     if (!baseDirRealPath) {
       return [];
@@ -373,6 +385,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: rootSkillMd,
+        allowExternalSkillsIn,
       });
       if (!rootSkillRealPath) {
         return [];
@@ -402,6 +415,7 @@ function loadSkillEntries(
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
+        allowExternalSkillsIn,
       });
     }
 
@@ -438,6 +452,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillDir,
+        allowExternalSkillsIn,
       });
       if (!skillDirRealPath) {
         continue;
@@ -451,6 +466,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillMd,
+        allowExternalSkillsIn,
       });
       if (!skillMdRealPath) {
         continue;
@@ -481,6 +497,7 @@ function loadSkillEntries(
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
+          allowExternalSkillsIn,
         }),
       );
 

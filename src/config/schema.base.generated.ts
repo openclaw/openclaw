@@ -22124,6 +22124,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               type: "string",
             },
           },
+          allowExternalSkillsIn: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+            title: "Allow External Skills In",
+            description:
+              "List of directory prefixes whose real paths are allowed to host skill files even when they resolve outside the configured skills root via symlinks. Useful for package-manager stores like /nix/store where skills are installed into an external read-only tree, or for shared git repositories symlinked into the workspace.",
+          },
           load: {
             type: "object",
             properties: {
@@ -24487,6 +24496,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Broadcast Destination List",
       help: "Per-source broadcast destination list where each key is a source peer ID and the value is an array of destination peer IDs. Keep lists intentional to avoid accidental message amplification.",
       tags: ["advanced"],
+    },
+    "skills.allowExternalSkillsIn": {
+      label: "Allow External Skills In",
+      help: "List of directory prefixes whose real paths are allowed to host skill files even when they resolve outside the configured skills root via symlinks. Useful for package-manager stores like /nix/store where skills are installed into an external read-only tree, or for shared git repositories symlinked into the workspace.",
+      tags: ["access"],
     },
     "skills.load.watch": {
       label: "Watch Skills",
