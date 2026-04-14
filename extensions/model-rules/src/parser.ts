@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 
 const fileCache = new Map<string, { content: string; mtimeMs: number }>();
 
@@ -12,7 +12,7 @@ export async function readModelsFile(
   filename: string = "MODELS.md",
 ): Promise<string | null> {
   const filePath = resolve(workspaceDir, filename);
-  const boundary = resolve(workspaceDir) + "/";
+  const boundary = resolve(workspaceDir) + sep;
   if (!filePath.startsWith(boundary) && filePath !== resolve(workspaceDir)) {
     return null;
   }

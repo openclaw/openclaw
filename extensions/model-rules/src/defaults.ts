@@ -1,5 +1,5 @@
 import { writeFile, access } from "node:fs/promises";
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 
 /**
  * Default MODELS.md shipped with the plugin.
@@ -220,7 +220,7 @@ export async function ensureDefaultModelsFile(
   filename: string = "MODELS.md",
 ): Promise<boolean> {
   const filePath = resolve(workspaceDir, filename);
-  const boundary = resolve(workspaceDir) + "/";
+  const boundary = resolve(workspaceDir) + sep;
   if (!filePath.startsWith(boundary) && filePath !== resolve(workspaceDir)) {
     return false;
   }
