@@ -183,6 +183,12 @@ export function isQaLabCliAvailable(): boolean {
   return hasQaScenarioPack();
 }
 
+function assertNoQaSubcommandCollision(qa: Command, commandName: string) {
+  if (qa.commands.some((command) => command.name() === commandName)) {
+    throw new Error(`QA runner command "${commandName}" conflicts with an existing qa subcommand`);
+  }
+}
+
 export function registerQaLabCli(program: Command) {
   const qa = program
     .command("qa")
@@ -283,10 +289,6 @@ export function registerQaLabCli(program: Command) {
         await runQaParityReport(opts);
       },
     );
-
-  for (const lane of listLiveTransportQaCliRegistrations()) {
-    lane.register(qa);
-  }
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")
@@ -579,4 +581,9 @@ export function registerQaLabCli(program: Command) {
     .action(async (opts: { host?: string; port?: number }) => {
       await runQaMockOpenAi(opts);
     });
+
+  for (const lane of listLiveTransportQaCliRegistrations()) {
+    assertNoQaSubcommandCollision(qa, lane.commandName);
+    lane.register(qa);
+  }
 }

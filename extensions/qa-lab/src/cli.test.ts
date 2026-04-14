@@ -42,6 +42,15 @@ function createBlockedQaRunnerContribution(): QaRunnerCliContribution {
   };
 }
 
+function createConflictingQaRunnerContribution(commandName: string): QaRunnerCliContribution {
+  return {
+    pluginId: TEST_QA_RUNNER.pluginId,
+    commandName,
+    description: TEST_QA_RUNNER.description,
+    status: "blocked",
+  };
+}
+
 const {
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
@@ -136,6 +145,16 @@ describe("qa cli registration", () => {
     await expect(
       blockedProgram.parseAsync(["node", "openclaw", "qa", TEST_QA_RUNNER.commandName]),
     ).rejects.toThrow(`Enable or allow plugin "${TEST_QA_RUNNER.pluginId}"`);
+  });
+
+  it("rejects discovered runners that collide with built-in qa subcommands", () => {
+    listQaRunnerCliContributions
+      .mockReset()
+      .mockReturnValue([createConflictingQaRunnerContribution("manual")]);
+
+    expect(() => registerQaLabCli(new Command())).toThrow(
+      'QA runner command "manual" conflicts with an existing qa subcommand',
+    );
   });
 
   it("routes telegram CLI defaults into the lane runtime", async () => {

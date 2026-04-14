@@ -17,7 +17,7 @@ export async function fetchHealthUrl(url: string): Promise<{ ok: boolean }> {
       signal: AbortSignal.timeout(2_000),
     },
     policy: { allowPrivateNetwork: true },
-    auditContext: "qa-lab-docker-health-check",
+    auditContext: "qa-matrix-docker-health-check",
   });
   try {
     return { ok: response.ok };
