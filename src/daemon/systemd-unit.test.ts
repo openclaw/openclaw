@@ -27,6 +27,41 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain("RestartPreventExitStatus=78");
   });
 
+  it("emits EnvironmentFile= when environmentFile is provided", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environmentFile: "/home/user/.openclaw/.env",
+    });
+    expect(unit).toContain("EnvironmentFile=/home/user/.openclaw/.env");
+    expect(unit).not.toMatch(/^Environment=/m);
+  });
+
+  it("emits EnvironmentFile= before inline Environment= lines", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: { PATH: "/usr/bin:/bin" },
+      environmentFile: "/home/user/.openclaw/.env",
+    });
+    const lines = unit.split("\n");
+    const envFileIdx = lines.findIndex((l) => l.startsWith("EnvironmentFile="));
+    const envIdx = lines.findIndex((l) => l.startsWith("Environment="));
+    expect(envFileIdx).toBeGreaterThan(-1);
+    expect(envIdx).toBeGreaterThan(-1);
+    expect(envFileIdx).toBeLessThan(envIdx);
+  });
+
+  it("rejects environmentFile paths with line breaks", () => {
+    expect(() =>
+      buildSystemdUnit({
+        description: "OpenClaw Gateway",
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        environmentFile: "/home/user/.openclaw/.env\nExecStartPre=/bin/touch /tmp/rce",
+      }),
+    ).toThrow(/CR or LF/);
+  });
+
   it("rejects environment values with line breaks", () => {
     expect(() =>
       buildSystemdUnit({

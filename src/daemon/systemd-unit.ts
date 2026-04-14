@@ -40,6 +40,7 @@ export function buildSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
+  environmentFile,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
@@ -48,6 +49,14 @@ export function buildSystemdUnit({
   const workingDirLine = workingDirectory
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
+  let envFileLine: string | null = null;
+  if (environmentFile) {
+    assertNoSystemdLineBreaks(environmentFile, "Systemd EnvironmentFile path");
+    if (/\s/.test(environmentFile)) {
+      throw new Error("Systemd EnvironmentFile path cannot contain whitespace.");
+    }
+    envFileLine = `EnvironmentFile=${systemdEscapeArg(environmentFile)}`;
+  }
   const envLines = renderEnvLines(environment);
   return [
     "[Unit]",
@@ -69,6 +78,7 @@ export function buildSystemdUnit({
     // orphan ACP/runtime workers behind.
     "KillMode=control-group",
     workingDirLine,
+    envFileLine,
     ...envLines,
     "",
     "[Install]",
