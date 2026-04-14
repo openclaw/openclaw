@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { createSlackChannel, type SlackChannel } from "../channels/slack/slack.js";
 import {
   createReplyPrefixContext,
   createReplyPrefixOptions,
@@ -20,6 +21,7 @@ export { createReplyPrefixContext, createReplyPrefixOptions, createTypingCallbac
 export type ChannelReplyPipeline = ReplyPrefixOptions & {
   typingCallbacks?: TypingCallbacks;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  slackChannel?: SlackChannel;
 };
 
 export function createChannelReplyPipeline(params: {
@@ -49,6 +51,15 @@ export function createChannelReplyPipeline(params: {
             accountId: params.accountId,
           }) ?? payload
       : undefined);
+
+  let slackChannel: SlackChannel | undefined;
+  if (channelId?.startsWith("slack")) {
+    const agentConfig = params.cfg as any;
+    if (agentConfig?.channels?.slack) {
+      slackChannel = createSlackChannel(agentConfig.channels.slack);
+    }
+  }
+
   return {
     ...createReplyPrefixOptions({
       cfg: params.cfg,
@@ -62,5 +73,6 @@ export function createChannelReplyPipeline(params: {
       : params.typing
         ? { typingCallbacks: createTypingCallbacks(params.typing) }
         : {}),
+    ...(slackChannel ? { slackChannel } : {}),
   };
 }
