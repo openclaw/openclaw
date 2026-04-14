@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isGoogleGenerativeAiApi,
+  normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
   parseGeminiAuth,
   resolveGoogleGenerativeAiHttpRequestConfig,
@@ -36,6 +37,20 @@ describe("google generative ai helpers", () => {
       "https://xgenerativelanguage.googleapis.com",
     );
     expect(normalizeGoogleGenerativeAiBaseUrl()).toBeUndefined();
+  });
+
+  it("keeps /openai on generic Google base URL normalization and strips it only for native Gemini callers", () => {
+    expect(
+      normalizeGoogleApiBaseUrl("https://generativelanguage.googleapis.com/v1beta/openai"),
+    ).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+    expect(
+      normalizeGoogleGenerativeAiBaseUrl("https://generativelanguage.googleapis.com/v1beta/openai"),
+    ).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(
+      normalizeGoogleGenerativeAiBaseUrl(
+        "https://generativelanguage.googleapis.com/v1alpha/openai/",
+      ),
+    ).toBe("https://generativelanguage.googleapis.com/v1alpha");
   });
 
   it("normalizes Google provider configs by provider key, provider api, or model api", () => {

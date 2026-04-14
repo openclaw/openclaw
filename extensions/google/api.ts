@@ -7,7 +7,11 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { parseGoogleOauthApiKey } from "./oauth-token-shared.js";
-import { DEFAULT_GOOGLE_API_BASE_URL, normalizeGoogleApiBaseUrl } from "./provider-policy.js";
+import {
+  DEFAULT_GOOGLE_API_BASE_URL,
+  normalizeGoogleApiBaseUrl,
+  normalizeGoogleGenerativeAiBaseUrl,
+} from "./provider-policy.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
 export {
   DEFAULT_GOOGLE_API_BASE_URL,
@@ -49,7 +53,9 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   transport: "http" | "media-understanding";
 }) {
   return resolveProviderHttpRequestConfig({
-    baseUrl: normalizeGoogleApiBaseUrl(params.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL),
+    baseUrl:
+      normalizeGoogleGenerativeAiBaseUrl(params.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL) ??
+      DEFAULT_GOOGLE_API_BASE_URL,
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
     allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
     headers: params.headers,

@@ -37,8 +37,7 @@ export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
     url.search = "";
     if (isGoogleGenerativeAiUrl(url)) {
       const normalizedPath = trimTrailingSlashes(url.pathname || "");
-      const strippedCompatPath = normalizedPath.replace(/\/openai$/i, "");
-      url.pathname = strippedCompatPath || "/v1beta";
+      url.pathname = normalizedPath || "/v1beta";
     }
     return trimTrailingSlashes(url.toString());
   } catch {
@@ -54,7 +53,22 @@ export function isGoogleGenerativeAiApi(api?: string | null): boolean {
 }
 
 export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | undefined {
-  return baseUrl ? normalizeGoogleApiBaseUrl(baseUrl) : baseUrl;
+  if (!baseUrl) {
+    return baseUrl;
+  }
+
+  const normalized = normalizeGoogleApiBaseUrl(baseUrl);
+  try {
+    const url = new URL(normalized);
+    if (isGoogleGenerativeAiUrl(url)) {
+      url.pathname = trimTrailingSlashes(url.pathname || "").replace(/\/openai$/i, "") || "/v1beta";
+      return trimTrailingSlashes(url.toString());
+    }
+  } catch {
+    // `normalizeGoogleApiBaseUrl` already returned the best-effort input form.
+  }
+
+  return normalized;
 }
 
 export function resolveGoogleGenerativeAiTransport<TApi extends string | null | undefined>(params: {
@@ -70,7 +84,9 @@ export function resolveGoogleGenerativeAiTransport<TApi extends string | null | 
 }
 
 export function resolveGoogleGenerativeAiApiOrigin(baseUrl?: string): string {
-  return normalizeGoogleApiBaseUrl(baseUrl).replace(/\/v1beta$/i, "");
+  return (
+    normalizeGoogleGenerativeAiBaseUrl(baseUrl) ?? normalizeGoogleApiBaseUrl(baseUrl)
+  ).replace(/\/v1beta$/i, "");
 }
 
 export function shouldNormalizeGoogleGenerativeAiProviderConfig(
