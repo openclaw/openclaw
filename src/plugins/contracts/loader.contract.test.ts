@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { uniqueSortedStrings } from "../../../test/helpers/plugins/contracts-testkit.js";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
 import {
   loadPluginManifestRegistry,
@@ -7,7 +8,6 @@ import {
 import { __testing as providerTesting } from "../providers.js";
 import { resolvePluginWebSearchProviders } from "../web-search-providers.runtime.js";
 import { providerContractCompatPluginIds } from "./registry.js";
-import { uniqueSortedStrings } from "./testkit.js";
 
 function resolveBundledManifestProviderPluginIds() {
   return uniqueSortedStrings(

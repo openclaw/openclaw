@@ -10,20 +10,24 @@ import {
 } from "../agents/model-catalog.js";
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { resolveAutoMediaKeyProviders, resolveDefaultMediaModel } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -50,11 +54,7 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
-
-export type ActiveMediaModel = {
-  provider: string;
-  model?: string;
-};
+export type { ActiveMediaModel } from "./active-model.types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 
@@ -130,8 +130,8 @@ function resolveCatalogImageModelId(params: {
   if (matches.length === 0) {
     return undefined;
   }
-  const autoEntry = matches.find((entry) => entry.id.trim().toLowerCase() === "auto");
-  return (autoEntry ?? matches[0])?.id.trim() || undefined;
+  const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
+  return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
 async function resolveAutoImageModelId(params: {
@@ -139,7 +139,7 @@ async function resolveAutoImageModelId(params: {
   providerId: string;
   explicitModel?: string;
 }): Promise<string | undefined> {
-  const explicit = params.explicitModel?.trim();
+  const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
     return explicit;
   }
@@ -295,7 +295,9 @@ async function probeGeminiCli(): Promise<boolean> {
       const { stdout } = await runExec("gemini", ["--output-format", "json", "ok"], {
         timeoutMs: 8000,
       });
-      return Boolean(extractGeminiResponse(stdout) ?? stdout.toLowerCase().includes("ok"));
+      return Boolean(
+        extractGeminiResponse(stdout) ?? normalizeLowercaseStringOrEmpty(stdout).includes("ok"),
+      );
     } catch {
       return false;
     }
@@ -456,58 +458,6 @@ async function resolveKeyEntry(params: {
     }
     return { type: "provider" as const, provider: providerId, model: resolvedModel };
   };
-
-  if (capability === "image") {
-    const activeProvider = params.activeModel?.provider?.trim();
-    if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-      if (activeEntry) {
-        return activeEntry;
-      }
-    }
-    for (const providerId of resolveConfiguredKeyProviderOrder({
-      cfg,
-      providerRegistry,
-      capability,
-      fallbackProviders: resolveAutoMediaKeyProviders({
-        cfg,
-        capability,
-        providerRegistry,
-      }),
-    })) {
-      const entry = await checkProvider(providerId);
-      if (entry) {
-        return entry;
-      }
-    }
-    return null;
-  }
-
-  if (capability === "video") {
-    const activeProvider = params.activeModel?.provider?.trim();
-    if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-      if (activeEntry) {
-        return activeEntry;
-      }
-    }
-    for (const providerId of resolveConfiguredKeyProviderOrder({
-      cfg,
-      providerRegistry,
-      capability,
-      fallbackProviders: resolveAutoMediaKeyProviders({
-        cfg,
-        capability,
-        providerRegistry,
-      }),
-    })) {
-      const entry = await checkProvider(providerId, undefined);
-      if (entry) {
-        return entry;
-      }
-    }
-    return null;
-  }
 
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {
@@ -776,6 +726,12 @@ async function runAttachmentEntries(params: {
   return { output: null, attempts };
 }
 
+function hasFailedMediaAttempt(attachments: MediaUnderstandingDecision["attachments"]): boolean {
+  return attachments.some((attachment) =>
+    attachment.attempts.some((attempt) => attempt.outcome === "failed"),
+  );
+}
+
 export async function runCapability(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
@@ -912,10 +868,17 @@ export async function runCapability(params: {
   }
   const decision: MediaUnderstandingDecision = {
     capability,
-    outcome: outputs.length > 0 ? "success" : "skipped",
+    outcome:
+      outputs.length > 0
+        ? "success"
+        : hasFailedMediaAttempt(attachmentDecisions)
+          ? "failed"
+          : "skipped",
     attachments: attachmentDecisions,
   };
-  if (shouldLogVerbose()) {
+  if (decision.outcome === "failed") {
+    logWarn(`media-understanding: ${formatDecisionSummary(decision)}`);
+  } else if (shouldLogVerbose()) {
     logVerbose(`Media understanding ${formatDecisionSummary(decision)}`);
   }
   return {

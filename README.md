@@ -89,7 +89,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 - **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
 
-Model note: while many providers/models are supported, for the best experience and lower prompt-injection risk use the strongest latest-generation model available to you. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
+Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
 
 ## Models (selection + auth)
 
@@ -325,6 +325,7 @@ Send these in WhatsApp/Telegram/Slack/Google Chat/Microsoft Teams/WebChat (group
 - `/compact` — compact session context (summary)
 - `/think <level>` — off|minimal|low|medium|high|xhigh (GPT-5.2 + Codex models only)
 - `/verbose on|off`
+- `/trace on|off` — plugin trace/debug lines only
 - `/usage off|tokens|full` — per-response usage footer
 - `/restart` — restart the gateway (owner-only in groups)
 - `/activation mention|always` — group activation toggle (groups only)
@@ -371,7 +372,7 @@ Minimal `~/.openclaw/openclaw.json` (model + defaults):
 ```json5
 {
   agent: {
-    model: "anthropic/claude-opus-4-6",
+    model: "<provider>/<model-id>",
   },
 }
 ```

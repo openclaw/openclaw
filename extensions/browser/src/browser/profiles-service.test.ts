@@ -111,7 +111,9 @@ describe("BrowserProfilesService", () => {
   });
 
   it("accepts per-profile cdpUrl for remote Chrome", async () => {
-    const resolved = resolveBrowserConfig({});
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
     const { ctx } = createCtx(resolved);
 
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });

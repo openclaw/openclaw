@@ -1,16 +1,15 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
-import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
-  type DeliveryContext,
-} from "../../utils/delivery-context.js";
+} from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
@@ -23,7 +22,10 @@ import {
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
 } from "./channel-resolution.js";
-import { missingTargetError } from "./target-errors.js";
+import {
+  resolveOutboundTargetWithPlugin,
+  type OutboundTargetResolution,
+} from "./targets-resolve-shared.js";
 
 export type OutboundChannel = DeliverableMessageChannel;
 
@@ -45,10 +47,9 @@ export type HeartbeatSenderContext = {
   allowFrom: string[];
 };
 
-export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
-
+export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
-import { resolveSessionDeliveryTarget } from "./targets-session.js";
+import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
@@ -59,65 +60,25 @@ export function resolveOutboundTarget(params: {
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
 }): OutboundTargetResolution {
-  if (params.channel === INTERNAL_MESSAGE_CHANNEL) {
-    return {
-      ok: false,
-      error: new Error(
-        `Delivering to WebChat is not supported via \`${formatCliCommand("openclaw agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
-      ),
-    };
-  }
-
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.cfg,
-  });
-  if (!plugin) {
-    return {
+  return (
+    resolveOutboundTargetWithPlugin({
+      plugin: resolveOutboundChannelPlugin({
+        channel: params.channel,
+        cfg: params.cfg,
+      }),
+      target: params,
+      onMissingPlugin: () =>
+        params.channel === INTERNAL_MESSAGE_CHANNEL
+          ? undefined
+          : {
+              ok: false,
+              error: new Error(`Unsupported channel: ${params.channel}`),
+            },
+    }) ?? {
       ok: false,
       error: new Error(`Unsupported channel: ${params.channel}`),
-    };
-  }
-
-  const allowFromRaw =
-    params.allowFrom ??
-    (params.cfg && plugin.config.resolveAllowFrom
-      ? plugin.config.resolveAllowFrom({
-          cfg: params.cfg,
-          accountId: params.accountId ?? undefined,
-        })
-      : undefined);
-  const allowFrom = allowFromRaw ? mapAllowFromEntries(allowFromRaw) : undefined;
-
-  // Fall back to per-channel defaultTo when no explicit target is provided.
-  const effectiveTo =
-    params.to?.trim() ||
-    (params.cfg && plugin.config.resolveDefaultTo
-      ? plugin.config.resolveDefaultTo({
-          cfg: params.cfg,
-          accountId: params.accountId ?? undefined,
-        })
-      : undefined);
-
-  const resolveTarget = plugin.outbound?.resolveTarget;
-  if (resolveTarget) {
-    return resolveTarget({
-      cfg: params.cfg,
-      to: effectiveTo,
-      allowFrom,
-      accountId: params.accountId ?? undefined,
-      mode: params.mode ?? "explicit",
-    });
-  }
-
-  if (effectiveTo) {
-    return { ok: true, to: effectiveTo };
-  }
-  const hint = plugin.messaging?.targetResolver?.hint;
-  return {
-    ok: false,
-    error: missingTargetError(plugin.meta.label ?? params.channel, hint),
-  };
+    }
+  );
 }
 
 export function resolveHeartbeatDeliveryTarget(params: {
@@ -259,12 +220,26 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
+  const inheritedHeartbeatThreadId = shouldReuseHeartbeatTelegramTopicThread({
+    target,
+    heartbeat,
+    turnSource: params.turnSource,
+    entry,
+    resolvedTarget,
+  })
+    ? resolvedTarget.lastThreadId
+    : undefined;
+
   return {
     channel: resolvedTarget.channel,
     to: resolved.to,
     reason,
     accountId: effectiveAccountId,
-    threadId: resolvedTarget.threadId,
+    // Heartbeats normally avoid inheriting session reply-thread IDs, but
+    // Telegram forum-topic sessions encode the topic as part of the
+    // destination identity. Preserve that topic routing when the heartbeat is
+    // still targeting the same group session.
+    threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
   };
@@ -322,6 +297,27 @@ function resolveHeartbeatDeliveryChatType(params: {
     channel: params.channel,
     to: params.to,
   });
+}
+
+function shouldReuseHeartbeatTelegramTopicThread(params: {
+  target: HeartbeatTarget;
+  heartbeat?: AgentDefaultsConfig["heartbeat"];
+  turnSource?: DeliveryContext;
+  entry?: SessionEntry;
+  resolvedTarget: SessionDeliveryTarget;
+}): boolean {
+  return (
+    params.resolvedTarget.threadId == null &&
+    params.target === "last" &&
+    !params.heartbeat?.to &&
+    params.turnSource?.threadId == null &&
+    params.resolvedTarget.channel === "telegram" &&
+    params.resolvedTarget.lastChannel === "telegram" &&
+    Boolean(params.resolvedTarget.to) &&
+    Boolean(params.resolvedTarget.lastTo) &&
+    params.resolvedTarget.to === params.resolvedTarget.lastTo &&
+    normalizeChatType(params.entry?.chatType) === "group"
+  );
 }
 
 function resolveHeartbeatSenderId(params: {

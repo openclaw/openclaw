@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+
 /** Structured reminder payload emitted by the model. */
 export interface CronReminderPayload {
   type: "cron_reminder";
@@ -83,7 +85,7 @@ export function parseQQBotPayload(text: string): ParseResult {
   } catch (e) {
     return {
       isPayload: true,
-      error: `Failed to parse JSON: ${e instanceof Error ? e.message : String(e)}`,
+      error: `Failed to parse JSON: ${formatErrorMessage(e)}`,
     };
   }
 }
@@ -125,7 +127,7 @@ export function decodeCronPayload(message: string): {
     if (payload.type !== "cron_reminder") {
       return {
         isCronPayload: true,
-        error: `Expected type cron_reminder but got ${payload.type}`,
+        error: `Expected type cron_reminder but got ${String(payload.type)}`,
       };
     }
 
@@ -143,7 +145,7 @@ export function decodeCronPayload(message: string): {
   } catch (e) {
     return {
       isCronPayload: true,
-      error: `Failed to decode cron payload: ${e instanceof Error ? e.message : String(e)}`,
+      error: `Failed to decode cron payload: ${formatErrorMessage(e)}`,
     };
   }
 }

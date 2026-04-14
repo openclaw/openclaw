@@ -1,76 +1,36 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { withProgress } from "../cli/progress.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, readBestEffortConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  type HeartbeatSummary,
-  resolveHeartbeatSummaryForAgent,
-} from "../infra/heartbeat-summary.js";
+import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
 import { styleHealthChannelLine } from "../terminal/health-style.js";
 import { isRich } from "../terminal/theme.js";
-
-export type ChannelAccountHealthSummary = {
-  accountId: string;
-  configured?: boolean;
-  linked?: boolean;
-  authAgeMs?: number | null;
-  probe?: unknown;
-  lastProbeAt?: number | null;
-  [key: string]: unknown;
-};
-
-export type ChannelHealthSummary = ChannelAccountHealthSummary & {
-  accounts?: Record<string, ChannelAccountHealthSummary>;
-};
-
-export type AgentHeartbeatSummary = HeartbeatSummary;
-
-export type AgentHealthSummary = {
-  agentId: string;
-  name?: string;
-  isDefault: boolean;
-  heartbeat: AgentHeartbeatSummary;
-  sessions: HealthSummary["sessions"];
-};
-
-export type HealthSummary = {
-  /**
-   * Convenience top-level flag for UIs (e.g. WebChat) that only need a binary
-   * "can talk to the gateway" signal. If this payload exists, the gateway RPC
-   * succeeded, so this is always `true`.
-   */
-  ok: true;
-  ts: number;
-  durationMs: number;
-  channels: Record<string, ChannelHealthSummary>;
-  channelOrder: string[];
-  channelLabels: Record<string, string>;
-  /** Legacy: default agent heartbeat seconds (rounded). */
-  heartbeatSeconds: number;
-  defaultAgentId: string;
-  agents: AgentHealthSummary[];
-  sessions: {
-    path: string;
-    count: number;
-    recent: Array<{
-      key: string;
-      updatedAt: number | null;
-      age: number | null;
-    }>;
-  };
-};
+import type {
+  AgentHealthSummary,
+  ChannelAccountHealthSummary,
+  ChannelHealthSummary,
+  HealthSummary,
+} from "./health.types.js";
+import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
+export type {
+  AgentHealthSummary,
+  ChannelAccountHealthSummary,
+  ChannelHealthSummary,
+  HealthSummary,
+} from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -109,10 +69,10 @@ const formatDurationParts = (ms: number): string => {
   return parts.join(" ");
 };
 
-const resolveHeartbeatSummary = (cfg: ReturnType<typeof loadConfig>, agentId: string) =>
+const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
-const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
+const resolveAgentOrder = (cfg: OpenClawConfig) => {
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const entries = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const seen = new Set<string>();
@@ -144,7 +104,8 @@ const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
   return { defaultAgentId, ordered };
 };
 
-const buildSessionSummary = (storePath: string) => {
+const buildSessionSummary = async (storePath: string) => {
+  const { loadSessionStore } = await import("../config/sessions/store.js");
   const store = loadSessionStore(storePath);
   const sessions = Object.entries(store)
     .filter(([key]) => key !== "global" && key !== "unknown")
@@ -162,9 +123,6 @@ const buildSessionSummary = (storePath: string) => {
   } satisfies HealthSummary["sessions"];
 };
 
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-
 async function inspectHealthAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
   return (
     plugin.config.inspectAccount?.(cfg, accountId) ??
@@ -177,7 +135,7 @@ async function inspectHealthAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, 
 }
 
 function readBooleanField(value: unknown, key: string): boolean | undefined {
-  const record = asRecord(value);
+  const record = asNullableRecord(value);
   if (!record) {
     return undefined;
   }
@@ -244,7 +202,7 @@ async function resolveHealthAccountContext(params: {
 }
 
 const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {}): string | null => {
-  const record = asRecord(probe);
+  const record = asNullableRecord(probe);
   if (!record) {
     return null;
   }
@@ -255,9 +213,9 @@ const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {})
   const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
   const status = typeof record.status === "number" ? record.status : null;
   const error = typeof record.error === "string" ? record.error : null;
-  const bot = asRecord(record.bot);
+  const bot = asNullableRecord(record.bot);
   const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
-  const webhook = asRecord(record.webhook);
+  const webhook = asNullableRecord(record.webhook);
   const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
 
   const usernames = new Set<string>();
@@ -291,7 +249,7 @@ const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {})
 };
 
 const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string | null => {
-  const probe = asRecord(summary.probe);
+  const probe = asNullableRecord(summary.probe);
   if (!probe) {
     return null;
   }
@@ -302,7 +260,7 @@ const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string 
   }
 
   const accountId = summary.accountId || "default";
-  const botRecord = asRecord(probe.bot);
+  const botRecord = asNullableRecord(probe.bot);
   const botUsername =
     botRecord && typeof botRecord.username === "string" ? botRecord.username : null;
   const handle = botUsername ? `@${botUsername}` : accountId;
@@ -312,7 +270,7 @@ const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string 
 };
 
 const isProbeFailure = (summary: ChannelAccountHealthSummary): boolean => {
-  const probe = asRecord(summary.probe);
+  const probe = asNullableRecord(summary.probe);
   if (!probe) {
     return false;
   }
@@ -357,8 +315,8 @@ export const formatHealthChannelLines = (
     const botUsernames = listSummaries
       ? listSummaries
           .map((account) => {
-            const probeRecord = asRecord(account.probe);
-            const bot = probeRecord ? asRecord(probeRecord.bot) : null;
+            const probeRecord = asNullableRecord(account.probe);
+            const bot = probeRecord ? asNullableRecord(probeRecord.bot) : null;
             return bot && typeof bot.username === "string" ? bot.username : null;
           })
           .filter((value): value is string => Boolean(value))
@@ -421,29 +379,31 @@ export async function getHealthSnapshot(params?: {
   probe?: boolean;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
+  const { loadConfig } = await import("../config/config.js");
   const cfg = loadConfig();
   const { defaultAgentId, ordered } = resolveAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
   const sessionCache = new Map<string, HealthSummary["sessions"]>();
-  const agents: AgentHealthSummary[] = ordered.map((entry) => {
+  const agents: AgentHealthSummary[] = [];
+  for (const entry of ordered) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-    const sessions = sessionCache.get(storePath) ?? buildSessionSummary(storePath);
+    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath));
     sessionCache.set(storePath, sessions);
-    return {
+    agents.push({
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
       heartbeat: resolveHeartbeatSummary(cfg, entry.id),
       sessions,
-    } satisfies AgentHealthSummary;
-  });
+    });
+  }
   const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
   const heartbeatSeconds = defaultAgent?.heartbeat.everyMs
     ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }));
+    (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
 
   const start = Date.now();
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
@@ -598,7 +558,7 @@ export async function healthCommand(
   opts: { json?: boolean; timeoutMs?: number; verbose?: boolean; config?: OpenClawConfig },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? (await readBestEffortConfig());
+  const cfg = opts.config ?? (await readBestEffortHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   const summary = await withProgress(
     {
@@ -624,24 +584,26 @@ export async function healthCommand(
     const rich = isRich();
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({ config: cfg });
-      runtime.log(info("Gateway connection:"));
-      for (const line of details.message.split("\n")) {
-        runtime.log(`  ${line}`);
-      }
+      logGatewayConnectionDetails({
+        runtime,
+        info,
+        message: details.message,
+      });
     }
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
-    const fallbackAgents = localAgents.ordered.map((entry) => {
+    const fallbackAgents: AgentHealthSummary[] = [];
+    for (const entry of localAgents.ordered) {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-      return {
+      fallbackAgents.push({
         agentId: entry.id,
         name: entry.name,
         isDefault: entry.id === localAgents.defaultAgentId,
         heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-        sessions: buildSessionSummary(storePath),
-      } satisfies AgentHealthSummary;
-    });
+        sessions: await buildSessionSummary(storePath),
+      });
+    }
     const resolvedAgents = agents.length > 0 ? agents : fallbackAgents;
     const displayAgents = opts.verbose
       ? resolvedAgents
@@ -665,7 +627,7 @@ export async function healthCommand(
             cfg,
             accountId,
           });
-          const record = asRecord(account);
+          const record = asNullableRecord(account);
           const tokenSource =
             record && typeof record.tokenSource === "string" ? record.tokenSource : undefined;
           runtime.log(
@@ -687,8 +649,8 @@ export async function healthCommand(
       for (const [channelId, channelSummary] of Object.entries(summary.channels ?? {})) {
         const accounts = channelSummary.accounts ?? {};
         const probes = Object.entries(accounts).map(([accountId, accountSummary]) => {
-          const probe = asRecord(accountSummary.probe);
-          const bot = probe ? asRecord(probe.bot) : null;
+          const probe = asNullableRecord(accountSummary.probe);
+          const bot = probe ? asNullableRecord(probe.bot) : null;
           const username = bot && typeof bot.username === "string" ? bot.username : null;
           return `${accountId}=${username ?? "(no bot)"}`;
         });
@@ -842,4 +804,9 @@ export async function healthCommand(
   if (fatal) {
     runtime.exit(1);
   }
+}
+
+async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
+  const { readBestEffortConfig } = await import("../config/config.js");
+  return await readBestEffortConfig();
 }

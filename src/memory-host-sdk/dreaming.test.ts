@@ -5,25 +5,17 @@ const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, agentId: string) => `/workspace/${agentId}`),
 );
-const resolveMemorySearchConfig = vi.hoisted(() =>
-  vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | null>(() => ({
-    enabled: true,
-  })),
-);
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 }));
 
-vi.mock("../agents/memory-search.js", () => ({
-  resolveMemorySearchConfig,
-}));
-
 import {
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
-  resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "./dreaming.js";
@@ -55,7 +47,7 @@ describe("memory dreaming host helpers", () => {
     });
 
     expect(resolved.enabled).toBe(true);
-    expect(resolved.frequency).toBe("0 3 * * *");
+    expect(resolved.frequency).toBe("0 */4 * * *");
     expect(resolved.timezone).toBe("Europe/London");
     expect(resolved.storage).toEqual({
       mode: "both",
@@ -114,10 +106,7 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.rem.cron).toBe("15 */8 * * *");
   });
 
-  it("dedupes shared workspaces and skips agents without memory search", () => {
-    resolveMemorySearchConfig.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
-      agentId === "beta" ? null : { enabled: true },
-    );
+  it("dedupes shared workspaces across all configured agents", () => {
     resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
       if (agentId === "alpha") {
         return "/workspace/shared";
@@ -138,6 +127,10 @@ describe("memory dreaming host helpers", () => {
       {
         workspaceDir: "/workspace/shared",
         agentIds: ["alpha", "gamma"],
+      },
+      {
+        workspaceDir: "/workspace/beta",
+        agentIds: ["beta"],
       },
     ]);
   });
@@ -163,9 +156,111 @@ describe("memory dreaming host helpers", () => {
         "America/Los_Angeles",
       ),
     ).toBe(true);
+  });
+
+  it("resolves the configured memory-slot plugin id", () => {
     expect(
-      resolveMemoryCorePluginConfig({
+      resolveMemoryDreamingPluginId({
         plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memos-local-openclaw-plugin");
+  });
+
+  it("reads dreaming config from the configured memory-slot owner", () => {
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+          entries: {
+            "memos-local-openclaw-plugin": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+      },
+    });
+  });
+
+  it("reads dreaming config from memory-lancedb when it owns the memory slot", () => {
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+          entries: {
+            "memory-lancedb": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 */6 * * *",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+        frequency: "0 */6 * * *",
+      },
+    });
+  });
+
+  it("falls back to memory-core when no memory slot override is configured", () => {
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+      },
+    });
+  });
+
+  it('falls back to memory-core when memory slot is "none" or blank', () => {
+    expect(
+      resolveMemoryDreamingPluginId({
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memory-core");
+
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "   ",
+          },
           entries: {
             "memory-core": {
               config: {

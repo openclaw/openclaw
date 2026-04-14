@@ -7,6 +7,7 @@ import {
   generateMusic as generateRuntimeMusic,
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
+import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -29,7 +30,9 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
-import type { PluginRuntime } from "./types.js";
+import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
+
+export type { CreatePluginRuntimeOptions } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
@@ -89,6 +92,10 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
     loadModelAuthRuntime,
     (runtime) => runtime.getApiKeyForModel,
   );
+  const getRuntimeAuthForModel = createLazyRuntimeMethod(
+    loadModelAuthRuntime,
+    (runtime) => runtime.getRuntimeAuthForModel,
+  );
   const resolveApiKeyForProvider = createLazyRuntimeMethod(
     loadModelAuthRuntime,
     (runtime) => runtime.resolveApiKeyForProvider,
@@ -98,6 +105,12 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
       getApiKeyForModel({
         model: params.model,
         cfg: params.cfg,
+      }),
+    getRuntimeAuthForModel: (params) =>
+      getRuntimeAuthForModel({
+        model: params.model,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
       }),
     resolveApiKeyForProvider: (params) =>
       resolveApiKeyForProvider({
@@ -109,7 +122,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
 
 function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   const unavailable = () => {
-    throw new Error("Plugin runtime subagent methods are only available during a gateway request.");
+    throw new RequestScopedSubagentRuntimeError();
   };
   return {
     run: unavailable,
@@ -186,11 +199,6 @@ function createLateBindingSubagent(
     },
   });
 }
-
-export type CreatePluginRuntimeOptions = {
-  subagent?: PluginRuntime["subagent"];
-  allowGatewaySubagentBinding?: boolean;
-};
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();

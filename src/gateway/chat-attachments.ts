@@ -1,7 +1,12 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -128,7 +133,7 @@ function normalizeMime(mime?: string): string | undefined {
   if (!mime) {
     return undefined;
   }
-  const cleaned = mime.split(";")[0]?.trim().toLowerCase();
+  const cleaned = normalizeOptionalLowercaseString(mime.split(";")[0]);
   return cleaned || undefined;
 }
 
@@ -172,7 +177,7 @@ function ensureExtension(label: string, mime: string): string {
   if (/\.[a-zA-Z0-9]+$/.test(label)) {
     return label;
   }
-  const ext = MIME_TO_EXT[mime.toLowerCase()] ?? "";
+  const ext = MIME_TO_EXT[normalizeLowercaseStringOrEmpty(mime)] ?? "";
   return ext ? `${label}${ext}` : label;
 }
 
@@ -428,7 +433,7 @@ export async function parseMessageWithAttachments(
 
           isOffloaded = true;
         } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : String(err);
+          const errorMessage = formatErrorMessage(err);
           throw new MediaOffloadError(
             `[Gateway Error] Failed to save intercepted media to disk: ${errorMessage}`,
             { cause: err },

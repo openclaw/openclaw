@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { formatErrorMessage } from "../../src/infra/errors.ts";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -428,18 +429,14 @@ function resolveCandidateBindings(params: {
   const normalizedTargetAgent = params.targetAgent.trim().toLowerCase();
   return params.entries
     .filter((entry) => {
-      const targetKind = String(entry.targetKind || "")
-        .trim()
-        .toLowerCase();
+      const targetKind = (entry.targetKind || "").trim().toLowerCase();
       if (targetKind !== "acp") {
         return false;
       }
       if (normalizeBoundAt(entry) < params.minBoundAt) {
         return false;
       }
-      const agentId = String(entry.agentId || "")
-        .trim()
-        .toLowerCase();
+      const agentId = (entry.agentId || "").trim().toLowerCase();
       if (normalizedTargetAgent && agentId && agentId !== normalizedTargetAgent) {
         return false;
       }
@@ -540,7 +537,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       ok: false,
       stage: "validation",
       smokeId: "n/a",
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 
@@ -662,7 +659,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
           "--json",
         ],
       });
-      sentMessageId = String(sent.payload?.result?.messageId || "");
+      sentMessageId = sent.payload?.result?.messageId || "";
       if (!sentMessageId) {
         throw new Error("openclaw message send did not return payload.result.messageId");
       }
@@ -672,7 +669,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       ok: false,
       stage: setupStage,
       smokeId,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 
@@ -793,8 +790,8 @@ async function run(): Promise<SuccessResult | FailureResult> {
       binding: {
         threadId,
         targetSessionKey: winningBinding.targetSessionKey,
-        targetKind: String(winningBinding.targetKind || "acp"),
-        agentId: String(winningBinding.agentId || args.targetAgent),
+        targetKind: winningBinding.targetKind || "acp",
+        agentId: winningBinding.agentId || args.targetAgent,
         boundAt: normalizeBoundAt(winningBinding),
         accountId: winningBinding.accountId,
         channelId: winningBinding.channelId,
@@ -830,7 +827,7 @@ const result = await run().catch(
     ok: false,
     stage: "unexpected",
     smokeId: "n/a",
-    error: err instanceof Error ? err.message : String(err),
+    error: formatErrorMessage(err),
   }),
 );
 

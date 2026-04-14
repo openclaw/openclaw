@@ -15,5 +15,6 @@ export * from "./src/scenario.js";
 export * from "./src/scenario-catalog.js";
 export * from "./src/self-check-scenario.js";
 export * from "./src/self-check.js";
+export * from "./src/self-check-runner.js";
 export * from "./src/gateway-child.js";
 export * from "./src/suite.js";

@@ -10,6 +10,7 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 type FeishuBindingTargetKind = "subagent" | "acp";
 
@@ -158,36 +159,41 @@ export function createFeishuThreadBindingManager(params: {
       metadata,
     }) => {
       const normalizedConversationId = conversationId.trim();
-      if (!normalizedConversationId || !targetSessionKey.trim()) {
+      const normalizedTargetSessionKey = targetSessionKey.trim();
+      if (!normalizedConversationId || !normalizedTargetSessionKey) {
         return null;
       }
+      const existing = getState().bindingsByAccountConversation.get(
+        resolveBindingKey({ accountId, conversationId: normalizedConversationId }),
+      );
       const now = Date.now();
       const record: FeishuThreadBindingRecord = {
         accountId,
         conversationId: normalizedConversationId,
-        parentConversationId: parentConversationId?.trim() || undefined,
+        parentConversationId:
+          normalizeOptionalString(parentConversationId) ?? existing?.parentConversationId,
         deliveryTo:
           typeof metadata?.deliveryTo === "string" && metadata.deliveryTo.trim()
             ? metadata.deliveryTo.trim()
-            : undefined,
+            : existing?.deliveryTo,
         deliveryThreadId:
           typeof metadata?.deliveryThreadId === "string" && metadata.deliveryThreadId.trim()
             ? metadata.deliveryThreadId.trim()
-            : undefined,
+            : existing?.deliveryThreadId,
         targetKind: toFeishuTargetKind(targetKind),
-        targetSessionKey: targetSessionKey.trim(),
+        targetSessionKey: normalizedTargetSessionKey,
         agentId:
           typeof metadata?.agentId === "string" && metadata.agentId.trim()
             ? metadata.agentId.trim()
-            : resolveAgentIdFromSessionKey(targetSessionKey),
+            : (existing?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()
-            : undefined,
+            : existing?.label,
         boundBy:
           typeof metadata?.boundBy === "string" && metadata.boundBy.trim()
             ? metadata.boundBy.trim()
-            : undefined,
+            : existing?.boundBy,
         boundAt: now,
         lastActivityAt: now,
       };
@@ -218,7 +224,7 @@ export function createFeishuThreadBindingManager(params: {
     },
     unbindBySessionKey: (targetSessionKey) => {
       const removed: FeishuThreadBindingRecord[] = [];
-      for (const record of [...getState().bindingsByAccountConversation.values()]) {
+      for (const record of getState().bindingsByAccountConversation.values()) {
         if (record.accountId !== accountId || record.targetSessionKey !== targetSessionKey) {
           continue;
         }
@@ -230,7 +236,7 @@ export function createFeishuThreadBindingManager(params: {
       return removed;
     },
     stop: () => {
-      for (const key of [...getState().bindingsByAccountConversation.keys()]) {
+      for (const key of getState().bindingsByAccountConversation.keys()) {
         if (key.startsWith(`${accountId}:`)) {
           getState().bindingsByAccountConversation.delete(key);
         }

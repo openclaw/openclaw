@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, type Mock, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, type Mock, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
@@ -231,6 +231,19 @@ describe("modelsStatusCommand auth overview", () => {
     await loadFreshModelsStatusCommandModuleForTest();
   });
 
+  afterAll(() => {
+    vi.doUnmock("../../agents/agent-paths.js");
+    vi.doUnmock("../../agents/agent-scope.js");
+    vi.doUnmock("../../agents/auth-profiles.js");
+    vi.doUnmock("../../agents/model-auth.js");
+    vi.doUnmock("../../agents/model-auth-env-vars.js");
+    vi.doUnmock("../../infra/shell-env.js");
+    vi.doUnmock("../../config/config.js");
+    vi.doUnmock("./load-config.js");
+    vi.doUnmock("../../infra/provider-usage.js");
+    vi.resetModules();
+  });
+
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
@@ -385,6 +398,42 @@ describe("modelsStatusCommand auth overview", () => {
         });
       },
     );
+  });
+
+  it("does not report cli backends as missing auth", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-sonnet-4-6", fallbacks: [] },
+          models: { "claude-cli/claude-sonnet-4-6": {} },
+          cliBackends: { "claude-cli": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      expect(payload.defaultModel).toBe("claude-cli/claude-sonnet-4-6");
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
   });
 
   it("dedupes alias and canonical provider ids in auth provider summaries", async () => {

@@ -372,6 +372,21 @@ describe("slackPlugin outbound", () => {
     },
   };
 
+  it("treats ACP block text as visible delivered output", () => {
+    expect(
+      slackPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
+        kind: "block",
+        text: "hello",
+      }),
+    ).toBe(true);
+    expect(
+      slackPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
+        kind: "tool",
+        text: "hello",
+      }),
+    ).toBe(false);
+  });
+
   it("advertises the 8000-character Slack default chunk limit", () => {
     expect(slackOutbound.textChunkLimit).toBe(8000);
     expect(slackPlugin.outbound?.textChunkLimit).toBe(8000);

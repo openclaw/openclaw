@@ -133,6 +133,7 @@ describe("runMatrixStartupMaintenance", () => {
         contentType: "image/png",
         fileName: "avatar.png",
       })),
+      abortSignal: undefined,
       env: {},
     };
   }
@@ -234,5 +235,23 @@ describe("runMatrixStartupMaintenance", () => {
       "Matrix startup verification request failed (non-fatal)",
       { error: "boom" },
     );
+  });
+
+  it("aborts maintenance before later startup steps continue", async () => {
+    const params = createParams();
+    params.auth.encryption = true;
+    const abortController = new AbortController();
+    params.abortSignal = abortController.signal;
+    vi.mocked(deps.syncMatrixOwnProfile).mockImplementation(async () => {
+      abortController.abort();
+      return createProfileSyncResult();
+    });
+
+    await expect(runMatrixStartupMaintenance(params, deps)).rejects.toMatchObject({
+      message: "Matrix startup aborted",
+      name: "AbortError",
+    });
+    expect(deps.ensureMatrixStartupVerification).not.toHaveBeenCalled();
+    expect(deps.maybeRestoreLegacyMatrixBackup).not.toHaveBeenCalled();
   });
 });

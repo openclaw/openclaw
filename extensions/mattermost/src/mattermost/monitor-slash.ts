@@ -39,7 +39,9 @@ function buildSlashCommands(params: {
     const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg });
     for (const spec of skillCommands) {
       const name = typeof spec.name === "string" ? spec.name.trim() : "";
-      if (!name) continue;
+      if (!name) {
+        continue;
+      }
       const trigger = name.startsWith("oc_") ? name : `oc_${name}`;
       commandsToRegister.push({
         trigger,

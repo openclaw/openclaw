@@ -10,6 +10,12 @@ const resolveLegacyWebhookNameToChatUserId = vi
 const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
   await import("./webhook-handler.js");
 
+type TestLog = {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
+
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
@@ -40,7 +46,7 @@ const validBody = makeFormBody({
 });
 
 async function runDangerousNameMatchReply(
-  log: { info: any; warn: any; error: any },
+  log: TestLog,
   options: {
     resolvedChatUserId?: number;
     accountIdSuffix: string;
@@ -73,7 +79,7 @@ async function runDangerousNameMatchReply(
 }
 
 describe("createWebhookHandler", () => {
-  let log: { info: any; warn: any; error: any };
+  let log: TestLog;
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();

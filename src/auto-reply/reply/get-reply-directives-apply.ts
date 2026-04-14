@@ -1,12 +1,13 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
-import { isDirectiveOnly, type InlineDirectives } from "./directive-handling.parse.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
@@ -178,6 +179,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasThinkDirective ||
     directives.hasFastDirective ||
     directives.hasVerboseDirective ||
+    directives.hasTraceDirective ||
     directives.hasReasoningDirective ||
     directives.hasElevatedDirective ||
     directives.hasExecDirective ||
@@ -236,17 +238,20 @@ export async function applyInlineDirectiveOverrides(params: {
       messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
+      senderIsOwner: command.senderIsOwner,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
       const { buildStatusReply } = await loadCommandsStatus();
+      const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,
         command,
-        sessionEntry,
+        sessionEntry: targetSessionEntry,
         sessionKey,
-        parentSessionKey: ctx.ParentSessionKey,
+        parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
         sessionScope,
+        storePath,
         provider,
         model,
         contextTokens,
@@ -276,6 +281,7 @@ export async function applyInlineDirectiveOverrides(params: {
     ).applyInlineDirectivesFastLane({
       directives,
       commandAuthorized: command.isAuthorizedSender,
+      senderIsOwner: command.senderIsOwner,
       ctx,
       cfg,
       agentId,
@@ -332,6 +338,7 @@ export async function applyInlineDirectiveOverrides(params: {
     messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
+    senderIsOwner: command.senderIsOwner,
   });
   provider = persisted.provider;
   model = persisted.model;
