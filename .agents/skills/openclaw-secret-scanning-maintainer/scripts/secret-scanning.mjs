@@ -114,7 +114,8 @@ function cmdFetchContent(locationJson) {
 
     while (hasNextPage && !comment) {
       const afterClause = cursor ? `, after: "${cursor}"` : "";
-      const gql = ghGraphQL(`{
+      const gql = ghGraphQL(
+        `{
         repository(owner: "${owner}", name: "${name}") {
           discussion(number: ${discussionNumber}) {
             id
@@ -131,10 +132,15 @@ function cmdFetchContent(locationJson) {
             }
           }
         }
-      }`, { allowFailure: true });
+      }`,
+        { allowFailure: true },
+      );
 
       const discussion = gql?.data?.repository?.discussion;
-      if (!discussion) fail(`Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`);
+      if (!discussion)
+        fail(
+          `Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`,
+        );
 
       discussionId = discussion.id;
       comment = discussion.comments.nodes.find(
@@ -144,7 +150,10 @@ function cmdFetchContent(locationJson) {
       cursor = discussion.comments.pageInfo.endCursor;
     }
 
-    if (!comment) fail(`Discussion comment #${discussionCommentDbId} not found in discussion #${discussionNumber}`);
+    if (!comment)
+      fail(
+        `Discussion comment #${discussionCommentDbId} not found in discussion #${discussionNumber}`,
+      );
 
     const bodyFile = tmpFile("body.md");
     fs.writeFileSync(bodyFile, comment.body || "");
@@ -356,7 +365,9 @@ function cmdDeleteComment(commentId) {
  */
 function cmdDeleteDiscussionComment(nodeId) {
   if (!nodeId) fail("Usage: delete-discussion-comment <node-id>");
-  const result = ghGraphQL(`mutation { deleteDiscussionComment(input: { id: "${nodeId}" }) { comment { id } } }`);
+  const result = ghGraphQL(
+    `mutation { deleteDiscussionComment(input: { id: "${nodeId}" }) { comment { id } } }`,
+  );
   if (result?.errors) {
     fail(`Failed to delete discussion comment: ${JSON.stringify(result.errors)}`);
   }
@@ -368,13 +379,20 @@ function cmdDeleteDiscussionComment(nodeId) {
  * Create a new discussion comment via GraphQL.
  */
 function cmdRecreateDiscussionComment(discussionNodeId, bodyFile) {
-  if (!discussionNodeId || !bodyFile) fail("Usage: recreate-discussion-comment <discussion-node-id> <body-file>");
+  if (!discussionNodeId || !bodyFile)
+    fail("Usage: recreate-discussion-comment <discussion-node-id> <body-file>");
   if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
 
   const body = fs.readFileSync(bodyFile, "utf8");
   // Escape for GraphQL string literal
-  const escapedBody = body.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-  const result = ghGraphQL(`mutation { addDiscussionComment(input: { discussionId: "${discussionNodeId}", body: "${escapedBody}" }) { comment { id url } } }`);
+  const escapedBody = body
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n");
+  const result = ghGraphQL(
+    `mutation { addDiscussionComment(input: { discussionId: "${discussionNodeId}", body: "${escapedBody}" }) { comment { id url } } }`,
+  );
   if (result?.errors) {
     fail(`Failed to create discussion comment: ${JSON.stringify(result.errors)}`);
   }
@@ -415,12 +433,13 @@ function cmdRecreateComment(issueNumber, bodyFile) {
 }
 
 /**
- * notify <issue-or-pr-number> <author> <location-type> <secret-types>
+ * notify <target> <author> <location-type> <secret-types>
  * Post a notification comment with the correct template for the location type.
+ * target = issue/PR number for non-discussion types, discussion node ID for discussion_comment.
  */
-function cmdNotify(issueNumber, author, locationType, secretTypes) {
-  if (!issueNumber || !author || !locationType || !secretTypes) {
-    fail("Usage: notify <issue-or-pr-number> <author> <location-type> <secret-types-comma-sep>");
+function cmdNotify(target, author, locationType, secretTypes) {
+  if (!target || !author || !locationType || !secretTypes) {
+    fail("Usage: notify <target> <author> <location-type> <secret-types-comma-sep>");
   }
 
   const types = secretTypes.split(",").map((s) => s.trim());
@@ -468,8 +487,14 @@ function cmdNotify(issueNumber, author, locationType, secretTypes) {
 
   // Discussion comments must be notified via GraphQL
   if (locationType === "discussion_comment") {
-    const escapedBody = body.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-    const result = ghGraphQL(`mutation { addDiscussionComment(input: { discussionId: "${issueNumber}", body: "${escapedBody}" }) { comment { id url } } }`);
+    const escapedBody = body
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\r/g, "\\r")
+      .replace(/\n/g, "\\n");
+    const result = ghGraphQL(
+      `mutation { addDiscussionComment(input: { discussionId: "${target}", body: "${escapedBody}" }) { comment { id url } } }`,
+    );
     if (result?.errors) {
       fail(`Failed to post discussion notification: ${JSON.stringify(result.errors)}`);
     }
@@ -490,7 +515,7 @@ function cmdNotify(issueNumber, author, locationType, secretTypes) {
 
   const result = gh([
     "api",
-    `repos/${REPO}/issues/${issueNumber}/comments`,
+    `repos/${REPO}/issues/${target}/comments`,
     "-X",
     "POST",
     "-F",
@@ -660,7 +685,7 @@ if (!command || !commands[command]) {
       "  delete-discussion-comment <node-id> Delete a discussion comment (GraphQL)",
       "  recreate-comment <issue-n> <file> Create replacement comment",
       "  recreate-discussion-comment <disc-node-id> <file> Create discussion comment (GraphQL)",
-      "  notify <n> <author> <type> <types> Post notification",
+      "  notify <target> <author> <type> <types> Post notification",
       "  resolve <n> [resolution] [comment] Close alert",
       "  list-open                          List open alerts",
       "  summary <json-file>               Print formatted summary",

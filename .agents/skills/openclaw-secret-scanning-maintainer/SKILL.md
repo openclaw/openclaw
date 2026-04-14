@@ -64,16 +64,16 @@ The `fetch-content` output includes:
 
 ### Location type routing
 
-| type                          | Flow                     |
-| ----------------------------- | ------------------------ |
-| `issue_comment`               | Comment: delete+recreate |
-| `pull_request_comment`        | Comment: delete+recreate |
-| `pull_request_review_comment` | Comment: delete+recreate |
+| type                          | Flow                                          |
+| ----------------------------- | --------------------------------------------- |
+| `issue_comment`               | Comment: delete+recreate                      |
+| `pull_request_comment`        | Comment: delete+recreate                      |
+| `pull_request_review_comment` | Comment: delete+recreate                      |
 | `discussion_comment`          | Discussion comment: delete+recreate (GraphQL) |
-| `issue_body`                  | Body: redact in place    |
-| `pull_request_body`           | Body: redact in place    |
-| `commit`                      | Notify only              |
-| _other_                       | Skip and report          |
+| `issue_body`                  | Body: redact in place                         |
+| `pull_request_body`           | Body: redact in place                         |
+| `commit`                      | Notify only                                   |
+| _other_                       | Skip and report                               |
 
 ## Step 2: Decide (Agent)
 
@@ -102,6 +102,7 @@ node secret-scanning.mjs redact-body <issue|pr> <NUMBER> <redacted-body-file>
 ### Comments — Delete and Recreate
 
 For issue/PR comments:
+
 ```bash
 # Delete original (all edit history gone)
 node secret-scanning.mjs delete-comment <COMMENT_ID>
@@ -111,6 +112,7 @@ node secret-scanning.mjs recreate-comment <ISSUE_NUMBER> <body-file>
 ```
 
 For discussion comments (uses GraphQL):
+
 ```bash
 # Delete original
 node secret-scanning.mjs delete-discussion-comment <COMMENT_NODE_ID>
@@ -152,8 +154,11 @@ Cannot clean. Notify author to delete branch or force-push (for unmerged PRs).
 ## Step 5: Notify
 
 ```bash
-node secret-scanning.mjs notify <ISSUE_NUMBER> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES>
+node secret-scanning.mjs notify <TARGET> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES>
 ```
+
+- For non-discussion types, `<TARGET>` is the issue/PR number.
+- For `discussion_comment`, `<TARGET>` is the `discussion_node_id` returned by `fetch-content`.
 
 Secret types are comma-separated: `"Discord Bot Token,Feishu App Secret"`
 
