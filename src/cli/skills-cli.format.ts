@@ -135,13 +135,17 @@ function resolveSkillByName(
     return null;
   }
 
-  return (
-    report.skills.find(
-      (s) =>
-        normalizeSkillLookupToken(s.name) === normalized ||
-        normalizeSkillLookupToken(s.skillKey) === normalized,
-    ) ?? null
+  const normalizedMatches = report.skills.filter(
+    (s) =>
+      normalizeSkillLookupToken(s.name) === normalized ||
+      normalizeSkillLookupToken(s.skillKey) === normalized,
   );
+
+  if (normalizedMatches.length !== 1) {
+    return null;
+  }
+
+  return normalizedMatches[0] ?? null;
 }
 
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
@@ -225,14 +229,19 @@ export function formatSkillInfo(
   opts: SkillInfoOptions,
 ): string {
   const requestedName = skillName.trim();
+  const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
   const skill = resolveSkillByName(report, requestedName);
 
   if (!skill) {
     if (opts.json) {
-      return JSON.stringify({ error: "not found", skill: requestedName }, null, 2);
+      return JSON.stringify(
+        sanitizeJsonValue({ error: "not found", skill: requestedName }),
+        null,
+        2,
+      );
     }
     return appendClawHubHint(
-      `Skill "${requestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
+      `Skill "${safeRequestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
       opts.json,
     );
   }
