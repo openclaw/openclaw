@@ -74,4 +74,27 @@ describe("allowExternalSkillsIn", () => {
     const names = entries.map((e) => e.skill.name);
     expect(names).toContain("my-ext-skill");
   });
+
+  it("resolves symlink aliases in allowExternalSkillsIn prefixes", async () => {
+    const { workspaceDir, extraSkillsDir, externalDir } = await setupSymlinkedSkill();
+
+    // Create a symlink alias pointing to the external dir.
+    const aliasDir = path.join(workspaceDir, "alias-to-external");
+    await fs.symlink(externalDir, aliasDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          // Use the symlink alias — must still match after canonicalization.
+          allowExternalSkillsIn: [aliasDir],
+          load: { extraDirs: [extraSkillsDir] },
+        },
+      },
+      bundledSkillsDir: "__nonexistent__",
+      managedSkillsDir: "__nonexistent__",
+    });
+
+    const names = entries.map((e) => e.skill.name);
+    expect(names).toContain("my-ext-skill");
+  });
 });
