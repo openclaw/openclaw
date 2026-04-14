@@ -18,8 +18,6 @@ const DEFAULT_KLING_IMAGE_MODEL = "kling-v3";
 const OMNI_KLING_IMAGE_MODEL = "kling-v3-omni";
 const BASIC_IMAGE_ENDPOINT = "/v1/images/generations";
 const OMNI_IMAGE_ENDPOINT = "/v1/images/omni-image";
-const DEFAULT_IMAGE_ASPECT_RATIO = "16:9";
-const DEFAULT_IMAGE_RESOLUTION = "1k";
 const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
 const SUPPORTED_IMAGE_MODELS = [DEFAULT_KLING_IMAGE_MODEL, OMNI_KLING_IMAGE_MODEL] as const;
 
@@ -30,7 +28,7 @@ function mapImageResolution(resolution: "1K" | "2K" | "4K" | undefined): string 
   if (resolution === "2K") {
     return "2k";
   }
-  return DEFAULT_IMAGE_RESOLUTION;
+  return "1k";
 }
 
 function fileExtensionForMimeType(mimeType: string): string {
@@ -65,6 +63,28 @@ function resolveImageModel(model: string | undefined): (typeof SUPPORTED_IMAGE_M
 }
 
 export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
+  const capabilities = {
+    generate: {
+      maxCount: 4,
+      supportsAspectRatio: true,
+      supportsResolution: true,
+      supportsSize: false,
+      supportsWatermark: true,
+    },
+    edit: {
+      enabled: true,
+      maxCount: 4,
+      maxInputImages: 1,
+      supportsAspectRatio: true,
+      supportsResolution: true,
+      supportsSize: false,
+      supportsWatermark: true,
+    },
+    geometry: {
+      aspectRatios: [...SUPPORTED_ASPECT_RATIOS],
+      resolutions: ["1K", "2K", "4K"],
+    },
+  };
   return {
     id: "klingai",
     label: "KlingAI",
@@ -75,26 +95,7 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
         provider: "klingai",
         agentDir,
       }),
-    capabilities: {
-      generate: {
-        maxCount: 4,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: false,
-      },
-      edit: {
-        enabled: true,
-        maxCount: 4,
-        maxInputImages: 1,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: false,
-      },
-      geometry: {
-        aspectRatios: [...SUPPORTED_ASPECT_RATIOS],
-        resolutions: ["1K", "2K", "4K"],
-      },
-    },
+    capabilities: capabilities as ImageGenerationProvider["capabilities"],
     async generateImage(req) {
       if ((req.inputImages?.length ?? 0) > 1) {
         throw new Error("KlingAI image generation supports at most one reference image.");
@@ -115,9 +116,11 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
         capability: "image",
       });
       const model = resolveImageModel(req.model);
-      const endpointPath = model === OMNI_KLING_IMAGE_MODEL ? OMNI_IMAGE_ENDPOINT : BASIC_IMAGE_ENDPOINT;
-      const resolution = mapImageResolution(req.resolution);
-      if (model === DEFAULT_KLING_IMAGE_MODEL && resolution === "4k") {
+      const endpointPath =
+        model === OMNI_KLING_IMAGE_MODEL ? OMNI_IMAGE_ENDPOINT : BASIC_IMAGE_ENDPOINT;
+      const resolvedAspectRatio = normalizeOptionalString(req.aspectRatio);
+      const resolvedResolution = req.resolution ? mapImageResolution(req.resolution) : undefined;
+      if (model === DEFAULT_KLING_IMAGE_MODEL && resolvedResolution === "4k") {
         throw new Error(
           "KlingAI image model kling-v3 does not support 4K. Use model kling-v3-omni for 4K image generation.",
         );
@@ -127,8 +130,6 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
           ? {
               model_name: model,
               prompt: req.prompt,
-              resolution,
-              aspect_ratio: normalizeOptionalString(req.aspectRatio) ?? "auto",
               result_type: "single",
               n: req.count ?? 1,
               callback_url: "",
@@ -138,10 +139,18 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
               prompt: req.prompt,
               negative_prompt: "",
               n: req.count ?? 1,
-              aspect_ratio: normalizeOptionalString(req.aspectRatio) ?? DEFAULT_IMAGE_ASPECT_RATIO,
-              resolution,
               callback_url: "",
             };
+      if (resolvedAspectRatio) {
+        body.aspect_ratio = resolvedAspectRatio;
+      }
+      if (resolvedResolution) {
+        body.resolution = resolvedResolution;
+      }
+      const explicitWatermark = (req as { watermark?: unknown }).watermark;
+      if (typeof explicitWatermark === "boolean") {
+        body.watermark_info = { enabled: explicitWatermark };
+      }
       const inputImage = req.inputImages?.[0];
       if (inputImage) {
         if (model === OMNI_KLING_IMAGE_MODEL) {

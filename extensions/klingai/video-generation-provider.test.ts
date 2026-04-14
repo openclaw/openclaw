@@ -74,14 +74,13 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          arrayBuffer: async () => Buffer.from("video-bytes"),
-          headers: new Headers({ "content-type": "video/mp4" }),
-        },
-        release: vi.fn(async () => {}),
-      });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
 
     const provider = buildKlingaiVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -116,6 +115,54 @@ describe("klingai video generation provider", () => {
       },
     ]);
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves explicit audio=false in request payload", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-vid-audio-off-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              videos: [{ url: "https://cdn.kling.ai/output/video-audio-off-1.mp4" }],
+            },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video-audio-off-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "audio off test",
+      cfg: {},
+      audio: false,
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          sound: "off",
+        }),
+      }),
+    );
   });
 
   it("returns url-only output when providerOptions.return_url_only is true", async () => {
@@ -159,7 +206,57 @@ describe("klingai video generation provider", () => {
         fileName: "video-1.mp4",
       },
     ]);
+    const request = postJsonRequestMock.mock.calls[0]?.[0] as { body?: Record<string, unknown> };
+    expect(request.body).not.toHaveProperty("sound");
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves explicit watermark=false in request payload", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-vid-watermark-off-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              videos: [{ url: "https://cdn.kling.ai/output/video-watermark-off-1.mp4" }],
+            },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video-watermark-off-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "watermark off test",
+      cfg: {},
+      watermark: false,
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          watermark_info: { enabled: false },
+        }),
+      }),
+    );
   });
 
   it("maps 720P resolution to std mode", async () => {
@@ -184,14 +281,13 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          arrayBuffer: async () => Buffer.from("video-1b-bytes"),
-          headers: new Headers({ "content-type": "video/mp4" }),
-        },
-        release: vi.fn(async () => {}),
-      });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video-1b-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
     const provider = buildKlingaiVideoGenerationProvider();
     await provider.generateVideo({
       provider: "klingai",
@@ -231,14 +327,13 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          arrayBuffer: async () => Buffer.from("video-1b-bytes"),
-          headers: new Headers({ "content-type": "video/mp4" }),
-        },
-        release: vi.fn(async () => {}),
-      });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video-1b-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
 
     const provider = buildKlingaiVideoGenerationProvider();
     await provider.generateVideo({
@@ -280,14 +375,13 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          arrayBuffer: async () => Buffer.from("video2-bytes"),
-          headers: new Headers({ "content-type": "video/mp4" }),
-        },
-        release: vi.fn(async () => {}),
-      });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video2-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
 
     const provider = buildKlingaiVideoGenerationProvider();
     await provider.generateVideo({
@@ -306,6 +400,8 @@ describe("klingai video generation provider", () => {
         }),
       }),
     );
+    const request = postJsonRequestMock.mock.calls[0]?.[0] as { body?: Record<string, unknown> };
+    expect(request.body).not.toHaveProperty("aspect_ratio");
   });
 
   it("routes kling-v3-omni to omni-video endpoint", async () => {
@@ -330,14 +426,13 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          arrayBuffer: async () => Buffer.from("video-omni-bytes"),
-          headers: new Headers({ "content-type": "video/mp4" }),
-        },
-        release: vi.fn(async () => {}),
-      });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video-omni-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
     const provider = buildKlingaiVideoGenerationProvider();
     await provider.generateVideo({
       provider: "klingai",
@@ -352,9 +447,58 @@ describe("klingai video generation provider", () => {
         url: "https://api-singapore.klingai.com/v1/videos/omni-video",
         body: expect.objectContaining({
           model_name: "kling-v3-omni",
-          image_list: [
-            { image_url: "https://example.com/first-frame.png", type: "first_frame" },
-          ],
+          image_list: [{ image_url: "https://example.com/first-frame.png", type: "first_frame" }],
+        }),
+      }),
+    );
+    const request = postJsonRequestMock.mock.calls[0]?.[0] as { body?: Record<string, unknown> };
+    expect(request.body).not.toHaveProperty("aspect_ratio");
+  });
+
+  it("includes default aspect ratio for kling-v3-omni text-to-video requests", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-vid-omni-text-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              videos: [{ url: "https://cdn.kling.ai/output/video-omni-text-1.mp4" }],
+            },
+          },
+        }),
+        headers: new Headers(),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video-omni-text-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "klingai",
+      model: "kling-v3-omni",
+      prompt: "omni text to video",
+      cfg: {},
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api-singapore.klingai.com/v1/videos/omni-video",
+        body: expect.objectContaining({
+          model_name: "kling-v3-omni",
+          aspect_ratio: "16:9",
         }),
       }),
     );

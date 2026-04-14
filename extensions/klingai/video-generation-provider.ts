@@ -1,11 +1,11 @@
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   downloadKlingBinaryAsset,
   pollKlingTaskUntilComplete,
@@ -28,9 +28,7 @@ const DEFAULT_VIDEO_MODE = "pro";
 const DEFAULT_RETURN_URL_ONLY = false;
 const RETURN_URL_ONLY_PROVIDER_OPTION = "return_url_only";
 const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
-const SUPPORTED_DURATION_SECONDS = [
-  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-] as const;
+const SUPPORTED_DURATION_SECONDS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
 const SUPPORTED_VIDEO_RESOLUTIONS = ["720P", "1080P"] as const;
 const SUPPORTED_VIDEO_MODELS = [DEFAULT_KLING_VIDEO_MODEL, OMNI_KLING_VIDEO_MODEL] as const;
 
@@ -184,7 +182,11 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
       });
       const model = resolveVideoModel(req.model);
       const inputImage = req.inputImages?.[0];
-      if (model === DEFAULT_KLING_VIDEO_MODEL && inputImage && normalizeOptionalString(req.aspectRatio)) {
+      if (
+        model === DEFAULT_KLING_VIDEO_MODEL &&
+        inputImage &&
+        normalizeOptionalString(req.aspectRatio)
+      ) {
         throw new Error(
           "KlingAI model kling-v3 does not support aspectRatio for image-to-video. Use model kling-v3-omni.",
         );
@@ -196,16 +198,27 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
             ? IMAGE_TO_VIDEO_ENDPOINT
             : TEXT_TO_VIDEO_ENDPOINT;
       const mode = resolveVideoModeFromResolution(req.resolution);
+      const resolvedAspectRatio = normalizeOptionalString(req.aspectRatio);
+      const isDefaultModelImageToVideo = model === DEFAULT_KLING_VIDEO_MODEL && Boolean(inputImage);
+      const isOmniModelImageToVideo = model === OMNI_KLING_VIDEO_MODEL && Boolean(inputImage);
       const body: Record<string, unknown> = {
         model_name: model,
         prompt: req.prompt,
         negative_prompt: "",
         duration: resolveDurationSeconds(req.durationSeconds),
         mode: mode ?? DEFAULT_VIDEO_MODE,
-        aspect_ratio: normalizeOptionalString(req.aspectRatio) ?? DEFAULT_VIDEO_ASPECT_RATIO,
         callback_url: "",
-        sound: req.audio ? "on" : "off",
       };
+      if (typeof req.audio === "boolean") {
+        body.sound = req.audio ? "on" : "off";
+      }
+      if (isOmniModelImageToVideo) {
+        if (resolvedAspectRatio) {
+          body.aspect_ratio = resolvedAspectRatio;
+        }
+      } else if (!isDefaultModelImageToVideo) {
+        body.aspect_ratio = resolvedAspectRatio ?? DEFAULT_VIDEO_ASPECT_RATIO;
+      }
 
       if (model === OMNI_KLING_VIDEO_MODEL) {
         delete body.negative_prompt;
@@ -218,8 +231,8 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
       } else {
         body.external_task_id = "";
       }
-      if (req.watermark) {
-        body.watermark_info = { enabled: true };
+      if (typeof req.watermark === "boolean") {
+        body.watermark_info = { enabled: req.watermark };
       }
 
       const taskId = await submitKlingTask({

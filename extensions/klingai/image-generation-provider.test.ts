@@ -9,7 +9,7 @@ const {
   assertOkOrThrowHttpErrorMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "kling-test-key" })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
+  resolveProviderHttpRequestConfigMock: vi.fn((params): any => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders),
@@ -43,30 +43,28 @@ describe("klingai image generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            code: 0,
-            data: {
-              task_status: "succeed",
-              task_result: {
-                images: [{ url: "https://cdn.kling.ai/output/image-1.png" }],
-              },
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              images: [{ url: "https://cdn.kling.ai/output/image-1.png" }],
             },
-          }),
-          headers: new Headers({ "content-type": "application/json" }),
-        },
-        release: vi.fn(async () => {}),
-      });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          arrayBuffer: async () => Buffer.from("png-bytes"),
-          headers: new Headers({ "content-type": "image/png" }),
-        },
-        release: vi.fn(async () => {}),
-      });
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("png-bytes"),
+        headers: new Headers({ "content-type": "image/png" }),
+      },
+      release: vi.fn(async () => {}),
+    });
 
     const provider = buildKlingaiImageGenerationProvider();
     const result = await provider.generateImage({
@@ -126,30 +124,28 @@ describe("klingai image generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            code: 0,
-            data: {
-              task_status: "succeed",
-              task_result: {
-                images: [{ url: "https://cdn.kling.ai/output/image-omni-1.png" }],
-              },
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              images: [{ url: "https://cdn.kling.ai/output/image-omni-1.png" }],
             },
-          }),
-          headers: new Headers({ "content-type": "application/json" }),
-        },
-        release: vi.fn(async () => {}),
-      });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          arrayBuffer: async () => Buffer.from("png-bytes"),
-          headers: new Headers({ "content-type": "image/png" }),
-        },
-        release: vi.fn(async () => {}),
-      });
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("png-bytes"),
+        headers: new Headers({ "content-type": "image/png" }),
+      },
+      release: vi.fn(async () => {}),
+    });
 
     const provider = buildKlingaiImageGenerationProvider();
     await provider.generateImage({
@@ -172,6 +168,98 @@ describe("klingai image generation provider", () => {
     );
   });
 
+  it("omits default aspect_ratio and resolution when unset", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-img-default-omits-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              images: [{ url: "https://cdn.kling.ai/output/image-default-omits-1.png" }],
+            },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("png-bytes"),
+        headers: new Headers({ "content-type": "image/png" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiImageGenerationProvider();
+    await provider.generateImage({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "draw defaults omitted",
+      cfg: {},
+    });
+
+    const request = postJsonRequestMock.mock.calls[0]?.[0] as { body?: Record<string, unknown> };
+    expect(request.body).not.toHaveProperty("aspect_ratio");
+    expect(request.body).not.toHaveProperty("resolution");
+  });
+
+  it("includes watermark_info when watermark is explicitly set", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-img-watermark-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              images: [{ url: "https://cdn.kling.ai/output/image-watermark-1.png" }],
+            },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("png-bytes"),
+        headers: new Headers({ "content-type": "image/png" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiImageGenerationProvider();
+    const request = {
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "watermark off image",
+      cfg: {},
+      watermark: false,
+    } as unknown as Parameters<typeof provider.generateImage>[0];
+    await provider.generateImage(request);
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          watermark_info: { enabled: false },
+        }),
+      }),
+    );
+  });
+
   it("passes through a URL reference image when present", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -179,28 +267,26 @@ describe("klingai image generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            code: 0,
-            data: {
-              task_status: "succeed",
-              task_result: { url: "https://cdn.kling.ai/output/edited.png" },
-            },
-          }),
-          headers: new Headers(),
-        },
-        release: vi.fn(async () => {}),
-      });
-    fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce({
-        response: {
-          arrayBuffer: async () => Buffer.from("edited-png-bytes"),
-          headers: new Headers({ "content-type": "image/png" }),
-        },
-        release: vi.fn(async () => {}),
-      });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: { url: "https://cdn.kling.ai/output/edited.png" },
+          },
+        }),
+        headers: new Headers(),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("edited-png-bytes"),
+        headers: new Headers({ "content-type": "image/png" }),
+      },
+      release: vi.fn(async () => {}),
+    });
 
     const provider = buildKlingaiImageGenerationProvider();
     const urlFirstInput = {
@@ -245,7 +331,7 @@ describe("klingai image generation provider", () => {
   });
 
   it("preserves HTTP policy and honors caller timeout for polling", async () => {
-    const dispatcherPolicy = { mode: "explicit-proxy" } as unknown;
+    const dispatcherPolicy = { mode: "explicit-proxy" } as any;
     resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
       baseUrl: "https://proxy.kling.ai",
       allowPrivateNetwork: true,
