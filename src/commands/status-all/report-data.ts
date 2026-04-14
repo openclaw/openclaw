@@ -117,7 +117,9 @@ async function resolveStatusAllLocalDiagnosis(params: {
           }
         })()
       : null;
-  const pluginCompatibility = buildPluginCompatibilityNotices({ config: overview.cfg });
+  const pluginCompatibility = buildPluginCompatibilityNotices({
+    config: overview.sourceConfig,
+  });
 
   return {
     configPath,

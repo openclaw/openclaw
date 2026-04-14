@@ -538,6 +538,42 @@ describe("plugin status reports", () => {
     );
   });
 
+  it("suppresses trust warnings while building full plugin diagnostics", () => {
+    setSinglePluginLoadResult(createPluginRecord({ id: "demo" }));
+
+    buildPluginDiagnosticsReport({ config: {} });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emitTrustWarnings: false,
+        logger: expect.objectContaining({
+          info: expect.any(Function),
+          warn: expect.any(Function),
+          error: expect.any(Function),
+          debug: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
+  it("suppresses trust warnings while building metadata-only plugin reports", () => {
+    setSinglePluginLoadResult(createPluginRecord({ id: "demo" }));
+
+    buildPluginSnapshotReport({ config: {} });
+
+    expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emitTrustWarnings: false,
+        logger: expect.objectContaining({
+          info: expect.any(Function),
+          warn: expect.any(Function),
+          error: expect.any(Function),
+          debug: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
   it("marks errored plugin modules as imported when full diagnostics already evaluated them", () => {
     setPluginLoadResult({
       plugins: [createPluginRecord({ id: "broken-plugin", status: "error" })],

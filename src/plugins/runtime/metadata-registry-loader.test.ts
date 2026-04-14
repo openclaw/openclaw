@@ -92,4 +92,18 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       }),
     );
   });
+
+  it("forwards trust warning suppression to metadata snapshots", () => {
+    loadPluginMetadataRegistrySnapshot({
+      config: { plugins: {} },
+      emitTrustWarnings: false,
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emitTrustWarnings: false,
+        mode: "validate",
+      }),
+    );
+  });
 });

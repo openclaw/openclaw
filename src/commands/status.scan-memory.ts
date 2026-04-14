@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginLogger } from "../plugins/types.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import {
   resolveSharedMemoryStatusSnapshot,
@@ -17,6 +18,15 @@ let statusScanDepsRuntimeModulePromise:
 function loadStatusScanDepsRuntimeModule() {
   statusScanDepsRuntimeModulePromise ??= import("./status.scan.deps.runtime.js");
   return statusScanDepsRuntimeModulePromise;
+}
+
+function createQuietStatusMemoryLogger(): PluginLogger {
+  return {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  };
 }
 
 export function resolveDefaultMemoryStorePath(agentId: string): string {
@@ -34,7 +44,11 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
     cfg: params.cfg,
     agentStatus: params.agentStatus,
     memoryPlugin: params.memoryPlugin,
-    resolveMemoryConfig: resolveMemorySearchConfig,
+    resolveMemoryConfig: (cfg, agentId) =>
+      resolveMemorySearchConfig(cfg, agentId, {
+        emitTrustWarnings: false,
+        logger: createQuietStatusMemoryLogger(),
+      }),
     getMemorySearchManager,
     requireDefaultStore: params.requireDefaultStore,
   });
