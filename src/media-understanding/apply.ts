@@ -334,19 +334,6 @@ function buildSyntheticSkippedAudioOutputs(
   });
 }
 
-function mergeAudioOutputsPreservingAttachmentOrder(params: {
-  outputs: MediaUnderstandingOutput[];
-  syntheticOutputs: MediaUnderstandingOutput[];
-}): MediaUnderstandingOutput[] {
-  const { outputs, syntheticOutputs } = params;
-  if (syntheticOutputs.length === 0) {
-    return outputs;
-  }
-  return [...outputs, ...syntheticOutputs].sort(
-    (left, right) => left.attachmentIndex - right.attachmentIndex,
-  );
-}
-
 function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
@@ -590,9 +577,12 @@ export async function applyMediaUnderstanding(params: {
         const before = outputs.slice(0, firstAudioIdx);
         const existingAudio = outputs.filter((o) => o.kind === "audio.transcription");
         const afterLastAudio = outputs.slice(
-          outputs.reduce((last, o, i) => (o.kind === "audio.transcription" ? i : last), firstAudioIdx) + 1,
+          outputs.reduce(
+            (last, o, i) => (o.kind === "audio.transcription" ? i : last),
+            firstAudioIdx,
+          ) + 1,
         );
-        const mergedAudio = [...existingAudio, ...syntheticSkippedAudioOutputs].sort(
+        const mergedAudio = [...existingAudio, ...syntheticSkippedAudioOutputs].toSorted(
           (a, b) => a.attachmentIndex - b.attachmentIndex,
         );
         outputs.length = 0;
