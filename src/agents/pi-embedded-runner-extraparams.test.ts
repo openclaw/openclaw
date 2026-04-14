@@ -1317,6 +1317,36 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
+  it("preserves maxTokens: 0 in shared extra params for providers that forward it", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5": {
+              params: {
+                maxTokens: 0,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.maxTokens).toBe(0);
+  });
+
   it("defaults Codex transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 

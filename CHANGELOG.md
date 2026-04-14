@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - Auto-reply/billing: classify pure billing cooldown fallback summaries from structured fallback reasons so users see billing guidance instead of the generic failure reply. (#66363) Thanks @Rohan5commit.
 - Agents/fallback: preserve the original prompt body on model fallback retries with session history so the retrying model keeps the active task instead of only seeing a generic continue message. (#66029) Thanks @WuKongAI-CMU.
 - Reply/secrets: resolve active reply channel/account SecretRefs before reply-run message-action discovery so channel token SecretRefs (for example Discord) do not degrade into discovery-time unresolved-secret failures. (#66796) Thanks @joshavant.
+- Agents/Anthropic: ignore non-positive Anthropic Messages token overrides and fail locally when no positive token budget remains, so invalid `max_tokens` values no longer reach the provider API. (#66664) thanks @jalehman
 
 ## 2026.4.14
 
@@ -190,6 +191,7 @@ Docs: https://docs.openclaw.ai
 - Setup/config/install: stop setup, config dry-runs, and daemon install from eagerly booting auth-profile and plugin repair runtime when those paths are not needed, so onboarding and local service setup avoid long cold-start stalls. Thanks @vincentkoc.
 - Cron/direct delivery: slim isolated-agent delivery cold paths so direct channel delivery and related cron execution spend less time loading unrelated auth, plugin, and channel runtime. Thanks @vincentkoc.
 - Channels/replay dedupe: standardize replay claims, retryable-failure release, and post-success commit behavior across Telegram, Discord, Slack, Mattermost, WhatsApp, Matrix, LINE, Feishu, Zalo, Nextcloud Talk, TLON, Nostr, Voice Call, and shared plugin interactive callbacks so duplicate deliveries stay reply-once after success but retry cleanly after pre-delivery failures. Thanks @vincentkoc.
+- Agents/OpenAI mini reasoning: remap unsupported `low` and `minimal` reasoning effort to `medium` for affected OpenAI mini models, and add a live regression lane to keep the compatibility fix covered. (#65478) Thanks @vincentkoc.
 
 ## 2026.4.11
 

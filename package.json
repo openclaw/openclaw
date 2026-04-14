@@ -1243,8 +1243,6 @@
     "proxy:install-ca": "node --import tsx scripts/proxy-install-ca.mjs",
     "proxy:run": "node scripts/run-node.mjs proxy run",
     "proxy:start": "node scripts/run-node.mjs proxy start",
-    "qa-runners:check": "node --import tsx scripts/generate-qa-runner-catalog.ts --check",
-    "qa-runners:gen": "node --import tsx scripts/generate-qa-runner-catalog.ts --write",
     "qa:e2e": "node --import tsx scripts/qa-e2e.ts",
     "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
     "qa:lab:ui": "pnpm openclaw qa ui",

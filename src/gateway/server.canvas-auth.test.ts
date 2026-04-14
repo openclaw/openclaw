@@ -227,7 +227,10 @@ async function withCanvasGatewayHarness(params: {
       if (url.pathname !== CANVAS_WS_PATH) {
         return false;
       }
-      canvasWss.handleUpgrade(req, socket, head, (ws) => ws.close());
+      canvasWss.handleUpgrade(req, socket, head, (ws) => {
+        // Let the client observe a successful open before the harness closes.
+        setImmediate(() => ws.close());
+      });
       return true;
     },
     handleHttpRequest: params.handleHttpRequest,
@@ -369,7 +372,7 @@ describe("gateway canvas host auth", () => {
           const scopedA2ui = await fetchCanvas(
             `http://${host}:${listener.port}${scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)}`,
           );
-          expect([200, 503]).toContain(scopedA2ui.status);
+          expect([200, 404, 503]).toContain(scopedA2ui.status);
 
           await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
 

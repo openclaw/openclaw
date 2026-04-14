@@ -2,27 +2,15 @@ import type { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
-const listBundledQaRunnerCatalog = vi.hoisted(() =>
-  vi.fn<
-    () => Array<{
-      pluginId: string;
-      commandName: string;
-      description?: string;
-      npmSpec: string;
-    }>
-  >(() => []),
-);
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
 }));
 
-vi.mock("../plugins/qa-runner-catalog.js", () => ({
-  listBundledQaRunnerCatalog,
-}));
-
 vi.mock("./facade-runtime.js", () => ({
+  loadBundledPluginPublicSurfaceModuleSync,
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
@@ -32,7 +20,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
       plugins: [],
       diagnostics: [],
     });
-    listBundledQaRunnerCatalog.mockReset().mockReturnValue([]);
+    loadBundledPluginPublicSurfaceModuleSync.mockReset();
     tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
   });
 
@@ -40,6 +28,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
     await import("./qa-runner-runtime.js");
 
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
     expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
@@ -49,6 +38,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
       plugins: [
         {
           id: "qa-matrix",
+          origin: "bundled",
           qaRunners: [
             {
               commandName: "matrix",
@@ -60,7 +50,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
       ],
       diagnostics: [],
     });
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
       qaRunnerCliRegistrations: [{ commandName: "matrix", register }],
     });
 
@@ -78,7 +68,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
         },
       },
     ]);
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
       dirName: "qa-matrix",
       artifactBasename: "runtime-api.js",
     });
@@ -89,6 +79,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
       plugins: [
         {
           id: "qa-matrix",
+          origin: "workspace",
           qaRunners: [{ commandName: "matrix" }],
           rootDir: "/tmp/qa-matrix",
         },
@@ -108,46 +99,25 @@ describe("plugin-sdk qa-runner-runtime", () => {
     ]);
   });
 
-  it("reports missing optional runners from the generated catalog", async () => {
-    listBundledQaRunnerCatalog.mockReturnValue([
-      {
-        pluginId: "qa-matrix",
-        commandName: "matrix",
-        description: "Run the Matrix live QA lane",
-        npmSpec: "@openclaw/qa-matrix",
-      },
-    ]);
-
-    const module = await import("./qa-runner-runtime.js");
-
-    expect(module.listQaRunnerCliContributions()).toEqual([
-      {
-        pluginId: "qa-matrix",
-        commandName: "matrix",
-        description: "Run the Matrix live QA lane",
-        status: "missing",
-        npmSpec: "@openclaw/qa-matrix",
-      },
-    ]);
-  });
-
   it("fails fast when two plugins declare the same qa runner command", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
           id: "alpha",
+          origin: "workspace",
           qaRunners: [{ commandName: "matrix" }],
           rootDir: "/tmp/alpha",
         },
         {
           id: "beta",
+          origin: "workspace",
           qaRunners: [{ commandName: "matrix" }],
           rootDir: "/tmp/beta",
         },
       ],
       diagnostics: [],
     });
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue(null);
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(null);
 
     const module = await import("./qa-runner-runtime.js");
 
@@ -161,13 +131,14 @@ describe("plugin-sdk qa-runner-runtime", () => {
       plugins: [
         {
           id: "qa-matrix",
+          origin: "bundled",
           qaRunners: [{ commandName: "matrix" }],
           rootDir: "/tmp/qa-matrix",
         },
       ],
       diagnostics: [],
     });
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
       qaRunnerCliRegistrations: [
         { commandName: "matrix", register: vi.fn() },
         { commandName: "extra", register: vi.fn() },
