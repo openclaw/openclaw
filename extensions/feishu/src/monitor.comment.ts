@@ -1238,6 +1238,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
   const fileType = normalizeCommentFileType(event.notice_meta?.file_type);
   const senderId = event.notice_meta?.from_user_id?.open_id?.trim();
   const senderUserId = normalizeString(event.notice_meta?.from_user_id?.user_id);
+  const recipientId = event.notice_meta?.to_user_id?.open_id?.trim();
   if (!eventId || !commentId || !noticeType || !fileToken || !fileType || !senderId) {
     logger?.(
       `feishu[${accountId}]: drive comment notice missing required fields event=${eventId ?? "unknown"} comment=${commentId ?? "unknown"}`,
@@ -1252,6 +1253,20 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     logger?.(
       `feishu[${accountId}]: skipping drive comment notice because bot open_id is unavailable ` +
         `event=${eventId}`,
+    );
+    return null;
+  }
+  if (!recipientId) {
+    logger?.(
+      `feishu[${accountId}]: skipping drive comment notice because to_user_id.open_id is missing ` +
+        `event=${eventId} comment=${commentId}`,
+    );
+    return null;
+  }
+  if (recipientId !== botOpenId) {
+    logger?.(
+      `feishu[${accountId}]: skipping drive comment notice not addressed to bot ` +
+        `event=${eventId} comment=${commentId} to=${recipientId} bot=${botOpenId}`,
     );
     return null;
   }
