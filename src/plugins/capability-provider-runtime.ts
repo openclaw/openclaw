@@ -84,20 +84,19 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  // Without cfg there is no allowlist to apply — use the active registry directly,
-  // falling back to the compat path only if the active registry is empty.
-  if (!params.cfg) {
-    if (activeProviders.length > 0) {
-      return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-    }
-    const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
-    const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
-    const registry = resolveRuntimePluginRegistry(loadOptions);
-    return (registry?.[params.key] ?? []).map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  // The compat path is only meaningful when there is an explicit plugins.allow list to
+  // expand against.  Without it, withBundledPluginAllowlistCompat would add every bundled
+  // provider for the capability to the allow set, injecting providers (e.g. elevenlabs)
+  // that were never configured by the user.  When there is no allow list — or when the
+  // active registry is already empty and would naturally fall through to the compat path
+  // anyway — use the original behaviour.
+  if (activeProviders.length > 0 && !params.cfg?.plugins?.allow?.length) {
+    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
-  // When cfg is provided, run the compat path to discover all allowlisted bundled providers
-  // (e.g. "microsoft" Edge TTS), then merge with any active providers not already present
-  // so that runtime-registered providers from workspace plugins are preserved.
+  // Run the compat path to discover allowlisted bundled providers (e.g. "microsoft" Edge
+  // TTS) that were not self-registered at startup because another provider (e.g. "openai")
+  // registered first via a different capability code path and caused the early-return above
+  // to fire on previous runs.
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
   const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const compatRegistry = resolveRuntimePluginRegistry(loadOptions);
@@ -107,7 +106,9 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   if (compatProviders.length === 0) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
-  // Merge: compat providers first, then any active-only providers not covered by compat.
+  // Merge: compat-discovered providers first (respects the allowlist ordering), then any
+  // active-only providers not already present (e.g. workspace-plugin-registered providers
+  // that are not in the bundled manifest).
   const compatIds = new Set(compatProviders.map((p) => (p as { id: string }).id));
   const activeOnlyProviders = activeProviders
     .filter((entry) => !compatIds.has((entry.provider as { id: string }).id))
