@@ -1,0 +1,10 @@
+{
+  "id": "qa-matrix",
+  "name": "QA Matrix",
+  "description": "Matrix QA transport runner and substrate",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

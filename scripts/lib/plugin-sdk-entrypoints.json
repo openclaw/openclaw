@@ -179,6 +179,8 @@
   "matrix-runtime-surface",
   "matrix-surface",
   "matrix-thread-bindings",
+  "qa-lab-runtime",
+  "qa-matrix",
   "mattermost",
   "mattermost-policy",
   "memory-core",

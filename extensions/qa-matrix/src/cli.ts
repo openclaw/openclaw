@@ -4,7 +4,7 @@ import {
   createLiveTransportQaCliRegistration,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
-} from "../shared/live-transport-cli.js";
+} from "./shared/live-transport-cli.js";
 
 type MatrixQaCliRuntime = typeof import("./cli.runtime.js");
 

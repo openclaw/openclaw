@@ -5,18 +5,24 @@ const {
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
-  runQaMatrixCommand,
   runQaTelegramCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
   runQaCredentialsRemoveCommand: vi.fn(),
-  runQaMatrixCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
 }));
 
-vi.mock("./live-transports/matrix/cli.runtime.js", () => ({
-  runQaMatrixCommand,
+const { isMatrixQaCliAvailable, registerMatrixQaCli } = vi.hoisted(() => ({
+  isMatrixQaCliAvailable: vi.fn(() => true),
+  registerMatrixQaCli: vi.fn((qa: Command) => {
+    qa.command("matrix").action(() => undefined);
+  }),
+}));
+
+vi.mock("openclaw/plugin-sdk/qa-matrix", () => ({
+  isMatrixQaCliAvailable,
+  registerMatrixQaCli,
 }));
 
 vi.mock("./live-transports/telegram/cli.runtime.js", () => ({
@@ -36,12 +42,13 @@ describe("qa cli registration", () => {
 
   beforeEach(() => {
     program = new Command();
-    registerQaLabCli(program);
     runQaCredentialsAddCommand.mockReset();
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
-    runQaMatrixCommand.mockReset();
     runQaTelegramCommand.mockReset();
+    isMatrixQaCliAvailable.mockClear().mockReturnValue(true);
+    registerMatrixQaCli.mockClear();
+    registerQaLabCli(program);
   });
 
   afterEach(() => {
@@ -56,43 +63,20 @@ describe("qa cli registration", () => {
     );
   });
 
-  it("routes matrix CLI flags into the lane runtime", async () => {
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "qa",
-      "matrix",
-      "--repo-root",
-      "/tmp/openclaw-repo",
-      "--output-dir",
-      ".artifacts/qa/matrix",
-      "--provider-mode",
-      "mock-openai",
-      "--model",
-      "mock-openai/gpt-5.4",
-      "--alt-model",
-      "mock-openai/gpt-5.4-alt",
-      "--scenario",
-      "matrix-thread-follow-up",
-      "--scenario",
-      "matrix-thread-isolation",
-      "--fast",
-      "--sut-account",
-      "sut-live",
-    ]);
+  it("delegates matrix command registration to the qa-matrix facade", () => {
+    expect(registerMatrixQaCli).toHaveBeenCalledTimes(1);
+  });
 
-    expect(runQaMatrixCommand).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      outputDir: ".artifacts/qa/matrix",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
-      fastMode: true,
-      scenarioIds: ["matrix-thread-follow-up", "matrix-thread-isolation"],
-      sutAccountId: "sut-live",
-      credentialSource: undefined,
-      credentialRole: undefined,
-    });
+  it("shows an install hint when the matrix runner plugin is unavailable", async () => {
+    isMatrixQaCliAvailable.mockReset().mockReturnValue(false);
+    registerMatrixQaCli.mockReset();
+    const missingProgram = new Command();
+    registerQaLabCli(missingProgram);
+
+    await expect(missingProgram.parseAsync(["node", "openclaw", "qa", "matrix"])).rejects.toThrow(
+      "openclaw plugins install @openclaw/qa-matrix",
+    );
+    expect(registerMatrixQaCli).not.toHaveBeenCalled();
   });
 
   it("routes telegram CLI defaults into the lane runtime", async () => {

@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { collectString } from "./cli-options.js";
-import { LIVE_TRANSPORT_QA_CLI_REGISTRATIONS } from "./live-transports/cli.js";
+import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
 import type { QaProviderModeInput } from "./run-config.js";
 import { hasQaScenarioPack } from "./scenario-catalog.js";
 
@@ -284,7 +284,7 @@ export function registerQaLabCli(program: Command) {
       },
     );
 
-  for (const lane of LIVE_TRANSPORT_QA_CLI_REGISTRATIONS) {
+  for (const lane of listLiveTransportQaCliRegistrations()) {
     lane.register(qa);
   }
 
