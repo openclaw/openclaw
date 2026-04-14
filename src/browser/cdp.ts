@@ -58,12 +58,8 @@ export async function captureScreenshot(opts: {
         deviceScaleFactor: 1,
         mobile: false,
       });
-      // Wait for Chrome to repaint after viewport change
-      await send("Runtime.enable");
-      await send("Runtime.evaluate", {
-        expression: "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
-        awaitPromise: true,
-      });
+      // Brief pause for Chrome to apply the viewport change
+      await new Promise((r) => setTimeout(r, 150));
     }
 
     // Force fullPage off in headless mode
@@ -133,26 +129,6 @@ export async function createTargetViaCdp(opts: {
     const targetId = String(created?.targetId ?? "").trim();
     if (!targetId) {
       throw new Error("CDP Target.createTarget returned no targetId");
-    }
-
-    // Set viewport on the new target for headless mode
-    if (loadConfig().browser?.headless) {
-      const tabs = await fetchJson<Array<{ id?: string; webSocketDebuggerUrl?: string }>>(
-        appendCdpPath(opts.cdpUrl, "/json/list"),
-        2000,
-      );
-      const targetWs = tabs?.find((t) => t.id === targetId)?.webSocketDebuggerUrl;
-      if (targetWs) {
-        const wsUrl = normalizeCdpWsUrl(targetWs, opts.cdpUrl);
-        await withCdpSocket(wsUrl, async (targetSend) => {
-          await targetSend("Emulation.setDeviceMetricsOverride", {
-            width: 1920,
-            height: 1080,
-            deviceScaleFactor: 1,
-            mobile: false,
-          });
-        });
-      }
     }
 
     return { targetId };
