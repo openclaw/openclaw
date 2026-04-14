@@ -1,9 +1,7 @@
+// No top-level import needed - using dynamic import above to avoid circular deps
 import fs from "node:fs/promises";
 import path from "node:path";
-import { URL } from "node:url";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
-import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
   appendFileWithinRoot,
   SafeOpenError,
@@ -11,7 +9,7 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
-import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
@@ -85,41 +83,10 @@ function mapContainerPathToWorkspaceRoot(params: {
   let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
-    if (localFilePath) {
-      candidate = localFilePath;
-    } else {
-      // Windows rejects posix-style file:///workspace/... in fileURLToPath; map via URL pathname
-      // when it clearly refers to the container workdir (same idea as sandbox-paths).
-      let parsed: URL;
-      try {
-        parsed = new URL(candidate);
-      } catch {
-        return params.filePath;
-      }
-      if (parsed.protocol !== "file:") {
-        return params.filePath;
-      }
-      const host = parsed.hostname.trim().toLowerCase();
-      if (host && host !== "localhost") {
-        return params.filePath;
-      }
-      if (hasEncodedFileUrlSeparator(parsed.pathname)) {
-        return params.filePath;
-      }
-      let normalizedPathname: string;
-      try {
-        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
-      } catch {
-        return params.filePath;
-      }
-      if (
-        normalizedPathname !== normalizedWorkdir &&
-        !normalizedPathname.startsWith(`${normalizedWorkdir}/`)
-      ) {
-        return params.filePath;
-      }
-      candidate = normalizedPathname;
+    if (!localFilePath) {
+      return params.filePath;
     }
+    candidate = localFilePath;
   }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
@@ -144,13 +111,9 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
 }): string {
   const mapped = mapContainerPathToWorkspaceRoot(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
-  if (isWindowsDrivePath(candidate)) {
-    return path.win32.normalize(candidate);
-  }
-  if (path.isAbsolute(candidate)) {
-    return path.resolve(candidate);
-  }
-  return path.resolve(params.root, candidate || ".");
+  return path.isAbsolute(candidate)
+    ? path.resolve(candidate)
+    : path.resolve(params.root, candidate || ".");
 }
 
 type MemoryFlushAppendOnlyWriteOptions = {
@@ -485,6 +448,7 @@ export function createOpenClawReadTool(
             };
           }
           const mimeType = getImageMimeType(ext);
+          // FIXED: Use the correct working format for images with URL text
           return {
             toolCallId,
             content: [
@@ -505,7 +469,7 @@ export function createOpenClawReadTool(
           };
         }
 
-// Handle audio files - use URL streaming, NOT base64
+        // Handle audio files - use URL streaming, NOT base64
         if (AUDIO_EXTENSIONS.has(ext)) {
           const MAX_AUDIO_SIZE = 10 * 1024 * 1024;
           if (stats.size > MAX_AUDIO_SIZE) {
@@ -587,7 +551,7 @@ export function createOpenClawReadTool(
         if (offset > 0 || limit !== undefined) {
           const lines = text.split('\n');
           const start = Math.max(0, Math.min(offset - 1, lines.length));
-          const end = limit != null ? Math.min(start + limit, lines.length) : lines.length;
+          const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
           text = lines.slice(start, end).join('\n');
           truncated = true;
         } else if (text.length > maxChars) {
