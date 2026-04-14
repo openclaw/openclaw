@@ -684,14 +684,32 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
       ? (normalizeThinkLevel(persisted) ?? persisted.trim())
       : "";
   const { provider, model } = resolveThinkingTargetModel(state);
+  const configuredDefaultRaw = (() => {
+    const cfg = state.configSnapshot?.config;
+    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
+      return undefined;
+    }
+    const agents = (cfg as Record<string, unknown>)["agents"];
+    if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
+      return undefined;
+    }
+    const defaults = (agents as Record<string, unknown>)["defaults"];
+    if (!defaults || typeof defaults !== "object" || Array.isArray(defaults)) {
+      return undefined;
+    }
+    const thinkingDefault = (defaults as Record<string, unknown>)["thinkingDefault"];
+    return typeof thinkingDefault === "string" ? thinkingDefault : undefined;
+  })();
+  const configuredDefault = normalizeThinkLevel(configuredDefaultRaw);
   const defaultLevel =
-    provider && model
+    configuredDefault ??
+    (provider && model
       ? resolveThinkingDefaultForModel({
           provider,
           model,
           catalog: state.chatModelCatalog ?? [],
         })
-      : "off";
+      : "off");
   return {
     currentOverride,
     defaultLabel: `Default (${defaultLevel})`,
