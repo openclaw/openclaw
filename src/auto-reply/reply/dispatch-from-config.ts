@@ -203,10 +203,11 @@ export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
-  const resolvedCommandAuthorization = params.replyOptions?.resolvedCommandAuthorization;
+  const channelResolvedCommandAuthorization =
+    params.replyOptions?.channelResolvedCommandAuthorization;
   const effectiveCommandAuthorized = resolveEffectiveCommandAuthorized({
     commandAuthorized: ctx.CommandAuthorized,
-    resolvedCommandAuthorization,
+    channelResolvedCommandAuthorization,
   });
   const dispatchCtx =
     effectiveCommandAuthorized === ctx.CommandAuthorized
@@ -304,13 +305,16 @@ export async function dispatchReplyFromConfig(
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
+  const hookContext = deriveInboundMessageHookContext(dispatchCtx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
   const inboundClaimContext = toPluginInboundClaimContext(hookContext);
   const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {
     commandAuthorized:
-      typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-    wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+      typeof dispatchCtx.CommandAuthorized === "boolean"
+        ? dispatchCtx.CommandAuthorized
+        : undefined,
+    wasMentioned:
+      typeof dispatchCtx.WasMentioned === "boolean" ? dispatchCtx.WasMentioned : undefined,
   });
 
   // Check if we should route replies to originating channel instead of dispatcher.
@@ -579,7 +583,7 @@ export async function dispatchReplyFromConfig(
     const fastAbort = await fastAbortResolver({
       ctx: dispatchCtx,
       cfg,
-      resolvedCommandAuthorization,
+      channelResolvedCommandAuthorization,
     });
     if (fastAbort.handled) {
       let queuedFinal = false;

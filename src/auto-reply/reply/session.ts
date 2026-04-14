@@ -45,7 +45,7 @@ import {
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import type { ResolvedCommandAuthorization } from "../command-auth.types.js";
+import type { ChannelResolvedCommandAuthorization } from "../command-auth.types.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
@@ -159,7 +159,7 @@ function isResetAuthorizedForContext(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
-  resolvedCommandAuthorization?: ResolvedCommandAuthorization;
+  channelResolvedCommandAuthorization?: ChannelResolvedCommandAuthorization;
 }): boolean {
   const auth = resolveCommandAuthorization(params);
   if (!params.commandAuthorized && !auth.isAuthorizedSender) {
@@ -239,9 +239,9 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
-  resolvedCommandAuthorization?: ResolvedCommandAuthorization;
+  channelResolvedCommandAuthorization?: ChannelResolvedCommandAuthorization;
 }): Promise<SessionInitResult> {
-  const { ctx, cfg, commandAuthorized, resolvedCommandAuthorization } = params;
+  const { ctx, cfg, commandAuthorized, channelResolvedCommandAuthorization } = params;
   const conversationBindingContext = resolveSessionConversationBindingContext(cfg, ctx);
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
@@ -341,7 +341,7 @@ export async function initSessionState(params: {
     ctx,
     cfg,
     commandAuthorized,
-    resolvedCommandAuthorization,
+    channelResolvedCommandAuthorization,
   });
   // Timestamp/message prefixes (e.g. "[Dec 4 17:35] ") are added by the
   // web inbox before we get here. They prevented reset triggers like "/new"

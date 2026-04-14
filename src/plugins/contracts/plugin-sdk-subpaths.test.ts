@@ -874,8 +874,8 @@ describe("plugin-sdk subpath exports", () => {
       "buildCommandsMessage",
       "buildCommandsMessagePaginated",
       "buildCommandsPaginationKeyboard",
+      "ChannelResolvedCommandAuthorization",
       "CommandAuthorization",
-      "ResolvedCommandAuthorization",
       "buildHelpMessage",
       "buildModelsProviderData",
       "hasControlCommand",
@@ -894,8 +894,8 @@ describe("plugin-sdk subpath exports", () => {
       "shouldHandleTextCommands",
     ]);
     expectSourceMentions("command-auth-native", [
+      "ChannelResolvedCommandAuthorization",
       "CommandAuthorization",
-      "ResolvedCommandAuthorization",
       "resolveCommandAuthorization",
     ]);
     expectSourceMentions("command-status", [

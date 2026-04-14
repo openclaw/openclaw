@@ -27,7 +27,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import type { ResolvedCommandAuthorization } from "../command-auth.types.js";
+import type { ChannelResolvedCommandAuthorization } from "../command-auth.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
   applyAbortCutoffToSessionEntry,
@@ -226,9 +226,9 @@ export function stopSubagentsForRequester(params: {
 export async function tryFastAbortFromMessage(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
-  resolvedCommandAuthorization?: ResolvedCommandAuthorization;
+  channelResolvedCommandAuthorization?: ChannelResolvedCommandAuthorization;
 }): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
-  const { ctx, cfg, resolvedCommandAuthorization } = params;
+  const { ctx, cfg, channelResolvedCommandAuthorization } = params;
   const targetKey =
     normalizeOptionalString(ctx.CommandTargetSessionKey) ?? normalizeOptionalString(ctx.SessionKey);
   // Use RawBody/CommandBody for abort detection (clean message without structural context).
@@ -255,7 +255,7 @@ export async function tryFastAbortFromMessage(params: {
     ctx,
     cfg,
     commandAuthorized,
-    resolvedCommandAuthorization,
+    channelResolvedCommandAuthorization,
   });
   if (!auth.isAuthorizedSender) {
     return { handled: false, aborted: false };

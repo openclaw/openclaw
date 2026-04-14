@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ResolvedCommandAuthorization } from "../command-auth.types.js";
+import type { ChannelResolvedCommandAuthorization } from "../command-auth.types.js";
 import {
   __testing as abortTesting,
   getAbortMemory,
@@ -112,7 +112,7 @@ describe("abort detection", () => {
     from: string;
     to: string;
     commandAuthorized?: boolean;
-    resolvedCommandAuthorization?: ResolvedCommandAuthorization;
+    channelResolvedCommandAuthorization?: ChannelResolvedCommandAuthorization;
     targetSessionKey?: string;
     messageSid?: string;
     timestamp?: number;
@@ -132,7 +132,7 @@ describe("abort detection", () => {
         ...(typeof params.timestamp === "number" ? { Timestamp: params.timestamp } : {}),
       }),
       cfg: params.cfg,
-      resolvedCommandAuthorization: params.resolvedCommandAuthorization,
+      channelResolvedCommandAuthorization: params.channelResolvedCommandAuthorization,
     });
   }
 
@@ -406,8 +406,7 @@ describe("abort detection", () => {
       from: "telegram:123",
       to: "telegram:123",
       commandAuthorized: false,
-      resolvedCommandAuthorization: {
-        providerId: "telegram",
+      channelResolvedCommandAuthorization: {
         ownerList: ["telegram:123"],
         senderIsOwner: true,
         isAuthorizedSender: true,

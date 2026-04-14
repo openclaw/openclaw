@@ -19,7 +19,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
-import type { ResolvedCommandAuthorization } from "../command-auth.types.js";
+import type { ChannelResolvedCommandAuthorization } from "../command-auth.types.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
@@ -1395,7 +1395,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("derives CommandAuthorized from resolved command auth before hook and reply dispatch", async () => {
+  it("derives CommandAuthorized from channel auth before hook and reply dispatch", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "reply_dispatch",
@@ -1409,12 +1409,11 @@ describe("dispatchReplyFromConfig", () => {
       CommandBody: "/status",
       CommandAuthorized: false,
     });
-    const resolvedCommandAuthorization = {
-      providerId: "telegram",
+    const channelResolvedCommandAuthorization = {
       ownerList: ["telegram:123"],
       senderIsOwner: true,
       isAuthorizedSender: true,
-    } satisfies ResolvedCommandAuthorization;
+    } satisfies ChannelResolvedCommandAuthorization;
     const replyResolver = vi.fn(async (_ctx: MsgContext) => ({ text: "hi" }) as ReplyPayload);
 
     await dispatchReplyFromConfig({
@@ -1422,13 +1421,13 @@ describe("dispatchReplyFromConfig", () => {
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
-      replyOptions: { resolvedCommandAuthorization },
+      replyOptions: { channelResolvedCommandAuthorization },
     });
 
     expect(mocks.tryFastAbortFromMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({ CommandAuthorized: true }),
-        resolvedCommandAuthorization,
+        channelResolvedCommandAuthorization,
       }),
     );
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
@@ -1439,8 +1438,70 @@ describe("dispatchReplyFromConfig", () => {
     );
     expect(replyResolver).toHaveBeenCalledWith(
       expect.objectContaining({ CommandAuthorized: true }),
-      expect.objectContaining({ resolvedCommandAuthorization }),
+      expect.objectContaining({ channelResolvedCommandAuthorization }),
       undefined,
+    );
+  });
+
+  it("derives CommandAuthorized from channel auth before plugin inbound-claim events", async () => {
+    setNoAbort();
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-auth-1",
+      targetSessionKey: "plugin-binding:codex:auth123",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "chat:trusted",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+      },
+    } satisfies SessionBindingRecord);
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:chat:trusted",
+      To: "telegram:chat:trusted",
+      AccountId: "default",
+      SenderId: "trusted-user",
+      CommandAuthorized: false,
+      WasMentioned: false,
+      CommandBody: "/status",
+      RawBody: "/status",
+      Body: "/status",
+      MessageSid: "msg-claim-auth-1",
+      SessionKey: "agent:main:telegram:chat:trusted",
+    });
+    const channelResolvedCommandAuthorization = {
+      ownerList: ["trusted-user"],
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+    } satisfies ChannelResolvedCommandAuthorization;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => ({ text: "unused" }) as ReplyPayload),
+      replyOptions: { channelResolvedCommandAuthorization },
+    });
+
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({
+        commandAuthorized: true,
+      }),
+      expect.anything(),
     );
   });
 

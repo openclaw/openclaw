@@ -178,7 +178,7 @@ export async function getReplyFromConfig(
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const resolvedCommandAuthorization = resolvedOpts?.resolvedCommandAuthorization;
+  const channelResolvedCommandAuthorization = resolvedOpts?.channelResolvedCommandAuthorization;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
@@ -235,7 +235,7 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
   const commandAuthorized = resolveEffectiveCommandAuthorized({
     commandAuthorized: finalized.CommandAuthorized,
-    resolvedCommandAuthorization,
+    channelResolvedCommandAuthorization,
   });
   const finalizedCtx =
     commandAuthorized === finalized.CommandAuthorized
@@ -272,7 +272,7 @@ export async function getReplyFromConfig(
         ctx: finalizedCtx,
         cfg,
         commandAuthorized,
-        resolvedCommandAuthorization,
+        channelResolvedCommandAuthorization,
       });
   let {
     sessionCtx,
@@ -371,7 +371,7 @@ export async function getReplyFromConfig(
       isGroup,
       triggerBodyNormalized,
       commandAuthorized,
-      resolvedCommandAuthorization,
+      channelResolvedCommandAuthorization,
     });
     return runPreparedReply({
       ctx,
@@ -447,7 +447,7 @@ export async function getReplyFromConfig(
     isGroup,
     triggerBodyNormalized,
     commandAuthorized,
-    resolvedCommandAuthorization,
+    channelResolvedCommandAuthorization,
     defaultProvider,
     defaultModel,
     aliasIndex,

@@ -14,6 +14,6 @@ export {
 export { resolveNativeCommandSessionTargets } from "../channels/native-command-session-targets.js";
 export { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 export type {
+  ChannelResolvedCommandAuthorization,
   CommandAuthorization,
-  ResolvedCommandAuthorization,
 } from "../auto-reply/command-auth.types.js";

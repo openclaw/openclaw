@@ -17,7 +17,10 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import type { CommandAuthorization, ResolvedCommandAuthorization } from "./command-auth.types.js";
+import type {
+  ChannelResolvedCommandAuthorization,
+  CommandAuthorization,
+} from "./command-auth.types.js";
 import type { MsgContext } from "./templating.js";
 
 type InferredProviderCandidate = {
@@ -44,56 +47,44 @@ type OwnerAuthorizationState = {
   ownerList: string[];
 };
 
-function warnMalformedResolvedCommandAuthorization(reason: string) {
-  console.warn(`[command-auth] ignoring malformed ResolvedCommandAuthorization: ${reason}`);
+function warnMalformedChannelResolvedCommandAuthorization(reason: string) {
+  console.warn(`[command-auth] ignoring malformed ChannelResolvedCommandAuthorization: ${reason}`);
 }
 
 export function resolveEffectiveCommandAuthorized(params: {
   commandAuthorized: boolean;
-  resolvedCommandAuthorization?: ResolvedCommandAuthorization;
+  channelResolvedCommandAuthorization?: ChannelResolvedCommandAuthorization;
 }): boolean {
-  return params.resolvedCommandAuthorization?.isAuthorizedSender ?? params.commandAuthorized;
+  return params.channelResolvedCommandAuthorization?.isAuthorizedSender ?? params.commandAuthorized;
 }
 
-function resolveDirectProviderIdFromContext(ctx: MsgContext): ChannelId | undefined {
-  const explicitMessageChannels = [ctx.Surface, ctx.OriginatingChannel, ctx.Provider]
-    .map((value) => normalizeMessageChannel(value))
-    .filter((value): value is string => Boolean(value));
-  const explicitMessageChannel = explicitMessageChannels.find(
-    (value) => value !== INTERNAL_MESSAGE_CHANNEL,
-  );
-  return (
-    normalizeAnyChannelId(explicitMessageChannel ?? undefined) ??
-    (explicitMessageChannel as ChannelId | undefined) ??
-    normalizeAnyChannelId(ctx.Provider) ??
-    normalizeAnyChannelId(ctx.Surface) ??
-    normalizeAnyChannelId(ctx.OriginatingChannel) ??
-    undefined
-  );
-}
-
-function resolveProvidedCommandAuthorization(params: {
+export function resolveCommandProviderIdFromContext(params: {
   ctx: MsgContext;
-  resolvedCommandAuthorization?: ResolvedCommandAuthorization;
-}): ResolvedCommandAuthorization | undefined {
-  const { ctx, resolvedCommandAuthorization: provided } = params;
+  cfg: OpenClawConfig;
+}): ChannelId | undefined {
+  return resolveProviderFromContext(params.ctx, params.cfg).providerId;
+}
+
+function resolveProvidedChannelCommandAuthorization(params: {
+  channelResolvedCommandAuthorization?: ChannelResolvedCommandAuthorization;
+}): ChannelResolvedCommandAuthorization | undefined {
+  const { channelResolvedCommandAuthorization: provided } = params;
   if (!provided || typeof provided !== "object") {
     return undefined;
   }
   if (!Array.isArray(provided.ownerList)) {
-    warnMalformedResolvedCommandAuthorization("ownerList must be an array");
+    warnMalformedChannelResolvedCommandAuthorization("ownerList must be an array");
     return undefined;
   }
   if (typeof provided.senderIsOwner !== "boolean") {
-    warnMalformedResolvedCommandAuthorization("senderIsOwner must be a boolean");
+    warnMalformedChannelResolvedCommandAuthorization("senderIsOwner must be a boolean");
     return undefined;
   }
   if (typeof provided.isAuthorizedSender !== "boolean") {
-    warnMalformedResolvedCommandAuthorization("isAuthorizedSender must be a boolean");
+    warnMalformedChannelResolvedCommandAuthorization("isAuthorizedSender must be a boolean");
     return undefined;
   }
   return {
-    providerId: provided.providerId ?? resolveDirectProviderIdFromContext(ctx),
     ownerList: normalizeStringEntries(provided.ownerList),
     senderIsOwner: provided.senderIsOwner,
     isAuthorizedSender: provided.isAuthorizedSender,
@@ -674,16 +665,15 @@ export function resolveCommandAuthorization(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
-  resolvedCommandAuthorization?: ResolvedCommandAuthorization;
+  channelResolvedCommandAuthorization?: ChannelResolvedCommandAuthorization;
 }): CommandAuthorization {
-  const { ctx, cfg, commandAuthorized, resolvedCommandAuthorization } = params;
-  const provided = resolveProvidedCommandAuthorization({
-    ctx,
-    resolvedCommandAuthorization,
+  const { ctx, cfg, commandAuthorized, channelResolvedCommandAuthorization } = params;
+  const provided = resolveProvidedChannelCommandAuthorization({
+    channelResolvedCommandAuthorization,
   });
   const { providerId, hadResolutionError: providerResolutionError } = provided
     ? {
-        providerId: provided.providerId ?? resolveDirectProviderIdFromContext(ctx),
+        providerId: resolveCommandProviderIdFromContext({ ctx, cfg }),
         hadResolutionError: false,
       }
     : resolveProviderFromContext(ctx, cfg);
@@ -704,6 +694,8 @@ export function resolveCommandAuthorization(params: {
   });
 
   if (provided) {
+    // Channel-provided command auth outcomes are authoritative, but core still
+    // derives sender identity from inbound context for non-authorization uses.
     const matchedSender = provided.ownerList.length
       ? senderCandidates.find((candidate) => provided.ownerList.includes(candidate))
       : undefined;
