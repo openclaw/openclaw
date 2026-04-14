@@ -13,8 +13,11 @@ import {
   updateSessionStore,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+
+const log = createSubsystemLogger("extensions/active-memory");
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -142,6 +145,33 @@ type ActiveMemorySearchDebug = {
   warning?: string;
   action?: string;
   error?: string;
+};
+
+type ActiveMemoryToolSummary = {
+  calls: number;
+  tools: string[];
+  failures?: number;
+  totalToolTimeMs?: number;
+};
+
+type ActiveMemoryTranscriptDiagnostics = {
+  entryTypes: Record<string, number>;
+  messageRoles: Record<string, number>;
+  toolCalls: number;
+  toolNames: string[];
+  toolCallCounts: Record<string, number>;
+  memorySearchCalls: number;
+  memoryGetCalls: number;
+  firstToolTimestamp?: number;
+  lastToolTimestamp?: number;
+};
+
+type ActiveMemoryFailureContext = {
+  artifactPath?: string;
+  searchDebug?: ActiveMemorySearchDebug;
+  transcriptDiagnostics?: ActiveMemoryTranscriptDiagnostics;
+  toolSummary?: ActiveMemoryToolSummary;
+  timeoutOwner?: string;
 };
 
 type ActiveRecallResult =
@@ -306,6 +336,18 @@ function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: str
   );
 }
 
+function resolveActiveMemoryDiagnosticsDir(api: OpenClawPluginApi, agentId: string): string {
+  return path.join(
+    api.runtime.state.resolveStateDir(),
+    "plugins",
+    "active-memory",
+    "transcripts",
+    "diagnostics",
+    "agents",
+    toSafeTranscriptAgentDirName(agentId),
+  );
+}
+
 function resolveCanonicalSessionKeyFromSessionId(params: {
   api: OpenClawPluginApi;
   agentId: string;
@@ -356,6 +398,18 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function hashTextForDiagnostics(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function incrementCount(map: Record<string, number>, key: string): void {
+  map[key] = (map[key] ?? 0) + 1;
+}
+
+function normalizeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function resolveRecallRunChannelContext(params: {
@@ -1293,6 +1347,244 @@ function readActiveMemorySearchDebugFromRunResult(
   );
 }
 
+async function readActiveMemoryTranscriptDiagnostics(
+  sessionFile: string,
+): Promise<ActiveMemoryTranscriptDiagnostics | undefined> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(sessionFile, "utf8");
+  } catch {
+    return undefined;
+  }
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const entryTypes: Record<string, number> = {};
+  const messageRoles: Record<string, number> = {};
+  const toolCallCounts: Record<string, number> = {};
+  let toolCalls = 0;
+  let memorySearchCalls = 0;
+  let memoryGetCalls = 0;
+  let firstToolTimestamp: number | undefined;
+  let lastToolTimestamp: number | undefined;
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      const entry = asRecord(parsed);
+      const entryType = normalizeOptionalString(entry?.type) ?? "unknown";
+      incrementCount(entryTypes, entryType);
+      const nestedMessage = entryType === "message" ? asRecord(entry?.message) : undefined;
+      const topLevelMessage = !nestedMessage && entry?.role ? entry : undefined;
+      const message = nestedMessage ?? topLevelMessage;
+      if (!message) {
+        continue;
+      }
+      const role = normalizeOptionalString(message.role) ?? "unknown";
+      incrementCount(messageRoles, role);
+      if (role !== "toolResult") {
+        continue;
+      }
+      toolCalls += 1;
+      const toolName = normalizeOptionalString(message.toolName) ?? "unknown";
+      incrementCount(toolCallCounts, toolName);
+      if (toolName === "memory_search") {
+        memorySearchCalls += 1;
+      }
+      if (toolName === "memory_get") {
+        memoryGetCalls += 1;
+      }
+      const timestamp = normalizeFiniteNumber(message.timestamp);
+      if (timestamp !== undefined) {
+        firstToolTimestamp =
+          firstToolTimestamp === undefined ? timestamp : Math.min(firstToolTimestamp, timestamp);
+        lastToolTimestamp =
+          lastToolTimestamp === undefined ? timestamp : Math.max(lastToolTimestamp, timestamp);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return {
+    entryTypes,
+    messageRoles,
+    toolCalls,
+    toolNames: Object.keys(toolCallCounts),
+    toolCallCounts,
+    memorySearchCalls,
+    memoryGetCalls,
+    firstToolTimestamp,
+    lastToolTimestamp,
+  };
+}
+
+function readActiveMemoryToolSummaryFromRunResult(
+  result: unknown,
+): ActiveMemoryToolSummary | undefined {
+  const record = asRecord(result);
+  const meta = asRecord(record?.meta);
+  const toolSummary = asRecord(meta?.toolSummary);
+  const calls = normalizeFiniteNumber(toolSummary?.calls);
+  const failures = normalizeFiniteNumber(toolSummary?.failures);
+  const totalToolTimeMs = normalizeFiniteNumber(toolSummary?.totalToolTimeMs);
+  const tools = Array.isArray(toolSummary?.tools)
+    ? toolSummary.tools.filter(
+        (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+      )
+    : [];
+  if (
+    calls === undefined &&
+    failures === undefined &&
+    totalToolTimeMs === undefined &&
+    tools.length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    calls: calls ?? 0,
+    tools,
+    failures,
+    totalToolTimeMs,
+  };
+}
+
+function readActiveMemoryFailureContext(error: unknown): ActiveMemoryFailureContext | undefined {
+  const record = asRecord(error);
+  const context = asRecord(record?.activeMemoryFailureContext);
+  return context as ActiveMemoryFailureContext | undefined;
+}
+
+function attachActiveMemoryFailureContext(
+  error: unknown,
+  context: ActiveMemoryFailureContext,
+): void {
+  if (!error || typeof error !== "object") {
+    return;
+  }
+  try {
+    (
+      error as { activeMemoryFailureContext?: ActiveMemoryFailureContext }
+    ).activeMemoryFailureContext = context;
+  } catch {
+    // Ignore non-extensible errors. Failure artifacts are best-effort only.
+  }
+}
+
+function classifyActiveMemoryTimeoutOwner(params: {
+  abortSignal?: AbortSignal;
+  error: unknown;
+}): "active_memory_plugin" | "embedded_run" | "unknown" {
+  if (params.abortSignal?.aborted) {
+    return "active_memory_plugin";
+  }
+  const message =
+    params.error instanceof Error
+      ? params.error.message
+      : typeof params.error === "string"
+        ? params.error
+        : typeof params.error === "number" ||
+            typeof params.error === "boolean" ||
+            typeof params.error === "bigint"
+          ? String(params.error)
+          : "";
+  return /timeout|timed out|idle timeout/i.test(message) ? "embedded_run" : "unknown";
+}
+
+async function writeActiveMemoryFailureArtifact(params: {
+  api: OpenClawPluginApi;
+  agentId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  subagentSessionId: string;
+  subagentSessionKey: string;
+  provider: string;
+  model: string;
+  modelSource: ModelResolutionSource;
+  query: string;
+  prompt: string;
+  timeoutMs: number;
+  startedAt: number;
+  endedAt: number;
+  status: "timeout" | "unavailable";
+  timeoutOwner?: string;
+  error: unknown;
+  searchDebug?: ActiveMemorySearchDebug;
+  toolSummary?: ActiveMemoryToolSummary;
+  transcriptDiagnostics?: ActiveMemoryTranscriptDiagnostics;
+  transcriptPath?: string;
+  runMeta?: Record<string, unknown>;
+}): Promise<string | undefined> {
+  try {
+    const diagnosticsDir = resolveActiveMemoryDiagnosticsDir(params.api, params.agentId);
+    await fs.mkdir(diagnosticsDir, { recursive: true, mode: 0o700 });
+    await fs.chmod(diagnosticsDir, 0o700).catch(() => undefined);
+    const filePath = path.join(
+      diagnosticsDir,
+      `${new Date(params.endedAt).toISOString().replace(/[:.]/g, "-")}-${params.subagentSessionId}.json`,
+    );
+    const errorMessage =
+      params.error instanceof Error ? params.error.message : String(params.error);
+    const errorName = params.error instanceof Error ? params.error.name : undefined;
+    const artifact = {
+      schemaVersion: 1,
+      generatedAt: new Date(params.endedAt).toISOString(),
+      status: params.status,
+      timeoutOwner: params.timeoutOwner,
+      elapsedMs: Math.max(0, params.endedAt - params.startedAt),
+      timeoutMs: params.timeoutMs,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      subagentSessionId: params.subagentSessionId,
+      subagentSessionKey: params.subagentSessionKey,
+      provider: params.provider,
+      model: params.model,
+      modelSource: params.modelSource,
+      queryHash: hashTextForDiagnostics(params.query),
+      promptHash: hashTextForDiagnostics(params.prompt),
+      queryChars: params.query.length,
+      promptChars: params.prompt.length,
+      transcriptPath: params.transcriptPath,
+      error: {
+        name: errorName,
+        message: errorMessage,
+      },
+      searchDebug: params.searchDebug,
+      toolSummary: params.toolSummary,
+      transcriptDiagnostics: params.transcriptDiagnostics,
+      runMeta: params.runMeta,
+    };
+    await fs.writeFile(filePath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+    log.warn("active-memory failure artifact written", {
+      event: "active_memory_failure_artifact_written",
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      subagentSessionId: params.subagentSessionId,
+      status: params.status,
+      timeoutOwner: params.timeoutOwner,
+      artifactPath: filePath,
+    });
+    return filePath;
+  } catch (artifactError) {
+    log.warn("active-memory failure artifact write failed", {
+      event: "active_memory_failure_artifact_written",
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      subagentSessionId: params.subagentSessionId,
+      status: params.status,
+      error: artifactError instanceof Error ? artifactError.message : String(artifactError),
+    });
+    return undefined;
+  }
+}
+
 function escapeXml(str: string): string {
   return str
     .replace(/&/g, "&amp;")
@@ -1545,6 +1837,12 @@ function parseModelCandidate(modelRef: string | undefined) {
   );
 }
 
+type ModelResolutionSource =
+  | "config.model"
+  | "current_run"
+  | "agent_primary"
+  | "config.modelFallback";
+
 function getModelRef(
   api: OpenClawPluginApi,
   agentId: string,
@@ -1553,19 +1851,19 @@ function getModelRef(
     modelProviderId?: string;
     modelId?: string;
   },
-): { provider: string; model: string } | undefined {
+): { provider: string; model: string; source: ModelResolutionSource } | undefined {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
-  const candidates = [
-    config.model,
-    currentRunModel,
-    resolveAgentEffectiveModelPrimary(api.config, agentId),
-    config.modelFallback,
+  const candidates: Array<{ ref: string | undefined; source: ModelResolutionSource }> = [
+    { ref: config.model, source: "config.model" },
+    { ref: currentRunModel, source: "current_run" },
+    { ref: resolveAgentEffectiveModelPrimary(api.config, agentId), source: "agent_primary" },
+    { ref: config.modelFallback, source: "config.modelFallback" },
   ];
-  for (const candidate of candidates) {
+  for (const { ref: candidate, source } of candidates) {
     const parsed = parseModelCandidate(candidate);
     if (parsed) {
-      return parsed;
+      return { ...parsed, source };
     }
   }
   return undefined;
@@ -1588,6 +1886,8 @@ async function runRecallSubagent(params: {
   rawReply: string;
   transcriptPath?: string;
   searchDebug?: ActiveMemorySearchDebug;
+  toolSummary?: ActiveMemoryToolSummary;
+  transcriptDiagnostics?: ActiveMemoryTranscriptDiagnostics;
 }> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
@@ -1598,7 +1898,14 @@ async function runRecallSubagent(params: {
       modelId: params.currentModelId,
     });
   if (!modelRef) {
-    return { rawReply: "NONE" };
+    log.warn("active-memory recall skipped: no model resolved", {
+      event: "active_memory_recall_skip",
+      reason: "no_model_resolved",
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+    return { rawReply: "" };
   }
   const subagentSessionId = `active-memory-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
   const parentSessionKey =
@@ -1646,6 +1953,20 @@ async function runRecallSubagent(params: {
     channelId: params.channelId,
   });
 
+  const recallSubagentStartedAt = Date.now();
+  log.info("active-memory recall subagent begin", {
+    event: "active_memory_recall_subagent_begin",
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    subagentSessionId,
+    subagentSessionKey,
+    provider: modelRef.provider,
+    model: modelRef.model,
+    modelSource: modelRef.source,
+    queryChars: params.query.length,
+    timeoutMs: params.config.timeoutMs,
+  });
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
@@ -1690,14 +2011,72 @@ async function runRecallSubagent(params: {
       .filter(Boolean)
       .join("\n")
       .trim();
+    const toolSummary = readActiveMemoryToolSummaryFromRunResult(result);
     const searchDebug =
       (await readActiveMemorySearchDebug(sessionFile)) ??
       readActiveMemorySearchDebugFromRunResult(result);
+    const transcriptDiagnostics = await readActiveMemoryTranscriptDiagnostics(sessionFile);
+    log.info("active-memory recall subagent end", {
+      event: "active_memory_recall_subagent_end",
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      subagentSessionId,
+      provider: modelRef.provider,
+      model: modelRef.model,
+      modelSource: modelRef.source,
+      rawReplyChars: rawReply.length,
+      hasSearchDebug: searchDebug != null,
+      toolCalls: toolSummary?.calls ?? transcriptDiagnostics?.toolCalls ?? 0,
+      tools: toolSummary?.tools ?? transcriptDiagnostics?.toolNames,
+      durationMs: Date.now() - recallSubagentStartedAt,
+    });
     return {
-      rawReply: rawReply || "NONE",
+      rawReply,
       transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
       searchDebug,
+      toolSummary,
+      transcriptDiagnostics,
     };
+  } catch (error) {
+    const searchDebug = (await readActiveMemorySearchDebug(sessionFile)) ?? undefined;
+    const transcriptDiagnostics = await readActiveMemoryTranscriptDiagnostics(sessionFile);
+    const timeoutOwner = classifyActiveMemoryTimeoutOwner({
+      abortSignal: params.abortSignal,
+      error,
+    });
+    const artifactPath = await writeActiveMemoryFailureArtifact({
+      api: params.api,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      subagentSessionId,
+      subagentSessionKey,
+      provider: modelRef.provider,
+      model: modelRef.model,
+      modelSource: modelRef.source,
+      query: params.query,
+      prompt,
+      timeoutMs: params.config.timeoutMs,
+      startedAt: recallSubagentStartedAt,
+      endedAt: Date.now(),
+      status:
+        timeoutOwner === "active_memory_plugin" || timeoutOwner === "embedded_run"
+          ? "timeout"
+          : "unavailable",
+      timeoutOwner,
+      error,
+      searchDebug,
+      transcriptDiagnostics,
+      transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
+    });
+    attachActiveMemoryFailureContext(error, {
+      artifactPath,
+      searchDebug,
+      transcriptDiagnostics,
+      timeoutOwner,
+    });
+    throw error;
   } finally {
     if (tempDir) {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
@@ -1744,9 +2123,22 @@ async function maybeResolveActiveRecall(params: {
       api: params.api,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      statusLine: `${buildPluginStatusLine({ result: cached, config: params.config })} cached`,
-      debugSummary: cached.summary,
+      statusLine:
+        cached.status === "empty"
+          ? undefined
+          : `${buildPluginStatusLine({ result: cached, config: params.config })} cached`,
+      debugSummary: cached.status === "empty" ? undefined : cached.summary,
       searchDebug: cached.searchDebug,
+    });
+    log.info("active-memory recall end (cache hit)", {
+      event: "active_memory_recall_end",
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      status: cached.status,
+      elapsedMs: cached.elapsedMs,
+      summaryChars: cached.summary?.length ?? 0,
+      fromCache: true,
     });
     if (params.config.logging) {
       params.api.logger.info?.(
@@ -1756,6 +2148,16 @@ async function maybeResolveActiveRecall(params: {
     return cached;
   }
 
+  log.info("active-memory recall begin", {
+    event: "active_memory_recall_begin",
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    queryChars: params.query.length,
+    timeoutMs: params.config.timeoutMs,
+    provider: params.currentModelProviderId,
+    model: params.currentModelId,
+  });
   if (params.config.logging) {
     params.api.logger.info?.(
       `${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(params.query.length)}`,
@@ -1769,11 +2171,12 @@ async function maybeResolveActiveRecall(params: {
   timeoutId.unref?.();
 
   try {
-    const { rawReply, transcriptPath, searchDebug } = await runRecallSubagent({
-      ...params,
-      modelRef: resolvedModelRef,
-      abortSignal: controller.signal,
-    });
+    const { rawReply, transcriptPath, searchDebug, toolSummary, transcriptDiagnostics } =
+      await runRecallSubagent({
+        ...params,
+        modelRef: resolvedModelRef,
+        abortSignal: controller.signal,
+      });
     const summary = truncateSummary(
       normalizeActiveSummary(rawReply) ?? "",
       params.config.maxSummaryChars,
@@ -1805,26 +2208,59 @@ async function maybeResolveActiveRecall(params: {
       api: params.api,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      statusLine: buildPluginStatusLine({ result, config: params.config }),
-      debugSummary: result.summary,
+      statusLine:
+        result.status === "empty"
+          ? undefined
+          : buildPluginStatusLine({ result, config: params.config }),
+      debugSummary: result.status === "empty" ? undefined : result.summary,
       searchDebug: result.searchDebug,
+    });
+    log.info("active-memory recall end", {
+      event: "active_memory_recall_end",
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      status: result.status,
+      elapsedMs: result.elapsedMs,
+      summaryChars: result.summary?.length ?? 0,
+      toolCalls: toolSummary?.calls ?? transcriptDiagnostics?.toolCalls ?? 0,
+      tools: toolSummary?.tools ?? transcriptDiagnostics?.toolNames,
+      fromCache: false,
     });
     if (shouldCacheResult(result)) {
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
     return result;
   } catch (error) {
-    if (controller.signal.aborted) {
+    const failureContext = readActiveMemoryFailureContext(error);
+    if (controller.signal.aborted || failureContext?.timeoutOwner === "embedded_run") {
       const result: ActiveRecallResult = {
         status: "timeout",
         elapsedMs: Date.now() - startedAt,
         summary: null,
+        searchDebug: failureContext?.searchDebug,
       };
       if (params.config.logging) {
         params.api.logger.info?.(
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=0`,
         );
       }
+      log.warn("active-memory recall timeout", {
+        event: "active_memory_recall_end",
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        status: "timeout",
+        elapsedMs: result.elapsedMs,
+        timeoutMs: params.config.timeoutMs,
+        timeoutOwner: failureContext?.timeoutOwner ?? "active_memory_plugin",
+        failureArtifactPath: failureContext?.artifactPath,
+        toolCalls:
+          failureContext?.toolSummary?.calls ??
+          failureContext?.transcriptDiagnostics?.toolCalls ??
+          0,
+        fromCache: false,
+      });
       await persistPluginStatusLines({
         api: params.api,
         agentId: params.agentId,
@@ -1842,7 +2278,22 @@ async function maybeResolveActiveRecall(params: {
       status: "unavailable",
       elapsedMs: Date.now() - startedAt,
       summary: null,
+      searchDebug: failureContext?.searchDebug,
     };
+    log.warn("active-memory recall error", {
+      event: "active_memory_recall_end",
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      status: "unavailable",
+      elapsedMs: result.elapsedMs,
+      timeoutOwner: failureContext?.timeoutOwner,
+      failureArtifactPath: failureContext?.artifactPath,
+      toolCalls:
+        failureContext?.toolSummary?.calls ?? failureContext?.transcriptDiagnostics?.toolCalls ?? 0,
+      fromCache: false,
+      error: message,
+    });
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,

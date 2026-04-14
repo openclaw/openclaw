@@ -108,6 +108,7 @@ export function selectAgentHarness(params: {
 export async function runAgentHarnessAttemptWithFallback(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const channel = params.messageChannel ?? params.messageProvider;
   const policy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.modelId,
@@ -122,6 +123,19 @@ export async function runAgentHarnessAttemptWithFallback(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
+  log.info("embedded run provider chosen", {
+    event: "embedded_run_provider_chosen",
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    channel,
+    provider: params.provider,
+    model: params.modelId,
+    harnessId: harness.id,
+    harnessLabel: harness.label,
+    runtime: policy.runtime,
+    fallback: policy.fallback,
+  });
   if (harness.id === "pi") {
     return harness.runAttempt(params);
   }
@@ -132,7 +146,18 @@ export async function runAgentHarnessAttemptWithFallback(
     if (policy.runtime !== "auto" || policy.fallback === "none") {
       throw error;
     }
-    log.warn(`${harness.label} failed; falling back to embedded PI backend`, { error });
+    log.warn(`${harness.label} failed; falling back to embedded PI backend`, {
+      event: "embedded_run_provider_fallback",
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      channel,
+      provider: params.provider,
+      model: params.modelId,
+      harnessId: harness.id,
+      fallbackHarnessId: "pi",
+      error,
+    });
     return createPiAgentHarness().runAttempt(params);
   }
 }

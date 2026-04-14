@@ -28,6 +28,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -83,6 +84,8 @@ import {
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+
+const log = createSubsystemLogger("gateway/agent");
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
@@ -208,6 +211,23 @@ function dispatchAgentRunFromGateway(params: {
   const inputProvenance = normalizeInputProvenance(params.ingressOpts.inputProvenance);
   const shouldTrackTask =
     params.ingressOpts.sessionKey?.trim() && inputProvenance?.kind !== "inter_session";
+  const dispatchStartedAt = Date.now();
+
+  log.info("gateway agent dispatch begin", {
+    event: "gateway_agent_dispatch_begin",
+    runId: params.runId,
+    sessionId: params.ingressOpts.sessionId,
+    sessionKey: params.ingressOpts.sessionKey,
+    channel: params.ingressOpts.channel,
+    messageChannel: params.ingressOpts.messageChannel,
+    to: params.ingressOpts.to,
+    threadId: params.ingressOpts.threadId,
+    provider: params.ingressOpts.provider,
+    model: params.ingressOpts.model,
+    deliver: params.ingressOpts.deliver === true,
+    inputProvenance: inputProvenance?.kind,
+  });
+
   if (shouldTrackTask) {
     try {
       createRunningTaskRun({
@@ -233,6 +253,19 @@ function dispatchAgentRunFromGateway(params: {
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
+      log.info("gateway agent dispatch end", {
+        event: "gateway_agent_dispatch_end",
+        runId: params.runId,
+        sessionId: params.ingressOpts.sessionId,
+        sessionKey: params.ingressOpts.sessionKey,
+        channel: params.ingressOpts.channel,
+        messageChannel: params.ingressOpts.messageChannel,
+        provider: result?.meta?.agentMeta?.provider ?? params.ingressOpts.provider,
+        model: result?.meta?.agentMeta?.model ?? params.ingressOpts.model,
+        durationMs: Date.now() - dispatchStartedAt,
+        stopReason: result?.meta?.stopReason,
+        aborted: result?.meta?.aborted ?? false,
+      });
       const payload = {
         runId: params.runId,
         status: "ok" as const,
@@ -253,6 +286,18 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
+      log.warn("gateway agent dispatch error", {
+        event: "gateway_agent_dispatch_error",
+        runId: params.runId,
+        sessionId: params.ingressOpts.sessionId,
+        sessionKey: params.ingressOpts.sessionKey,
+        channel: params.ingressOpts.channel,
+        messageChannel: params.ingressOpts.messageChannel,
+        provider: params.ingressOpts.provider,
+        model: params.ingressOpts.model,
+        durationMs: Date.now() - dispatchStartedAt,
+        error: formatForLog(err),
+      });
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,

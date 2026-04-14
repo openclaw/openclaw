@@ -996,10 +996,6 @@ describe("active-memory plugin", () => {
 
     expect(store[sessionKey]?.pluginDebugEntries).toEqual([
       { pluginId: "other-plugin", lines: ["Other Plugin: keep me"] },
-      {
-        pluginId: "active-memory",
-        lines: [expect.stringContaining("🧩 Active Memory: status=empty")],
-      },
     ]);
   });
 
@@ -1295,7 +1291,6 @@ describe("active-memory plugin", () => {
       {
         pluginId: "active-memory",
         lines: [
-          expect.stringContaining("🧩 Active Memory: status=empty"),
           expect.stringContaining(
             "🔎 Active Memory Debug: Memory search is unavailable because the embedding provider quota is exhausted. Top up or switch embedding provider, then retry memory_search.",
           ),

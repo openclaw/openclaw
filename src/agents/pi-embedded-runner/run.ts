@@ -240,12 +240,48 @@ export async function runEmbeddedPiAgent(
     throw abortErr;
   };
 
+  const requestChannel = params.messageChannel ?? params.messageProvider ?? null;
+  log.info("embedded run request accepted", {
+    event: "embedded_run_request_accepted",
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionLane,
+    globalLane,
+    channel: requestChannel,
+    provider: params.provider ?? DEFAULT_PROVIDER,
+    model: params.model ?? DEFAULT_MODEL,
+    trigger: params.trigger,
+  });
+
   throwIfAborted();
 
   return enqueueSession(() => {
     throwIfAborted();
+    log.info("embedded run lane enter", {
+      event: "embedded_run_lane_enter",
+      lane: "session",
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      laneKey: sessionLane,
+      channel: requestChannel,
+      provider: params.provider ?? DEFAULT_PROVIDER,
+      model: params.model ?? DEFAULT_MODEL,
+    });
     return enqueueGlobal(async () => {
       throwIfAborted();
+      log.info("embedded run lane enter", {
+        event: "embedded_run_lane_enter",
+        lane: "global",
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        laneKey: globalLane,
+        channel: requestChannel,
+        provider: params.provider ?? DEFAULT_PROVIDER,
+        model: params.model ?? DEFAULT_MODEL,
+      });
       const started = Date.now();
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -650,6 +686,41 @@ export async function runEmbeddedPiAgent(
 
           const basePrompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          let providerFirstChunkSeen = false;
+          const instrumentedOnAssistantMessageStart = async () => {
+            if (!providerFirstChunkSeen) {
+              providerFirstChunkSeen = true;
+              log.info("embedded run provider first stream chunk", {
+                event: "embedded_run_provider_first_chunk",
+                runId: params.runId,
+                sessionId: params.sessionId,
+                sessionKey: resolvedSessionKey,
+                channel: requestChannel,
+                provider,
+                model: modelId,
+              });
+            }
+            await params.onAssistantMessageStart?.();
+          };
+          const instrumentedOnPartialReply = async (payload: {
+            text?: string;
+            mediaUrls?: string[];
+          }) => {
+            if (!providerFirstChunkSeen) {
+              providerFirstChunkSeen = true;
+              log.info("embedded run provider first stream chunk", {
+                event: "embedded_run_provider_first_chunk",
+                runId: params.runId,
+                sessionId: params.sessionId,
+                sessionKey: resolvedSessionKey,
+                channel: requestChannel,
+                provider,
+                model: modelId,
+                source: "partial_reply",
+              });
+            }
+            await params.onPartialReply?.(payload);
+          };
           const promptAdditions = [
             ackExecutionFastPathInstruction,
             planningOnlyRetryInstruction,
@@ -662,11 +733,17 @@ export async function runEmbeddedPiAgent(
             promptAdditions.length > 0
               ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
               : basePrompt;
-          let resolvedStreamApiKey: string | undefined;
-          if (!runtimeAuthState && apiKeyInfo) {
-            resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
-          }
-
+          log.info("embedded run provider dispatch begin", {
+            event: "embedded_run_provider_dispatch_begin",
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: resolvedSessionKey,
+            channel: requestChannel,
+            provider,
+            model: modelId,
+            authProfileId: lastProfileId,
+            thinkLevel,
+          });
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
@@ -715,7 +792,8 @@ export async function runEmbeddedPiAgent(
               runtimeAuthState ? null : apiKeyInfo,
               params.config,
             ),
-            resolvedApiKey: resolvedStreamApiKey,
+            resolvedApiKey:
+              !runtimeAuthState && apiKeyInfo ? (apiKeyInfo as ApiKeyInfo).apiKey : undefined,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
@@ -736,8 +814,8 @@ export async function runEmbeddedPiAgent(
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
-            onAssistantMessageStart: params.onAssistantMessageStart,
+            onPartialReply: instrumentedOnPartialReply,
+            onAssistantMessageStart: instrumentedOnAssistantMessageStart,
             onBlockReply: params.onBlockReply,
             onBlockReplyFlush: params.onBlockReplyFlush,
             blockReplyBreak: params.blockReplyBreak,
@@ -757,6 +835,17 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+          });
+
+          log.info("embedded run provider dispatch end", {
+            event: "embedded_run_provider_dispatch_end",
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: resolvedSessionKey,
+            channel: requestChannel,
+            provider,
+            model: modelId,
+            firstChunkSeen: providerFirstChunkSeen,
           });
 
           const {
@@ -2042,6 +2131,17 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
+        log.info("embedded run lane exit", {
+          event: "embedded_run_lane_exit",
+          lane: "global",
+          runId: params.runId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          channel: requestChannel,
+          provider,
+          model: modelId,
+          durationMs: Date.now() - started,
+        });
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
         if (params.cleanupBundleMcpOnRunEnd === true) {

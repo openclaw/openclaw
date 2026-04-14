@@ -1298,6 +1298,9 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      let assemblyCompleted = false;
+      let providerDispatchStarted = false;
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -1381,6 +1384,19 @@ export async function runEmbeddedAttempt(
                 `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
               );
             }
+            assemblyCompleted = true;
+            log.info("embedded run assembled context ready", {
+              event: "embedded_run_assembled_context_ready",
+              runId: params.runId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              channel: params.messageChannel ?? params.messageProvider,
+              provider: params.provider,
+              model: params.modelId,
+              contextEngine: params.contextEngine.info.id,
+              messageCount: activeSession.messages.length,
+              systemPromptAdditionChars: assembled.systemPromptAddition?.length ?? 0,
+            });
           } catch (assembleErr) {
             log.warn(
               `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
@@ -1970,6 +1986,18 @@ export async function runEmbeddedAttempt(
 
           if (!skipPromptSubmission) {
             finalPromptText = effectivePrompt;
+            log.info("embedded run provider call start", {
+              event: "embedded_run_provider_call_start",
+              runId: params.runId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              channel: params.messageChannel ?? params.messageProvider,
+              provider: params.provider,
+              model: params.modelId,
+              promptChars: effectivePrompt.length,
+              imageCount: imageResult.images.length,
+            });
+            providerDispatchStarted = true;
             const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
@@ -1988,6 +2016,19 @@ export async function runEmbeddedAttempt(
             }
           }
         } catch (err) {
+          if (assemblyCompleted && !providerDispatchStarted) {
+            log.warn("embedded run dispatch anomaly", {
+              event: "embedded_run_dispatch_anomaly",
+              runId: params.runId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              channel: params.messageChannel ?? params.messageProvider,
+              provider: params.provider,
+              model: params.modelId,
+              reason: "assembled_context_without_provider_call_start",
+              promptErrorSource: promptErrorSource ?? "pre_prompt",
+            });
+          }
           yieldAborted =
             yieldDetected &&
             isRunnerAbortError(err) &&
@@ -2009,6 +2050,26 @@ export async function runEmbeddedAttempt(
             promptErrorSource = "prompt";
           }
         } finally {
+          log.info("embedded run provider call end", {
+            event: "embedded_run_provider_call_end",
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            channel: params.messageChannel ?? params.messageProvider,
+            provider: params.provider,
+            model: params.modelId,
+            dispatchStarted: providerDispatchStarted,
+            durationMs: Date.now() - promptStartedAt,
+            reason: promptError
+              ? "error"
+              : timedOut
+                ? "timeout"
+                : aborted
+                  ? "aborted"
+                  : skipPromptSubmission
+                    ? "skipped"
+                    : "completed",
+          });
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );

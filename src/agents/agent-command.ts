@@ -863,6 +863,18 @@ async function agentCommandInternal(
         });
 
         let fallbackAttemptIndex = 0;
+        log.info("agent run execution begin", {
+          event: "agent_run_execution_begin",
+          runId,
+          sessionId,
+          sessionKey,
+          agentId: sessionAgentId,
+          channel: opts.channel,
+          messageChannel,
+          threadId: opts.threadId,
+          provider,
+          model,
+        });
         const fallbackResult = await runWithModelFallback({
           cfg,
           provider,
@@ -873,6 +885,19 @@ async function agentCommandInternal(
           run: async (providerOverride, modelOverride, runOptions) => {
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
+            log.info("agent run provider attempt begin", {
+              event: "agent_run_provider_attempt_begin",
+              runId,
+              sessionId,
+              sessionKey,
+              agentId: sessionAgentId,
+              messageChannel,
+              provider: providerOverride,
+              model: modelOverride,
+              attemptIndex: fallbackAttemptIndex,
+              isFallbackRetry,
+              transientCooldownProbe: runOptions?.allowTransientCooldownProbe === true,
+            });
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -914,6 +939,20 @@ async function agentCommandInternal(
           },
         });
         result = fallbackResult.result;
+        log.info("agent run execution end", {
+          event: "agent_run_execution_end",
+          runId,
+          sessionId,
+          sessionKey,
+          agentId: sessionAgentId,
+          channel: opts.channel,
+          messageChannel,
+          provider: fallbackResult.provider,
+          model: fallbackResult.model,
+          durationMs: Date.now() - startedAt,
+          stopReason: fallbackResult.result.meta.stopReason,
+          aborted: fallbackResult.result.meta.aborted ?? false,
+        });
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
         if (!lifecycleEnded) {
@@ -1022,6 +1061,19 @@ async function agentCommandInternal(
             },
           });
         }
+        log.warn("agent run execution error", {
+          event: "agent_run_execution_error",
+          runId,
+          sessionId,
+          sessionKey,
+          agentId: sessionAgentId,
+          channel: opts.channel,
+          threadId: opts.threadId,
+          provider,
+          model,
+          durationMs: Date.now() - startedAt,
+          error: formatErrorMessage(err),
+        });
         throw err;
       }
     }
