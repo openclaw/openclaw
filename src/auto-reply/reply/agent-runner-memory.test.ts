@@ -518,6 +518,48 @@ describe("runPreflightCompactionIfNeeded", () => {
     expect(result).toBe(sessionEntry);
   });
 
+  it("skips compaction when totalTokensFresh is undefined (legacy sessions)", async () => {
+    // Legacy session: totalTokensFresh was never set (undefined), but totalTokens
+    // has a stale persisted value above the threshold. Previously this was treated
+    // as fresh (undefined !== false → !shouldUseTranscriptFallback was true),
+    // causing the fresh-token branch to use stale persisted totals and trigger
+    // unnecessary compaction.
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 305_000,
+      // totalTokensFresh is intentionally omitted (undefined)
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const result = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 30_000,
+            },
+          },
+        },
+      },
+      followupRun: createFollowupRun(),
+      defaultModel: "claude-sonnet-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // With undefined freshness and no transcript file to read, transcript
+    // estimation returns undefined. The function bails out because there is
+    // no reliable token count and freshness is not confirmed, rather than
+    // falling back to stale persisted totals.
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(result).toBe(sessionEntry);
+  });
+
   it("skips compaction on heartbeat even with fresh tokens above threshold", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
