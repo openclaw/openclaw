@@ -757,7 +757,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
         data: content,
         encoding: "utf8",
       });
-    } catch {
+    } catch (err) {
+      if (!(err instanceof SafeOpenError)) {
+        throw err;
+      }
       respondWorkspaceFileUnsafe(respond, name);
       return;
     }
