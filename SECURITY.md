@@ -1,6 +1,7 @@
 # Security Policy
 
-If you believe you've found a security issue in OpenClaw, please report it privately.
+If you believe you've found a security issue in OpenClaw, please report it **privately** and responsibly.
+Do not open public issues, pull requests, or discussions for potential security vulnerabilities.
 
 ## Reporting
 
