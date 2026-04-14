@@ -185,6 +185,21 @@ function loadPersistedEntries<T extends { id: string; createdAt?: number; expire
   return changed;
 }
 
+// Debounce flag: coalesce rapid register/resolve events into a single write
+// so that interactive hot paths (button clicks, modal submissions) don't block
+// the event loop with synchronous disk I/O on every interaction.
+let _persistScheduled = false;
+function schedulePersistComponentRegistry(): void {
+  if (_persistScheduled) {
+    return;
+  }
+  _persistScheduled = true;
+  setImmediate(() => {
+    _persistScheduled = false;
+    persistComponentRegistry();
+  });
+}
+
 function persistComponentRegistry(): void {
   const filePath = getRegistryPath();
   try {
@@ -310,12 +325,12 @@ function resolveEntry<T extends { expiresAt?: number }>(
   const now = Date.now();
   if (isExpired(entry, now)) {
     store.delete(params.id);
-    persistComponentRegistry();
+    schedulePersistComponentRegistry();
     return null;
   }
   if (params.consume !== false) {
     store.delete(params.id);
-    persistComponentRegistry();
+    schedulePersistComponentRegistry();
   }
   return entry;
 }
@@ -334,7 +349,7 @@ export function registerDiscordComponentEntries(params: {
     messageId: params.messageId,
   });
   registerEntries(params.modals, getModalEntries(), { now, ttlMs, messageId: params.messageId });
-  persistComponentRegistry();
+  schedulePersistComponentRegistry();
 }
 
 export function resolveDiscordComponentEntry(params: {
