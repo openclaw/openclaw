@@ -54,9 +54,9 @@ describe("yandex provider plugin", () => {
     expect(catalog.provider.api).toBe("openai-completions");
     expect(catalog.provider.baseUrl).toBe("https://llm.api.cloud.yandex.net/v1");
     expect(catalog.provider.models?.map((model) => model.id)).toEqual([
-      "yandexgpt-5.1",
-      "yandexgpt-5-pro",
-      "yandexgpt-5-lite",
+      "yandexgpt/latest",
+      "yandexgpt/rc",
+      "yandexgpt-lite/latest",
     ]);
   });
 

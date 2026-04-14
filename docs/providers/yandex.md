@@ -16,10 +16,13 @@ read_when:
 
 ## Prerequisites
 
-You need two values from Yandex AI Studio:
+You need two values from Yandex Cloud:
 
-1. **API key** — create one at [Yandex AI Studio → API keys](https://aistudio.yandex.ru/)
-2. **Folder ID** — found in Yandex Cloud console under your cloud/folder. Required because Yandex AI Studio model URIs are folder-scoped: `gpt://<folder_ID>/<model_name>` ([docs](https://aistudio.yandex.ru/docs/en/ai-studio/concepts/generation/models.html))
+1. **API key** — create one at [Yandex AI Studio](https://aistudio.yandex.ru/)
+2. **Folder ID** — found in your [Yandex Cloud console](https://console.yandex.cloud/). Required because model URIs are folder-scoped: `gpt://<folder_ID>/yandexgpt/latest`
+   ([see TextGeneration API docs](https://yandex.cloud/en/docs/ai-studio/text-generation/api-ref/TextGeneration/completion))
+
+The folder ID is sent as the `OpenAI-Project` header on every request.
 
 ## Quick start
 
@@ -28,7 +31,7 @@ openclaw onboard --auth-choice yandex-api-key
 openclaw onboard --auth-choice yandex-folder-id
 ```
 
-This sets `yandex/yandexgpt-5.1` as the default model.
+This sets `yandex/yandexgpt/latest` as the default model.
 
 ## Non-interactive example
 
@@ -46,18 +49,18 @@ openclaw onboard --non-interactive \
 ## Environment note
 
 If the Gateway runs as a daemon (launchd/systemd), make sure both `YANDEX_API_KEY`
-and `YANDEX_FOLDER_ID` are available to that process (for example, in
-`~/.openclaw/.env` or via `env.shellEnv`).
+and `YANDEX_FOLDER_ID` are available to that process (e.g. in `~/.openclaw/.env`
+or via `env.shellEnv`).
 
 ## Available models
 
-| Model ID          | Name              | Context |
-| ----------------- | ----------------- | ------- |
-| `yandexgpt-5.1`   | YandexGPT Pro 5.1 | 32K     |
-| `yandexgpt-5-pro` | YandexGPT Pro 5   | 32K     |
-| `yandexgpt-5-lite`| YandexGPT Lite 5  | 32K     |
+| Model ID                | Name             | Context |
+| ----------------------- | ---------------- | ------- |
+| `yandexgpt/latest`      | YandexGPT Pro    | 32K     |
+| `yandexgpt/rc`          | YandexGPT Pro RC | 32K     |
+| `yandexgpt-lite/latest` | YandexGPT Lite   | 32K     |
 
-All models are addressed as `gpt://<folder_ID>/<model_name>` on the wire.
-In OpenClaw config use `yandex/<model_name>`, e.g. `yandex/yandexgpt-5.1`.
+Model URIs on the wire: `gpt://<folder_ID>/yandexgpt/latest`, etc.
+In OpenClaw config use `yandex/yandexgpt/latest`.
 
 Get your API key and folder ID at [Yandex AI Studio](https://aistudio.yandex.ru/).

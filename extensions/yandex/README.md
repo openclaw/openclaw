@@ -8,7 +8,8 @@
 Two values are required:
 
 1. **API key** from [Yandex AI Studio](https://aistudio.yandex.ru/)
-2. **Folder ID** from Yandex Cloud — used to build model URIs in the form `gpt://<folder_ID>/<model_name>` ([see docs](https://aistudio.yandex.ru/docs/en/ai-studio/concepts/generation/models.html))
+2. **Folder ID** from [Yandex Cloud console](https://console.yandex.cloud/) — used to build model URIs in the form `gpt://<folder_ID>/<model_id>` and sent as the `OpenAI-Project` header
+   ([TextGeneration API docs](https://yandex.cloud/en/docs/ai-studio/text-generation/api-ref/TextGeneration/completion))
 
 ```bash
 openclaw onboard --auth-choice yandex-api-key
@@ -24,12 +25,12 @@ export YANDEX_FOLDER_ID=<your_folder_id>
 
 ## Models
 
-| Model ID           | Name              | Context Window |
-| ------------------ | ----------------- | -------------- |
-| `yandexgpt-5.1`    | YandexGPT Pro 5.1 | 32 768         |
-| `yandexgpt-5-pro`  | YandexGPT Pro 5   | 32 768         |
-| `yandexgpt-5-lite` | YandexGPT Lite 5  | 32 768         |
+| Model ID                | Name             | Context Window |
+| ----------------------- | ---------------- | -------------- |
+| `yandexgpt/latest`      | YandexGPT Pro    | 32 768         |
+| `yandexgpt/rc`          | YandexGPT Pro RC | 32 768         |
+| `yandexgpt-lite/latest` | YandexGPT Lite   | 32 768         |
 
-Use as `yandex/<model-id>`, for example `yandex/yandexgpt-5.1`.
+Use as `yandex/<model-id>`, e.g. `yandex/yandexgpt/latest`.
 
-Model URIs sent on the wire: `gpt://<folder_ID>/yandexgpt-5.1`, etc.
+Model URIs sent on the wire: `gpt://<folder_ID>/yandexgpt/latest`, etc.

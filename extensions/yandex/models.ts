@@ -4,49 +4,24 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
  * Yandex AI Studio OpenAI-compatible API base URL.
  *
  * The chat completions endpoint lives at `${YANDEX_BASE_URL}/chat/completions`.
- * @see https://aistudio.yandex.ru/docs/en/ai-studio/quickstart/index.html
+ * @see https://yandex.cloud/en/docs/ai-studio/quickstart/yandexgpt
  */
 export const YANDEX_BASE_URL = "https://llm.api.cloud.yandex.net/v1";
 
 /**
- * Build a folder-scoped Yandex model URI.
- *
- * Yandex AI Studio's OpenAI-compatible endpoint requires model IDs in the form
- * `gpt://<folder_ID>/<model_name>`. The folder ID is passed separately as the
- * `project` parameter (OpenAI SDK) which maps to the `OpenAI-Project` header.
- *
- * @see https://aistudio.yandex.ru/docs/en/ai-studio/concepts/generation/models.html
- */
-export function buildYandexModelUri(folderId: string, modelName: string): string {
-  return `gpt://${folderId}/${modelName}`;
-}
-
-/**
- * Yandex AI Studio model names (without folder prefix).
- *
- * @see https://aistudio.yandex.ru/docs/en/ai-studio/concepts/generation/models.html
- */
-export const YANDEX_MODEL_NAMES = {
-  PRO_5_1: "yandexgpt-5.1",
-  PRO_5: "yandexgpt-5-pro",
-  LITE_5: "yandexgpt-5-lite",
-} as const;
-
-/**
  * YandexGPT model catalog.
  *
- * Model IDs here are bare names (without folder prefix). The folder ID is
- * configured separately via `YANDEX_FOLDER_ID` and injected at request time
- * via the `OpenAI-Project` header (the `project` field in the OpenAI SDK).
+ * Model IDs here are bare names (without folder prefix). At request time they
+ * are sent as `gpt://<folder_ID>/<model_id>` — the folder ID is supplied via
+ * the `OpenAI-Project` header (the `project` field in the OpenAI SDK).
  *
- * Pricing is per 1 M tokens (approximate, subject to change).
- * @see https://aistudio.yandex.ru/docs/en/ai-studio/concepts/generation/models.html
+ * @see https://yandex.cloud/en/docs/ai-studio/text-generation/api-ref/TextGeneration/completion
  * @see https://yandex.cloud/en/docs/foundation-models/pricing
  */
 export const YANDEX_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
-    id: YANDEX_MODEL_NAMES.PRO_5_1,
-    name: "YandexGPT Pro 5.1",
+    id: "yandexgpt/latest",
+    name: "YandexGPT Pro",
     reasoning: false,
     input: ["text"],
     contextWindow: 32768,
@@ -59,8 +34,8 @@ export const YANDEX_MODEL_CATALOG: ModelDefinitionConfig[] = [
     },
   },
   {
-    id: YANDEX_MODEL_NAMES.PRO_5,
-    name: "YandexGPT Pro 5",
+    id: "yandexgpt/rc",
+    name: "YandexGPT Pro RC",
     reasoning: false,
     input: ["text"],
     contextWindow: 32768,
@@ -73,8 +48,8 @@ export const YANDEX_MODEL_CATALOG: ModelDefinitionConfig[] = [
     },
   },
   {
-    id: YANDEX_MODEL_NAMES.LITE_5,
-    name: "YandexGPT Lite 5",
+    id: "yandexgpt-lite/latest",
+    name: "YandexGPT Lite",
     reasoning: false,
     input: ["text"],
     contextWindow: 32768,

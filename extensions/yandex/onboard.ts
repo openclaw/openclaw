@@ -2,9 +2,9 @@ import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { buildYandexModelDefinition, YANDEX_BASE_URL, YANDEX_MODEL_CATALOG, YANDEX_MODEL_NAMES } from "./models.js";
+import { buildYandexModelDefinition, YANDEX_BASE_URL, YANDEX_MODEL_CATALOG } from "./models.js";
 
-export const YANDEX_DEFAULT_MODEL_REF = `yandex/${YANDEX_MODEL_NAMES.PRO_5_1}`;
+export const YANDEX_DEFAULT_MODEL_REF = "yandex/yandexgpt/latest";
 
 const yandexPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: YANDEX_DEFAULT_MODEL_REF,
