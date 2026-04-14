@@ -276,7 +276,11 @@ async function finalizeAcpTurnOutput(params: {
   return queuedFinal;
 }
 
-function resolveAcpSpeechAgentId(params: {
+function resolveAcpSpeechAgentId(params: { sessionKey: string }): string | undefined {
+  return normalizeOptionalString(resolveAgentIdFromSessionKey(params.sessionKey));
+}
+
+function resolveAcpRuntimeAgentId(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   acpMetaAgent?: string | null;
@@ -325,16 +329,19 @@ export async function tryDispatchAcpReply(params: {
   const canonicalSessionKey = acpResolution.sessionKey;
   const resolvedAcpAgent =
     acpResolution.kind === "ready"
-      ? resolveAcpSpeechAgentId({
+      ? resolveAcpRuntimeAgentId({
           cfg: params.cfg,
           sessionKey: canonicalSessionKey,
           acpMetaAgent: acpResolution.meta.agent,
         })
-      : resolveAcpSpeechAgentId({
+      : resolveAcpRuntimeAgentId({
           cfg: params.cfg,
           sessionKey: canonicalSessionKey,
         });
-  const speechCfg = resolveAgentSpeechConfig(params.cfg, resolvedAcpAgent);
+  const speechAgentId = resolveAcpSpeechAgentId({
+    sessionKey: canonicalSessionKey,
+  });
+  const speechCfg = resolveAgentSpeechConfig(params.cfg, speechAgentId);
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
@@ -468,7 +475,7 @@ export async function tryDispatchAcpReply(params: {
       (await finalizeAcpTurnOutput({
         cfg: params.cfg,
         sessionKey: canonicalSessionKey,
-        agentId: resolvedAcpAgent,
+        agentId: speechAgentId,
         delivery,
         inboundAudio: params.inboundAudio,
         sessionTtsAuto: params.sessionTtsAuto,

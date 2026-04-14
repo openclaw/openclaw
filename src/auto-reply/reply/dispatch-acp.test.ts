@@ -491,12 +491,12 @@ describe("tryDispatchAcpReply", () => {
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
-  it("resolves ACP speech config from the resolved ACP agent instead of the raw session key", async () => {
+  it("resolves ACP speech config from the session agent instead of ACP harness ids", async () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
-      sessionKey: "main",
+      sessionKey: "agent:voice:session-1",
       meta: createAcpSessionMeta({
-        agent: "voice",
+        agent: "codex",
       }),
     });
     mockVisibleTextTurn("hola");
@@ -504,6 +504,14 @@ describe("tryDispatchAcpReply", () => {
     await runDispatch({
       bodyForAgent: "speak",
       cfg: createAcpTestConfig({
+        acp: {
+          enabled: true,
+          defaultAgent: "claude",
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 64,
+          },
+        },
         messages: {
           tts: {
             auto: "always",
@@ -545,7 +553,7 @@ describe("tryDispatchAcpReply", () => {
         MediaPath: "/tmp/inbound.wav",
         MediaType: "audio/wav",
       },
-      sessionKeyOverride: "main",
+      sessionKeyOverride: "agent:voice:session-1",
     });
 
     const [mediaParams] = mediaUnderstandingMocks.applyMediaUnderstanding.mock.calls[0] as [
