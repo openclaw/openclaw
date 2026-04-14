@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
+import { DEFAULT_IMAGE_MAX_DIMENSION_PX } from "./image-sanitization.js";
 
 describe("tool image sanitizing", () => {
   const getImageBlock = (
@@ -14,7 +15,7 @@ describe("tool image sanitizing", () => {
   };
 
   const createWidePng = async () => {
-    const width = 2600;
+    const width = 4000;
     const height = 400;
     const raw = Buffer.alloc(width * height * 3, 0x7f);
     return sharp(raw, {
@@ -61,8 +62,8 @@ describe("tool image sanitizing", () => {
     expect(dropped).toBe(0);
     expect(out.length).toBe(1);
     const meta = await sharp(Buffer.from(out[0].data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(1200);
-    expect(meta.height).toBeLessThanOrEqual(1200);
+    expect(meta.width).toBeLessThanOrEqual(DEFAULT_IMAGE_MAX_DIMENSION_PX);
+    expect(meta.height).toBeLessThanOrEqual(DEFAULT_IMAGE_MAX_DIMENSION_PX);
   }, 20_000);
 
   it("shrinks images that exceed max dimension even if size is small", async () => {
@@ -79,8 +80,8 @@ describe("tool image sanitizing", () => {
     const out = await sanitizeContentBlocksImages(blocks, "test");
     const image = getImageBlock(out);
     const meta = await sharp(Buffer.from(image.data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(1200);
-    expect(meta.height).toBeLessThanOrEqual(1200);
+    expect(meta.width).toBeLessThanOrEqual(DEFAULT_IMAGE_MAX_DIMENSION_PX);
+    expect(meta.height).toBeLessThanOrEqual(DEFAULT_IMAGE_MAX_DIMENSION_PX);
     expect(image.mimeType).toBe("image/jpeg");
   }, 20_000);
 
