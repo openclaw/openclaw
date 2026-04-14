@@ -160,7 +160,7 @@ New-NetFirewallRule `
 
 ```bash
 # Replace with your Windows Tailscale IP or WSL2 gateway IP
-curl http://100.114.41.9:9222/json/version
+curl http://100.x.x.x:9222/json/version
 ```
 
 If you see a JSON response with `Browser` and `Protocol-Version`, the bridge
