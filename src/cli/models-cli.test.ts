@@ -3,37 +3,41 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerModelsCli } from "./models-cli.js";
 
-const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
-const noopAsync = vi.fn(async () => undefined);
-const modelsAuthLoginCommand = vi.fn().mockResolvedValue(undefined);
-const githubCopilotLoginCommand = vi.fn().mockResolvedValue(undefined);
+const mocks = vi.hoisted(() => ({
+  modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
+  noopAsync: vi.fn(async () => undefined),
+  modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
+  githubCopilotLoginCommand: vi.fn().mockResolvedValue(undefined),
+}));
+
+const { modelsStatusCommand, modelsAuthLoginCommand, githubCopilotLoginCommand } = mocks;
 
 vi.mock("../commands/models.js", () => ({
-  githubCopilotLoginCommand,
-  modelsStatusCommand,
-  modelsAliasesAddCommand: noopAsync,
-  modelsAliasesListCommand: noopAsync,
-  modelsAliasesRemoveCommand: noopAsync,
-  modelsAuthAddCommand: noopAsync,
-  modelsAuthCleanCommand: noopAsync,
-  modelsAuthLoginCommand,
-  modelsAuthOrderClearCommand: noopAsync,
-  modelsAuthOrderGetCommand: noopAsync,
-  modelsAuthOrderSetCommand: noopAsync,
-  modelsAuthPasteTokenCommand: noopAsync,
-  modelsAuthSetupTokenCommand: noopAsync,
-  modelsFallbacksAddCommand: noopAsync,
-  modelsFallbacksClearCommand: noopAsync,
-  modelsFallbacksListCommand: noopAsync,
-  modelsFallbacksRemoveCommand: noopAsync,
-  modelsImageFallbacksAddCommand: noopAsync,
-  modelsImageFallbacksClearCommand: noopAsync,
-  modelsImageFallbacksListCommand: noopAsync,
-  modelsImageFallbacksRemoveCommand: noopAsync,
-  modelsListCommand: noopAsync,
-  modelsScanCommand: noopAsync,
-  modelsSetCommand: noopAsync,
-  modelsSetImageCommand: noopAsync,
+  githubCopilotLoginCommand: mocks.githubCopilotLoginCommand,
+  modelsStatusCommand: mocks.modelsStatusCommand,
+  modelsAliasesAddCommand: mocks.noopAsync,
+  modelsAliasesListCommand: mocks.noopAsync,
+  modelsAliasesRemoveCommand: mocks.noopAsync,
+  modelsAuthAddCommand: mocks.noopAsync,
+  modelsAuthCleanCommand: mocks.noopAsync,
+  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthOrderClearCommand: mocks.noopAsync,
+  modelsAuthOrderGetCommand: mocks.noopAsync,
+  modelsAuthOrderSetCommand: mocks.noopAsync,
+  modelsAuthPasteTokenCommand: mocks.noopAsync,
+  modelsAuthSetupTokenCommand: mocks.noopAsync,
+  modelsFallbacksAddCommand: mocks.noopAsync,
+  modelsFallbacksClearCommand: mocks.noopAsync,
+  modelsFallbacksListCommand: mocks.noopAsync,
+  modelsFallbacksRemoveCommand: mocks.noopAsync,
+  modelsImageFallbacksAddCommand: mocks.noopAsync,
+  modelsImageFallbacksClearCommand: mocks.noopAsync,
+  modelsImageFallbacksListCommand: mocks.noopAsync,
+  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+  modelsListCommand: mocks.noopAsync,
+  modelsScanCommand: mocks.noopAsync,
+  modelsSetCommand: mocks.noopAsync,
+  modelsSetImageCommand: mocks.noopAsync,
 }));
 
 describe("models cli", () => {
