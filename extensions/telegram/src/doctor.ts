@@ -229,7 +229,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     for (const accountId of resolverAccountIds) {
       try {
         const account = resolveTelegramAccount({ cfg: resolvedConfig, accountId });
-        const token = account.token.trim();
+        const token = (account.token ?? "").trim();
         if (!token) {
           continue;
         }

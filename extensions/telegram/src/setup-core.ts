@@ -33,6 +33,9 @@ export const TELEGRAM_USER_ID_HELP_LINES = [
 ];
 
 export function normalizeTelegramAllowFromInput(raw: string): string {
+  if (raw == null) {
+    return "";
+  }
   return raw
     .trim()
     .replace(/^(telegram|tg):/i, "")

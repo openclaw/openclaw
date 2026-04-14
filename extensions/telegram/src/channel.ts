@@ -515,7 +515,7 @@ async function resolveTelegramTargets(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const token = account.token.trim();
+  const token = (account.token ?? "").trim();
   if (!token) {
     return params.inputs.map((input) => ({
       input,
@@ -731,8 +731,8 @@ export const telegramPlugin = createChatChannelPlugin({
       detectLegacyStateMigrations: ({ cfg, env }) =>
         detectTelegramLegacyStateMigrations({ cfg, env }),
       onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
-        const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
-        const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
+        const previousToken = (resolveTelegramAccount({ cfg: prevCfg, accountId }).token ?? "").trim();
+        const nextToken = (resolveTelegramAccount({ cfg: nextCfg, accountId }).token ?? "").trim();
         if (previousToken !== nextToken) {
           const { deleteTelegramUpdateOffset } = await import("../update-offset-runtime-api.js");
           await deleteTelegramUpdateOffset({ accountId });
