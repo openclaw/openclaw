@@ -8,6 +8,17 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/Codex: include `apiKey` in the codex provider catalog output so the Pi ModelRegistry validator no longer rejects the entry and silently drops all custom models from every provider in `models.json`. (#66180) Thanks @hoyyeva.
+- Slack/interactions: apply the configured global `allowFrom` owner allowlist to channel block-action and modal interactive events, require an expected sender id for cross-verification, and reject ambiguous channel types so interactive triggers can no longer bypass the documented allowlist intent in channels without a `users` list. Open-by-default behavior is preserved when no allowlists are configured. (#66028) Thanks @eleqtrizit.
+- Media-understanding/attachments: fail closed when a local attachment path cannot be canonically resolved via `realpath`, so a `realpath` error can no longer downgrade the canonical-roots allowlist check to a non-canonical comparison; attachments that also have a URL still fall back to the network fetch path. (#66022) Thanks @eleqtrizit.
+- Agents/gateway-tool: reject `config.patch` and `config.apply` calls from the model-facing gateway tool when they would newly enable any flag enumerated by `openclaw security audit` (for example `dangerouslyDisableDeviceAuth`, `allowInsecureAuth`, `dangerouslyAllowHostHeaderOriginFallback`, `hooks.gmail.allowUnsafeExternalContent`, `tools.exec.applyPatch.workspaceOnly: false`); already-enabled flags pass through unchanged so non-dangerous edits in the same patch still apply, and direct authenticated operator RPC behavior is unchanged. (#62006) Thanks @eleqtrizit.
+- Telegram/forum topics: persist learned topic names to the Telegram session sidecar store so agent context can keep using human topic names after a restart instead of relearning from future service metadata. (#66107) Thanks @obviyus.
+- Doctor/systemd: keep `openclaw doctor --repair` and service reinstall from re-embedding dotenv-backed secrets in user systemd units, while preserving newer inline overrides over stale state-dir `.env` values. (#66249) Thanks @tmimmanuel.
+- Doctor/plugins: cache external `preferOver` catalog lookups within each plugin auto-enable pass so large `agents.list` configs no longer peg CPU and repeatedly reread plugin catalogs during doctor/plugins resolution. (#66246) Thanks @yfge.
+- Agents/local models: clarify low-context preflight hints for self-hosted models, point config-backed caps at the relevant OpenClaw setting, and stop suggesting larger models when `agents.defaults.contextTokens` is the real limit. (#66236) Thanks @ImLukeF.
+- Browser/SSRF: restore hostname navigation under the default browser SSRF policy while keeping explicit strict mode reachable from config, and keep managed loopback CDP `/json/new` fallback requests on the local CDP control policy so browser follow-up fixes stop regressing normal navigation or self-blocking local CDP control. (#66386) Thanks @obviyus.
+- Browser/SSRF: preserve explicit strict browser navigation mode for legacy `browser.ssrfPolicy.allowPrivateNetwork: false` configs by normalizing the legacy alias to the canonical strict marker instead of silently widening those installs to the default non-strict hostname-navigation path.
+
 ## 2026.4.14-beta.1
 
 ### Changes
@@ -50,6 +61,8 @@ Docs: https://docs.openclaw.ai
 - Outbound/relay-status: suppress internal relay-status placeholder payloads (`No channel reply.`, `Replied in-thread.`, `Replied in #...`, wiki-update status variants ending in `No channel reply.`) before channel delivery so internal housekeeping text does not leak to users.
 - Slack/doctor: add a dedicated doctor-contract sidecar so config warmup paths such as `openclaw cron` no longer fall back to Slack's broader contract surface, which could trigger Slack-related config-read crashes on affected setups. (#63192) Thanks @shhtheonlyperson.
 - Hooks/session-memory: pass the resolved agent workspace into gateway `/new` and `/reset` session-memory hooks so reset snapshots stay scoped to the right agent workspace instead of leaking into the default workspace. (#64735) Thanks @suboss87 and @vincentkoc.
+- CLI/approvals: raise the default `openclaw approvals get` gateway timeout and report config-load timeouts explicitly, so slow hosts stop showing a misleading `Config unavailable.` note when the approvals snapshot succeeds but the follow-up config RPC needs more time. (#66239) Thanks @neeravmakwana.
+- Media/store: honor configured agent media limits when saving generated media and persisting outbound reply media, so the store no longer hard-stops those flows at 5 MB before the configured limit applies. (#66229) Thanks @neeravmakwana and @vincentkoc.
 
 ## 2026.4.12
 
