@@ -22,6 +22,7 @@ type ModelRegistryLike = {
 type ConfigModelEntry = { id?: string; contextWindow?: number; contextTokens?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
+type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
@@ -263,6 +264,25 @@ if (shouldEagerWarmContextWindowCache()) {
   void ensureContextWindowCacheLoaded();
 }
 
+function resolveConfiguredModelParams(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): Record<string, unknown> | undefined {
+  const models = cfg?.agents?.defaults?.models;
+  if (!models) {
+    return undefined;
+  }
+  const key = normalizeLowercaseStringOrEmpty(`${provider}/${model}`);
+  for (const [rawKey, entry] of Object.entries(models)) {
+    if (normalizeLowercaseStringOrEmpty(rawKey) === key) {
+      const params = (entry as AgentModelEntry | undefined)?.params;
+      return params && typeof params === "object" ? params : undefined;
+    }
+  }
+  return undefined;
+}
+
 function resolveProviderModelRef(params: {
   provider?: string;
   model?: string;
@@ -379,8 +399,17 @@ export function resolveContextTokensForModel(params: {
   });
   const explicitProvider = params.provider?.trim();
   if (ref) {
+    const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (isAnthropic1MModel(ref.provider, ref.model)) {
-      return ANTHROPIC_CONTEXT_1M_TOKENS;
+      // Respect explicit context1m: false opt-out (e.g. for OAuth/legacy
+      // token auth where Anthropic strips the context-1m beta header).
+      // context1m: true is a no-op now since isAnthropic1MModel already
+      // returns true; absence of the flag no longer prevents 1M context.
+      if (modelParams?.context1m === false) {
+        // Fall through to configured/discovered window
+      } else {
+        return ANTHROPIC_CONTEXT_1M_TOKENS;
+      }
     }
     // Only do the config direct scan when the caller explicitly passed a
     // provider. When provider is inferred from a slash in the model string

@@ -228,6 +228,36 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
+  it("respects context1m: false opt-out for opus/sonnet-4", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { context1m: false },
+            },
+          },
+        },
+      },
+    },
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    fallbackContextTokens: 200_000,
+    allowAsyncLoad: false,
+  });
+
+  expect(result).toBe(200_000);
+});
+
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {
     const result = resolveContextTokensForModel({
       cfg: {
