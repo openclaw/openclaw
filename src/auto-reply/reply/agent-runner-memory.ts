@@ -385,36 +385,38 @@ export async function runPreflightCompactionIfNeeded(params: {
     20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
-  const persistedTotalTokens = entry.totalTokens;
-  const hasPersistedTotalTokens =
-    typeof persistedTotalTokens === "number" &&
-    Number.isFinite(persistedTotalTokens) &&
-    persistedTotalTokens > 0;
-  const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback) {
-    return entry ?? params.sessionEntry;
+  const hasFreshPersistedTotalTokens =
+    typeof freshPersistedTokens === "number" && freshPersistedTokens > 0;
+
+  // When totals are fresh, use them directly — don't early-return, because the
+  // fresh totals themselves may already be over the threshold (e.g. Anthropic
+  // prompt cache hits keep incoming-token counts tiny but total context huge).
+  // When totals are stale/missing, fall back to transcript + prompt estimate.
+  let promptTokenEstimate: number | undefined;
+  let transcriptPromptTokens: number | undefined;
+  let tokenCountForCompaction: number | undefined;
+  if (hasFreshPersistedTotalTokens) {
+    tokenCountForCompaction = freshPersistedTokens;
+  } else {
+    promptTokenEstimate = estimatePromptTokensForMemoryFlush(
+      params.promptForEstimate ?? params.followupRun.prompt,
+    );
+    transcriptPromptTokens = estimatePromptTokensFromSessionTranscript({
+      sessionId: entry.sessionId,
+      storePath: params.storePath,
+      sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
+    });
+    const projectedTokenCount =
+      typeof transcriptPromptTokens === "number"
+        ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate)
+        : undefined;
+    tokenCountForCompaction =
+      typeof projectedTokenCount === "number" &&
+      Number.isFinite(projectedTokenCount) &&
+      projectedTokenCount > 0
+        ? projectedTokenCount
+        : undefined;
   }
-  const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
-    params.promptForEstimate ?? params.followupRun.prompt,
-  );
-  const transcriptPromptTokens =
-    typeof freshPersistedTokens === "number"
-      ? undefined
-      : estimatePromptTokensFromSessionTranscript({
-          sessionId: entry.sessionId,
-          storePath: params.storePath,
-          sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
-        });
-  const projectedTokenCount =
-    typeof transcriptPromptTokens === "number"
-      ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate)
-      : undefined;
-  const tokenCountForCompaction =
-    typeof projectedTokenCount === "number" &&
-    Number.isFinite(projectedTokenCount) &&
-    projectedTokenCount > 0
-      ? projectedTokenCount
-      : undefined;
 
   const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
   logVerbose(
