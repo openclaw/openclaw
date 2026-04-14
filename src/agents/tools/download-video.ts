@@ -201,20 +201,37 @@ async function downloadFileWithVerification(
           file.on('close', async () => {
             signal?.removeEventListener('abort', abortHandler);
             
-            const actualHash = hash.digest('hex');
-            if (actualHash !== expectedHash) {
+            try {
+              const actualHash = hash.digest('hex');
+              if (actualHash !== expectedHash) {
+                await fs.unlink(tempDest).catch(() => {});
+                reject(new Error(`Checksum verification failed.\nExpected: ${expectedHash}\nGot: ${actualHash}`));
+                return;
+              }
+              
+              // Move temp file to final destination
+              try {
+                await fs.rename(tempDest, dest);
+              } catch (renameError) {
+                await fs.unlink(tempDest).catch(() => {});
+                reject(new Error(`Failed to rename temp file: ${renameError instanceof Error ? renameError.message : 'Unknown error'}`));
+                return;
+              }
+              
+              if (process.platform !== 'win32') {
+                try {
+                  await fs.chmod(dest, 0o755);
+                } catch (chmodError) {
+                  // Log but don't fail - file still usable
+                  console.warn(`Warning: Could not set executable permissions on ${dest}:`, chmodError);
+                }
+              }
+              resolve(undefined);
+            } catch (error) {
+              // Clean up on any unexpected error
               await fs.unlink(tempDest).catch(() => {});
-              reject(new Error(`Checksum verification failed.\nExpected: ${expectedHash}\nGot: ${actualHash}`));
-              return;
+              reject(error);
             }
-            
-            // Move temp file to final destination
-            await fs.rename(tempDest, dest);
-            
-            if (process.platform !== 'win32') {
-              await fs.chmod(dest, 0o755);
-            }
-            resolve(undefined);
           });
         }).on('error', (err) => {
           signal?.removeEventListener('abort', abortHandler);
@@ -436,6 +453,12 @@ export const downloadVideoTool = {
       if (!downloadedFile || !downloadedFile.includes(sanitized)) {
         // Fallback: scan directory for the most recent matching file
         const files = await fs.readdir(workspaceRoot);
+        
+        // Create ASCII-normalized version of the original sanitized title
+        const asciiNormalizedTitle = sanitized.normalize('NFKD')
+          .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
+          .replace(/[^\x00-\x7F]/g, '');    // Remove remaining non-ASCII
+        
         const matchingFiles = files.filter(f => {
           // Skip temp files
           if (f.endsWith('.part') || f.endsWith('.ytdl')) return false;
@@ -443,15 +466,14 @@ export const downloadVideoTool = {
           // Try the original sanitized match
           if (f.includes(sanitized)) return true;
           
-          // When --restrict-filenames is used, non-ASCII chars are normalized to ASCII
-          // e.g., "café" becomes "cafe", "こんにちは" becomes something like "konnitiha"
-          const asciiNormalized = f.normalize('NFKD')
-            .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
-            .replace(/[^\x00-\x7F]/g, '');    // Remove remaining non-ASCII
+          // Check if filename (normalized) contains the normalized title
+          const normalizedFilename = f.normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^\x00-\x7F]/g, '');
           
-          // Check if the normalized filename matches or contains timestamp-like patterns
-          return asciiNormalized.length > 0 && 
-                 (f.includes(asciiNormalized) || 
+          // Check if normalized filename matches or contains timestamp-like patterns
+          return asciiNormalizedTitle.length > 0 && 
+                 (normalizedFilename.includes(asciiNormalizedTitle) || 
                   /video_.*\d{13}/.test(f));   // Fallback for our generated names
         });
         
