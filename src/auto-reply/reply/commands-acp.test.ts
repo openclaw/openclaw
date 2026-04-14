@@ -1527,6 +1527,30 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
+  // Regression for #66298: on surfaces with commands.text: false (allowTextCommands=false),
+  // /acp close inside a bound thread must still reach handleAcpCommand's lifecycle path
+  // instead of being early-returned as null and falling through to the ACP agent as
+  // conversational input. Locks in the removal of the legacy `if (!allowTextCommands)`
+  // gate that shadowed the shouldBypassAcpDispatchForCommand bypass.
+  it("still handles /acp close in a bound thread when allowTextCommands is false (#66298)", async () => {
+    mockBoundThreadSession();
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createBoundThreadSession() as SessionBindingRecord,
+    ]);
+
+    const result = await handleAcpCommand(createThreadParams("/acp close", baseCfg), false);
+
+    expect(result).not.toBeNull();
+    expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: defaultAcpSessionKey,
+        reason: "manual",
+      }),
+    );
+    expect(result?.reply?.text).toContain("Removed 1 binding");
+  });
+
   it("lists ACP sessions from the session store", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
