@@ -66,6 +66,45 @@ export function parseTtsDirectives(
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
     const tokens = body.split(/\s+/).filter(Boolean);
+
+    // Pre-scan for `provider=X` so generic-token routing below can prefer the
+    // user-declared provider. Without this, multiple plugins that claim the
+    // same generic token (e.g. `speed`) are resolved in autoSelectOrder and the
+    // first-match wins regardless of whether the user named a different
+    // provider. Last-wins semantics match the legacy behavior for
+    // `overrides.provider` and its warnings.
+    let declaredProviderId: string | undefined;
+    if (policy.allowProvider) {
+      for (const token of tokens) {
+        const eqIndex = token.indexOf("=");
+        if (eqIndex === -1) {
+          continue;
+        }
+        const rawKey = token.slice(0, eqIndex).trim();
+        if (!rawKey || normalizeLowercaseStringOrEmpty(rawKey) !== "provider") {
+          continue;
+        }
+        const rawValue = token.slice(eqIndex + 1).trim();
+        if (!rawValue) {
+          continue;
+        }
+        const providerId = normalizeLowercaseStringOrEmpty(rawValue);
+        if (providerId) {
+          declaredProviderId = providerId;
+          overrides.provider = providerId;
+        } else {
+          warnings.push("invalid provider id");
+        }
+      }
+    }
+
+    const orderedProviders = declaredProviderId
+      ? [
+          ...providers.filter((p) => p.id === declaredProviderId),
+          ...providers.filter((p) => p.id !== declaredProviderId),
+        ]
+      : providers;
+
     for (const token of tokens) {
       const eqIndex = token.indexOf("=");
       if (eqIndex === -1) {
@@ -78,19 +117,10 @@ export function parseTtsDirectives(
       }
       const key = normalizeLowercaseStringOrEmpty(rawKey);
       if (key === "provider") {
-        if (policy.allowProvider) {
-          const providerId = normalizeLowercaseStringOrEmpty(rawValue);
-          if (providerId) {
-            overrides.provider = providerId;
-          } else {
-            warnings.push("invalid provider id");
-          }
-        }
         continue;
       }
 
-      let handled = false;
-      for (const provider of providers) {
+      for (const provider of orderedProviders) {
         const parsed = provider.parseDirectiveToken?.({
           key,
           value: rawValue,
@@ -101,7 +131,6 @@ export function parseTtsDirectives(
         if (!parsed?.handled) {
           continue;
         }
-        handled = true;
         if (parsed.overrides) {
           overrides.providerOverrides = {
             ...overrides.providerOverrides,
@@ -115,10 +144,6 @@ export function parseTtsDirectives(
           warnings.push(...parsed.warnings);
         }
         break;
-      }
-
-      if (!handled) {
-        continue;
       }
     }
     return "";
