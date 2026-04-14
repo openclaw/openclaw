@@ -676,7 +676,12 @@ export function createAgentEventHandler({
     const delayMs = Math.max(1, Math.min(Math.floor(lifecycleErrorRetryGraceMs), 2_147_483_647));
     const timer = setTimeout(() => {
       pendingTerminalLifecycleErrors.delete(evt.runId);
-      finalizeLifecycleEvent(evt, opts);
+      // Re-evaluate skipChatErrorFinal at fire time. If chat.send's .catch()
+      // already cancelled this timer, we never reach here. If we do reach here
+      // it means .catch() did NOT fire (surface_error / billing path), so
+      // isChatSendRunActive is now false and we must emit the error event.
+      const resolvedSkip = opts?.skipChatErrorFinal ? isChatSendRunActive(evt.runId) : false;
+      finalizeLifecycleEvent(evt, { ...opts, skipChatErrorFinal: resolvedSkip });
     }, delayMs);
     timer.unref?.();
     pendingTerminalLifecycleErrors.set(evt.runId, timer);
