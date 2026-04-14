@@ -669,7 +669,10 @@ export async function runTui(opts: TuiOptions) {
         streamingIdleTimer = null;
         if (activityStatus === "streaming" || activityStatus === "running") {
           activityStatus = "idle";
-          state.activeChatRunId = null;
+          // Intentionally do NOT clear state.activeChatRunId here — the run
+          // may still be in-flight (e.g. during a long tool call). Clearing
+          // it would break /abort and cause later lifecycle events to be
+          // dropped. We only reset the visual indicator.
           renderStatus();
         }
       }, STREAMING_IDLE_TIMEOUT_MS);
