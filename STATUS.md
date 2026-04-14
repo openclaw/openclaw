@@ -20,7 +20,7 @@
 
 ## Currently In Progress
 
-Fresh-session coordination reset on DevAgents. No new Codex branch claimed yet in the gateway repo.
+- Codex implementing Widget Chat V1 in openclaw-dashboard (branch: codex/feat-widget-chat-v1)
 
 ---
 
@@ -42,10 +42,11 @@ Fresh-session coordination reset on DevAgents. No new Codex branch claimed yet i
 
 ## Active Branches / PRs
 
-| Repo               | Branch                   | PR  | Status      | Owner   | Files / Areas Touched              | Validation | Next Concrete Step                       | Notes                          |
-| ------------------ | ------------------------ | --- | ----------- | ------- | ---------------------------------- | ---------- | ---------------------------------------- | ------------------------------ |
-| unknown            | chore/staging-deploy-gcp | #1  | open, stale | unknown | GCP deploy workflow                | unknown    | Verify ownership before reuse or cleanup | Treat as active until verified |
-| openclaw-dashboard | feat/ci-cd-pipeline      | #51 | merged      | Claude  | GitHub Actions, Cloud Run pipeline | merged     | None                                     | CI/CD auto-deploy live         |
+| Repo               | Branch                    | PR  | Status      | Owner   | Files / Areas Touched              | Validation | Next Concrete Step                       | Notes                                                           |
+| ------------------ | ------------------------- | --- | ----------- | ------- | ---------------------------------- | ---------- | ---------------------------------------- | --------------------------------------------------------------- |
+| openclaw-dashboard | codex/feat-widget-chat-v1 | —   | claimed     | Codex   | Widget Chat V1                     | build pass | PR review                                | Widget Chat V1 implemented; build passing in openclaw-dashboard |
+| unknown            | chore/staging-deploy-gcp  | #1  | open, stale | unknown | GCP deploy workflow                | unknown    | Verify ownership before reuse or cleanup | Treat as active until verified                                  |
+| openclaw-dashboard | feat/ci-cd-pipeline       | #51 | merged      | Claude  | GitHub Actions, Cloud Run pipeline | merged     | None                                     | CI/CD auto-deploy live                                          |
 
 ---
 
