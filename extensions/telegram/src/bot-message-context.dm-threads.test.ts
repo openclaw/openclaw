@@ -15,7 +15,8 @@ vi.mock("./bot-message-context.session.runtime.js", async () => {
   return {
     ...actual,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
+    resolveStorePath: (store?: string, opts?: { agentId?: string; env?: NodeJS.ProcessEnv }) =>
+      resolveStorePathMock(store, opts),
   };
 });
 
