@@ -870,6 +870,11 @@ export class GatewayClient {
         this.ws?.close(4000, "tick timeout");
       }
     }, interval);
+    // Allow the process to exit naturally when this is the only remaining
+    // handle. beginStop() clears the interval on the normal close path;
+    // unref() is a defence-in-depth fallback for any path where clearInterval
+    // is not reached (e.g. uncaught error before beginStop).
+    this.tickTimer.unref();
   }
 
   private validateTlsFingerprint(): Error | null {
