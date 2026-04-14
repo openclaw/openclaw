@@ -25,6 +25,7 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 | `opencode-go/kimi-k2.5`    | Kimi K2.5    |
 | `opencode-go/glm-5`        | GLM 5        |
 | `opencode-go/minimax-m2.5` | MiniMax M2.5 |
+| `opencode-go/minimax-m2.7` | MiniMax M2.7 |
 
 ## Getting started
 
@@ -90,6 +91,12 @@ provider id `opencode-go` so upstream per-model routing stays correct.
   <Accordion title="Shared credentials">
     The same `OPENCODE_API_KEY` is used by both the Zen and Go catalogs. Entering
     the key during setup stores credentials for both runtime providers.
+  </Accordion>
+
+  <Accordion title="Forward-compatible catalog rows">
+    OpenClaw synthesizes `opencode-go/minimax-m2.7` from the bundled
+    `opencode-go/minimax-m2.5` template until the upstream Go catalog exposes a
+    native M2.7 row.
   </Accordion>
 </AccordionGroup>
 

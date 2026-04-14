@@ -192,7 +192,8 @@ Current bundled examples:
   reasoning-payload cleanup, and bundled video-generation provider
   registration for `grok-imagine-video`
 - `mistral`: plugin-owned capability metadata
-- `opencode` and `opencode-go`: plugin-owned capability metadata plus
+- `opencode` and `opencode-go`: plugin-owned capability metadata, forward-compatible
+  synthetic Go catalog rows (for example `opencode-go/minimax-m2.7`), plus
   proxy-Gemini thought-signature sanitation
 - `alibaba`: plugin-owned video-generation catalog for direct Wan model refs
   such as `alibaba/wan2.6-t2v`
