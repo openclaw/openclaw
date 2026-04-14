@@ -188,15 +188,6 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
       });
       const model = resolveVideoModel(req.model);
       const inputImage = req.inputImages?.[0];
-      if (
-        model === DEFAULT_KLING_VIDEO_MODEL &&
-        inputImage &&
-        normalizeOptionalString(req.aspectRatio)
-      ) {
-        throw new Error(
-          "KlingAI model kling-v3 does not support aspectRatio for image-to-video. Use model kling-v3-omni.",
-        );
-      }
       const endpointPath =
         model === OMNI_KLING_VIDEO_MODEL
           ? OMNI_VIDEO_ENDPOINT

@@ -646,18 +646,48 @@ describe("klingai video generation provider", () => {
     );
   });
 
-  it("rejects kling-v3 image-to-video requests with explicit aspect ratio", async () => {
+  it("omits aspect_ratio for kling-v3 image-to-video requests", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-vid-no-ar-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              videos: [{ url: "https://cdn.kling.ai/output/video-no-ar-1.mp4" }],
+            },
+          },
+        }),
+        headers: new Headers(),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("video-no-ar-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
     const provider = buildKlingaiVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "klingai",
-        model: "kling-v3",
-        prompt: "animate this image",
-        cfg: {},
-        aspectRatio: "16:9",
-        inputImages: [{ url: "https://example.com/ref.png" }],
-      }),
-    ).rejects.toThrow("does not support aspectRatio");
+    await provider.generateVideo({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "animate this image",
+      cfg: {},
+      aspectRatio: "16:9",
+      inputImages: [{ url: "https://example.com/ref.png" }],
+    });
+
+    const request = postJsonRequestMock.mock.calls[0]?.[0] as { body?: Record<string, unknown> };
+    expect(request.body).not.toHaveProperty("aspect_ratio");
   });
 
   it("rejects unsupported model ids", async () => {
