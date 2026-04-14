@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { closeSync, openSync, readSync } from "node:fs";
 import path from "node:path";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeBatchCommandLine, buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 function isPnpmExecPath(value) {
-  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
+  const baseName = value.split(/[/\\]/).pop() ?? value;
+  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(baseName.toLowerCase());
 }
 
 function hasScriptShebang(value) {
@@ -48,14 +49,27 @@ export function resolvePnpmRunner(params = {}) {
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
 
-  if (
-    typeof npmExecPath === "string" &&
-    npmExecPath.length > 0 &&
-    isNodeRunnablePnpmExecPath(npmExecPath)
-  ) {
+  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
+    if (isNodeRunnablePnpmExecPath(npmExecPath)) {
+      return {
+        command: nodeExecPath,
+        args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+        shell: false,
+      };
+    }
+
+    if (platform === "win32" && npmExecPath.toLowerCase().endsWith(".cmd")) {
+      return {
+        command: comSpec,
+        args: ["/d", "/s", "/c", buildCmdExeBatchCommandLine(npmExecPath, pnpmArgs)],
+        shell: false,
+        windowsVerbatimArguments: true,
+      };
+    }
+
     return {
-      command: nodeExecPath,
-      args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+      command: npmExecPath,
+      args: pnpmArgs,
       shell: false,
     };
   }
