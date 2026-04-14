@@ -97,6 +97,16 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   // TTS) that were not self-registered at startup because another provider (e.g. "openai")
   // registered first via a different capability code path and caused the early-return above
   // to fire on previous runs.
+  //
+  // Note: resolveRuntimePluginRegistry(loadOptions) may activate the compat registry as the
+  // new global active registry on cache miss (it calls loadOpenClawPlugins which sets active
+  // state).  This is intentional and safe: the compat config is derived from the real config
+  // by only extending plugins.allow with bundled provider IDs — plugins.load.paths and all
+  // other settings are unchanged.  The compat registry therefore loads the same workspace
+  // plugins and is a strict superset of the real registry.  Replacing the active registry
+  // with a superset cannot drop any previously-registered providers.  The activeOnlyProviders
+  // merge below additionally guards the current-call return value for the edge case of
+  // providers registered via out-of-band in-process mechanisms not backed by load paths.
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
   const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const compatRegistry = resolveRuntimePluginRegistry(loadOptions);
