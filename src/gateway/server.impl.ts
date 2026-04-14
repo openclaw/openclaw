@@ -447,6 +447,7 @@ export async function startGatewayServer(
     openResponsesEnabled,
     openResponsesConfig,
     strictTransportSecurityHeader,
+    resolvedAuth,
     rateLimiter: authRateLimiter,
     gatewayTls,
     getResolvedAuth,

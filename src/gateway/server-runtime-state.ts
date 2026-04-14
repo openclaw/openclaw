@@ -60,6 +60,7 @@ export async function createGatewayRuntimeState(params: {
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
+  resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -184,6 +185,7 @@ export async function createGatewayRuntimeState(params: {
         handleHooksRequest,
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
+        resolvedAuth: params.resolvedAuth,
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
@@ -223,6 +225,7 @@ export async function createGatewayRuntimeState(params: {
         canvasHost,
         clients,
         preauthConnectionBudget,
+        resolvedAuth: params.resolvedAuth,
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
       });

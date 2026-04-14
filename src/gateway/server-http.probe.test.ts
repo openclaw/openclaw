@@ -123,6 +123,7 @@ describe("gateway probe endpoints", () => {
 
     await withGatewayServer({
       prefix: "probe-remote-rotated-auth",
+      // `resolvedAuth` remains the static fallback; `getResolvedAuth` drives the rotated value.
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         getReadiness,

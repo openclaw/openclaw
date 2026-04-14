@@ -837,8 +837,8 @@ export function createGatewayHttpServer(opts: {
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
+  resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
-  resolvedAuth?: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
@@ -858,17 +858,11 @@ export function createGatewayHttpServer(opts: {
     handleHooksRequest,
     handlePluginRequest,
     shouldEnforcePluginGatewayAuth,
+    resolvedAuth,
     rateLimiter,
     getReadiness,
   } = opts;
-  const getResolvedAuth =
-    opts.getResolvedAuth ??
-    (() => {
-      if (!opts.resolvedAuth) {
-        throw new Error("createGatewayHttpServer requires resolvedAuth or getResolvedAuth");
-      }
-      return opts.resolvedAuth;
-    });
+  const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -1125,20 +1119,21 @@ export function attachGatewayUpgradeHandler(opts: {
   canvasHost: CanvasHostHandler | null;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
+  resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
-  resolvedAuth?: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
 }) {
-  const { httpServer, wss, canvasHost, clients, preauthConnectionBudget, rateLimiter } = opts;
-  const getResolvedAuth =
-    opts.getResolvedAuth ??
-    (() => {
-      if (!opts.resolvedAuth) {
-        throw new Error("attachGatewayUpgradeHandler requires resolvedAuth or getResolvedAuth");
-      }
-      return opts.resolvedAuth;
-    });
+  const {
+    httpServer,
+    wss,
+    canvasHost,
+    clients,
+    preauthConnectionBudget,
+    resolvedAuth,
+    rateLimiter,
+  } = opts;
+  const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
       const configSnapshot = loadConfig();
