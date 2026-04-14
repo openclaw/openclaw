@@ -34,6 +34,8 @@ export type ConfigState = {
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
+  pendingUpdateExpectedVersion: string | null;
+  updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
 };
 
@@ -138,6 +140,39 @@ function serializeFormForSubmit(state: ConfigState): string {
 type ConfigSubmitMethod = "config.set" | "config.apply";
 type ConfigSubmitBusyKey = "configSaving" | "configApplying";
 
+function resolveUpdateStatusBanner(params: { status?: string; reason?: string }): {
+  tone: "danger" | "warn" | "info";
+  text: string;
+} {
+  const status = (params.status ?? "error").trim() || "error";
+  const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
+  const tone = status === "skipped" ? "warn" : "danger";
+  const guidance =
+    {
+      dirty: "Commit or stash changes, then retry.",
+      "no-upstream": "Set an upstream branch, then retry.",
+      "not-git-install":
+        "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
+      "not-openclaw-root":
+        "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
+      "deps-install-failed": "Dependency install failed. Fix the install error and retry.",
+      "build-failed": "Build failed. Fix the build error and retry.",
+      "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
+      "global-install-failed":
+        "The global package install did not verify on disk. Retry or reinstall from the CLI.",
+      "restart-disabled": "Enable gateway restarts or restart the gateway manually after updating.",
+      "restart-unavailable":
+        "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
+      "restart-unhealthy":
+        "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
+    }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
+  return {
+    tone,
+    text: `Update ${status}: ${reason}. ${guidance}`,
+  };
+}
+
 async function submitConfigChange(
   state: ConfigState,
   method: ConfigSubmitMethod,
@@ -193,20 +228,27 @@ export async function runUpdate(state: ConfigState) {
   }
   state.updateRunning = true;
   state.lastError = null;
+  state.updateStatusBanner = null;
   try {
     const res = await state.client.request<{
       ok?: boolean;
-      result?: { status?: string; reason?: string };
+      result?: { status?: string; reason?: string; after?: { version?: string | null } };
     }>("update.run", {
       sessionKey: state.applySessionKey,
     });
-    if (res && res.ok === false) {
-      const status = res.result?.status ?? "error";
-      const reason = res.result?.reason ?? "Update failed.";
-      state.lastError = `Update ${status}: ${reason}`;
+    const status = res.result?.status ?? (res.ok === true ? "ok" : "error");
+    if (status === "ok" && res.ok === true) {
+      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      return;
     }
+    state.pendingUpdateExpectedVersion = null;
+    state.updateStatusBanner = resolveUpdateStatusBanner({
+      status,
+      reason: res.result?.reason,
+    });
   } catch (err) {
     state.lastError = String(err);
+    state.pendingUpdateExpectedVersion = null;
   } finally {
     state.updateRunning = false;
   }
