@@ -122,6 +122,19 @@ function withFakeRuntimeBins<T>(params: {
   }
 }
 
+function resolveNativeBinaryFixturePath(): string {
+  for (const candidate of ["/bin/ls", "/usr/bin/ls", "/bin/echo", "/usr/bin/printf"]) {
+    try {
+      if (fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("expected a native binary fixture path");
+}
+
 function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
   const prepared = buildSystemRunApprovalPlan({
     command: fixture.command,
@@ -773,9 +786,10 @@ describe("hardenApprovedExecutionPaths", () => {
     if (process.platform === "win32") {
       return;
     }
+    const binaryPath = resolveNativeBinaryFixturePath();
     const prepared = buildSystemRunApprovalPlan({
-      command: ["/bin/sh", "-lc", process.execPath],
-      rawCommand: process.execPath,
+      command: ["/bin/sh", "-lc", binaryPath],
+      rawCommand: binaryPath,
       cwd: process.cwd(),
     });
     expect(prepared.ok).toBe(true);
