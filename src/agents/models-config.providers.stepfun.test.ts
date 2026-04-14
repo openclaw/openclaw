@@ -225,6 +225,51 @@ describe("StepFun provider catalog", () => {
     expect(providers?.["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
   });
 
+  it("ignores stale auth.order entries when a newer credential-backed profile resolves", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+
+    upsertAuthProfile({
+      profileId: "stepfun:intl",
+      credential: {
+        type: "api_key",
+        provider: "stepfun",
+        key: "sk-stepfun-intl", // pragma: allowlist secret
+      },
+      agentDir,
+    });
+    upsertAuthProfile({
+      profileId: "stepfun-plan:intl",
+      credential: {
+        type: "api_key",
+        provider: "stepfun-plan",
+        key: "sk-stepfun-intl", // pragma: allowlist secret
+      },
+      agentDir,
+    });
+
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: {},
+      config: {
+        auth: {
+          profiles: {
+            "stepfun:cn": { provider: "stepfun", mode: "api_key" },
+            "stepfun:intl": { provider: "stepfun", mode: "api_key" },
+            "stepfun-plan:cn": { provider: "stepfun-plan", mode: "api_key" },
+            "stepfun-plan:intl": { provider: "stepfun-plan", mode: "api_key" },
+          },
+          order: {
+            stepfun: ["stepfun:cn", "stepfun:intl"],
+            "stepfun-plan": ["stepfun-plan:cn", "stepfun-plan:intl"],
+          },
+        },
+      },
+    });
+
+    expect(providers?.stepfun?.baseUrl).toBe("https://api.stepfun.ai/v1");
+    expect(providers?.["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
+  });
+
   it("ignores stale auth.order entries when discovery relies on env fallback", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
 

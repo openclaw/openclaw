@@ -3,6 +3,7 @@ import {
   type OpenClawConfig,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -88,6 +89,8 @@ function inferOrderedRegionForProvider(
   }
   const configuredProfiles = ctx.config.auth?.profiles;
   const normalizedProviderId = providerId.trim().toLowerCase();
+  const normalizedCurrentProfileId = currentProfileId?.trim();
+  const credentialBackedProfiles = resolveCredentialBackedProfiles(ctx, providerId);
 
   // applyAuthProfileConfig writes the latest selected profile first.
   for (const profileId of matchingOrder) {
@@ -106,10 +109,12 @@ function inferOrderedRegionForProvider(
       typeof configuredProfile.provider === "string" &&
       configuredProfile.provider.trim().toLowerCase() === normalizedProviderId;
     const profileMatchesCurrent =
-      Boolean(currentProfileId) && normalizedProfileId === currentProfileId?.trim();
+      Boolean(normalizedCurrentProfileId) && normalizedProfileId === normalizedCurrentProfileId;
+    const profileIsCredentialBacked =
+      credentialBackedProfiles?.has(normalizedProfileId) ?? profileMatchesConfiguredProvider;
 
-    // Ignore stale auth.order entries that cannot be tied to this provider.
-    if (!profileMatchesConfiguredProvider && !profileMatchesCurrent) {
+    // Skip stale auth.order entries without usable credentials.
+    if (!profileMatchesCurrent && !profileIsCredentialBacked) {
       continue;
     }
 
@@ -119,6 +124,26 @@ function inferOrderedRegionForProvider(
     }
   }
   return undefined;
+}
+
+function resolveCredentialBackedProfiles(
+  ctx: ProviderCatalogContext,
+  providerId: string,
+): Set<string> | undefined {
+  const agentDir = ctx.agentDir?.trim();
+  if (!agentDir) {
+    return undefined;
+  }
+  try {
+    const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+    return new Set(
+      listProfilesForProvider(store, providerId)
+        .map((profileId) => profileId.trim())
+        .filter((profileId) => profileId.length > 0),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 function inferLatestConfiguredRegion(
