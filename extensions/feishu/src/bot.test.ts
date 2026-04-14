@@ -2672,6 +2672,80 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("downloads images from thread history messages and inlines attachment hints", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValue({
+      messageId: "om_topic_root",
+      chatId: "oc-group",
+      content: "thread root",
+      contentType: "text",
+      threadId: "omt_topic_img",
+    });
+    const imgRawContent = JSON.stringify({ image_key: "img_history_key_1" });
+    mockListFeishuThreadMessages.mockResolvedValue([
+      {
+        messageId: "om_img_msg",
+        senderId: "ou-sender",
+        senderType: "user",
+        content: "[image message]",
+        contentType: "image",
+        rawContent: imgRawContent,
+        createTime: 1710000000000,
+      },
+    ]);
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image-data"),
+      contentType: "image/png",
+    });
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      path: "/fake/.openclaw/media/inbound/thread-img.png",
+      contentType: "image/png",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: "om_text_followup",
+        root_id: "om_topic_root",
+        thread_id: "omt_topic_img",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "what was in that image?" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // The image should have been downloaded via the resource API.
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_img_msg",
+        fileKey: "img_history_key_1",
+        type: "image",
+      }),
+    );
+    // ThreadHistoryBody should include the attachment hint with the saved path.
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ThreadHistoryBody: expect.stringContaining("/fake/.openclaw/media/inbound/thread-img.png"),
+      }),
+    );
+  });
+
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

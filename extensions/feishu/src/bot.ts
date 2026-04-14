@@ -956,16 +956,53 @@ export async function handleFeishuMessage(params: {
         const historyMessages = includeStarterInHistory
           ? relevantMessages
           : relevantMessages.slice(1);
-        const historyParts = historyMessages.map((msg) => {
+        const historyParts: string[] = [];
+        for (const msg of historyMessages) {
           const role = msg.senderType === "app" ? "assistant" : "user";
-          return core.channel.reply.formatAgentEnvelope({
-            channel: "Feishu",
-            from: `${msg.senderId ?? "Unknown"} (${role})`,
-            timestamp: msg.createTime,
-            body: msg.content,
-            envelope: envelopeOptions,
-          });
-        });
+          let msgBody = msg.content;
+
+          // Download and inline media for image/file/audio/video/sticker/post messages.
+          const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
+          if (mediaTypes.includes(msg.contentType)) {
+            try {
+              const mediaItems = await resolveFeishuMediaList({
+                cfg,
+                messageId: msg.messageId,
+                messageType: msg.contentType,
+                content: msg.rawContent ?? "",
+                maxBytes: mediaMaxBytes,
+                log,
+                accountId: account.accountId,
+              });
+              if (mediaItems.length > 0) {
+                const attachmentHints = mediaItems
+                  .map(
+                    (m) =>
+                      `[media attached: ${m.path} (${m.contentType ?? "application/octet-stream"}) | ${m.path}]`,
+                  )
+                  .join("\n");
+                msgBody = [msgBody, attachmentHints].filter(Boolean).join("\n");
+                log(
+                  `feishu[${account.accountId}]: downloaded ${mediaItems.length} media item(s) from thread history message ${msg.messageId}`,
+                );
+              }
+            } catch (err) {
+              log(
+                `feishu[${account.accountId}]: failed to download media for thread history message ${msg.messageId}: ${String(err)}`,
+              );
+            }
+          }
+
+          historyParts.push(
+            core.channel.reply.formatAgentEnvelope({
+              channel: "Feishu",
+              from: `${msg.senderId ?? "Unknown"} (${role})`,
+              timestamp: msg.createTime,
+              body: msgBody,
+              envelope: envelopeOptions,
+            }),
+          );
+        }
 
         threadContext.threadStarterBody = threadStarterBody;
         threadContext.threadHistoryBody =
