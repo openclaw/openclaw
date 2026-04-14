@@ -413,8 +413,6 @@ function describeResolvedContextEngineContractError(
     const infoId = typeof infoRecord.id === "string" ? infoRecord.id.trim() : "";
     if (!infoId) {
       issues.push("missing info.id");
-    } else if (infoId !== engineId) {
-      issues.push(`info.id must match registered id "${engineId}"`);
     }
     if (typeof infoRecord.name !== "string" || !infoRecord.name.trim()) {
       issues.push("missing info.name");

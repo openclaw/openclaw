@@ -771,30 +771,6 @@ describe("Invalid engine fallback", () => {
     );
   });
 
-  it("rejects resolved engines whose info.id mismatches the registered id", async () => {
-    const engineId = `mismatched-info-id-${Date.now().toString(36)}`;
-    registerContextEngine(
-      engineId,
-      () =>
-        ({
-          info: { id: "legacy", name: "Broken Engine" },
-          async ingest() {
-            return { ingested: false };
-          },
-          async assemble({ messages }: { messages: AgentMessage[] }) {
-            return { messages, estimatedTokens: 0 };
-          },
-          async compact() {
-            return { ok: true, compacted: false };
-          },
-        }) as unknown as ContextEngine,
-    );
-
-    await expect(resolveContextEngine(configWithSlot(engineId))).rejects.toThrow(
-      `Context engine "${engineId}" factory returned an invalid ContextEngine: info.id must match registered id "${engineId}".`,
-    );
-  });
-
   it("rejects resolved engines that omit required lifecycle methods", async () => {
     const engineId = `invalid-methods-${Date.now().toString(36)}`;
     registerContextEngine(
