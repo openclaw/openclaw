@@ -61,13 +61,13 @@ export async function resolveAcpTargetSessionKey(params: {
   const token = normalizeOptionalString(params.token) ?? "";
   if (token) {
     const resolved = await resolveSessionKeyByToken(token);
-    if (!resolved) {
-      return {
-        ok: false,
-        error: `Unable to resolve session target: ${token}`,
-      };
+    if (resolved) {
+      return { ok: true, sessionKey: resolved };
     }
-    return { ok: true, sessionKey: resolved };
+    // Token didn't resolve as a session key/id/label — fall through to
+    // thread-binding lookup instead of returning an error. This handles
+    // the case where Discord slash command auto-fills the current thread
+    // ID as a positional arg, which is not a session identifier (#66299).
   }
 
   const threadBound = resolveBoundAcpThreadSessionKey(params.commandParams);
