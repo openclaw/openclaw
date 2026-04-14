@@ -403,6 +403,11 @@ describe("buildOpenAIProvider", () => {
     const codexProvider = buildOpenAICodexProviderPlugin();
 
     expect(provider.wrapStreamFn).toBe(codexProvider.wrapStreamFn);
+    expect(provider.buildReplayPolicy).toBe(codexProvider.buildReplayPolicy);
+    expect(provider.resolveTransportTurnState).toBe(codexProvider.resolveTransportTurnState);
+    expect(provider.resolveWebSocketSessionPolicy).toBe(
+      codexProvider.resolveWebSocketSessionPolicy,
+    );
   });
 
   it("owns Azure OpenAI reasoning compatibility without forcing OpenAI transport defaults", () => {

@@ -3,9 +3,15 @@ import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared
 import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
+  type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { buildOpenAIReplayPolicy } from "./replay-policy.js";
+import {
+  resolveOpenAITransportTurnState,
+  resolveOpenAIWebSocketSessionPolicy,
+} from "./transport-policy.js";
 
 type SyntheticOpenAIModelCatalogCost = {
   input: number;
@@ -75,6 +81,35 @@ export function defaultOpenAIResponsesExtraParams(
     ...extraParams,
     ...(hasSupportedTransport ? {} : { transport: "auto" }),
     ...(shouldDefaultWarmup && !hasExplicitWarmup ? { openaiWsWarmup: true } : {}),
+  };
+}
+
+type OpenAIResponsesProviderHooks = Pick<
+  ProviderPlugin,
+  | "buildReplayPolicy"
+  | "prepareExtraParams"
+  | "wrapStreamFn"
+  | "resolveTransportTurnState"
+  | "resolveWebSocketSessionPolicy"
+>;
+
+const resolveOpenAIResponsesTransportTurnState: NonNullable<
+  OpenAIResponsesProviderHooks["resolveTransportTurnState"]
+> = (ctx) => resolveOpenAITransportTurnState(ctx);
+
+const resolveOpenAIResponsesWebSocketSessionPolicy: NonNullable<
+  OpenAIResponsesProviderHooks["resolveWebSocketSessionPolicy"]
+> = (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx);
+
+export function buildOpenAIResponsesProviderHooks(options?: {
+  openaiWsWarmup?: boolean;
+}): OpenAIResponsesProviderHooks {
+  return {
+    buildReplayPolicy: buildOpenAIReplayPolicy,
+    prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
+    ...OPENAI_RESPONSES_STREAM_HOOKS,
+    resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
+    resolveWebSocketSessionPolicy: resolveOpenAIResponsesWebSocketSessionPolicy,
   };
 }
 

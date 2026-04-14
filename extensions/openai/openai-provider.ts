@@ -11,20 +11,14 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
-import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
+  buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
   cloneFirstTemplateModel,
-  defaultOpenAIResponsesExtraParams,
   findCatalogTemplate,
   isOpenAIApiBaseUrl,
   matchesExactOrPrefix,
-  OPENAI_RESPONSES_STREAM_HOOKS,
 } from "./shared.js";
-import {
-  resolveOpenAITransportTurnState,
-  resolveOpenAIWebSocketSessionPolicy,
-} from "./transport-policy.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
@@ -220,14 +214,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
       shouldUseOpenAIResponsesTransport({ provider, api, baseUrl })
         ? { api: "openai-responses", baseUrl }
         : undefined,
-    buildReplayPolicy: buildOpenAIReplayPolicy,
-    prepareExtraParams: (ctx) =>
-      defaultOpenAIResponsesExtraParams(ctx.extraParams, { openaiWsWarmup: true }),
-    ...OPENAI_RESPONSES_STREAM_HOOKS,
+    ...buildOpenAIResponsesProviderHooks({ openaiWsWarmup: true }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
-    resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
-    resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
     resolveReasoningOutputMode: () => "native",
     supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
