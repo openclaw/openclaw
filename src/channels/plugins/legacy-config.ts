@@ -82,8 +82,9 @@ export function collectChannelLegacyConfigRules(
   const rules: LegacyConfigRule[] = [];
   const unresolvedChannelIds: ChannelId[] = [];
   for (const channelId of channelIds) {
-    const contractRules = loadBundledChannelDoctorContractApi(channelId)?.legacyConfigRules;
-    if (Array.isArray(contractRules) && contractRules.length > 0) {
+    const contractApi = loadBundledChannelDoctorContractApi(channelId);
+    const contractRules = contractApi?.legacyConfigRules;
+    if (Array.isArray(contractRules)) {
       rules.push(...contractRules);
       continue;
     }
@@ -91,6 +92,9 @@ export function collectChannelLegacyConfigRules(
     const plugin = getBootstrapChannelPlugin(channelId);
     if (plugin?.doctor?.legacyConfigRules?.length) {
       rules.push(...plugin.doctor.legacyConfigRules);
+      continue;
+    }
+    if (plugin) {
       continue;
     }
 
