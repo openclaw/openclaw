@@ -43,7 +43,8 @@ TIMEOUT_INSTALL_S=1200
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
-TIMEOUT_GATEWAY_S=120
+# verify_gateway_reachable runs six 30s probes plus short retry sleeps.
+TIMEOUT_GATEWAY_S=240
 TIMEOUT_AGENT_S=180
 
 FRESH_MAIN_STATUS="skip"
@@ -1900,7 +1901,7 @@ try {
   Write-ProgressLog 'install.download-tgz'
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
   Write-ProgressLog 'install.install-tgz'
-  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
+  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --omit=dev --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Write-ProgressLog 'install.verify-version'
   Invoke-Logged 'openclaw --version' { & $openclaw --version }
