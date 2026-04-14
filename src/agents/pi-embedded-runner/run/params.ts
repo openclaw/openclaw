@@ -116,6 +116,10 @@ export type RunEmbeddedPiAgentParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   lane?: string;
+  /** Original requested provider before hook/fallback resolution. */
+  requestedProvider?: string;
+  /** Original requested model before hook/fallback resolution. */
+  requestedModel?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   internalEvents?: AgentInternalEvent[];

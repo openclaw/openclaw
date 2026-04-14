@@ -15,7 +15,15 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedPiAgentParams,
-  "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
+  | "provider"
+  | "model"
+  | "authProfileId"
+  | "authProfileIdSource"
+  | "thinkLevel"
+  | "lane"
+  | "enqueue"
+  | "requestedProvider"
+  | "requestedModel"
 >;
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
@@ -32,6 +40,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authProfileIdSource?: "auto" | "user";
   provider: string;
   modelId: string;
+  /** Original requested provider before hook/fallback resolution. */
+  requestedProvider?: string;
+  /** Original requested model before hook/fallback resolution. */
+  requestedModel?: string;
   model: Model<Api>;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;

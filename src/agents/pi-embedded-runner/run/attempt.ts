@@ -2380,8 +2380,8 @@ export async function runEmbeddedAttempt(
               route: {
                 requestedLane: inferRoutingLane({
                   agentId: hookAgentId,
-                  model: params.modelId,
-                  provider: params.provider,
+                  model: params.requestedModel ?? params.modelId,
+                  provider: params.requestedProvider ?? params.provider,
                 }),
                 selectedLane: inferRoutingLane({
                   agentId: hookAgentId,
@@ -2393,9 +2393,17 @@ export async function runEmbeddedAttempt(
                   model: params.modelId,
                   provider: params.provider,
                 }),
+                requestedModel:
+                  params.requestedProvider && params.requestedModel
+                    ? `${params.requestedProvider}/${params.requestedModel}`
+                    : undefined,
                 selectedModel: `${params.provider}/${params.modelId}`,
                 actualModel: `${params.provider}/${params.modelId}`,
-                routeReason: "primary",
+                routeReason:
+                  (params.requestedProvider && params.requestedProvider !== params.provider) ||
+                  (params.requestedModel && params.requestedModel !== params.modelId)
+                    ? "failover"
+                    : "primary",
               },
             },
             {

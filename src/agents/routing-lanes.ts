@@ -137,17 +137,23 @@ export function buildRouteMetadata(params: {
 }): RouteMetadata {
   const requested = [params.requestedProvider, params.requestedModel].filter(Boolean).join("/");
   const selected = [params.selectedProvider, params.selectedModel].filter(Boolean).join("/");
-  const inferredLane = inferRoutingLane({
+  const requestedLane = inferRoutingLane({
+    agentId: params.agentId,
+    model: params.requestedModel,
+    provider: params.requestedProvider,
+  });
+  const selectedLane = inferRoutingLane({
     agentId: params.agentId,
     model: params.selectedModel,
     provider: params.selectedProvider,
   });
 
   return {
-    requestedLane: inferredLane,
-    selectedLane: inferredLane,
-    actualLane: inferredLane,
-    routeReason: params.routeReason ?? (requested !== selected ? "failover" : "primary"),
+    requestedLane,
+    selectedLane,
+    actualLane: selectedLane,
+    routeReason:
+      params.routeReason ?? (requested !== selected && requested && selected ? "failover" : "primary"),
     requestedModel: requested || undefined,
     selectedModel: selected || undefined,
     actualModel: selected || undefined,
