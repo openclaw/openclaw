@@ -42,7 +42,7 @@ describe("xai provider plugin", () => {
     let capturedModelId = "";
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn: StreamFn = (model, _context, options) => {
-      capturedModelId = String(model.id);
+      capturedModelId = model.id;
       const payload: Record<string, unknown> = {
         reasoning: { effort: "high" },
         tools: [
@@ -87,5 +87,29 @@ describe("xai provider plugin", () => {
     expect(
       (capturedPayload?.tools as Array<{ function?: Record<string, unknown> }>)[0]?.function,
     ).not.toHaveProperty("strict");
+  });
+
+  it("defaults tool_stream extra params but preserves explicit values", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "xai",
+        modelId: "grok-4",
+        extraParams: { fastMode: true },
+      } as never),
+    ).toEqual({
+      fastMode: true,
+      tool_stream: true,
+    });
+
+    const explicit = { fastMode: true, tool_stream: false };
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "xai",
+        modelId: "grok-4",
+        extraParams: explicit,
+      } as never),
+    ).toBe(explicit);
   });
 });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractCliErrorMessage, parseCliJson, parseCliJsonl } from "./cli-output.js";
+import {
+  createCliJsonlStreamingParser,
+  extractCliErrorMessage,
+  parseCliJson,
+  parseCliJsonl,
+} from "./cli-output.js";
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -118,6 +123,39 @@ describe("parseCliJson", () => {
       },
     });
   });
+
+  it("parses nested OpenAI-style cached token details from CLI json payloads", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "openai-session-123",
+        response: "OpenAI says hello",
+        usage: {
+          input_tokens: 15,
+          output_tokens: 4,
+          input_tokens_details: {
+            cached_tokens: 6,
+          },
+        },
+      }),
+      {
+        command: "codex",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "OpenAI says hello",
+      sessionId: "openai-session-123",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
 });
 
 describe("parseCliJsonl", () => {
@@ -154,6 +192,33 @@ describe("parseCliJsonl", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("parses Claude stream-json result events for an explicit backend dialect", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-dialect" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-dialect",
+          result: "dialect says hello",
+          usage: { input_tokens: 5, output_tokens: 2 },
+        }),
+      ].join("\n"),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result).toMatchObject({
+      text: "dialect says hello",
+      sessionId: "session-dialect",
+      usage: { input: 5, output: 2 },
     });
   });
 
@@ -282,5 +347,39 @@ describe("parseCliJsonl", () => {
     );
 
     expect(result).toBe(message);
+  });
+});
+
+describe("createCliJsonlStreamingParser", () => {
+  it("streams Claude stream-json deltas for an explicit backend dialect", () => {
+    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "hello" },
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
+    ]);
   });
 });

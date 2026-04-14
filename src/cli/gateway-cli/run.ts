@@ -14,6 +14,7 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { defaultGatewayBindMode, isContainerEnvironment } from "../../gateway/net.js";
@@ -97,6 +98,13 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 
+/**
+ * EX_CONFIG (78) from sysexits.h — used for configuration errors so systemd
+ * (via RestartPreventExitStatus=78) stops restarting instead of entering a
+ * restart storm that can render low-resource hosts unresponsive.
+ */
+const EXIT_CONFIG_ERROR = 78;
+
 const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "none",
   "token",
@@ -151,7 +159,7 @@ function formatModeErrorList<T extends string>(modes: readonly T[]): string {
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
 }
 
-function maybeLogPendingControlUiBuild(cfg: ReturnType<typeof loadConfig>): void {
+function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): void {
   if (cfg.gateway?.controlUi?.enabled === false) {
     return;
   }
@@ -429,7 +437,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     for (const error of guardErrors) {
       defaultRuntime.error(error);
     }
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
@@ -487,7 +495,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         .filter(Boolean)
         .join("\n"),
     );
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   if (resolvedAuthMode === "none") {
@@ -517,7 +525,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         .filter(Boolean)
         .join("\n"),
     );
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   const tailscaleOverride =

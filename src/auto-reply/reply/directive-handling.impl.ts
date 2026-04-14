@@ -5,7 +5,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
@@ -56,6 +56,12 @@ export async function handleDirectiveOnly(
     currentReasoningLevel,
     currentElevatedLevel,
   } = params;
+  const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
+  if (directives.hasTraceDirective && !params.senderIsOwner && !delegatedTraceAllowed) {
+    return {
+      text: "❌ /trace is restricted to owners and gateway clients with operator.admin scope.",
+    };
+  }
   const activeAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: params.cfg,
@@ -150,6 +156,17 @@ export async function handleDirectiveOnly(
     }
     return {
       text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`,
+    };
+  }
+  if (directives.hasTraceDirective && !directives.traceLevel) {
+    if (!directives.rawTraceLevel) {
+      const level = (sessionEntry.traceLevel as "on" | "off" | "raw" | undefined) ?? "off";
+      return {
+        text: withOptions(`Current trace level: ${level}.`, "on, off, raw"),
+      };
+    }
+    return {
+      text: `Unrecognized trace level "${directives.rawTraceLevel}". Valid levels: off, on, raw.`,
     };
   }
   if (directives.hasFastDirective && directives.fastMode === undefined) {
@@ -303,6 +320,7 @@ export async function handleDirectiveOnly(
     (directives.hasVerboseDirective &&
       Boolean(directives.verboseLevel) &&
       allowInternalVerbosePersistence) ||
+    (directives.hasTraceDirective && Boolean(directives.traceLevel)) ||
     (directives.hasReasoningDirective && Boolean(directives.reasoningLevel)) ||
     (directives.hasElevatedDirective && Boolean(directives.elevatedLevel)) ||
     (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) ||
@@ -331,6 +349,9 @@ export async function handleDirectiveOnly(
       allowInternalVerbosePersistence
     ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
+    }
+    if (directives.hasTraceDirective && directives.traceLevel) {
+      applyTraceOverride(sessionEntry, directives.traceLevel);
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {
       if (directives.reasoningLevel === "off") {
@@ -453,6 +474,19 @@ export async function handleDirectiveOnly(
           : directives.verboseLevel === "full"
             ? formatDirectiveAck("Verbose logging set to full.")
             : formatDirectiveAck("Verbose logging enabled."),
+    );
+  }
+  if (directives.hasTraceDirective && directives.traceLevel) {
+    parts.push(
+      directives.traceLevel === "off"
+        ? formatDirectiveAck("Trace disabled.")
+        : directives.traceLevel === "raw"
+          ? formatDirectiveAck(
+              "Trace set to raw. Warning: trace output may contain sensitive information.",
+            )
+          : formatDirectiveAck(
+              "Trace enabled. Warning: trace output may contain sensitive information.",
+            ),
     );
   }
   if (

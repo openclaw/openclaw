@@ -1,4 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildCommandsMessage as buildCommandsMessageCompat,
+  buildCommandsMessagePaginated as buildCommandsMessagePaginatedCompat,
+  buildHelpMessage as buildHelpMessageCompat,
+} from "../auto-reply/command-status-builders.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
 export { buildCommandsPaginationKeyboard } from "./telegram-command-ui.js";
 export {
@@ -71,6 +76,10 @@ export {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
+export {
+  getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
+} from "../plugins/command-registration.js";
 export type { SkillCommandSpec } from "../agents/skills.js";
 export {
   buildModelsProviderData,
@@ -78,13 +87,8 @@ export {
   resolveModelsCommandReply,
 } from "../auto-reply/reply/commands-models.js";
 export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
-export { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
-export type { StoredModelOverride } from "../auto-reply/reply/model-selection.js";
-export {
-  buildCommandsMessage,
-  buildCommandsMessagePaginated,
-  buildHelpMessage,
-} from "../auto-reply/status.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
+export type { StoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;
@@ -199,4 +203,25 @@ export async function resolveSenderCommandAuthorization(
     senderAllowedForCommands,
     commandAuthorized,
   };
+}
+
+/** @deprecated Use `openclaw/plugin-sdk/command-status` instead. */
+export function buildCommandsMessage(
+  ...args: Parameters<typeof buildCommandsMessageCompat>
+): ReturnType<typeof buildCommandsMessageCompat> {
+  return buildCommandsMessageCompat(...args);
+}
+
+/** @deprecated Use `openclaw/plugin-sdk/command-status` instead. */
+export function buildCommandsMessagePaginated(
+  ...args: Parameters<typeof buildCommandsMessagePaginatedCompat>
+): ReturnType<typeof buildCommandsMessagePaginatedCompat> {
+  return buildCommandsMessagePaginatedCompat(...args);
+}
+
+/** @deprecated Use `openclaw/plugin-sdk/command-status` instead. */
+export function buildHelpMessage(
+  ...args: Parameters<typeof buildHelpMessageCompat>
+): ReturnType<typeof buildHelpMessageCompat> {
+  return buildHelpMessageCompat(...args);
 }

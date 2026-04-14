@@ -17,8 +17,10 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
+  DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
+  resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
 
@@ -399,7 +401,8 @@ describe("isModernModelRef", () => {
       provider === "openai" &&
       ["gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"].includes(context.modelId)
         ? true
-        : provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-mini"].includes(context.modelId)
+        : provider === "openai-codex" &&
+            ["gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"].includes(context.modelId)
           ? true
           : provider === "opencode" && ["claude-opus-4-6", "gemini-3-pro"].includes(context.modelId)
             ? true
@@ -413,6 +416,7 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-nano" })).toBe(true);
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
@@ -501,5 +505,29 @@ describe("selectHighSignalLiveItems", () => {
       { provider: "google", id: "gemini-3-flash-preview" },
       { provider: "openai", id: "gpt-5.2" },
     ]);
+  });
+});
+
+describe("resolveHighSignalLiveModelLimit", () => {
+  it("defaults modern live sweeps to the curated high-signal cap", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: false,
+      }),
+    ).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("leaves explicit model lists uncapped unless a cap is provided", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: true,
+      }),
+    ).toBe(0);
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "3",
+        useExplicitModels: true,
+      }),
+    ).toBe(3);
   });
 });

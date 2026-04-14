@@ -122,8 +122,12 @@ describe("discoverAuthStorage", () => {
   });
 
   it("includes env-backed provider auth when no auth profile exists", async () => {
-    const previous = process.env.MISTRAL_API_KEY;
+    const previousMistral = process.env.MISTRAL_API_KEY;
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     process.env.MISTRAL_API_KEY = "mistral-env-test-key";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     try {
       const credentials = addEnvBackedPiCredentials({}, process.env);
 
@@ -132,10 +136,20 @@ describe("discoverAuthStorage", () => {
         key: "mistral-env-test-key",
       });
     } finally {
-      if (previous === undefined) {
+      if (previousMistral === undefined) {
         delete process.env.MISTRAL_API_KEY;
       } else {
-        process.env.MISTRAL_API_KEY = previous;
+        process.env.MISTRAL_API_KEY = previousMistral;
+      }
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      if (previousDisableBundledPlugins === undefined) {
+        delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+      } else {
+        process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
       }
     }
   });

@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -28,7 +30,7 @@ import {
   writeTrustedProxyControlUiConfig,
 } from "./server.auth.shared.js";
 
-let controlUiIdentityPathSeq = 0;
+const operatorIdentityPathByPrefix = new Map<string, string>();
 
 export function registerControlUiAndPairingSuite(): void {
   const trustedProxyControlUiCases: Array<{
@@ -117,12 +119,13 @@ export function registerControlUiAndPairingSuite(): void {
   };
 
   const createOperatorIdentityFixture = async (identityPrefix: string) => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-    const identityDir = await mkdtemp(join(tmpdir(), identityPrefix));
-    const identityPath = join(identityDir, "device.json");
+    let identityPath = operatorIdentityPathByPrefix.get(identityPrefix);
+    if (!identityPath) {
+      const poolId = process.env.VITEST_POOL_ID ?? "0";
+      identityPath = path.join(os.tmpdir(), `${identityPrefix}${process.pid}-${poolId}.json`);
+      operatorIdentityPathByPrefix.set(identityPrefix, identityPath);
+    }
     const identity = loadOrCreateDeviceIdentity(identityPath);
     return {
       identityPath,
@@ -211,49 +214,50 @@ export function registerControlUiAndPairingSuite(): void {
     return { identityPath, identity: { deviceId: identity.deviceId } };
   };
 
-  for (const tc of trustedProxyControlUiCases) {
-    test(tc.name, async () => {
-      await configureTrustedProxyControlUiAuth();
-      await withControlUiGatewayServer(async ({ port }) => {
+  test("rejects untrusted trusted-proxy control ui device identity states", async () => {
+    await configureTrustedProxyControlUiAuth();
+    await withControlUiGatewayServer(async ({ port }) => {
+      for (const tc of trustedProxyControlUiCases) {
         const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
-        const scopes = tc.withUnpairedNodeDevice ? [] : undefined;
-        let device: Awaited<ReturnType<typeof createSignedDevice>>["device"] | null = null;
-        if (tc.withUnpairedNodeDevice) {
-          const challengeNonce = await readConnectChallengeNonce(ws);
-          expect(challengeNonce).toBeTruthy();
-          ({ device } = await createSignedDevice({
-            token: null,
-            role: "node",
-            scopes: [],
-            clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-            clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            nonce: String(challengeNonce),
-          }));
-        }
-        const res = await connectReq(ws, {
-          skipDefaultAuth: true,
-          role: tc.role,
-          scopes,
-          device,
-          client: { ...CONTROL_UI_CLIENT },
-        });
-        expect(res.ok).toBe(tc.expectedOk);
-        if (!tc.expectedOk) {
-          if (tc.expectedErrorSubstring) {
-            expect(res.error?.message ?? "").toContain(tc.expectedErrorSubstring);
+        try {
+          const scopes = tc.withUnpairedNodeDevice ? [] : undefined;
+          let device: Awaited<ReturnType<typeof createSignedDevice>>["device"] | null = null;
+          if (tc.withUnpairedNodeDevice) {
+            const challengeNonce = await readConnectChallengeNonce(ws);
+            expect(challengeNonce, tc.name).toBeTruthy();
+            ({ device } = await createSignedDevice({
+              token: null,
+              role: "node",
+              scopes: [],
+              clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              nonce: challengeNonce,
+            }));
           }
-          if (tc.expectedErrorCode) {
-            expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-              tc.expectedErrorCode,
-            );
+          const res = await connectReq(ws, {
+            skipDefaultAuth: true,
+            role: tc.role,
+            scopes,
+            device,
+            client: { ...CONTROL_UI_CLIENT },
+          });
+          expect(res.ok, tc.name).toBe(tc.expectedOk);
+          if (!tc.expectedOk) {
+            if (tc.expectedErrorSubstring) {
+              expect(res.error?.message ?? "", tc.name).toContain(tc.expectedErrorSubstring);
+            }
+            if (tc.expectedErrorCode) {
+              expect((res.error?.details as { code?: string } | undefined)?.code, tc.name).toBe(
+                tc.expectedErrorCode,
+              );
+            }
           }
+        } finally {
           ws.close();
-          return;
         }
-        ws.close();
-      });
+      }
     });
-  }
+  });
 
   test("rejects trusted-proxy control ui without device identity even with self-declared scopes", async () => {
     await configureTrustedProxyControlUiAuth();
@@ -346,17 +350,15 @@ export function registerControlUiAndPairingSuite(): void {
             "x-forwarded-for": "203.0.113.10",
           },
         });
-        const challengePromise = onceMessage<{
-          type?: string;
-          event?: string;
-          payload?: Record<string, unknown> | null;
-        }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+        const challengePromise = onceMessage(
+          ws,
+          (o) => o.type === "event" && o.event === "connect.challenge",
+        );
         await new Promise<void>((resolve) => ws.once("open", resolve));
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
         expect(typeof nonce).toBe("string");
-        const os = await import("node:os");
-        const path = await import("node:path");
+        const { identityPath } = await createOperatorIdentityFixture("openclaw-controlui-device-");
         const scopes = [
           "operator.admin",
           "operator.read",
@@ -369,10 +371,7 @@ export function registerControlUiAndPairingSuite(): void {
           scopes,
           clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
-          identityPath: path.join(
-            os.tmpdir(),
-            `openclaw-controlui-device-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${controlUiIdentityPathSeq++}.json`,
-          ),
+          identityPath,
           nonce: String(nonce),
         });
         const res = await connectReq(ws, {
@@ -395,25 +394,25 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
-  test("allows control ui with stale device identity when device auth is disabled", async () => {
+  test("allows control ui auth bypasses when device auth is disabled", async () => {
     testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
     testState.gatewayAuth = { mode: "token", token: "secret" };
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
     try {
       await withControlUiGatewayServer(async ({ port }) => {
-        const ws = await openWs(port, { origin: originForPort(port) });
-        const challengeNonce = await readConnectChallengeNonce(ws);
-        expect(challengeNonce).toBeTruthy();
+        const staleDeviceWs = await openWs(port, { origin: originForPort(port) });
+        const challengeNonce = await readConnectChallengeNonce(staleDeviceWs);
+        expect(challengeNonce, "stale device challenge").toBeTruthy();
         const { device } = await createSignedDevice({
           token: "secret",
           scopes: [],
           clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
           signedAtMs: Date.now() - 60 * 60 * 1000,
-          nonce: String(challengeNonce),
+          nonce: challengeNonce,
         });
-        const res = await connectReq(ws, {
+        const res = await connectReq(staleDeviceWs, {
           token: "secret",
           scopes: ["operator.read"],
           device,
@@ -423,38 +422,26 @@ export function registerControlUiAndPairingSuite(): void {
         });
         expect(res.ok).toBe(true);
         expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
-        const health = await rpcReq(ws, "health");
+        const health = await rpcReq(staleDeviceWs, "health");
         expect(health.ok).toBe(true);
-        ws.close();
-      });
-    } finally {
-      restoreGatewayToken(prevToken);
-    }
-  });
+        staleDeviceWs.close();
 
-  test("preserves requested control ui scopes when dangerouslyDisableDeviceAuth bypasses device identity", async () => {
-    testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-    try {
-      await withControlUiGatewayServer(async ({ port }) => {
-        const ws = await openWs(port, { origin: originForPort(port) });
-        const res = await connectReq(ws, {
+        const scopedWs = await openWs(port, { origin: originForPort(port) });
+        const scopedRes = await connectReq(scopedWs, {
           token: "secret",
           scopes: ["operator.read"],
           client: {
             ...CONTROL_UI_CLIENT,
           },
         });
-        expect(res.ok).toBe(true);
+        expect(scopedRes.ok, "requested scope bypass").toBe(true);
 
-        const health = await rpcReq(ws, "health");
-        expect(health.ok).toBe(true);
+        const scopedHealth = await rpcReq(scopedWs, "health");
+        expect(scopedHealth.ok).toBe(true);
 
-        const talk = await rpcReq(ws, "chat.history", { sessionKey: "main", limit: 1 });
+        const talk = await rpcReq(scopedWs, "chat.history", { sessionKey: "main", limit: 1 });
         expect(talk.ok).toBe(true);
-        ws.close();
+        scopedWs.close();
       });
     } finally {
       restoreGatewayToken(prevToken);
@@ -1074,11 +1061,10 @@ export function registerControlUiAndPairingSuite(): void {
       const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "gateway.example" },
       });
-      const challengePromise = onceMessage<{
-        type?: string;
-        event?: string;
-        payload?: Record<string, unknown> | null;
-      }>(socket, (o) => o.type === "event" && o.event === "connect.challenge");
+      const challengePromise = onceMessage(
+        socket,
+        (o) => o.type === "event" && o.event === "connect.challenge",
+      );
       await new Promise<void>((resolve) => socket.once("open", resolve));
       const challenge = await challengePromise;
       const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
@@ -1222,8 +1208,9 @@ export function registerControlUiAndPairingSuite(): void {
       expect(reconnect.ok).toBe(true);
 
       const repaired = await getPairedDevice(deviceId);
-      expect(repaired?.roles ?? []).toContain("operator");
-      expect(repaired?.scopes ?? []).toContain("operator.read");
+      expect(repaired?.role).toBe("operator");
+      expect(repaired?.approvedScopes ?? []).toContain("operator.read");
+      expect(repaired?.tokens?.operator?.scopes ?? []).toContain("operator.read");
       const list = await listDevicePairing();
       expect(list.pending.filter((entry) => entry.deviceId === deviceId)).toEqual([]);
     } finally {

@@ -32,7 +32,7 @@ function createTestXaiFastModeWrapper(
       )(model, context, options);
     }
 
-    const fastModelId = XAI_FAST_MODEL_IDS.get(String(model.id).trim());
+    const fastModelId = XAI_FAST_MODEL_IDS.get(model.id.trim());
     return (
       baseStreamFn ??
       (() => {
@@ -140,7 +140,7 @@ import {
 } from "./pi-embedded-runner/openai-stream-wrappers.js";
 
 type WrapProviderStreamFnParams = Parameters<
-  typeof import("../plugins/provider-runtime.js").wrapProviderStreamFn
+  typeof import("../plugins/provider-hook-runtime.js").wrapProviderStreamFn
 >[0];
 
 function createTestOpenAIProviderWrapper(
@@ -334,7 +334,7 @@ describe("applyExtraParamsToAgent", () => {
   }): string {
     let resolvedModelId = params.model.id;
     const baseStreamFn: StreamFn = (model) => {
-      resolvedModelId = String(model.id ?? "");
+      resolvedModelId = model.id;
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };

@@ -149,6 +149,7 @@ explicitly promotes one as public.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
+    | `plugin-sdk/command-status` | Command/help message builders such as `buildCommandsMessagePaginated` and `buildHelpMessage` |
     | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
     | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
@@ -218,6 +219,7 @@ explicitly promotes one as public.
     | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers |
     | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
+    | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, and attempt result utilities |
     | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
@@ -301,20 +303,21 @@ methods:
 
 ### Capability registration
 
-| Method                                           | What it registers                |
-| ------------------------------------------------ | -------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)             |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend      |
-| `api.registerChannel(...)`                       | Messaging channel                |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis   |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
-| `api.registerImageGenerationProvider(...)`       | Image generation                 |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                 |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                 |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider      |
-| `api.registerWebSearchProvider(...)`             | Web search                       |
+| Method                                           | What it registers                     |
+| ------------------------------------------------ | ------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                  |
+| `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend           |
+| `api.registerChannel(...)`                       | Messaging channel                     |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis            |
+| `api.registerImageGenerationProvider(...)`       | Image generation                      |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                      |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                      |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
+| `api.registerWebSearchProvider(...)`             | Web search                            |
 
 ### Tools and commands
 

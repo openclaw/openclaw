@@ -5,6 +5,7 @@ export type {
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 export {
+  dedupeDreamDiaryEntries,
   removeBackfillDiaryEntries,
   writeBackfillDiaryEntries,
 } from "./src/dreaming-narrative.js";

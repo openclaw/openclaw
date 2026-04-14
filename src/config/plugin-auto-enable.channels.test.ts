@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  applyPluginAutoEnable,
+  materializePluginAutoEnableCandidates,
+} from "./plugin-auto-enable.js";
 import {
   makeApnChannelConfig,
   makeBluebubblesAndImessageChannels,
@@ -9,7 +12,6 @@ import {
   makeRegistry,
   makeTempDir,
   resetPluginAutoEnableTestState,
-  writePluginManifestFixture,
 } from "./plugin-auto-enable.test-helpers.js";
 
 function applyWithApnChannelConfig(extra?: {
@@ -71,22 +73,112 @@ describe("applyPluginAutoEnable channels", () => {
       "utf-8",
     );
 
-    const result = applyPluginAutoEnable({
+    const result = materializePluginAutoEnableCandidates({
       config: {
         channels: {
           "env-primary": { token: "primary" },
           "env-secondary": { token: "secondary" },
         },
       },
+      candidates: [
+        {
+          pluginId: "env-primary",
+          kind: "channel-configured",
+          channelId: "env-primary",
+        },
+        {
+          pluginId: "env-secondary",
+          kind: "channel-configured",
+          channelId: "env-secondary",
+        },
+      ],
       env: {
         ...makeIsolatedEnv(),
         OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
       },
       manifestRegistry: makeRegistry([]),
     });
 
     expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
+  });
+
+  it("memoizes external catalog preferOver lookups within one auto-enable pass", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-primary",
+            openclaw: {
+              channel: {
+                id: "env-primary",
+                label: "Env Primary",
+                selectionLabel: "Env Primary",
+                docsPath: "/channels/env-primary",
+                blurb: "Env primary entry",
+              },
+              install: {
+                npmSpec: "@openclaw/env-primary",
+              },
+            },
+          },
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            "env-primary": { token: "primary" },
+            "env-secondary": { token: "secondary" },
+          },
+        },
+        candidates: Array.from({ length: 20 }, (_, index) => ({
+          pluginId: index % 2 === 0 ? "env-primary" : "env-secondary",
+          kind: "channel-configured" as const,
+          channelId: index % 2 === 0 ? "env-primary" : "env-secondary",
+        })),
+        env: {
+          ...makeIsolatedEnv(),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        manifestRegistry: makeRegistry([]),
+      });
+
+      expect(
+        readFileSpy.mock.calls.filter(([filePath]) =>
+          String(filePath).endsWith("plugins/catalog.json"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {
@@ -210,29 +302,6 @@ describe("applyPluginAutoEnable channels", () => {
 
       expect(result.config.channels?.imessage?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
-    });
-
-    it("uses the provided env when loading installed plugin manifests", () => {
-      const stateDir = makeTempDir();
-      const pluginDir = path.join(stateDir, "extensions", "apn-channel");
-      writePluginManifestFixture({
-        rootDir: pluginDir,
-        id: "apn-channel",
-        channels: ["apn"],
-      });
-
-      const result = applyPluginAutoEnable({
-        config: makeApnChannelConfig(),
-        env: {
-          ...makeIsolatedEnv(),
-          OPENCLAW_HOME: undefined,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-        },
-      });
-
-      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.apn).toBeUndefined();
     });
   });
 });

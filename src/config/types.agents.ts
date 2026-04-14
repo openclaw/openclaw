@@ -1,6 +1,10 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
-import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
+import type { AgentDefaultsConfig, EmbeddedPiExecutionContract } from "./types.agent-defaults.js";
+import type {
+  AgentEmbeddedHarnessConfig,
+  AgentModelConfig,
+  AgentSandboxConfig,
+} from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
@@ -66,6 +70,8 @@ export type AgentConfig = {
   agentDir?: string;
   /** Optional per-agent full system prompt replacement. */
   systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];
+  /** Optional per-agent embedded harness policy override. */
+  embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
@@ -91,6 +97,11 @@ export type AgentConfig = {
     model?: AgentModelConfig;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
+  };
+  /** Optional per-agent embedded Pi overrides. */
+  embeddedPi?: {
+    /** Optional per-agent execution contract override. */
+    executionContract?: EmbeddedPiExecutionContract;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

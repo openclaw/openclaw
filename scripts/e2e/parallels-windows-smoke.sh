@@ -43,7 +43,8 @@ TIMEOUT_INSTALL_S=1200
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
-TIMEOUT_GATEWAY_S=120
+# verify_gateway_reachable runs six 30s probes plus short retry sleeps.
+TIMEOUT_GATEWAY_S=240
 TIMEOUT_AGENT_S=180
 
 FRESH_MAIN_STATUS="skip"
@@ -779,11 +780,11 @@ resolve_latest_version() {
 }
 
 baseline_install_version() {
-  if [[ -n "$INSTALL_VERSION" ]]; then
-    printf '%s\n' "$INSTALL_VERSION"
+  if [[ -z "$INSTALL_VERSION" ]]; then
+    printf '%s\n' "$LATEST_VERSION"
     return
   fi
-  printf '%s\n' "$LATEST_VERSION"
+  npm view "openclaw@$INSTALL_VERSION" version --userconfig "$(mktemp)"
 }
 
 resolve_mingit_download() {
@@ -1066,21 +1067,16 @@ function Invoke-Logged {
     [Parameter(Mandatory = $true)][scriptblock]$Command
   )
 
-  $output = $null
   $previousErrorActionPreference = $ErrorActionPreference
   $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    $output = & $Command *>&1
+    & $Command *>&1 | Tee-Object -FilePath $LogPath -Append | Out-Null
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
     $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
-  }
-
-  if ($null -ne $output) {
-    $output | Tee-Object -FilePath $LogPath -Append | Out-Null
   }
 
   if ($exitCode -ne 0) {
@@ -1389,7 +1385,7 @@ install_main_tgz() {
   local tgz_url script_url
   local runner_name log_name done_name done_status launcher_state guest_log
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
-  local log_state_path npm_log_state_path last_npm_log_poll
+  local log_state_path npm_log_state_path last_npm_log_poll last_process_check process_state
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
   write_install_runner_script
   script_url="http://$host_ip:$HOST_PORT/$(basename "$WINDOWS_INSTALL_SCRIPT_PATH")"
@@ -1404,6 +1400,7 @@ install_main_tgz() {
   poll_deadline=$((SECONDS + TIMEOUT_INSTALL_S + 60))
   startup_checked=0
   last_npm_log_poll=0
+  last_process_check=0
 
   guest_powershell_poll 20 "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -1512,6 +1509,26 @@ PY
       fi
       last_npm_log_poll=$SECONDS
     fi
+    if (( SECONDS - start_seconds >= 60 && SECONDS - last_process_check >= 30 )); then
+      set +e
+      process_state="$(
+        guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; \$currentPid = \$PID; \$process = Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -ne \$currentPid -and ((\$_.CommandLine -like '*$runner_name*') -or (\$_.CommandLine -like '*$temp_name*')) } | Select-Object -First 1; 'log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done) + ' process=' + [bool]\$process"
+      )"
+      state_rc=$?
+      set -e
+      process_state="${process_state//$'\r'/}"
+      last_process_check=$SECONDS
+      if [[ $state_rc -eq 0 && "$process_state" == *"log=True"* && "$process_state" == *"done=False"* && "$process_state" == *"process=False"* ]]; then
+        warn "windows install helper exited without writing done file"
+        if ! stream_windows_install_log; then
+          :
+        fi
+        dump_latest_guest_npm_log_tail "windows packaged install npm debug tail" || true
+        rm -f "$log_state_path"
+        rm -f "$npm_log_state_path"
+        return 1
+      fi
+    fi
     if (( SECONDS >= poll_deadline )); then
       if ! stream_windows_install_log; then
         warn "windows install helper log drain failed after timeout"
@@ -1581,9 +1598,11 @@ try {
   $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\deps') 'portable-git') ''
   $shortRoot = 'C:\ocu'
   $shortTemp = Join-Path $shortRoot 'tmp'
+  $shimBin = Join-Path $shortRoot 'shims'
   $bootstrapRoot = Join-Path $shortRoot 'bootstrap'
   $bootstrapBin = Join-Path $bootstrapRoot 'node_modules\.bin'
-  $env:PATH = "$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$env:PATH"
+  $previousNpmIgnoreScripts = [Environment]::GetEnvironmentVariable('npm_config_ignore_scripts', 'Process')
+  $env:PATH = "$shimBin;$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$env:PATH"
   $env:ComSpec = Join-Path $env:SystemRoot 'System32\cmd.exe'
   $env:npm_config_ignore_scripts = 'true'
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
@@ -1595,6 +1614,7 @@ try {
 
   Write-ProgressLog 'update.short-temp'
   New-Item -ItemType Directory -Path $shortTemp -Force | Out-Null
+  New-Item -ItemType Directory -Path $shimBin -Force | Out-Null
   New-Item -ItemType Directory -Path $bootstrapRoot -Force | Out-Null
   $env:TEMP = $shortTemp
   $env:TMP = $shortTemp
@@ -1622,6 +1642,38 @@ try {
   Write-ProgressLog 'update.bootstrap-toolchain'
   Invoke-Logged 'npm bootstrap node-gyp pnpm' {
     & npm install --prefix $bootstrapRoot --no-save node-gyp pnpm@10
+  }
+  $pnpmCli = Join-Path $bootstrapRoot 'node_modules\pnpm\bin\pnpm.cjs'
+  $pnpmCmdShim = Join-Path $shimBin 'pnpm.cmd'
+  $pnpmPsShim = Join-Path $shimBin 'pnpm.ps1'
+  @"
+@echo off
+set "NPM_CONFIG_SCRIPT_SHELL="
+set "npm_config_script_shell="
+node.exe "$pnpmCli" %*
+exit /b %ERRORLEVEL%
+"@ | Set-Content -Path $pnpmCmdShim -Encoding ASCII
+  @"
+Remove-Item Env:NPM_CONFIG_SCRIPT_SHELL -ErrorAction SilentlyContinue
+Remove-Item Env:npm_config_script_shell -ErrorAction SilentlyContinue
+& node.exe '$pnpmCli' @args
+exit `$LASTEXITCODE
+"@ | Set-Content -Path $pnpmPsShim -Encoding UTF8
+  Write-LoggedLine ("pnpm_shim=" + $pnpmCmdShim)
+  if ($null -eq $previousNpmIgnoreScripts) {
+    Remove-Item Env:npm_config_ignore_scripts -ErrorAction SilentlyContinue
+  } else {
+    $env:npm_config_ignore_scripts = $previousNpmIgnoreScripts
+  }
+  Write-LoggedLine 'npm_config_ignore_scripts=restored-after-bootstrap'
+
+  Write-ProgressLog 'update.where-pnpm-bootstrap'
+  $pnpmBootstrap = Get-Command pnpm -ErrorAction SilentlyContinue
+  if ($null -ne $pnpmBootstrap) {
+    Write-LoggedLine $pnpmBootstrap.Source
+    Invoke-Logged 'pnpm --version' { & pnpm --version }
+  } else {
+    throw 'pnpm missing after bootstrap'
   }
 
   Write-ProgressLog 'update.where-node-gyp-pre'
@@ -1849,7 +1901,7 @@ try {
   Write-ProgressLog 'install.download-tgz'
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
   Write-ProgressLog 'install.install-tgz'
-  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
+  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --omit=dev --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Write-ProgressLog 'install.verify-version'
   Invoke-Logged 'openclaw --version' { & $openclaw --version }
@@ -2038,7 +2090,10 @@ EOF
   pnpm_output="$(
     guest_powershell "$(cat <<'EOF'
 $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\deps') 'portable-git') ''
-$env:PATH = "$portableGit\cmd;$portableGit\mingw64\bin;$portableGit\usr\bin;$env:PATH"
+$shortRoot = 'C:\ocu'
+$shimBin = Join-Path $shortRoot 'shims'
+$bootstrapBin = Join-Path $shortRoot 'bootstrap\node_modules\.bin'
+$env:PATH = "$shimBin;$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$portableGit\usr\bin;$env:PATH"
 $pnpmCommand = Get-Command pnpm -ErrorAction SilentlyContinue
 if ($null -eq $pnpmCommand) {
   throw 'pnpm missing after dev update'
@@ -2191,14 +2246,21 @@ capture_latest_ref_failure() {
 run_fresh_main_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
+  local install_log_phase
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "fresh.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
   if ! phase_run "fresh.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
     phase_run "fresh.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
     phase_run "fresh.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
   fi
-  phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
-  FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
+  if phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"; then
+    install_log_phase="fresh.install-main"
+  else
+    phase_run "fresh.wait-for-user-install-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
+    phase_run "fresh.install-main-retry" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
+    install_log_phase="fresh.install-main-retry"
+  fi
+  FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path "$install_log_phase")")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
@@ -2211,7 +2273,6 @@ run_upgrade_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   local baseline_version
-  baseline_version="$(baseline_install_version)"
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "upgrade.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
   if ! phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
@@ -2223,7 +2284,8 @@ run_upgrade_lane() {
     LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline-package)")"
     phase_run "upgrade.verify-baseline-package-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   else
-    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_baseline_npm_release "$host_ip" "$baseline_version" || return $?
+    baseline_version="$(baseline_install_version)"
+    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_latest_release || return $?
     LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline)")"
     phase_run "upgrade.verify-baseline-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$baseline_version" || return $?
   fi
@@ -2244,7 +2306,8 @@ run_upgrade_lane() {
   # onboard health probe fail against a stale daemon.
   phase_run "upgrade.gateway-stop" "$TIMEOUT_GATEWAY_S" stop_gateway || return $?
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
-  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
+  phase_run "upgrade.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
+  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
   UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
   UPGRADE_AGENT_STATUS="pass"
