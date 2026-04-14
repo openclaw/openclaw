@@ -168,6 +168,8 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
         headers,
         timeoutMs: req.timeoutMs,
         fetchFn,
+        allowPrivateNetwork,
+        dispatcherPolicy,
         context: "KlingAI image generation",
       });
       const urls = listKlingImageUrls(completed);
@@ -180,6 +182,8 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
           url,
           timeoutMs: req.timeoutMs,
           fetchFn,
+          allowPrivateNetwork,
+          dispatcherPolicy,
           context: "KlingAI generated image",
         });
         images.push({

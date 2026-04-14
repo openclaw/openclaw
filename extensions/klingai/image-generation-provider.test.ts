@@ -5,7 +5,7 @@ const {
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
   postJsonRequestMock,
-  fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpErrorMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "kling-test-key" })),
@@ -16,7 +16,7 @@ const {
     dispatcherPolicy: undefined,
   })),
   postJsonRequestMock: vi.fn(),
-  fetchWithTimeoutMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
 }));
 
@@ -27,7 +27,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
   postJsonRequest: postJsonRequestMock,
-  fetchWithTimeout: fetchWithTimeoutMock,
+  fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
 }));
 
@@ -43,22 +43,29 @@ describe("klingai image generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        json: async () => ({
-          code: 0,
-          data: {
-            task_status: "succeed",
-            task_result: {
-              images: [{ url: "https://cdn.kling.ai/output/image-1.png" }],
+        response: {
+          json: async () => ({
+            code: 0,
+            data: {
+              task_status: "succeed",
+              task_result: {
+                images: [{ url: "https://cdn.kling.ai/output/image-1.png" }],
+              },
             },
-          },
-        }),
-        headers: new Headers({ "content-type": "application/json" }),
-      })
+          }),
+          headers: new Headers({ "content-type": "application/json" }),
+        },
+        release: vi.fn(async () => {}),
+      });
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("png-bytes"),
-        headers: new Headers({ "content-type": "image/png" }),
+        response: {
+          arrayBuffer: async () => Buffer.from("png-bytes"),
+          headers: new Headers({ "content-type": "image/png" }),
+        },
+        release: vi.fn(async () => {}),
       });
 
     const provider = buildKlingaiImageGenerationProvider();
@@ -86,7 +93,7 @@ describe("klingai image generation provider", () => {
         },
       }),
     );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
       1,
       "https://api-singapore.klingai.com/v1/images/generations/task-img-1",
       expect.objectContaining({
@@ -94,6 +101,7 @@ describe("klingai image generation provider", () => {
       }),
       30000,
       fetch,
+      {},
     );
     expect(result).toEqual({
       images: [
@@ -118,22 +126,29 @@ describe("klingai image generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        json: async () => ({
-          code: 0,
-          data: {
-            task_status: "succeed",
-            task_result: {
-              images: [{ url: "https://cdn.kling.ai/output/image-omni-1.png" }],
+        response: {
+          json: async () => ({
+            code: 0,
+            data: {
+              task_status: "succeed",
+              task_result: {
+                images: [{ url: "https://cdn.kling.ai/output/image-omni-1.png" }],
+              },
             },
-          },
-        }),
-        headers: new Headers({ "content-type": "application/json" }),
-      })
+          }),
+          headers: new Headers({ "content-type": "application/json" }),
+        },
+        release: vi.fn(async () => {}),
+      });
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("png-bytes"),
-        headers: new Headers({ "content-type": "image/png" }),
+        response: {
+          arrayBuffer: async () => Buffer.from("png-bytes"),
+          headers: new Headers({ "content-type": "image/png" }),
+        },
+        release: vi.fn(async () => {}),
       });
 
     const provider = buildKlingaiImageGenerationProvider();
@@ -164,20 +179,27 @@ describe("klingai image generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        json: async () => ({
-          code: 0,
-          data: {
-            task_status: "succeed",
-            task_result: { url: "https://cdn.kling.ai/output/edited.png" },
-          },
-        }),
-        headers: new Headers(),
-      })
+        response: {
+          json: async () => ({
+            code: 0,
+            data: {
+              task_status: "succeed",
+              task_result: { url: "https://cdn.kling.ai/output/edited.png" },
+            },
+          }),
+          headers: new Headers(),
+        },
+        release: vi.fn(async () => {}),
+      });
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("edited-png-bytes"),
-        headers: new Headers({ "content-type": "image/png" }),
+        response: {
+          arrayBuffer: async () => Buffer.from("edited-png-bytes"),
+          headers: new Headers({ "content-type": "image/png" }),
+        },
+        release: vi.fn(async () => {}),
       });
 
     const provider = buildKlingaiImageGenerationProvider();
@@ -220,6 +242,65 @@ describe("klingai image generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("KlingAI image generation failed");
+  });
+
+  it("preserves HTTP policy and honors caller timeout for polling", async () => {
+    const dispatcherPolicy = { mode: "explicit-proxy" } as unknown;
+    resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
+      baseUrl: "https://proxy.kling.ai",
+      allowPrivateNetwork: true,
+      headers: new Headers({
+        Authorization: "Bearer kling-test-key",
+        "Content-Type": "application/json",
+      }),
+      dispatcherPolicy,
+    });
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-img-policy-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: { images: [{ url: "https://cdn.kling.ai/output/policy-1.png" }] },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        arrayBuffer: async () => Buffer.from("policy-bytes"),
+        headers: new Headers({ "content-type": "image/png" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiImageGenerationProvider();
+    await provider.generateImage({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "policy timeout test",
+      cfg: {},
+      timeoutMs: 5_000,
+    });
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
+      "https://proxy.kling.ai/v1/images/generations/task-img-policy-1",
+      expect.objectContaining({ method: "GET" }),
+      5_000,
+      fetch,
+      {
+        ssrfPolicy: { allowPrivateNetwork: true },
+        dispatcherPolicy,
+      },
+    );
   });
 
   it("fails fast when api key is missing", async () => {

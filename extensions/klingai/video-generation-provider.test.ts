@@ -5,18 +5,18 @@ const {
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
   postJsonRequestMock,
-  fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpErrorMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "kling-video-key" })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
+  resolveProviderHttpRequestConfigMock: vi.fn((params): any => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined,
   })),
   postJsonRequestMock: vi.fn(),
-  fetchWithTimeoutMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
 }));
 
@@ -27,7 +27,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
   postJsonRequest: postJsonRequestMock,
-  fetchWithTimeout: fetchWithTimeoutMock,
+  fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
 }));
 
@@ -36,14 +36,14 @@ describe("klingai video generation provider", () => {
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "kling-video-key" });
     resolveProviderHttpRequestConfigMock.mockReset();
-    resolveProviderHttpRequestConfigMock.mockImplementation((params) => ({
+    resolveProviderHttpRequestConfigMock.mockImplementation((params): any => ({
       baseUrl: params.baseUrl ?? params.defaultBaseUrl,
       allowPrivateNetwork: false,
       headers: new Headers(params.defaultHeaders),
       dispatcherPolicy: undefined,
     }));
     postJsonRequestMock.mockReset();
-    fetchWithTimeoutMock.mockReset();
+    fetchWithTimeoutGuardedMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockResolvedValue(undefined);
   });
@@ -59,8 +59,8 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
         json: async () => ({
           code: 0,
           data: {
@@ -71,10 +71,16 @@ describe("klingai video generation provider", () => {
           },
         }),
         headers: new Headers({ "content-type": "application/json" }),
-      })
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("video-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
+        response: {
+          arrayBuffer: async () => Buffer.from("video-bytes"),
+          headers: new Headers({ "content-type": "video/mp4" }),
+        },
+        release: vi.fn(async () => {}),
       });
 
     const provider = buildKlingaiVideoGenerationProvider();
@@ -109,7 +115,7 @@ describe("klingai video generation provider", () => {
         fileName: "video-1.mp4",
       },
     ]);
-    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
   });
 
   it("returns url-only output when providerOptions.return_url_only is true", async () => {
@@ -119,8 +125,8 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
         json: async () => ({
           code: 0,
           data: {
@@ -131,11 +137,9 @@ describe("klingai video generation provider", () => {
           },
         }),
         headers: new Headers({ "content-type": "application/json" }),
-      })
-      .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("video-res-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
-      });
+      },
+      release: vi.fn(async () => {}),
+    });
 
     const provider = buildKlingaiVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -155,7 +159,7 @@ describe("klingai video generation provider", () => {
         fileName: "video-1.mp4",
       },
     ]);
-    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(1);
   });
 
   it("maps 720P resolution to std mode", async () => {
@@ -165,8 +169,8 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
         json: async () => ({
           code: 0,
           data: {
@@ -177,10 +181,16 @@ describe("klingai video generation provider", () => {
           },
         }),
         headers: new Headers({ "content-type": "application/json" }),
-      })
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("video-1b-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
+        response: {
+          arrayBuffer: async () => Buffer.from("video-1b-bytes"),
+          headers: new Headers({ "content-type": "video/mp4" }),
+        },
+        release: vi.fn(async () => {}),
       });
     const provider = buildKlingaiVideoGenerationProvider();
     await provider.generateVideo({
@@ -206,8 +216,8 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
         json: async () => ({
           code: 0,
           data: {
@@ -218,10 +228,16 @@ describe("klingai video generation provider", () => {
           },
         }),
         headers: new Headers({ "content-type": "application/json" }),
-      })
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("video-1b-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
+        response: {
+          arrayBuffer: async () => Buffer.from("video-1b-bytes"),
+          headers: new Headers({ "content-type": "video/mp4" }),
+        },
+        release: vi.fn(async () => {}),
       });
 
     const provider = buildKlingaiVideoGenerationProvider();
@@ -249,8 +265,8 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
         json: async () => ({
           code: 0,
           data: {
@@ -261,10 +277,16 @@ describe("klingai video generation provider", () => {
           },
         }),
         headers: new Headers(),
-      })
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("video2-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
+        response: {
+          arrayBuffer: async () => Buffer.from("video2-bytes"),
+          headers: new Headers({ "content-type": "video/mp4" }),
+        },
+        release: vi.fn(async () => {}),
       });
 
     const provider = buildKlingaiVideoGenerationProvider();
@@ -293,8 +315,8 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
         json: async () => ({
           code: 0,
           data: {
@@ -305,10 +327,16 @@ describe("klingai video generation provider", () => {
           },
         }),
         headers: new Headers(),
-      })
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("video-omni-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
+        response: {
+          arrayBuffer: async () => Buffer.from("video-omni-bytes"),
+          headers: new Headers({ "content-type": "video/mp4" }),
+        },
+        release: vi.fn(async () => {}),
       });
     const provider = buildKlingaiVideoGenerationProvider();
     await provider.generateVideo({
@@ -339,15 +367,18 @@ describe("klingai video generation provider", () => {
       },
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
-        code: 0,
-        data: {
-          task_status: "failed",
-          task_status_msg: "quota exceeded",
-        },
-      }),
-      headers: new Headers(),
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "failed",
+            task_status_msg: "quota exceeded",
+          },
+        }),
+        headers: new Headers(),
+      },
+      release: vi.fn(async () => {}),
     });
 
     const provider = buildKlingaiVideoGenerationProvider();
@@ -359,6 +390,68 @@ describe("klingai video generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("quota exceeded");
+  });
+
+  it("preserves HTTP policy and honors caller timeout for polling", async () => {
+    const dispatcherPolicy = { mode: "explicit-proxy" } as unknown;
+    resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
+      baseUrl: "https://proxy.kling.ai",
+      allowPrivateNetwork: true,
+      headers: new Headers({
+        Authorization: "Bearer kling-video-key",
+        "Content-Type": "application/json",
+      }),
+      dispatcherPolicy,
+    });
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-vid-policy-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              videos: [{ url: "https://cdn.kling.ai/output/video-policy-1.mp4" }],
+            },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "policy timeout video test",
+      cfg: {},
+      providerOptions: { return_url_only: true },
+      timeoutMs: 5_000,
+    });
+
+    expect(result.videos).toEqual([
+      {
+        url: "https://cdn.kling.ai/output/video-policy-1.mp4",
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      },
+    ]);
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
+      "https://proxy.kling.ai/v1/videos/text2video/task-vid-policy-1",
+      expect.objectContaining({ method: "GET" }),
+      5_000,
+      fetch,
+      {
+        ssrfPolicy: { allowPrivateNetwork: true },
+        dispatcherPolicy,
+      },
+    );
   });
 
   it("rejects kling-v3 image-to-video requests with explicit aspect ratio", async () => {

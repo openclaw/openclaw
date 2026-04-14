@@ -239,6 +239,8 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
         headers,
         timeoutMs: req.timeoutMs,
         fetchFn,
+        allowPrivateNetwork,
+        dispatcherPolicy,
         context: "KlingAI video generation",
       });
       const outputUrl = resolveKlingVideoUrl(completed);
@@ -259,6 +261,8 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
           url: outputUrl,
           timeoutMs: req.timeoutMs,
           fetchFn,
+          allowPrivateNetwork,
+          dispatcherPolicy,
           context: "KlingAI generated video",
         });
         video = {

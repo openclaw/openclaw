@@ -30,6 +30,7 @@ describe("klingai onboard", () => {
       models: {
         providers: {
           klingai: {
+            baseUrl: KLINGAI_GLOBAL_BASE_URL,
             models: [
               {
                 id: "kling-v3",
@@ -37,6 +38,7 @@ describe("klingai onboard", () => {
                 input: ["text"],
                 reasoning: false,
                 contextWindow: 128000,
+                maxTokens: 4096,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
             ],

@@ -131,13 +131,13 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 
 ## Provider capabilities
 
-| Capability            | OpenAI               | Google               | fal                 | KlingAI            | MiniMax                    | ComfyUI                            | Vydra   |
-| --------------------- | -------------------- | -------------------- | ------------------- | ------------------ | -------------------------- | ---------------------------------- | ------- |
-| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 4)      | Yes (up to 9)              | Yes (workflow-defined outputs)     | Yes (1) |
-| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image)      | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) | No      |
-| Size control          | Yes                  | Yes                  | Yes                 | No                 | No                         | No                                 | No      |
-| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                | Yes                        | No                                 | No      |
-| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | Yes                | No                         | No                                 | No      |
+| Capability            | OpenAI               | Google               | fal                 | KlingAI       | MiniMax                    | ComfyUI                            | Vydra   |
+| --------------------- | -------------------- | -------------------- | ------------------- | ------------- | -------------------------- | ---------------------------------- | ------- |
+| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 4) | Yes (up to 9)              | Yes (workflow-defined outputs)     | Yes (1) |
+| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image) | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) | No      |
+| Size control          | Yes                  | Yes                  | Yes                 | No            | No                         | No                                 | No      |
+| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes           | Yes                        | No                                 | No      |
+| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | Yes           | No                         | No                                 | No      |
 
 ## Related
 

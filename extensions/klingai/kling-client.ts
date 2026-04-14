@@ -1,6 +1,6 @@
 import {
   assertOkOrThrowHttpError,
-  fetchWithTimeout,
+  fetchWithTimeoutGuarded,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -46,6 +46,8 @@ export type KlingTaskData = {
   task_status_msg?: string;
   task_result?: KlingTaskResult;
 };
+
+type KlingDispatcherPolicy = ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/u, "");
@@ -118,7 +120,7 @@ export async function submitKlingTask(params: {
   timeoutMs?: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork: boolean;
-  dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
+  dispatcherPolicy: KlingDispatcherPolicy;
   baseUrl: string;
   context: string;
 }): Promise<string> {
@@ -154,10 +156,12 @@ async function queryKlingTask(params: {
   headers: Headers;
   timeoutMs?: number;
   fetchFn: typeof fetch;
+  allowPrivateNetwork: boolean;
+  dispatcherPolicy: KlingDispatcherPolicy;
   context: string;
 }): Promise<KlingTaskData> {
   const queryUrl = `${normalizeBaseUrl(params.queryPath)}/${encodeURIComponent(params.taskId)}`;
-  const response = await fetchWithTimeout(
+  const { response, release } = await fetchWithTimeoutGuarded(
     queryUrl,
     {
       method: "GET",
@@ -165,13 +169,33 @@ async function queryKlingTask(params: {
     },
     params.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
     params.fetchFn,
+    {
+      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+    },
   );
-  await assertOkOrThrowHttpError(response, `${params.context} status query failed`);
-  const payload = parseKlingEnvelope<KlingTaskData>(
-    await response.json(),
-    `${params.context} status query failed`,
-  );
-  return payload.data;
+  try {
+    await assertOkOrThrowHttpError(response, `${params.context} status query failed`);
+    const payload = parseKlingEnvelope<KlingTaskData>(
+      await response.json(),
+      `${params.context} status query failed`,
+    );
+    return payload.data;
+  } finally {
+    await release();
+  }
+}
+
+function resolvePollingRequestTimeoutMs(params: {
+  pollTimeoutMs: number | undefined;
+  deadline: number;
+}): number {
+  const remainingMs = Math.max(1, params.deadline - Date.now());
+  const requestedMs = params.pollTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+  if (!Number.isFinite(requestedMs) || requestedMs <= 0) {
+    return remainingMs;
+  }
+  return Math.max(1, Math.min(requestedMs, remainingMs));
 }
 
 export async function pollKlingTaskUntilComplete(params: {
@@ -180,6 +204,8 @@ export async function pollKlingTaskUntilComplete(params: {
   headers: Headers;
   timeoutMs?: number;
   fetchFn: typeof fetch;
+  allowPrivateNetwork: boolean;
+  dispatcherPolicy: KlingDispatcherPolicy;
   context: string;
   pollIntervalMs?: number;
 }): Promise<KlingTaskData> {
@@ -188,12 +214,18 @@ export async function pollKlingTaskUntilComplete(params: {
   const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   let lastStatus = "unknown";
   while (Date.now() < deadline) {
+    const requestTimeoutMs = resolvePollingRequestTimeoutMs({
+      pollTimeoutMs: params.timeoutMs,
+      deadline,
+    });
     const data = await queryKlingTask({
       queryPath: params.queryPath,
       taskId: params.taskId,
       headers: params.headers,
-      timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+      timeoutMs: requestTimeoutMs,
       fetchFn: params.fetchFn,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      dispatcherPolicy: params.dispatcherPolicy,
       context: params.context,
     });
     const status = normalizeOptionalString(data.task_status)?.toLowerCase();
@@ -217,21 +249,32 @@ export async function downloadKlingBinaryAsset(params: {
   url: string;
   timeoutMs?: number;
   fetchFn: typeof fetch;
+  allowPrivateNetwork: boolean;
+  dispatcherPolicy: KlingDispatcherPolicy;
   context: string;
 }): Promise<{ buffer: Buffer; mimeType: string }> {
-  const response = await fetchWithTimeout(
+  const { response, release } = await fetchWithTimeoutGuarded(
     params.url,
     { method: "GET" },
     params.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
     params.fetchFn,
+    {
+      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+    },
   );
-  await assertOkOrThrowHttpError(response, `${params.context} download failed`);
-  const mimeType = normalizeOptionalString(response.headers.get("content-type")) || "application/octet-stream";
-  const arrayBuffer = await response.arrayBuffer();
-  return {
-    buffer: Buffer.from(arrayBuffer),
-    mimeType,
-  };
+  try {
+    await assertOkOrThrowHttpError(response, `${params.context} download failed`);
+    const mimeType =
+      normalizeOptionalString(response.headers.get("content-type")) || "application/octet-stream";
+    const arrayBuffer = await response.arrayBuffer();
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      mimeType,
+    };
+  } finally {
+    await release();
+  }
 }
 
 export function listKlingImageUrls(taskData: KlingTaskData): string[] {
