@@ -11,6 +11,7 @@ import {
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
+  resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 
@@ -69,30 +70,19 @@ function canonicalizePathForComparison(filePath: string): string {
 }
 
 function resolveAgentRootDirFromStorePath(storePath: string): string | undefined {
-  const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);
-  if (!agentsDir) {
+  if (!resolveAgentsDirFromSessionStorePath(storePath)) {
     return undefined;
   }
   const sessionsDir = path.dirname(path.resolve(storePath));
-  if (path.basename(sessionsDir) !== "sessions") {
-    return undefined;
-  }
-  const agentDir = path.dirname(sessionsDir);
-  const agentId = path.basename(agentDir);
-  if (!agentId) {
-    return undefined;
-  }
-  return path.join(agentsDir, agentId);
+  return path.dirname(sessionsDir);
 }
 
-function resolveAgentRootDirFromAgentId(sessionId: string, agentId?: string): string | undefined {
+function resolveAgentRootDirFromAgentId(agentId?: string): string | undefined {
   if (!agentId?.trim()) {
     return undefined;
   }
   try {
-    const sessionPath = resolveSessionTranscriptPath(sessionId, agentId);
-    const sessionsDir = path.dirname(sessionPath);
-    return path.dirname(sessionsDir);
+    return path.dirname(resolveSessionTranscriptsDirForAgent(agentId));
   } catch {
     return undefined;
   }
@@ -108,7 +98,7 @@ export function resolveSessionTranscriptCandidates(
   const sessionFileState = classifySessionTranscriptCandidate(sessionId, sessionFile);
   const rootFallbackDir =
     (storePath ? resolveAgentRootDirFromStorePath(storePath) : undefined) ??
-    resolveAgentRootDirFromAgentId(sessionId, agentId);
+    resolveAgentRootDirFromAgentId(agentId);
   const pushCandidate = (resolve: () => string): void => {
     try {
       candidates.push(resolve());
