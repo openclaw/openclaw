@@ -456,7 +456,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     }
   });
 
-  it("does not send the timeout fallback when final reply delivery is already in flight", async () => {
+  it("sends the timeout fallback when final reply delivery starts but never completes", async () => {
     vi.useFakeTimers();
     try {
       preflightDiscordMessageMock.mockReset();
@@ -495,13 +495,28 @@ describe("createDiscordMessageHandler queue behavior", () => {
       expect(params.runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("discord inbound worker timed out after"),
       );
-      expect(deliverDiscordReplyMock).not.toHaveBeenCalled();
+      expect(params.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("timed out before final reply delivery completed"),
+      );
+      expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
+      expect(deliverDiscordReplyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: "channel:ch-1",
+          token: "test-token",
+          replies: [
+            expect.objectContaining({
+              isError: true,
+              text: "Discord inbound worker timed out.",
+            }),
+          ],
+        }),
+      );
 
       finishFinalReply.resolve();
       await finishFinalReply.promise;
       await Promise.resolve();
 
-      expect(deliverDiscordReplyMock).not.toHaveBeenCalled();
+      expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
