@@ -16,6 +16,7 @@ import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   buildOpenAISyntheticCatalogEntry,
   cloneFirstTemplateModel,
+  defaultOpenAIResponsesExtraParams,
   findCatalogTemplate,
   isOpenAIApiBaseUrl,
   matchesExactOrPrefix,
@@ -222,20 +223,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
         ? { api: "openai-responses", baseUrl }
         : undefined,
     buildReplayPolicy: buildOpenAIReplayPolicy,
-    prepareExtraParams: (ctx) => {
-      const transport = ctx.extraParams?.transport;
-      const hasSupportedTransport =
-        transport === "auto" || transport === "sse" || transport === "websocket";
-      const hasExplicitWarmup = typeof ctx.extraParams?.openaiWsWarmup === "boolean";
-      if (hasSupportedTransport && hasExplicitWarmup) {
-        return ctx.extraParams;
-      }
-      return {
-        ...ctx.extraParams,
-        ...(hasSupportedTransport ? {} : { transport: "auto" }),
-        ...(hasExplicitWarmup ? {} : { openaiWsWarmup: true }),
-      };
-    },
+    prepareExtraParams: (ctx) =>
+      defaultOpenAIResponsesExtraParams(ctx.extraParams, { openaiWsWarmup: true }),
     ...OPENAI_RESPONSES_STREAM_HOOKS,
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),

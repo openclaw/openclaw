@@ -28,6 +28,7 @@ import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   buildOpenAISyntheticCatalogEntry,
   cloneFirstTemplateModel,
+  defaultOpenAIResponsesExtraParams,
   findCatalogTemplate,
   isOpenAIApiBaseUrl,
   isOpenAICodexBaseUrl,
@@ -336,16 +337,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       return id === OPENAI_CODEX_GPT_54_MODEL_ID || id === OPENAI_CODEX_GPT_54_PRO_MODEL_ID;
     },
     buildReplayPolicy: buildOpenAIReplayPolicy,
-    prepareExtraParams: (ctx) => {
-      const transport = ctx.extraParams?.transport;
-      if (transport === "auto" || transport === "sse" || transport === "websocket") {
-        return ctx.extraParams;
-      }
-      return {
-        ...ctx.extraParams,
-        transport: "auto",
-      };
-    },
+    prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams),
     ...OPENAI_RESPONSES_STREAM_HOOKS,
     resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
     resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
