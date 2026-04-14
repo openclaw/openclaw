@@ -436,7 +436,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: dist/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}-${{ github.run_id }}
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
@@ -670,7 +670,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: dist/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}-${{ github.run_id }}
 
       - name: Download dist artifact
         if: matrix.requires_dist == true && steps.dist-cache.outputs.cache-hit != 'true'
