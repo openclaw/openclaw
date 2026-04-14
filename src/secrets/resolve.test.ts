@@ -564,3 +564,29 @@ describe("secret ref resolver", () => {
     }
   });
 });
+
+import { __testing } from "./resolve.js";
+
+describe("parseExecValues - multiline stdout", () => {
+  it("takes last line of multi-line non-JSON stdout in single-ref mode", () => {
+    const result = __testing.parseExecValues({
+      providerName: "test",
+      ids: ["key"],
+      stdout: "[plugin log]\nfull-secret-value",
+      jsonOnly: false,
+    });
+    expect(result).toEqual({ key: "full-secret-value" });
+  });
+
+  it("warns when multi-line non-JSON output is truncated", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    __testing.parseExecValues({
+      providerName: "test",
+      ids: ["key"],
+      stdout: "line1\nline2",
+      jsonOnly: false,
+    });
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
+  });
+});

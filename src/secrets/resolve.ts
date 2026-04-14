@@ -570,16 +570,18 @@ function parseExecValues(params: {
 
   let parsed: unknown;
   if (!params.jsonOnly && params.ids.length === 1) {
-    const lastLine = trimmed.split(/\r?\n/u)
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0)
-      .at(-1) ?? "";
-
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      return { [params.ids[0]]: lastLine };
+  const lines = trimmed.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l.length > 0);
+  const lastLine = lines.at(-1) ?? "";
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch {
+    if (lines.length > 1) {
+      console.warn(
+        `[openclaw] Exec provider "${params.providerName}" returned multi-line non-JSON output — using last line only. Use jsonOnly: true or a file provider for multi-line values like PEM certificates.`,
+      );
     }
+    return { [params.ids[0]]: lastLine };
+  }
   } else {
     try {
       parsed = JSON.parse(trimmed) as unknown;
@@ -959,3 +961,7 @@ export async function resolveSecretRefString(
   }
   return resolved;
 }
+
+export const __testing = {
+  parseExecValues,
+};
