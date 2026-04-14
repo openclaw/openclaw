@@ -30,10 +30,23 @@ const CHECKSUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download
 /**
  * Downloads text content from URL with redirect following
  */
-async function downloadTextContent(url: string): Promise<string> {
+async function downloadTextContent(url: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    
+    const abortHandler = () => {
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+    };
+    
+    signal?.addEventListener('abort', abortHandler);
+    
     function doGet(currentUrl: string, redirectsLeft: number): void {
+      if (signal?.aborted) {
+        return reject(new DOMException('The operation was aborted', 'AbortError'));
+      }
+      
       if (redirectsLeft <= 0) {
+        signal?.removeEventListener('abort', abortHandler);
         return reject(new Error(`Too many redirects: ${url}`));
       }
 
@@ -45,14 +58,24 @@ async function downloadTextContent(url: string): Promise<string> {
 
         if (response.statusCode !== 200) {
           response.resume();
+          signal?.removeEventListener('abort', abortHandler);
           return reject(new Error(`HTTP ${response.statusCode} downloading checksums`));
         }
 
         const chunks: Buffer[] = [];
         response.on('data', (chunk) => chunks.push(chunk));
-        response.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-        response.on('error', reject);
-      }).on('error', reject);
+        response.on('end', () => {
+          signal?.removeEventListener('abort', abortHandler);
+          resolve(Buffer.concat(chunks).toString('utf-8'));
+        });
+        response.on('error', (err) => {
+          signal?.removeEventListener('abort', abortHandler);
+          reject(err);
+        });
+      }).on('error', (err) => {
+        signal?.removeEventListener('abort', abortHandler);
+        reject(err);
+      });
     }
     doGet(url, 10);
   });
@@ -82,9 +105,9 @@ function parseChecksumFromContent(content: string, platformFile: string): string
 /**
  * Fetches and returns the expected checksum for current platform
  */
-async function getExpectedChecksum(): Promise<string> {
+async function getExpectedChecksum(signal?: AbortSignal): Promise<string> {
   try {
-    const checksumsContent = await downloadTextContent(CHECKSUMS_URL);
+    const checksumsContent = await downloadTextContent(CHECKSUMS_URL, signal);
     const platformFile = YTDLP_CHECKSUM_FILES[process.platform];
     
     if (!platformFile) {
@@ -98,6 +121,9 @@ async function getExpectedChecksum(): Promise<string> {
     
     return expectedHash;
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw error;
+    }
     throw new Error(`Failed to fetch checksums: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
@@ -120,13 +146,31 @@ async function verifyFileChecksum(filePath: string, expectedHash: string): Promi
 /**
  * Downloads binary file with redirect following and checksum verification
  */
-async function downloadFileWithVerification(url: string, dest: string, expectedHash: string): Promise<void> {
+async function downloadFileWithVerification(
+  url: string, 
+  dest: string, 
+  expectedHash: string, 
+  signal?: AbortSignal
+): Promise<void> {
   const tempDest = `${dest}.tmp`;
+  
+  signal?.throwIfAborted();
   
   try {
     await new Promise((resolve, reject) => {
+      const abortHandler = () => {
+        reject(new DOMException('The operation was aborted', 'AbortError'));
+      };
+      
+      signal?.addEventListener('abort', abortHandler);
+      
       function doGet(currentUrl: string, redirectsLeft: number): void {
+        if (signal?.aborted) {
+          return reject(new DOMException('The operation was aborted', 'AbortError'));
+        }
+        
         if (redirectsLeft <= 0) {
+          signal?.removeEventListener('abort', abortHandler);
           return reject(new Error(`Too many redirects: ${url}`));
         }
 
@@ -138,6 +182,7 @@ async function downloadFileWithVerification(url: string, dest: string, expectedH
 
           if (response.statusCode !== 200) {
             response.resume();
+            signal?.removeEventListener('abort', abortHandler);
             return reject(new Error(`HTTP ${response.statusCode} downloading binary`));
           }
 
@@ -149,10 +194,13 @@ async function downloadFileWithVerification(url: string, dest: string, expectedH
 
           file.on('error', (err) => {
             file.close();
+            signal?.removeEventListener('abort', abortHandler);
             reject(err);
           });
 
           file.on('close', async () => {
+            signal?.removeEventListener('abort', abortHandler);
+            
             const actualHash = hash.digest('hex');
             if (actualHash !== expectedHash) {
               await fs.unlink(tempDest).catch(() => {});
@@ -168,7 +216,10 @@ async function downloadFileWithVerification(url: string, dest: string, expectedH
             }
             resolve(undefined);
           });
-        }).on('error', reject);
+        }).on('error', (err) => {
+          signal?.removeEventListener('abort', abortHandler);
+          reject(err);
+        });
       }
       doGet(url, 10);
     });
@@ -185,16 +236,19 @@ async function getYtDlpPath(): Promise<string> {
   return path.join(baseDir, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
 }
 
-async function ensureYtDlp(): Promise<string> {
+async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
   const ytDlpPath = await getYtDlpPath();
+  
+  // Check for cancellation before starting
+  signal?.throwIfAborted();
   
   try {
     // First, try to use existing binary
-    await execFileAsync(ytDlpPath, ['--version']);
+    await execFileAsync(ytDlpPath, ['--version'], { signal });
     
     // Verify integrity of existing binary
     try {
-      const expectedHash = await getExpectedChecksum();
+      const expectedHash = await getExpectedChecksum(signal);
       const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
       if (!isValid) {
         console.warn('Existing yt-dlp binary failed integrity check, will re-download');
@@ -208,6 +262,9 @@ async function ensureYtDlp(): Promise<string> {
     
     return ytDlpPath;
   } catch (error) {
+    // Check if we were cancelled
+    signal?.throwIfAborted();
+    
     // Binary missing, corrupted, or failed verification - download fresh copy
     const url = YTDLP_URLS[process.platform];
     if (!url) {
@@ -217,11 +274,11 @@ async function ensureYtDlp(): Promise<string> {
     console.log('Downloading fresh yt-dlp binary...');
     
     // Fetch expected checksum from official source
-    const expectedHash = await getExpectedChecksum();
+    const expectedHash = await getExpectedChecksum(signal);
     console.log(`Expected SHA256: ${expectedHash}`);
     
-    // Download and verify
-    await downloadFileWithVerification(url, ytDlpPath, expectedHash);
+    // Download and verify with cancellation support
+    await downloadFileWithVerification(url, ytDlpPath, expectedHash, signal);
     
     // Final verification
     const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
@@ -291,19 +348,20 @@ export const downloadVideoTool = {
   execute: async (toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): Promise<AgentToolResult<unknown>> => {
     try {
       await ensureFfmpeg();
-      const ytDlpPath = await ensureYtDlp();
+      const ytDlpPath = await ensureYtDlp(signal);
       const workspaceRoot = await findWorkspaceFolder();
 
       const typedParams = params as Record<string, unknown>;
-      let formatSelector = "best[height<=1080]";
+      let formatSelector = "bestvideo[height<=1080]+bestaudio/best[height<=1080]";
       if (typedParams.quality === "720") {
-        formatSelector = "best[height<=720]";
+          formatSelector = "bestvideo[height<=720]+bestaudio/best[height<=720]";
       } else if (typedParams.quality === "best") {
-        formatSelector = "best";
+          formatSelector = "bestvideo+bestaudio/best";
       } else if (typedParams.quality === "worst") {
-        formatSelector = "worst";
+          formatSelector = "worstvideo+worstaudio/worst";
       } else if (typedParams.quality && typeof typedParams.quality === "string" && typedParams.quality.includes("[")) {
-        formatSelector = typedParams.quality;
+          // If it's a custom format string, assume the user knows what they're doing
+          formatSelector = typedParams.quality;
       }
 
       // Get title first (without creating file)
@@ -368,11 +426,24 @@ export const downloadVideoTool = {
       if (!downloadedFile || !downloadedFile.includes(sanitized)) {
         // Fallback: scan directory for the most recent matching file
         const files = await fs.readdir(workspaceRoot);
-        const matchingFiles = files.filter(f => 
-          f.includes(sanitized) && 
-          !f.endsWith('.part') && 
-          !f.endsWith('.ytdl')
-        );
+        const matchingFiles = files.filter(f => {
+          // Skip temp files
+          if (f.endsWith('.part') || f.endsWith('.ytdl')) return false;
+          
+          // Try the original sanitized match
+          if (f.includes(sanitized)) return true;
+          
+          // When --restrict-filenames is used, non-ASCII chars are normalized to ASCII
+          // e.g., "café" becomes "cafe", "こんにちは" becomes something like "konnitiha"
+          const asciiNormalized = f.normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
+            .replace(/[^\x00-\x7F]/g, '');    // Remove remaining non-ASCII
+          
+          // Check if the normalized filename matches or contains timestamp-like patterns
+          return asciiNormalized.length > 0 && 
+                 (f.includes(asciiNormalized) || 
+                  /video_.*\d{13}/.test(f));   // Fallback for our generated names
+        });
         
         if (matchingFiles.length > 0) {
           const fileStats = await Promise.all(
