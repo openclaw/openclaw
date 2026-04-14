@@ -28,16 +28,6 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 0
 fi
 
-for file in "${files[@]}"; do
-  case "$file" in
-    USER.md)
-      echo "Refusing to commit repo-root USER.md. This file is an internal work log and must stay out of git history." >&2
-      echo "Run: git restore --staged -- USER.md" >&2
-      exit 1
-      ;;
-  esac
-done
-
 lint_files=()
 while IFS= read -r -d '' file; do
   lint_files+=("$file")

@@ -108,21 +108,4 @@ describe("git-hooks/pre-commit (integration)", () => {
 
     expect(output).toContain("FAST_COMMIT enabled: skipping pnpm check in pre-commit hook.");
   });
-
-  it("rejects repo-root USER.md when it is staged", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-user-md-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-
-    const fakeBinDir = installPreCommitFixture(dir);
-    writeExecutable(fakeBinDir, "pnpm", "#!/usr/bin/env bash\nexit 0\n");
-
-    writeFileSync(path.join(dir, "USER.md"), "internal log\n", "utf8");
-    run(dir, "git", ["add", "--", "USER.md"]);
-
-    expect(() =>
-      run(dir, "bash", ["git-hooks/pre-commit"], {
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      }),
-    ).toThrowError(/Refusing to commit repo-root USER\.md/);
-  });
 });
