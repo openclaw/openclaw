@@ -1,9 +1,12 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions/store.js";
+import { buildRepoSlotBranchName } from "./repo-slots.js";
 import { buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
@@ -12,6 +15,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 let testWorkspaceDir = os.tmpdir();
+const execFileAsync = promisify(execFile);
 
 beforeAll(async () => {
   testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-list-"));
@@ -155,5 +159,133 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
     expect(list.active[0]?.line).toContain("prompt/cache 197k");
     expect(list.active[0]?.line).not.toContain("1k io");
+  });
+
+  it("exposes structured operator state and workspace git summary", async () => {
+    const repoDir = path.join(testWorkspaceDir, "subagent-state-repo");
+    await fs.mkdir(repoDir, { recursive: true });
+    await execFileAsync("git", ["init", "-b", "status-branch"], { cwd: repoDir });
+    const run = {
+      runId: "run-state",
+      childSessionKey: "agent:main:subagent:state",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "monitor status",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+      workspaceDir: repoDir,
+      operatorState: {
+        stage: "running",
+        lastToolName: "exec",
+        lastToolAction: "pnpm test",
+        waitingReason: "Awaiting command approval",
+        filesTouched: ["src/a.ts", "src/b.ts"],
+        verificationStatus: "pending",
+        verificationNote: "pnpm test --filter subagents",
+        progressNote: "Tests started",
+        confidence: "medium",
+      },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [run],
+      recentMinutes: 30,
+      taskMaxChars: 110,
+    });
+
+    expect(list.active[0]?.line).toContain("waiting: Awaiting command approval");
+    expect(list.active[0]?.line).toContain("verify: pending (pnpm test --filter subagents)");
+    expect(list.active[0]?.line).toContain("files: 2");
+    expect(list.active[0]?.line).toContain("branch: status-branch");
+    expect(list.active[0]?.state).toMatchObject({
+      stage: "running",
+      workspaceDir: repoDir,
+      workspaceSlot: "subagent-state-repo",
+      repo: "subagent-state-repo",
+      branch: "status-branch",
+      lastToolName: "exec",
+      lastToolAction: "pnpm test",
+      waitingReason: "Awaiting command approval",
+      filesTouched: ["src/a.ts", "src/b.ts"],
+      verificationStatus: "pending",
+      verificationNote: "pnpm test --filter subagents",
+      progressNote: "Tests started",
+      confidence: "medium",
+    });
+  });
+
+  it("exposes repo slot workspace slot and branch from slot metadata", async () => {
+    const slotRoot = path.join(
+      testWorkspaceDir,
+      "repo-slots",
+      "openclaw-test",
+      "process-test-lane-b",
+    );
+    const repoDir = path.join(slotRoot, "repo");
+    const branch = buildRepoSlotBranchName("process-test-lane-b");
+    await fs.mkdir(repoDir, { recursive: true });
+    await execFileAsync("git", ["init", "-b", branch], { cwd: repoDir });
+    await fs.writeFile(
+      path.join(slotRoot, "slot.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          slot: "process-test-lane-b",
+          branch,
+          repoRoot: "/tmp/source/openclaw",
+          repoName: "openclaw",
+          repoKey: "openclaw-test",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          materialization: "worktree",
+          workspaceDir: repoDir,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const run = {
+      runId: "run-slot-state",
+      childSessionKey: "agent:main:subagent:slot-state",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "monitor slot status",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+      workspaceDir: repoDir,
+      operatorState: {
+        stage: "running",
+      },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [run],
+      recentMinutes: 30,
+      taskMaxChars: 110,
+    });
+
+    expect(list.active[0]?.line).toContain(`branch: ${branch}`);
+    expect(list.active[0]?.state).toMatchObject({
+      workspaceDir: repoDir,
+      workspaceSlot: "process-test-lane-b",
+      repo: "openclaw",
+      branch,
+    });
   });
 });

@@ -19,6 +19,7 @@ export type RepoSlotMaterialization = "worktree" | "clone";
 export type RepoSlotRecord = {
   version: 1;
   slot: string;
+  branch: string;
   repoRoot: string;
   repoName: string;
   repoKey: string;
@@ -35,6 +36,10 @@ export type EnsureRepoSlotResult = {
   created: boolean;
   record: RepoSlotRecord;
 };
+
+export function buildRepoSlotBranchName(slot: string): string {
+  return `openclaw/slot/${sanitizeSegment(slot, "slot")}`;
+}
 
 function sanitizeSegment(value: string, fallback: string): string {
   const cleaned = value
@@ -118,17 +123,27 @@ async function materializeWorktree(params: {
   repoRoot: string;
   workspaceDir: string;
   baseRef: string;
+  branch: string;
 }): Promise<RepoSlotMaterialization> {
   await fs.mkdir(path.dirname(params.workspaceDir), { recursive: true });
   try {
     await runGit(
-      ["-C", params.repoRoot, "worktree", "add", "--detach", params.workspaceDir, params.baseRef],
+      [
+        "-C",
+        params.repoRoot,
+        "worktree",
+        "add",
+        "-B",
+        params.branch,
+        params.workspaceDir,
+        params.baseRef,
+      ],
       params.repoRoot,
     );
     return "worktree";
   } catch {
     await runGit(["clone", "--no-checkout", params.repoRoot, params.workspaceDir]);
-    await runGit(["-C", params.workspaceDir, "checkout", "--detach", params.baseRef]);
+    await runGit(["-C", params.workspaceDir, "checkout", "-B", params.branch, params.baseRef]);
     return "clone";
   }
 }
@@ -144,6 +159,7 @@ export async function ensureRepoSlot(params: {
   const headSha = await readHeadSha(repoRoot);
   const baseRef = normalizeOptionalString(params.baseRef) || headSha || "HEAD";
   const paths = resolveRepoSlotPaths({ repoRoot, originUrl, slot: params.slot, env: params.env });
+  const branch = buildRepoSlotBranchName(paths.normalizedSlot);
   const now = new Date().toISOString();
   const existing = await readSlotRecord(paths.metadataPath);
   const existingWorkspacePresent = await fs
@@ -151,11 +167,13 @@ export async function ensureRepoSlot(params: {
     .then((entry) => entry.isDirectory())
     .catch(() => false);
   if (existing && existing.repoRoot === repoRoot && existingWorkspacePresent) {
+    await runGit(["-C", paths.workspaceDir, "checkout", "-B", branch, baseRef]);
     const next: RepoSlotRecord = {
       ...existing,
       updatedAt: now,
+      branch,
       originUrl,
-      headSha,
+      headSha: await readHeadSha(paths.workspaceDir),
       baseRef,
     };
     await writeSlotRecord(next, paths.metadataPath);
@@ -165,10 +183,12 @@ export async function ensureRepoSlot(params: {
     repoRoot,
     workspaceDir: paths.workspaceDir,
     baseRef,
+    branch,
   });
   const record: RepoSlotRecord = {
     version: 1,
     slot: paths.normalizedSlot,
+    branch,
     repoRoot,
     repoName: paths.repoName,
     repoKey: paths.repoKey,
@@ -235,7 +255,7 @@ export async function resetRepoSlot(params: {
     await tryRunGit(["-C", record.repoRoot, "fetch", "--all", "--prune", "--tags"]);
   }
   const targetRef = normalizeOptionalString(params.ref) || record.baseRef || "HEAD";
-  await runGit(["-C", record.workspaceDir, "checkout", "--detach", targetRef]);
+  await runGit(["-C", record.workspaceDir, "checkout", "-B", record.branch, targetRef]);
   await runGit(["-C", record.workspaceDir, "reset", "--hard", targetRef]);
   await runGit(["-C", record.workspaceDir, "clean", "-fdx"]);
   const next: RepoSlotRecord = {

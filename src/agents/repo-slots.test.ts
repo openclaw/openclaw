@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ensureRepoSlot, listRepoSlots, removeRepoSlot, resetRepoSlot } from "./repo-slots.js";
+import {
+  buildRepoSlotBranchName,
+  ensureRepoSlot,
+  listRepoSlots,
+  removeRepoSlot,
+  resetRepoSlot,
+} from "./repo-slots.js";
 
 function git(args: string[], cwd: string) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -44,10 +50,15 @@ describe("repo slots", () => {
     expect(ensured.created).toBe(true);
     expect(fs.existsSync(path.join(ensured.record.workspaceDir, ".git"))).toBe(true);
     expect(ensured.record.workspaceDir).not.toBe(repoRoot);
+    expect(ensured.record.branch).toBe(buildRepoSlotBranchName("alpha"));
+    expect(git(["branch", "--show-current"], ensured.record.workspaceDir)).toBe(
+      buildRepoSlotBranchName("alpha"),
+    );
 
     const listed = await listRepoSlots({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
     expect(listed).toHaveLength(1);
     expect(listed[0]?.slot).toBe("alpha");
+    expect(listed[0]?.branch).toBe(buildRepoSlotBranchName("alpha"));
 
     fs.writeFileSync(path.join(ensured.record.workspaceDir, "scratch.txt"), "temp\n", "utf8");
     fs.writeFileSync(path.join(ensured.record.workspaceDir, "note.txt"), "changed\n", "utf8");
@@ -58,8 +69,12 @@ describe("repo slots", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
     expect(reset.slot).toBe("alpha");
+    expect(reset.branch).toBe(buildRepoSlotBranchName("alpha"));
     expect(fs.existsSync(path.join(reset.workspaceDir, "scratch.txt"))).toBe(false);
     expect(fs.readFileSync(path.join(reset.workspaceDir, "note.txt"), "utf8")).toBe("base\n");
+    expect(git(["branch", "--show-current"], reset.workspaceDir)).toBe(
+      buildRepoSlotBranchName("alpha"),
+    );
 
     const removed = await removeRepoSlot({
       repoPath: repoRoot,
