@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { buildMatrixQaConfig } from "./config.js";
+import type { MatrixQaProvisionedTopology } from "./topology.js";
 
 describe("matrix qa config", () => {
-  const topology = {
+  const topology: MatrixQaProvisionedTopology = {
     defaultRoomId: "!main:matrix-qa.test",
     defaultRoomKey: "main",
     rooms: [
