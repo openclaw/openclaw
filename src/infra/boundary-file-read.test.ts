@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveBoundaryPathSyncMock = vi.hoisted(() => vi.fn());
 const resolveBoundaryPathMock = vi.hoisted(() => vi.fn());
@@ -15,19 +15,24 @@ vi.mock("./safe-open-sync.js", () => ({
 }));
 
 let canUseBoundaryFileOpen: typeof import("./boundary-file-read.js").canUseBoundaryFileOpen;
+let describePluginBoundaryFileOpenFailure: typeof import("./boundary-file-read.js").describePluginBoundaryFileOpenFailure;
 let matchBoundaryFileOpenFailure: typeof import("./boundary-file-read.js").matchBoundaryFileOpenFailure;
 let openBoundaryFile: typeof import("./boundary-file-read.js").openBoundaryFile;
 let openBoundaryFileSync: typeof import("./boundary-file-read.js").openBoundaryFileSync;
 
 describe("boundary-file-read", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({
       canUseBoundaryFileOpen,
+      describePluginBoundaryFileOpenFailure,
       matchBoundaryFileOpenFailure,
       openBoundaryFile,
       openBoundaryFileSync,
     } = await import("./boundary-file-read.js"));
+  });
+
+  beforeEach(() => {
     resolveBoundaryPathSyncMock.mockReset();
     resolveBoundaryPathMock.mockReset();
     openVerifiedFileSyncMock.mockReset();
@@ -236,5 +241,35 @@ describe("boundary-file-read", () => {
     expect(missing).toBe("missing");
     expect(io).toBe("io");
     expect(validation).toBe("validation");
+  });
+
+  it("describePluginBoundaryFileOpenFailure labels missing files vs boundary escape", () => {
+    const missingError = Object.assign(new Error("ENOENT: missing"), { code: "ENOENT" });
+    const loopError = Object.assign(new Error("ELOOP: loop"), { code: "ELOOP" });
+
+    expect(
+      describePluginBoundaryFileOpenFailure(
+        { ok: false, reason: "path", error: missingError },
+        { entryPath: "./src/channel.js" },
+      ),
+    ).toContain("file not found in build output");
+    expect(
+      describePluginBoundaryFileOpenFailure(
+        { ok: false, reason: "path", error: loopError },
+        { entryPath: "./src/channel.js" },
+      ),
+    ).toContain("path could not be opened");
+    expect(
+      describePluginBoundaryFileOpenFailure(
+        { ok: false, reason: "validation", error: new Error("outside") },
+        { entryPath: "/tmp/x" },
+      ),
+    ).toContain("escapes plugin root");
+    expect(
+      describePluginBoundaryFileOpenFailure(
+        { ok: false, reason: "io", error: new Error("EACCES: denied") },
+        { entryPath: "./src/channel.js" },
+      ),
+    ).toContain("read failed");
   });
 });

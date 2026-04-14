@@ -11,7 +11,10 @@ import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import {
+  describePluginBoundaryFileOpenFailure,
+  openBoundaryFileSync,
+} from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
@@ -2748,7 +2751,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         skipLexicalRootCheck: true,
       });
       if (!opened.ok) {
-        pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+        pushPluginLoadError(
+          describePluginBoundaryFileOpenFailure(opened, { entryPath: loadSource }),
+        );
         continue;
       }
       const safeSource = opened.path;
@@ -3397,7 +3402,9 @@ export async function loadOpenClawPluginCliRegistry(
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
-      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+      pushPluginLoadError(
+        describePluginBoundaryFileOpenFailure(opened, { entryPath: sourceForCliMetadata }),
+      );
       continue;
     }
     const safeSource = opened.path;

@@ -5,6 +5,7 @@ import {
   resolveBoundaryPathSync,
   type ResolvedBoundaryPath,
 } from "./boundary-path.js";
+import { extractErrorCode, formatErrorMessage } from "./errors.js";
 import type { PathAliasPolicy } from "./path-alias-guards.js";
 import {
   openVerifiedFileSync,
@@ -109,6 +110,39 @@ export function matchBoundaryFileOpenFailure<T>(
       return handlers.io ? handlers.io(failure) : handlers.fallback(failure);
   }
   return handlers.fallback(failure);
+}
+
+/**
+ * User-facing explanation for plugin entry opens that failed boundary checks.
+ * Distinguishes missing build artifacts (ENOENT after a successful boundary resolve)
+ * from real boundary / alias violations (`validation` from {@link resolveBoundaryPathSync})
+ * and other path-level open failures such as ENOTDIR/ELOOP.
+ */
+export function describePluginBoundaryFileOpenFailure(
+  failure: BoundaryFileOpenFailure,
+  params: { entryPath: string; moduleLabel?: string },
+): string {
+  const label = params.moduleLabel ?? "plugin entry";
+  switch (failure.reason) {
+    case "validation":
+      return `${label} path escapes plugin root or fails alias checks`;
+    case "path":
+      if (extractErrorCode(failure.error) === "ENOENT") {
+        return `${label} file not found in build output: ${params.entryPath}`;
+      }
+      return `${label} path could not be opened: ${formatBoundaryFileOpenErrorDetail(failure.error)}`;
+    case "io":
+      return `${label} read failed: ${formatBoundaryFileOpenErrorDetail(failure.error)}`;
+    default:
+      return `${label} open failed`;
+  }
+}
+
+function formatBoundaryFileOpenErrorDetail(error: unknown): string {
+  if (error === undefined) {
+    return "unknown error";
+  }
+  return formatErrorMessage(error);
 }
 
 function openBoundaryFileResolved(params: {

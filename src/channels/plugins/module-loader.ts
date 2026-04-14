@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
+import {
+  describePluginBoundaryFileOpenFailure,
+  openBoundaryFileSync,
+} from "../../infra/boundary-file-read.js";
 import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
@@ -77,8 +80,12 @@ export function loadChannelPluginModule(params: {
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
+    const label = `${params.boundaryLabel ?? "plugin"} module`;
     throw new Error(
-      `${params.boundaryLabel ?? "plugin"} module path escapes plugin root or fails alias checks`,
+      describePluginBoundaryFileOpenFailure(opened, {
+        entryPath: params.modulePath,
+        moduleLabel: label,
+      }),
     );
   }
   const safePath = opened.path;
