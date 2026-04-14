@@ -41,6 +41,7 @@ import {
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS = 272_000;
@@ -88,6 +89,13 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
 const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
 
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
+  const lowerModelId = normalizeLowercaseStringOrEmpty(model.id);
+  const canonicalModelId =
+    lowerModelId === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID ? OPENAI_CODEX_GPT_54_MODEL_ID : model.id;
+  const canonicalName =
+    normalizeLowercaseStringOrEmpty(model.name) === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
+      ? OPENAI_CODEX_GPT_54_MODEL_ID
+      : model.name;
   const useCodexTransport =
     !model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl);
   const api =
@@ -96,25 +104,30 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
     api === "openai-codex-responses" && (!model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl))
       ? OPENAI_CODEX_BASE_URL
       : model.baseUrl;
-  if (api === model.api && baseUrl === model.baseUrl) {
+  if (
+    api === model.api &&
+    baseUrl === model.baseUrl &&
+    canonicalModelId === model.id &&
+    canonicalName === model.name
+  ) {
     return model;
   }
   return {
     ...model,
+    id: canonicalModelId,
+    name: canonicalName,
     api,
     baseUrl,
   };
 }
 
-function resolveCodexForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
+function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
 
   let templateIds: readonly string[];
-  let patch: Partial<ProviderRuntimeModel> | undefined;
-  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
+  let patch: Parameters<typeof cloneFirstTemplateModel>[0]["patch"];
+  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID || lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     patch = {
       contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
@@ -150,14 +163,23 @@ function resolveCodexForwardCompatModel(
   return (
     cloneFirstTemplateModel({
       providerId: PROVIDER_ID,
-      modelId: trimmedModelId,
+      modelId:
+        lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
+          ? OPENAI_CODEX_GPT_54_MODEL_ID
+          : trimmedModelId,
       templateIds,
       ctx,
       patch,
     }) ??
     normalizeModelCompat({
-      id: trimmedModelId,
-      name: trimmedModelId,
+      id:
+        lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
+          ? OPENAI_CODEX_GPT_54_MODEL_ID
+          : trimmedModelId,
+      name:
+        lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
+          ? OPENAI_CODEX_GPT_54_MODEL_ID
+          : trimmedModelId,
       api: "openai-codex-responses",
       provider: PROVIDER_ID,
       baseUrl: OPENAI_CODEX_BASE_URL,
