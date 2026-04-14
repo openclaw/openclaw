@@ -83,12 +83,12 @@ function buildPluginSdkAliasMap(moduleUrl) {
     }
   }
 
-  for (const exportKey of Object.keys(packageJson.exports ?? {})) {
+  for (const exportKey of Object.keys(packageJson.exports ?? {}).toSorted()) {
     if (!exportKey.startsWith(PLUGIN_SDK_EXPORT_PREFIX)) {
       continue;
     }
     const subpath = exportKey.slice(PLUGIN_SDK_EXPORT_PREFIX.length);
-    if (!subpath) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath)) {
       continue;
     }
     const resolvedPath =

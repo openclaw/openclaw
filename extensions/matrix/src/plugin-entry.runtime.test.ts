@@ -80,7 +80,7 @@ function writeOpenClawPackageFixture(fixtureRoot: string) {
   writeFixtureFile(fixtureRoot, "dist/plugin-sdk/index.js", "export {};\n");
 }
 
-function writeOpenClawAliasFixture(fixtureRoot: string) {
+function writeOpenClawAliasFixture(fixtureRoot: string, extraExports?: Record<string, string>) {
   writeFixtureFile(
     fixtureRoot,
     "package.json",
@@ -91,6 +91,7 @@ function writeOpenClawAliasFixture(fixtureRoot: string) {
         exports: {
           "./plugin-sdk": "./dist/plugin-sdk/index.js",
           "./plugin-sdk/group-access": "./dist/plugin-sdk/group-access.js",
+          ...extraExports,
         },
       },
       null,
@@ -213,4 +214,51 @@ it("builds scoped and unscoped plugin-sdk aliases for the wrapper jiti loader", 
       ),
     },
   });
+}, 240_000);
+
+it("keeps wrapper plugin-sdk aliases deterministic and ignores unsafe subpaths", async () => {
+  const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-alias-order-");
+  const wrapperSource = fs.readFileSync(
+    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+    "utf8",
+  );
+
+  delete matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions;
+  writeOpenClawAliasFixture(fixtureRoot, {
+    "./plugin-sdk/zeta": "./dist/plugin-sdk/zeta.js",
+    "./plugin-sdk/../escape": "./dist/plugin-sdk/escape.js",
+    "./plugin-sdk/alpha": "./dist/plugin-sdk/alpha.js",
+  });
+  writeFixtureFile(fixtureRoot, "src/plugin-sdk/alpha.ts", "export {};\n");
+  writeFixtureFile(fixtureRoot, "src/plugin-sdk/zeta.ts", "export {};\n");
+  writeCapturingJitiFixture(fixtureRoot);
+  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/plugin-entry.handlers.runtime.js",
+    PACKAGED_RUNTIME_STUB,
+  );
+
+  const wrapperUrl = pathToFileURL(
+    path.join(fixtureRoot, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+  );
+  await import(`${wrapperUrl.href}?t=${Date.now()}`);
+
+  const aliasKeys = Object.keys(
+    (
+      (matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions ?? {}) as {
+        alias?: Record<string, string>;
+      }
+    ).alias ?? {},
+  );
+  expect(aliasKeys).toEqual([
+    "openclaw/plugin-sdk",
+    "@openclaw/plugin-sdk",
+    "openclaw/plugin-sdk/alpha",
+    "@openclaw/plugin-sdk/alpha",
+    "openclaw/plugin-sdk/group-access",
+    "@openclaw/plugin-sdk/group-access",
+    "openclaw/plugin-sdk/zeta",
+    "@openclaw/plugin-sdk/zeta",
+  ]);
 }, 240_000);
