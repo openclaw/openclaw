@@ -225,8 +225,12 @@ export async function runBlueBubblesCatchup(
   const existing = await loadBlueBubblesCatchupCursor(accountId).catch(() => null);
   const cursorBefore = existing?.lastSeenMs ?? null;
 
-  if (existing && nowMs - existing.lastSeenMs < MIN_INTERVAL_MS) {
+  if (existing && nowMs >= existing.lastSeenMs && nowMs - existing.lastSeenMs < MIN_INTERVAL_MS) {
     // A recent run just committed; skip to avoid churn on rolling restarts.
+    // The `nowMs >= existing.lastSeenMs` guard avoids a wall-clock-skew
+    // hazard: if the host clock jumps backwards (NTP correction, manual
+    // adjust), a future-dated cursor would otherwise satisfy this gate
+    // forever and silently disable catchup until wall time caught up.
     return null;
   }
 
@@ -275,6 +279,14 @@ export async function runBlueBubblesCatchup(
     return summary;
   }
 
+  // Track the earliest timestamp where `processMessage` threw so we never
+  // advance the cursor past a retryable failure. Normalize failures (the
+  // record didn't yield a usable NormalizedWebhookMessage) are treated as
+  // permanent skips and do NOT block cursor advance — those payloads are
+  // unlikely to ever normalize on retry, and blocking on them would wedge
+  // catchup forever.
+  let earliestProcessFailureTs: number | null = null;
+
   for (const rec of messages) {
     // Defense in depth: the server-side `after:` filter should already
     // exclude pre-cursor messages, but guard here against BB API variants
@@ -307,15 +319,27 @@ export async function runBlueBubblesCatchup(
       summary.replayed++;
     } catch (err) {
       summary.failed++;
+      if (ts > 0 && (earliestProcessFailureTs === null || ts < earliestProcessFailureTs)) {
+        earliestProcessFailureTs = ts;
+      }
       error?.(`[${accountId}] BlueBubbles catchup: processMessage failed: ${String(err)}`);
     }
   }
 
-  // Advance cursor to `nowMs` rather than the latest observed timestamp, so
-  // subsequent runs start from the moment this sweep finished. This avoids
-  // edge cases where a message with `dateCreated > nowMs` (minor clock skew
-  // between BB Server and gateway host) would be rescanned indefinitely.
-  await saveBlueBubblesCatchupCursor(accountId, nowMs).catch((err) => {
+  // Compute the new cursor. Default is `nowMs` so subsequent runs start
+  // from the moment this sweep finished (avoiding stuck rescans of a
+  // message with `dateCreated > nowMs` from minor clock skew between the
+  // BB Server host and the gateway host). If any `processMessage` call
+  // threw, hold the cursor just before the earliest failure so the next
+  // run retries from there. The inbound-dedupe cache from #66230 keeps
+  // already-replayed messages from being re-processed on that retry.
+  let nextCursorMs = nowMs;
+  if (earliestProcessFailureTs !== null) {
+    const heldCursor = Math.max(earliestProcessFailureTs - 1, cursorBefore ?? windowStartMs);
+    nextCursorMs = Math.min(heldCursor, nowMs);
+  }
+  summary.cursorAfter = nextCursorMs;
+  await saveBlueBubblesCatchupCursor(accountId, nextCursorMs).catch((err) => {
     error?.(`[${accountId}] BlueBubbles catchup: cursor save failed: ${String(err)}`);
   });
 
