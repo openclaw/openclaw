@@ -154,7 +154,8 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
     root: params.root,
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
-  });
+    bridge: params.bridge,
+  } as OpenClawReadToolOptions);
 }
 
 export function createSandboxedWriteTool(params: SandboxToolParams) {
@@ -448,6 +449,10 @@ export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
+  // Store bridge separately to avoid type issues
+  const bridge = (options as any)?.bridge;
+  const rootDir = options?.root;
+  
   return {
     ...base,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -463,28 +468,35 @@ export function createOpenClawReadTool(
       const offset = typeof record?.offset === 'number' ? record.offset : 0;
       const limit = typeof record?.limit === 'number' ? record.limit : undefined;
 
-      const rootDir = options?.root ? path.resolve(options.root) : process.cwd();
+      const rootDirResolved = options?.root ? path.resolve(options.root) : process.cwd();
 
       const inputPath = resolveToolPathAgainstWorkspaceRoot({
         filePath: rawPath,
-        root: rootDir,
+        root: rootDirResolved,
         containerWorkdir: options?.containerWorkdir,
       });
 
       try {
-        const stats = await fs.stat(inputPath);
+        // Use bridge if available, otherwise use fs
+        const stats = bridge 
+          ? await bridge.stat({ filePath: inputPath, cwd: rootDir })
+          : await fs.stat(inputPath);
 
         if (stats.isDirectory()) {
           if (signal?.aborted) throw new Error("Read operation aborted");
 
-          let files = await fs.readdir(inputPath);
+          const files = bridge
+            ? await (bridge.readdir?.({ filePath: inputPath, cwd: rootDir }) ?? fs.readdir(inputPath))
+            : await fs.readdir(inputPath);
+          
           let truncated = false;
-          if (files.length > MAX_DIR_ENTRIES) {
+          let fileList = files;
+          if (fileList.length > MAX_DIR_ENTRIES) {
             truncated = true;
-            files = files.slice(0, MAX_DIR_ENTRIES);
+            fileList = fileList.slice(0, MAX_DIR_ENTRIES);
           }
 
-          const listingText = `Listing for ${inputPath}:\n${files.join("\n")}${
+          const listingText = `Listing for ${inputPath}:\n${fileList.join("\n")}${
             truncated ? `\n\n... and ${files.length - MAX_DIR_ENTRIES} more entries not shown (limit: ${MAX_DIR_ENTRIES})` : ""
           }`;
 
@@ -504,7 +516,9 @@ export function createOpenClawReadTool(
         if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) throw new Error("Read operation aborted");
 
-          let fileBuffer = await fs.readFile(inputPath);
+          let fileBuffer = bridge
+            ? await bridge.readFile({ filePath: inputPath, cwd: rootDir })
+            : await fs.readFile(inputPath);
           let mimeType = getImageMimeType(ext);
 
           if (options?.imageSanitization) {
@@ -587,7 +601,9 @@ export function createOpenClawReadTool(
         }
 
         if (signal?.aborted) throw new Error("Read operation aborted");
-        let text = await fs.readFile(inputPath, "utf-8");
+        let text = bridge
+          ? (await bridge.readFile({ filePath: inputPath, cwd: rootDir })).toString("utf-8")
+          : await fs.readFile(inputPath, "utf-8");
 
         if (offset > 0 || limit !== undefined) {
           const lines = text.split('\n');

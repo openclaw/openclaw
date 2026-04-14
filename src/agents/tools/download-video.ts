@@ -166,7 +166,7 @@ async function downloadFileWithVerification(url: string, dest: string, expectedH
             if (process.platform !== 'win32') {
               await fs.chmod(dest, 0o755);
             }
-            resolve();
+            resolve(undefined);
           });
         }).on('error', reject);
       }
