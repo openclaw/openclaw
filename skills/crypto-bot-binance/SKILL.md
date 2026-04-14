@@ -41,14 +41,19 @@ The self-hosted bot project can be downloaded from:
 
 ## Required configuration
 
-- Example: `https://your-bot-host.example.com`
 - `CRYPTO_BOT_BINANCE_BASE_URL` (required)
-  - Example: `https://bot.adduser.xyz`
-- `CRYPTO_BOT_BINANCE_TOKEN` (recommended; required for control endpoints if server token is configured)
+  - Must be HTTPS.
+  - Example: `https://your-bot-host.example.com`
 
 Optional:
 
+- `CRYPTO_BOT_BINANCE_TOKEN` (Bearer token auth)
+- `CRYPTO_BOT_BINANCE_X_OPENCLAW_TOKEN` (send as `X-OpenClaw-Token` header)
+- `CRYPTO_BOT_BINANCE_BASIC_AUTH_USER` and `CRYPTO_BOT_BINANCE_BASIC_AUTH_PASSWORD` (HTTP Basic Auth)
+  - Set both together.
+  - Do not combine Basic Auth with `CRYPTO_BOT_BINANCE_TOKEN`.
 - `CRYPTO_BOT_BINANCE_API_PREFIX` (default `/api/openclaw`)
+- Supports both `api/openclaw` and `/api/openclaw` forms.
 - `CRYPTO_BOT_BINANCE_TIMEOUT` (seconds, default `25`)
 - `CRYPTO_BOT_BINANCE_RETRIES` (default `1`)
 
@@ -76,9 +81,16 @@ Optional:
 # Connection and synchronization
 {baseDir}/scripts/crypto_bot_binance.sh test-connection
 {baseDir}/scripts/crypto_bot_binance.sh sync
+
+# Test onboarding credentials and persist them when supported by the server
+{baseDir}/scripts/crypto_bot_binance.sh test-connection \
+  --api-key "<BINANCE_API_KEY>" \
+  --api-secret "<BINANCE_API_SECRET>"
 ```
 
 ## Save integration settings
+
+Only these flags are accepted by `save-settings`, and each must be `true` or `false`.
 
 ```bash
 {baseDir}/scripts/crypto_bot_binance.sh save-settings \
@@ -114,7 +126,9 @@ Use this sequence when connecting a user's `crypto_bot_binance` instance to Bina
 
 3. Save credentials in bot via API
 
-- Use `/api/binance/test-connection` with `api_key` and `api_secret`.
+- Use the script onboarding flow:
+  - `{baseDir}/scripts/crypto_bot_binance.sh test-connection --api-key "<BINANCE_API_KEY>" --api-secret "<BINANCE_API_SECRET>"`
+- The script sends a JSON body with `api_key` and `api_secret`.
 - On success, credentials are persisted in bot storage and can be used by worker runtime.
 
 4. Set trusted deployment IPs in bot settings
@@ -146,7 +160,7 @@ Use this sequence when connecting a user's `crypto_bot_binance` instance to Bina
 Use these prompts directly in OpenClaw chat.
 
 ```text
-Configure crypto_bot_binance connection for https://crypto.adduser.xyz using OpenClaw token auth, then run health and status checks.
+Configure crypto_bot_binance connection for https://your-bot-host.example.com using OpenClaw token auth, then run health and status checks.
 ```
 
 ```text
