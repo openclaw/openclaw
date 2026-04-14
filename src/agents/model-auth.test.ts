@@ -427,6 +427,72 @@ describe("resolveUsableCustomProviderApiKey", () => {
     }
   });
 
+  it("resolves env SecretRefs with unknown env IDs from process env for custom providers", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "MY_CUSTOM_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved?.apiKey).toBe("sk-custom-secretref-env");
+      expect(resolved?.source).toContain("MY_CUSTOM_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not treat env SecretRefs with missing unknown env IDs as usable", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    delete process.env.MY_CUSTOM_KEY;
+    try {
+      expect(
+        hasUsableCustomProviderApiKey(
+          {
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://example.com/v1",
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MY_CUSTOM_KEY",
+                  },
+                  models: [],
+                },
+              },
+            },
+          },
+          "custom",
+        ),
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
   it("does not treat non-env SecretRefs as usable models.json credentials", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
