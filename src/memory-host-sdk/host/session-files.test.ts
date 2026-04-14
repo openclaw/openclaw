@@ -175,7 +175,7 @@ describe("buildSessionEntry", () => {
     expect(entry?.generatedByDreamingNarrative).toBe(true);
   });
 
-  it("flags dreaming narrative transcripts from the dream-diary prompt body", async () => {
+  it("does not flag ordinary transcripts that quote the dream-diary prompt", async () => {
     const jsonlLines = [
       JSON.stringify({
         type: "message",
@@ -196,8 +196,11 @@ describe("buildSessionEntry", () => {
     const entry = await buildSessionEntry(filePath);
 
     expect(entry).not.toBeNull();
-    expect(entry?.generatedByDreamingNarrative).toBe(true);
-    expect(entry?.content).toBe("");
-    expect(entry?.lineMap).toEqual([]);
+    expect(entry?.generatedByDreamingNarrative).toBeUndefined();
+    expect(entry?.content).toContain(
+      "User: Write a dream diary entry from these memory fragments:",
+    );
+    expect(entry?.content).toContain("Assistant: A drifting archive breathed in moonlight.");
+    expect(entry?.lineMap).toEqual([1, 2]);
   });
 });

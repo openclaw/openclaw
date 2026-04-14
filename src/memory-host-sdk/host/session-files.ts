@@ -8,7 +8,6 @@ import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
-const DREAMING_NARRATIVE_PROMPT_PREFIX = "Write a dream diary entry from these memory fragments";
 
 export type SessionFileEntry = {
   path: string;
@@ -51,11 +50,8 @@ function hasDreamingNarrativeRunId(value: unknown): boolean {
   return typeof value === "string" && value.includes(DREAMING_NARRATIVE_RUN_PREFIX);
 }
 
-function isDreamingNarrativeGeneratedRecord(record: unknown, messageText?: string | null): boolean {
+function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
   if (isDreamingNarrativeBootstrapRecord(record)) {
-    return true;
-  }
-  if (messageText?.includes(DREAMING_NARRATIVE_PROMPT_PREFIX)) {
     return true;
   }
   if (!record || typeof record !== "object" || Array.isArray(record)) {
@@ -199,9 +195,6 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       const text = extractSessionText(message.content);
       if (!text) {
         continue;
-      }
-      if (!generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record, text)) {
-        generatedByDreamingNarrative = true;
       }
       if (generatedByDreamingNarrative) {
         continue;
