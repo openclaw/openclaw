@@ -543,6 +543,68 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
   });
 
+  it("does not resolve env SecretRefs when provider allowlist excludes FIRECRAWL_API_KEY", () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-ref-key");
+    const cfg = {
+      secrets: {
+        providers: {
+          "firecrawl-env": {
+            source: "env",
+            allowlist: ["OTHER_FIRECRAWL_API_KEY"],
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "firecrawl-env",
+                  id: "FIRECRAWL_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+  });
+
+  it("does not resolve env SecretRefs when provider source is not env", () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-ref-key");
+    const cfg = {
+      secrets: {
+        providers: {
+          "firecrawl-env": {
+            source: "file",
+            path: "/tmp/secrets.json",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "firecrawl-env",
+                  id: "FIRECRAWL_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+  });
+
   it("only allows the official Firecrawl API host for fetch endpoints", () => {
     expect(firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape")).toBe(
       "https://api.firecrawl.dev/v2/scrape",

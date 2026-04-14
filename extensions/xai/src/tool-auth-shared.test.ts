@@ -215,4 +215,72 @@ describe("xai tool auth helpers", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("does not resolve env SecretRefs when provider allowlist excludes XAI_API_KEY", () => {
+    vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
+
+    expect(
+      resolveXaiToolApiKey({
+        sourceConfig: {
+          secrets: {
+            providers: {
+              "xai-env": {
+                source: "env",
+                allowlist: ["OTHER_XAI_API_KEY"],
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "xai-env",
+                      id: "XAI_API_KEY",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not resolve env SecretRefs when provider source is not env", () => {
+    vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
+
+    expect(
+      resolveXaiToolApiKey({
+        sourceConfig: {
+          secrets: {
+            providers: {
+              "xai-env": {
+                source: "file",
+                path: "/tmp/secrets.json",
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "xai-env",
+                      id: "XAI_API_KEY",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
 });

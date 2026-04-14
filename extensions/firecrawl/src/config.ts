@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { resolveSecretInputString, normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
@@ -107,10 +108,31 @@ type ConfiguredSecretResolution =
   | { status: "missing" }
   | { status: "blocked" };
 
-function resolveConfiguredSecret(value: unknown, path: string): ConfiguredSecretResolution {
+function canResolveEnvSecretRefInReadOnlyPath(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  id: string;
+}): boolean {
+  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
+  if (!providerConfig) {
+    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
+  }
+  if (providerConfig.source !== "env") {
+    return false;
+  }
+  const allowlist = providerConfig.allowlist;
+  return !allowlist || allowlist.includes(params.id);
+}
+
+function resolveConfiguredSecret(
+  value: unknown,
+  path: string,
+  cfg?: OpenClawConfig,
+): ConfiguredSecretResolution {
   const resolved = resolveSecretInputString({
     value,
     path,
+    defaults: cfg?.secrets?.defaults,
     mode: "inspect",
   });
   if (resolved.status === "available") {
@@ -125,6 +147,15 @@ function resolveConfiguredSecret(value: unknown, path: string): ConfiguredSecret
   }
   const envVarName = resolved.ref.id.trim();
   if (envVarName !== FIRECRAWL_API_KEY_ENV_VAR) {
+    return { status: "blocked" };
+  }
+  if (
+    !canResolveEnvSecretRefInReadOnlyPath({
+      cfg,
+      provider: resolved.ref.provider,
+      id: envVarName,
+    })
+  ) {
     return { status: "blocked" };
   }
   const envValue = normalizeSecretInput(process.env[envVarName]);
@@ -155,7 +186,7 @@ export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined
   ];
   let blockedConfiguredSecret = false;
   for (const candidate of configuredCandidates) {
-    const resolved = resolveConfiguredSecret(candidate.value, candidate.path);
+    const resolved = resolveConfiguredSecret(candidate.value, candidate.path, cfg);
     if (resolved.status === "available") {
       return resolved.value;
     }

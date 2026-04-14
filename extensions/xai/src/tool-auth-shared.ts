@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   coerceSecretRef,
+  resolveDefaultSecretProviderAlias,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -22,6 +23,22 @@ type ConfiguredRuntimeApiKeyResolution =
   | { status: "available"; value: string }
   | { status: "missing" }
   | { status: "blocked" };
+
+function canResolveEnvSecretRefInReadOnlyPath(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  id: string;
+}): boolean {
+  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
+  if (!providerConfig) {
+    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
+  }
+  if (providerConfig.source !== "env") {
+    return false;
+  }
+  const allowlist = providerConfig.allowlist;
+  return !allowlist || allowlist.includes(params.id);
+}
 
 function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   const literal = normalizeSecretInputString(value);
@@ -47,10 +64,12 @@ function readLegacyGrokFallbackAuth(cfg?: OpenClawConfig): XaiFallbackAuth | und
 function readConfiguredRuntimeApiKey(
   value: unknown,
   path: string,
+  cfg?: OpenClawConfig,
 ): ConfiguredRuntimeApiKeyResolution {
   const resolved = resolveSecretInputString({
     value,
     path,
+    defaults: cfg?.secrets?.defaults,
     mode: "inspect",
   });
   if (resolved.status === "available") {
@@ -66,6 +85,15 @@ function readConfiguredRuntimeApiKey(
   if (envVarName !== XAI_API_KEY_ENV_VAR) {
     return { status: "blocked" };
   }
+  if (
+    !canResolveEnvSecretRefInReadOnlyPath({
+      cfg,
+      provider: resolved.ref.provider,
+      id: envVarName,
+    })
+  ) {
+    return { status: "blocked" };
+  }
   const envValue = normalizeSecretInputString(process.env[envVarName]);
   return envValue ? { status: "available", value: envValue } : { status: "missing" };
 }
@@ -79,6 +107,7 @@ function readLegacyGrokApiKeyResult(cfg?: OpenClawConfig): ConfiguredRuntimeApiK
   return readConfiguredRuntimeApiKey(
     grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
     "tools.web.search.grok.apiKey",
+    cfg,
   );
 }
 
@@ -93,6 +122,7 @@ function readPluginXaiWebSearchApiKeyResult(
   return readConfiguredRuntimeApiKey(
     resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,
     "plugins.entries.xai.config.webSearch.apiKey",
+    cfg,
   );
 }
 
