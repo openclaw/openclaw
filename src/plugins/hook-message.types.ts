@@ -54,4 +54,5 @@ export type PluginHookMessageSentEvent = {
   content: string;
   success: boolean;
   error?: string;
+  messageId?: string;
 };

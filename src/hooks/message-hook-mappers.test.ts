@@ -251,6 +251,7 @@ describe("message hook mappers", () => {
       content: "reply",
       success: false,
       error: "network error",
+      messageId: "out-1",
     });
     expect(toInternalMessageSentContext(canonical)).toEqual({
       to: "demo-chat:chat:456",
@@ -263,6 +264,38 @@ describe("message hook mappers", () => {
       messageId: "out-1",
       isGroup: true,
       groupId: "demo-chat:chat:456",
+    });
+  });
+
+  it("omits messageId from plugin sent event when not provided", () => {
+    const canonical = buildCanonicalSentMessageHookContext({
+      to: "demo-chat:chat:456",
+      content: "reply",
+      success: true,
+      channelId: "demo-chat",
+    });
+
+    expect(toPluginMessageSentEvent(canonical)).toEqual({
+      to: "demo-chat:chat:456",
+      content: "reply",
+      success: true,
+    });
+  });
+
+  it("exposes native messageId on successful plugin sent events", () => {
+    const canonical = buildCanonicalSentMessageHookContext({
+      to: "demo-chat:chat:456",
+      content: "reply",
+      success: true,
+      channelId: "demo-chat",
+      messageId: "native-msg-42",
+    });
+
+    expect(toPluginMessageSentEvent(canonical)).toEqual({
+      to: "demo-chat:chat:456",
+      content: "reply",
+      success: true,
+      messageId: "native-msg-42",
     });
   });
 });

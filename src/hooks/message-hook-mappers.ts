@@ -307,6 +307,7 @@ export function toPluginMessageSentEvent(
     content: canonical.content,
     success: canonical.success,
     ...(canonical.error ? { error: canonical.error } : {}),
+    ...(canonical.messageId ? { messageId: canonical.messageId } : {}),
   };
 }
 
