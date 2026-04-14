@@ -60,17 +60,17 @@ export function buildOutboundMediaLoadOptions(
 ): OutboundMediaLoadOptions {
   const mediaAccess = resolveOutboundMediaAccess(params);
   const workspaceDir = mediaAccess?.workspaceDir ?? params.workspaceDir;
+  const localRoots = mediaAccess?.localRoots;
   if (mediaAccess?.readFile) {
     return {
       ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
-      localRoots: "any",
+      ...(localRoots ? { localRoots } : { localRoots: "any" }),
       readFile: mediaAccess.readFile,
       hostReadCapability: true,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
     };
   }
-  const localRoots = mediaAccess?.localRoots;
   return {
     ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
     ...(localRoots ? { localRoots } : {}),

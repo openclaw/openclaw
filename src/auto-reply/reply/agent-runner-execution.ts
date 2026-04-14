@@ -605,6 +605,15 @@ export async function runAgentTurnWithFallback(params: {
     cfg: runtimeConfig,
     sessionKey: params.sessionKey,
     workspaceDir: params.followupRun.run.workspaceDir,
+    messageProvider: params.followupRun.run.messageProvider,
+    accountId: params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
+    groupId: params.followupRun.run.groupId,
+    groupChannel: params.followupRun.run.groupChannel,
+    groupSpace: params.followupRun.run.groupSpace,
+    requesterSenderId: params.followupRun.run.senderId,
+    requesterSenderName: params.followupRun.run.senderName,
+    requesterSenderUsername: params.followupRun.run.senderUsername,
+    requesterSenderE164: params.followupRun.run.senderE164,
   });
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {

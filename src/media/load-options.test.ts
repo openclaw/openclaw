@@ -33,6 +33,21 @@ describe("media load options", () => {
       params: { maxBytes: 2048, mediaLocalRoots: undefined },
       expected: { maxBytes: 2048, localRoots: undefined },
     },
+    {
+      params: {
+        maxBytes: 4096,
+        mediaAccess: {
+          localRoots: ["/tmp/workspace"],
+          readFile: async () => Buffer.from("x"),
+        },
+      },
+      expected: {
+        maxBytes: 4096,
+        localRoots: ["/tmp/workspace"],
+        readFile: expect.any(Function),
+        hostReadCapability: true,
+      },
+    },
   ] as const)("builds outbound media load options %#", ({ params, expected }) => {
     expectBuiltOutboundMediaLoadOptions(params, expected);
   });
