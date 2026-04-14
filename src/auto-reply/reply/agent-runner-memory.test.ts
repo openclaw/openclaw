@@ -8,7 +8,11 @@ import {
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
-import { runMemoryFlushIfNeeded, setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.js";
+import {
+  resolveMemoryFlushModelOverride,
+  runMemoryFlushIfNeeded,
+  setAgentRunnerMemoryTestDeps,
+} from "./agent-runner-memory.js";
 import type { FollowupRun } from "./queue.js";
 
 const runWithModelFallbackMock = vi.fn();
@@ -286,5 +290,236 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.silentExpected).toBe(true);
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+
+  it("uses memoryFlush.model override when configured (provider/model format)", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                model: "openrouter/anthropic/claude-sonnet-4-6",
+              },
+            },
+          },
+        },
+      },
+      followupRun: createFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    const fallbackArgs = runWithModelFallbackMock.mock.calls[0]?.[0] as {
+      provider: string;
+      model: string;
+    };
+    expect(fallbackArgs.provider).toBe("openrouter");
+    expect(fallbackArgs.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("uses memoryFlush.model override when configured (model-only format)", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                model: "gpt-4o-mini",
+              },
+            },
+          },
+        },
+      },
+      followupRun: createFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    const fallbackArgs = runWithModelFallbackMock.mock.calls[0]?.[0] as {
+      provider: string;
+      model: string;
+    };
+    expect(fallbackArgs.provider).toBe("anthropic");
+    expect(fallbackArgs.model).toBe("gpt-4o-mini");
+  });
+
+  it("falls back to session model when memoryFlush.model is not configured", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      followupRun: createFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    const fallbackArgs = runWithModelFallbackMock.mock.calls[0]?.[0] as {
+      provider: string;
+      model: string;
+    };
+    expect(fallbackArgs.provider).toBe("anthropic");
+    expect(fallbackArgs.model).toBe("claude");
+  });
+});
+
+describe("resolveMemoryFlushModelOverride", () => {
+  it("returns override provider and model when provider/model format is configured", () => {
+    const result = resolveMemoryFlushModelOverride({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                model: "openrouter/anthropic/claude-sonnet-4-6",
+              },
+            },
+          },
+        },
+      },
+      sessionProvider: "anthropic",
+      sessionModel: "claude-opus-4-6",
+    });
+    expect(result.provider).toBe("openrouter");
+    expect(result.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("uses session provider when model-only format is configured", () => {
+    const result = resolveMemoryFlushModelOverride({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                model: "gpt-4o-mini",
+              },
+            },
+          },
+        },
+      },
+      sessionProvider: "openai",
+      sessionModel: "gpt-5.4",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4o-mini");
+  });
+
+  it("falls back to session provider and model when not configured", () => {
+    const result = resolveMemoryFlushModelOverride({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      sessionProvider: "anthropic",
+      sessionModel: "claude-opus-4-6",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+  });
+
+  it("falls back to session model when cfg is undefined", () => {
+    const result = resolveMemoryFlushModelOverride({
+      cfg: undefined,
+      sessionProvider: "anthropic",
+      sessionModel: "claude-opus-4-6",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+  });
+
+  it("falls back to session model when override is empty string", () => {
+    const result = resolveMemoryFlushModelOverride({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                model: "  ",
+              },
+            },
+          },
+        },
+      },
+      sessionProvider: "anthropic",
+      sessionModel: "claude-opus-4-6",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+  });
+
+  it("falls back to session model for the model part when override has provider/ with empty model", () => {
+    const result = resolveMemoryFlushModelOverride({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                model: "openrouter/",
+              },
+            },
+          },
+        },
+      },
+      sessionProvider: "anthropic",
+      sessionModel: "claude-opus-4-6",
+    });
+    expect(result.provider).toBe("openrouter");
+    expect(result.model).toBe("claude-opus-4-6");
   });
 });

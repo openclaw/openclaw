@@ -4529,6 +4529,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
                       },
+                      model: {
+                        type: "string",
+                        title: "Compaction Memory Flush Model",
+                        description:
+                          "Optional provider/model override used only for the pre-compaction memory flush turn. Set this when you want the flush to run on a cheaper or faster model than the session default, and leave it unset to keep using the session model.",
+                      },
                     },
                     additionalProperties: false,
                     title: "Compaction Memory Flush",
@@ -25578,6 +25584,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.compaction.memoryFlush.systemPrompt": {
       label: "Compaction Memory Flush System Prompt",
       help: "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.compaction.memoryFlush.model": {
+      label: "Compaction Memory Flush Model",
+      help: "Optional provider/model override used only for the pre-compaction memory flush turn. Set this when you want the flush to run on a cheaper or faster model than the session default, and leave it unset to keep using the session model.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedPi": {

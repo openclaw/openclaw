@@ -170,6 +170,7 @@ export const AgentDefaultsSchema = z
               .optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
+            model: z.string().optional(),
           })
           .strict()
           .optional(),

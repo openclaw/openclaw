@@ -457,6 +457,10 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+  /** Optional model override for the memory flush turn (e.g. "openrouter/anthropic/claude-sonnet-4-6").
+   * When set, the flush uses this model instead of the session model.
+   * Falls back to the session model when unset. */
+  model?: string;
 };
 
 /**
