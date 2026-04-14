@@ -259,12 +259,68 @@ describe("resolvePluginCapabilityProviders", () => {
     const cfg = { plugins: { allow: ["openai", "microsoft"] } } as OpenClawConfig;
     const providers = resolvePluginCapabilityProviders({ key: "speechProviders", cfg });
 
-    // Both providers should be returned (compat path ran, not short-circuited by openai alone)
+    // Both providers should be returned — compat discovered microsoft, openai already in compat too
     expectResolvedCapabilityProviderIds(providers, ["microsoft", "openai"]);
     // Compat path must have been invoked
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: expect.anything(),
     });
+  });
+
+  it("merges active-only runtime providers with compat-discovered bundled providers", () => {
+    // Regression guard: a workspace plugin may register a TTS provider at runtime that is
+    // not in the bundled manifest. It should be preserved alongside compat-discovered providers.
+    const openaiProvider = {
+      id: "openai",
+      label: "openai",
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.from("x"),
+        outputFormat: "mp3",
+        voiceCompatible: false,
+        fileExtension: ".mp3",
+      }),
+    };
+    const customProvider = {
+      id: "custom-tts",
+      label: "custom-tts",
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.from("x"),
+        outputFormat: "mp3",
+        voiceCompatible: false,
+        fileExtension: ".mp3",
+      }),
+    };
+
+    // Active runtime registry: openai (LLM side-effect) + custom-tts (workspace plugin)
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push(
+      { pluginId: "openai", pluginName: "openai", source: "test", provider: openaiProvider } as never,
+      { pluginId: "custom-tts", pluginName: "custom-tts", source: "workspace", provider: customProvider } as never,
+    );
+
+    // Compat registry: only bundled providers (openai) — custom-tts is not in the manifest
+    const compat = createEmptyPluginRegistry();
+    compat.speechProviders.push(
+      { pluginId: "openai", pluginName: "openai", source: "test", provider: openaiProvider } as never,
+    );
+
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : compat,
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "openai", origin: "bundled", contracts: { speechProviders: ["openai"] } },
+      ] as never,
+      diagnostics: [],
+    });
+
+    const cfg = { plugins: { allow: ["openai"] } } as OpenClawConfig;
+    const providers = resolvePluginCapabilityProviders({ key: "speechProviders", cfg });
+
+    // custom-tts must be preserved even though it's not in the bundled manifest
+    expectResolvedCapabilityProviderIds(providers, ["openai", "custom-tts"]);
   });
 
   it("keeps active capability providers even when cfg is passed", () => {
