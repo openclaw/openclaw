@@ -596,10 +596,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const voiceText = formatVoiceText(voiceTranscripts);
         const hasAsrReferFallback = voiceTranscriptSources.includes("asr");
 
-        const parsedContent = parseFaceTags(event.content);
-        const userContent = voiceText
-          ? (parsedContent.trim() ? `${parsedContent}\n${voiceText}` : voiceText) + attachmentInfo
-          : parsedContent + attachmentInfo;
+        const parsedContent = parseFaceTags(event.content ?? "");
+        const userContent =
+          (voiceText
+            ? (parsedContent.trim() ? `${parsedContent}\n${voiceText}` : voiceText) + attachmentInfo
+            : parsedContent + attachmentInfo) ?? "";
 
         let replyToId: string | undefined;
         let replyToBody: string | undefined;
