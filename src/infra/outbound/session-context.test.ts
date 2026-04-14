@@ -75,4 +75,55 @@ describe("buildOutboundSessionContext", () => {
       agentId: "explicit-agent",
     });
   });
+
+  it("preserves a trimmed requester sender id when provided", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        requesterSenderId: "  sender-123  ",
+      }),
+    ).toEqual({
+      requesterSenderId: "sender-123",
+    });
+  });
+
+  it("preserves a trimmed requester account id when provided", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        requesterAccountId: "  work  ",
+      }),
+    ).toEqual({
+      requesterAccountId: "work",
+    });
+  });
+
+  it("preserves trimmed non-id sender fields for e164/username/name policy matching", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        requesterSenderId: "id:telegram:123",
+        requesterSenderName: "  Alice  ",
+        requesterSenderUsername: "  alice_u  ",
+        requesterSenderE164: "  +15551234567  ",
+      }),
+    ).toEqual({
+      requesterSenderId: "id:telegram:123",
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
+    });
+  });
+
+  it("returns undefined when all sender and session fields are blank", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        requesterSenderId: "  ",
+        requesterSenderName: "  ",
+        requesterSenderUsername: "  ",
+        requesterSenderE164: "  ",
+      }),
+    ).toBeUndefined();
+  });
 });

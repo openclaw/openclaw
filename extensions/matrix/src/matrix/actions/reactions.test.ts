@@ -10,7 +10,7 @@ function createReactionsClient(params: {
   }>;
   userId?: string | null;
 }) {
-  const doRequest = vi.fn(async (_method: string, _path: string, _query: any) => ({
+  const doRequest = vi.fn(async (_method: string, _path: string, _query: unknown) => ({
     chunk: params.chunk.map((item) => ({
       event_id: item.event_id ?? "",
       sender: item.sender ?? "",

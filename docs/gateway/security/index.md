@@ -13,7 +13,7 @@ OpenClaw is **not** a hostile multi-tenant security boundary for multiple advers
 If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
 </Warning>
 
-**On this page:** [Trust model](#scope-first-personal-assistant-security-model) | [Quick audit](#quick-check-openclaw-security-audit) | [Hardened baseline](#hardened-baseline-in-60-seconds) | [DM access model](#dm-access-model-pairing--allowlist--open--disabled) | [Configuration hardening](#configuration-hardening-examples) | [Incident response](#incident-response)
+**On this page:** [Trust model](#scope-first-personal-assistant-security-model) | [Quick audit](#quick-check-openclaw-security-audit) | [Hardened baseline](#hardened-baseline-in-60-seconds) | [DM access model](#dm-access-model-pairing-allowlist-open-disabled) | [Configuration hardening](#configuration-hardening-examples) | [Incident response](#incident-response)
 
 ## Scope first: personal assistant security model
 
@@ -187,7 +187,7 @@ Allowlists gate triggers and command authorization. The `contextVisibility` sett
 - `contextVisibility: "allowlist"` filters supplemental context to senders allowed by the active allowlist checks.
 - `contextVisibility: "allowlist_quote"` behaves like `allowlist`, but still keeps one explicit quoted reply.
 
-Set `contextVisibility` per channel or per room/conversation. See [Group Chats](/channels/groups#context-visibility) for setup details.
+Set `contextVisibility` per channel or per room/conversation. See [Group Chats](/channels/groups#context-visibility-and-allowlists) for setup details.
 
 Advisory triage guidance:
 
@@ -579,6 +579,8 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 
 Details: [Plugins](/tools/plugin)
 
+<a id="dm-access-model-pairing-allowlist-open-disabled"></a>
+
 ## DM access model (pairing / allowlist / open / disabled)
 
 All current DM-capable channels support a DM policy (`dmPolicy` or `*.dm.policy`) that gates inbound DMs **before** the message is processed:
@@ -728,15 +730,16 @@ Recommendations:
 
 ## Reasoning & verbose output in groups
 
-`/reasoning` and `/verbose` can expose internal reasoning or tool output that
+`/reasoning`, `/verbose`, and `/trace` can expose internal reasoning, tool
+output, or plugin diagnostics that
 was not meant for a public channel. In group settings, treat them as **debug
 only** and keep them off unless you explicitly need them.
 
 Guidance:
 
-- Keep `/reasoning` and `/verbose` disabled in public rooms.
+- Keep `/reasoning`, `/verbose`, and `/trace` disabled in public rooms.
 - If you enable them, do so only in trusted DMs or tightly controlled rooms.
-- Remember: verbose output can include tool args, URLs, and data the model saw.
+- Remember: verbose and trace output can include tool args, URLs, plugin diagnostics, and data the model saw.
 
 ## Configuration Hardening (examples)
 
@@ -1149,13 +1152,13 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
 - Chrome MCP existing-session mode is **not** “safer”; it can act as you in whatever that host Chrome profile can reach.
 
-### Browser SSRF policy (trusted-network default)
+### Browser SSRF policy (strict by default)
 
-OpenClaw’s browser network policy defaults to the trusted-operator model: private/internal destinations are allowed unless you explicitly disable them.
+OpenClaw’s browser navigation policy is strict by default: private/internal destinations stay blocked unless you explicitly opt in.
 
-- Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` (implicit when unset).
+- Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is unset, so browser navigation keeps private/internal/special-use destinations blocked.
 - Legacy alias: `browser.ssrfPolicy.allowPrivateNetwork` is still accepted for compatibility.
-- Strict mode: set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false` to block private/internal/special-use destinations by default.
+- Opt-in mode: set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` to allow private/internal/special-use destinations.
 - In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including blocked names like `localhost`) for explicit exceptions.
 - Navigation is checked before request and best-effort re-checked on the final `http(s)` URL after navigation to reduce redirect-based pivots.
 

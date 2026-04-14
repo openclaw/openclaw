@@ -68,8 +68,20 @@ describe("config footprint guardrails", () => {
         "hooks.internal.handlers",
         "channels.telegram.groupMentionsOnly",
         "channels.telegram.streamMode",
+        "channels.telegram.chunkMode",
+        "channels.telegram.blockStreaming",
+        "channels.telegram.draftChunk",
+        "channels.telegram.blockStreamingCoalesce",
         "channels.slack.streamMode",
+        "channels.slack.chunkMode",
+        "channels.slack.blockStreaming",
+        "channels.slack.blockStreamingCoalesce",
+        "channels.slack.nativeStreaming",
         "channels.discord.streamMode",
+        "channels.discord.chunkMode",
+        "channels.discord.blockStreaming",
+        "channels.discord.draftChunk",
+        "channels.discord.blockStreamingCoalesce",
         "channels.googlechat.streamMode",
         "channels.slack.channels.*.allow",
         "channels.slack.accounts.*.channels.*.allow",
@@ -98,6 +110,16 @@ describe("config footprint guardrails", () => {
         `${pluginId} missing canonical network.dangerouslyAllowPrivateNetwork`,
       ).toBe(true);
     }
+  });
+
+  it("keeps canonical nested streaming paths in the public core channel schema", () => {
+    const source = readSource("src/config/zod-schema.providers-core.ts");
+
+    expect(source).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
+    expect(source).toContain("streaming: SlackStreamingConfigSchema.optional(),");
+    expect(source).not.toContain('streamMode: z.enum(["replace", "status_final", "append"])');
+    expect(source).not.toContain("draftChunk:");
+    expect(source).not.toContain("nativeStreaming:");
   });
 
   it("keeps shared setup input canonical-first", () => {

@@ -1,5 +1,6 @@
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
@@ -109,7 +110,8 @@ export const formatDaemonRuntimeShort = (runtime?: {
   const details: string[] = [];
   const detail = runtime.detail?.replace(/\s+/g, " ").trim() || "";
   const noisyLaunchctlDetail =
-    runtime.missingUnit === true && detail.toLowerCase().includes("could not find service");
+    runtime.missingUnit === true &&
+    normalizeLowercaseStringOrEmpty(detail).includes("could not find service");
   if (detail && !noisyLaunchctlDetail) {
     details.push(detail);
   }

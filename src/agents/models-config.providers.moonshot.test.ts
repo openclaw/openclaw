@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-catalog-shared.js";
-import { resolveMissingProviderApiKey } from "./models-config.providers.secrets.js";
+import { resolveMissingProviderApiKey } from "./models-config.providers.secret-helpers.js";
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";

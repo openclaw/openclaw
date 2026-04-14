@@ -14,6 +14,10 @@ import {
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
@@ -81,8 +85,8 @@ function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPoli
 }
 
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
-  const normalizedHost = hostname.trim().toLowerCase();
-  const normalizedSuffix = trustedSuffix.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
+  const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
 }
 
@@ -97,7 +101,7 @@ function resolveFalNetworkPolicy(params: {
     return {};
   }
 
-  const hostSuffix = parsedBaseUrl.hostname.trim().toLowerCase();
+  const hostSuffix = normalizeLowercaseStringOrEmpty(parsedBaseUrl.hostname);
   if (!hostSuffix || !params.allowPrivateNetwork) {
     return {};
   }
@@ -241,7 +245,7 @@ function toDataUri(buffer: Buffer, mimeType: string): string {
 }
 
 function fileExtensionForMimeType(mimeType: string | undefined): string {
-  const normalized = mimeType?.toLowerCase().trim();
+  const normalized = normalizeOptionalLowercaseString(mimeType);
   if (!normalized) {
     return "png";
   }

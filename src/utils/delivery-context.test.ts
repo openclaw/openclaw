@@ -149,6 +149,38 @@ describe("delivery context helpers", () => {
     });
   });
 
+  it.each([
+    {
+      channel: "slack",
+      conversationId: "1710000000.000100",
+      parentConversationId: "C123",
+      expected: { to: "channel:C123", threadId: "1710000000.000100" },
+    },
+    {
+      channel: "telegram",
+      conversationId: "42",
+      parentConversationId: "-10099",
+      expected: { to: "channel:-10099", threadId: "42" },
+    },
+    {
+      channel: "mattermost",
+      conversationId: "msg-child-id",
+      parentConversationId: "channel-parent-id",
+      expected: { to: "channel:channel-parent-id", threadId: "msg-child-id" },
+    },
+  ])(
+    "resolves parent-scoped thread delivery targets for $channel",
+    ({ channel, conversationId, parentConversationId, expected }) => {
+      expect(
+        resolveConversationDeliveryTarget({
+          channel,
+          conversationId,
+          parentConversationId,
+        }),
+      ).toEqual(expected);
+    },
+  );
+
   it("derives delivery context from a session entry", () => {
     expect(
       deliveryContextFromSession({

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
@@ -6,8 +6,8 @@ import {
 import type { ClawdbotConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuSubagentHooks } from "./subagent-hooks.js";
 import {
-  __testing as threadBindingTesting,
   createFeishuThreadBindingManager,
+  __testing as threadBindingTesting,
 } from "./thread-bindings.js";
 
 const baseConfig: ClawdbotConfig = {

@@ -59,6 +59,7 @@ happened while the attempt was running.
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 
 - Secrets live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (legacy: `~/.openclaw/agent/auth-profiles.json`).
+- Runtime auth-routing state lives in `~/.openclaw/agents/<agentId>/agent/auth-state.json`.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
 - Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
 
@@ -155,7 +156,7 @@ Cooldowns use exponential backoff:
 - 25 minutes
 - 1 hour (cap)
 
-State is stored in `auth-profiles.json` under `usageStats`:
+State is stored in `auth-state.json` under `usageStats`:
 
 ```json
 {
@@ -184,7 +185,7 @@ limit reached, resets tomorrow`, or `organization spending limit exceeded`).
 Those stay on the short cooldown/failover path instead of the long
 billing-disable path.
 
-State is stored in `auth-profiles.json`:
+State is stored in `auth-state.json`:
 
 ```json
 {

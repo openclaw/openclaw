@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
-import { setMinimaxApiKey, writeOAuthCredentials } from "../plugins/provider-auth-storage.js";
+import {
+  applyAuthProfileConfig,
+  upsertApiKeyProfile,
+  writeOAuthCredentials,
+} from "../plugins/provider-auth-helpers.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
@@ -163,7 +166,7 @@ describe("writeOAuthCredentials", () => {
   });
 });
 
-describe("setMinimaxApiKey", () => {
+describe("upsertApiKeyProfile", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
@@ -178,7 +181,7 @@ describe("setMinimaxApiKey", () => {
     const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
     lifecycle.setStateDir(env.stateDir);
 
-    await setMinimaxApiKey("sk-minimax-test");
+    upsertApiKeyProfile({ provider: "minimax", input: "sk-minimax-test" });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;

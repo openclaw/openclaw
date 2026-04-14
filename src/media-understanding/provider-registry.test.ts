@@ -1,10 +1,36 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/capability-provider-runtime.js")>(
+    "../plugins/capability-provider-runtime.js",
+  );
+  const runtime =
+    await vi.importActual<typeof import("../plugins/runtime.js")>("../plugins/runtime.js");
+  return {
+    ...actual,
+    resolvePluginCapabilityProviders: ({ key }: { key: string }) =>
+      key !== "mediaUnderstandingProviders"
+        ? []
+        : (() => {
+            const activeProviders =
+              runtime
+                .getActivePluginRegistry()
+                ?.mediaUnderstandingProviders.map((entry) => entry.provider) ?? [];
+            return activeProviders.length > 0
+              ? activeProviders
+              : [
+                  { id: "groq", capabilities: ["image", "audio"] },
+                  { id: "deepgram", capabilities: ["audio"] },
+                ];
+          })(),
+  };
+});
 
 describe("media-understanding provider registry", () => {
   afterEach(() => {

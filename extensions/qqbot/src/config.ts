@@ -5,6 +5,7 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -15,11 +16,7 @@ interface QQBotChannelConfig extends QQBotAccountConfig {
 }
 
 function normalizeConfiguredDefaultAccountId(raw: unknown): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim().toLowerCase();
-  return trimmed ? trimmed : null;
+  return normalizeOptionalLowercaseString(raw) ?? null;
 }
 
 function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): QQBotAccountConfig {
@@ -33,8 +30,13 @@ function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): Q
 }
 
 function normalizeAppId(raw: unknown): string {
-  if (raw === null || raw === undefined) return "";
-  return String(raw).trim();
+  if (typeof raw === "string") {
+    return raw.trim();
+  }
+  if (typeof raw === "number") {
+    return String(raw);
+  }
+  return "";
 }
 
 /** List all configured QQBot account IDs. */
@@ -170,7 +172,7 @@ export function applyQQBotAccountConfig(
     next.channels = {
       ...next.channels,
       qqbot: {
-        ...((next.channels?.qqbot as Record<string, unknown>) || {}),
+        ...(next.channels?.qqbot as Record<string, unknown> | undefined),
         enabled: true,
         allowFrom,
         ...(input.appId ? { appId: input.appId } : {}),
@@ -191,12 +193,12 @@ export function applyQQBotAccountConfig(
     next.channels = {
       ...next.channels,
       qqbot: {
-        ...((next.channels?.qqbot as Record<string, unknown>) || {}),
+        ...(next.channels?.qqbot as Record<string, unknown> | undefined),
         enabled: true,
         accounts: {
-          ...((next.channels?.qqbot as QQBotChannelConfig)?.accounts || {}),
+          ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts,
           [accountId]: {
-            ...((next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId] || {}),
+            ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId],
             enabled: true,
             allowFrom,
             ...(input.appId ? { appId: input.appId } : {}),

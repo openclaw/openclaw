@@ -8,6 +8,8 @@ export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
+export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
+
 export type McpServerConfig = {
   command: string;
   args?: string[];
@@ -43,6 +45,10 @@ export type ResolvedAcpxPluginConfig = {
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
+  legacyCompatibilityConfig: {
+    strictWindowsCmdWrapper?: boolean;
+    queueOwnerTtlSeconds?: number;
+  };
   mcpServers: Record<string, McpServerConfig>;
   agents: Record<string, string>;
 };
@@ -88,7 +94,7 @@ export const AcpxPluginConfigSchema = z.strictObject({
   timeoutSeconds: z
     .number({ error: "timeoutSeconds must be a number >= 0.001" })
     .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
-    .optional(),
+    .default(DEFAULT_ACPX_TIMEOUT_SECONDS),
   queueOwnerTtlSeconds: z
     .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
     .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })

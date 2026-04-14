@@ -3,8 +3,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../../test/helpers/plugins/public-artifacts.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugins/public-artifacts.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");

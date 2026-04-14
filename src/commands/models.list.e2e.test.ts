@@ -17,6 +17,7 @@ const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
   available: [] as Array<Record<string, unknown>>,
@@ -25,15 +26,17 @@ const modelRegistryState = {
 };
 let previousExitCode: typeof process.exitCode;
 
-vi.mock("./models/load-config.runtime.js", () => ({
-  getRuntimeConfig,
-  readSourceConfigSnapshotForWrite: readConfigFileSnapshotForWrite,
-  setRuntimeConfigSnapshot,
-  getModelsCommandSecretTargetIds: vi.fn().mockReturnValue([]),
-  resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
-    resolvedConfig: config,
-    diagnostics: [],
-  })),
+vi.mock("./models/load-config.js", () => ({
+  loadModelsConfigWithSource: vi.fn(async () => {
+    const resolvedConfig = getRuntimeConfig();
+    const sourceConfig = await loadSourceConfigSnapshotForTest(resolvedConfig);
+    setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
+    return {
+      sourceConfig,
+      resolvedConfig,
+      diagnostics: [],
+    };
+  }),
 }));
 
 vi.mock("./models/list.runtime.js", () => {
@@ -85,6 +88,10 @@ vi.mock("./models/list.runtime.js", () => {
   };
 });
 
+vi.mock("../agents/model-suppression.js", () => ({
+  shouldSuppressBuiltInModel,
+}));
+
 function makeRuntime() {
   return {
     log: vi.fn(),
@@ -104,6 +111,18 @@ function expectModelRegistryUnavailable(
   expect(process.exitCode).toBe(1);
 }
 
+async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unknown> {
+  try {
+    const { snapshot } = await readConfigFileSnapshotForWrite();
+    if (snapshot.valid) {
+      return snapshot.sourceConfig;
+    }
+  } catch {
+    // Match load-config: source snapshot is a best-effort write-preservation input.
+  }
+  return fallback;
+}
+
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -113,6 +132,8 @@ beforeEach(() => {
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
   ensureOpenClawModelsJson.mockClear();
+  shouldSuppressBuiltInModel.mockReset();
+  shouldSuppressBuiltInModel.mockReturnValue(false);
   readConfigFileSnapshotForWrite.mockClear();
   readConfigFileSnapshotForWrite.mockResolvedValue({
     snapshot: { valid: false, resolved: {} },
@@ -367,6 +388,11 @@ describe("models list/status", () => {
   });
 
   it("filters stale direct OpenAI spark rows from models list and registry views", async () => {
+    shouldSuppressBuiltInModel.mockImplementation(
+      ({ provider, id }: { provider?: string | null; id?: string | null }) =>
+        id === "gpt-5.3-codex-spark" &&
+        (provider === "openai" || provider === "azure-openai-responses"),
+    );
     setDefaultModel("openai-codex/gpt-5.3-codex-spark");
     modelRegistryState.models = [
       OPENAI_SPARK_MODEL,

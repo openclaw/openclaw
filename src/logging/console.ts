@@ -5,12 +5,13 @@ import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
-import { getLogger, type LoggerSettings } from "./logger.js";
+import { getLogger } from "./logger.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
+import type { ConsoleStyle, LoggerSettings } from "./types.js";
 
-export type ConsoleStyle = "pretty" | "compact" | "json";
+export type { ConsoleStyle } from "./types.js";
 type ConsoleSettings = {
   level: LogLevel;
   style: ConsoleStyle;
@@ -175,7 +176,7 @@ function isEpipeError(err: unknown): boolean {
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
   if (style === "pretty") {
-    return formatTimestamp(now, { style: "short" });
+    return formatTimestamp(now, { style: "short" }).replace(/[+-]\d{2}:\d{2}$/, "");
   }
   return formatLocalIsoWithOffset(now);
 }
