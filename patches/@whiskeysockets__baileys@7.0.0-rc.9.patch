@@ -24,13 +24,11 @@ index 0d32dfb4882dfe029ba8804772d7d89404b08e76..73809fcd1d52362aef0c35cb7416c29d
              // eslint-disable-next-line @typescript-eslint/no-explicit-any
              let result;
              try {
--                const stream = createReadStream(filePath);
-+                const body = await fs.readFile(filePath);
+                 const stream = createReadStream(filePath);
                  const response = await fetch(url, {
 -                    dispatcher: fetchAgent,
                      method: 'POST',
--                    body: stream,
-+                    body,
+                     body: stream,
                      headers: {
                          ...(() => {
                              const hdrs = options?.headers;
