@@ -2,14 +2,12 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
 import {
   buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
   isBundledPluginExtensionPath,
   resolvePluginLoaderJitiConfig,
   resolveLoaderPackageRoot,
@@ -141,17 +139,16 @@ function getSharedBundledPublicSurfaceJiti(modulePath: string, tryNative: boolea
     return null;
   }
   const cacheKey = tryNative ? "bundled:native" : "bundled:source";
-  const cached = sharedBundledPublicSurfaceJitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
   const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
+  return getCachedPluginJitiLoader({
+    cache: sharedBundledPublicSurfaceJitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    jitiFilename: import.meta.url,
+    cacheScopeKey: cacheKey,
+    aliasMap,
     tryNative,
   });
-  sharedBundledPublicSurfaceJitiLoaders.set(cacheKey, loader);
-  return loader;
 }
 
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {

@@ -19,6 +19,7 @@ export function getCachedPluginJitiLoader(params: {
   createLoader?: PluginJitiLoaderFactory;
   aliasMap?: Record<string, string>;
   tryNative?: boolean;
+  cacheScopeKey?: string;
 }): PluginJitiLoader {
   const defaultConfig =
     params.aliasMap || typeof params.tryNative === "boolean"
@@ -45,7 +46,7 @@ export function getCachedPluginJitiLoader(params: {
     tryNative,
     aliasMap,
   });
-  const scopedCacheKey = `${params.jitiFilename ?? params.modulePath}::${cacheKey}`;
+  const scopedCacheKey = `${params.jitiFilename ?? params.modulePath}::${params.cacheScopeKey ?? cacheKey}`;
   const cached = params.cache.get(scopedCacheKey);
   if (cached) {
     return cached;
