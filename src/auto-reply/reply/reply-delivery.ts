@@ -128,13 +128,14 @@ export function createBlockReplyDeliveryHandler(params: {
       // Track sent key to avoid duplicate in final payloads.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply(blockPayload);
-    } else if (blockHasMedia) {
-      // When block streaming is disabled, text-only block replies are accumulated into the
-      // final response. Media cannot be reconstructed later, so send it immediately and let
-      // the assistant's final text arrive through the normal final-reply path.
+    } else {
+      // Send directly: either flushing before tool execution (streaming enabled,
+      // no pipeline) or delivering progressively (streaming disabled).
+      // Track sent keys so the final-reply dedup filters out already-delivered content.
+      // Only record the key after a successful send so that a transient failure
+      // falls back to the final-reply path instead of silently dropping text.
+      await params.onBlockReply(blockPayload);
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply({ ...blockPayload, text: undefined });
     }
-    // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };
 }
