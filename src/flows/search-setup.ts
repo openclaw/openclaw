@@ -440,6 +440,10 @@ export async function runSearchSetupFlow(
     });
   }
 
+  if (entry.credentialNote) {
+    await prompter.note(entry.credentialNote, entry.label);
+  }
+
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
   if (useSecretRefMode) {
     if (keyConfigured) {
@@ -470,10 +474,6 @@ export async function runSearchSetupFlow(
       prompter,
       opts,
     });
-  }
-
-  if (entry.credentialNote) {
-    await prompter.note(entry.credentialNote, entry.label);
   }
 
   const keyInput = await prompter.text({
