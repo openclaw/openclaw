@@ -11,6 +11,19 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Video generation/live tests: bound provider polling for live video smoke, default to the fast non-FAL text-to-video path, and use a one-second lobster prompt so release validation no longer waits indefinitely on slow provider queues.
+- Memory-core/QMD `memory_get`: reject reads of arbitrary workspace markdown paths and only allow canonical memory files (`MEMORY.md`, `memory.md`, `DREAMS.md`, `dreams.md`, `memory/**`) plus exact paths of active indexed QMD workspace documents, so the QMD memory backend can no longer be used as a generic workspace-file read shim that bypasses `read` tool-policy denials. (#66026) Thanks @eleqtrizit.
+- Cron/agents: forward embedded-run tool policy and internal event params into the attempt layer so `--tools` allowlists, cron-owned message-tool suppression, explicit message targeting, and command-path internal events all take effect at runtime again. (#62675) Thanks @hexsprite.
+- Setup/providers: guard preferred-provider lookup during setup so malformed plugin metadata with a missing provider id no longer crashes the wizard with `Cannot read properties of undefined (reading 'trim')`. (#66649) Thanks @Tianworld.
+- Matrix/security: normalize sandboxed profile avatar params, preserve `mxc://` avatar URLs, and surface gmail watcher stop failures during reload. (#64701) Thanks @slepybear.
+- Telegram/documents: drop leaked binary caption bytes from inbound Telegram text handling so document uploads like `.mobi` or `.epub` no longer explode prompt token counts. (#66663) Thanks @joelnishanth.
+- Gateway/auth: resolve the active gateway bearer per-request on the HTTP server and the HTTP upgrade handler via `getResolvedAuth()`, mirroring the WebSocket path, so a secret rotated through `secrets.reload` or config hot-reload stops authenticating on `/v1/*`, `/tools/invoke`, plugin HTTP routes, and the canvas upgrade path immediately instead of remaining valid on HTTP until gateway restart. (#66651) Thanks @mmaps.
+- Agents/compaction: cap the compaction reserve-token floor to the model context window so small-context local models (e.g. Ollama with 16K tokens) no longer trigger context-overflow errors or infinite compaction loops on every prompt. (#65671) Thanks @openperf.
+- Agents/OpenAI Responses: classify the exact `Unknown error (no error details in response)` transport failure as failover reason `unknown` so assistant/model fallback still runs for that no-details failure path. (#65254) Thanks @OpenCodeEngineer.
+- Models/probe: surface invalid-model probe failures as `format` instead of `unknown` in `models list --probe`, and lock the invalid-model fallback path in with regression coverage. (#50028) Thanks @xiwuqi.
+- Agents/failover: classify OpenAI-compatible `finish_reason: network_error` stream failures as timeout so model fallback retries continue instead of stopping with an unknown failover reason. (#61784) thanks @lawrence3699.
+- Onboarding/channels: normalize channel setup metadata before discovery and validation so malformed or mixed-shape channel plugin metadata no longer breaks setup and onboarding channel lists. (#66706) Thanks @darkamenosa.
+
 ## 2026.4.14
 
 ### Changes
@@ -87,6 +100,7 @@ Docs: https://docs.openclaw.ai
 - Hooks/session-memory: pass the resolved agent workspace into gateway `/new` and `/reset` session-memory hooks so reset snapshots stay scoped to the right agent workspace instead of leaking into the default workspace. (#64735) Thanks @suboss87 and @vincentkoc.
 - CLI/approvals: raise the default `openclaw approvals get` gateway timeout and report config-load timeouts explicitly, so slow hosts stop showing a misleading `Config unavailable.` note when the approvals snapshot succeeds but the follow-up config RPC needs more time. (#66239) Thanks @neeravmakwana.
 - Media/store: honor configured agent media limits when saving generated media and persisting outbound reply media, so the store no longer hard-stops those flows at 5 MB before the configured limit applies. (#66229) Thanks @neeravmakwana and @vincentkoc.
+- Plugins/setup-entry: preserve separate setup-entry secrets exports when loading bundled setup-runtime channels, so setup-mode flows keep the channel secret contract for split plugin + secrets entrypoints. (#66261) Thanks @hxy91819.
 
 ## 2026.4.12
 
