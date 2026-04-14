@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import "../test-helpers/load-styles.ts";
+import { i18n } from "../i18n/index.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
@@ -165,7 +166,30 @@ describe("control UI routing", () => {
     expect(app.querySelector(".topnav-shell")).not.toBeNull();
     expect(app.querySelector(".topnav-shell__content")).not.toBeNull();
     expect(app.querySelector(".topnav-shell__actions")).not.toBeNull();
+    expect(app.querySelector(".topbar-language-menu")).not.toBeNull();
     expect(app.querySelector(".topnav-shell .brand-title")).toBeNull();
+  });
+
+  it("lets the topbar language picker switch locale", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    await i18n.setLocale("vi");
+    app.applySettings({ ...app.settings, locale: "vi" });
+    await app.updateComplete;
+
+    const englishButton = app.querySelector<HTMLButtonElement>(
+      '.topbar-language-menu__option[data-locale="en"]',
+    );
+    expect(englishButton).not.toBeNull();
+
+    englishButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.settings.locale).toBe("en");
+    expect(i18n.getLocale()).toBe("en");
+    expect(app.querySelector(".topbar-language-menu__current")?.textContent?.trim()).toBe("EN");
   });
 
   it("renders the refreshed sidebar shell structure", async () => {

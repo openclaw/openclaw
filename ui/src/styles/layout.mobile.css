@@ -282,6 +282,18 @@
     display: none;
   }
 
+  .topbar-language-menu__trigger {
+    min-width: 0;
+    padding: 0 10px;
+  }
+
+  .topbar-language-menu__panel {
+    right: 0;
+    left: auto;
+    min-width: min(82vw, 260px);
+    max-width: min(82vw, 260px);
+  }
+
   .sidebar-mode-switch {
     display: block;
   }

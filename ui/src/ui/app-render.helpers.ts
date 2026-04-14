@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { t } from "../i18n/index.ts";
+import { i18n, isSupportedLocale, SUPPORTED_LOCALES, t, type Locale } from "../i18n/index.ts";
 import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -1123,6 +1123,66 @@ const THEME_MODE_OPTIONS: ThemeModeOption[] = [
   { id: "light", label: "Light", short: "LIGHT" },
   { id: "dark", label: "Dark", short: "DARK" },
 ];
+
+function localeLabelKey(locale: Locale): string {
+  return locale.replace(/-([a-zA-Z])/g, (_, char: string) => char.toUpperCase());
+}
+
+function localeLabel(locale: Locale): string {
+  return t(`languages.${localeLabelKey(locale)}`);
+}
+
+function localeTriggerLabel(locale: Locale): string {
+  return locale.toUpperCase();
+}
+
+export function renderTopbarLanguagePicker(state: AppViewState) {
+  const currentLocale = isSupportedLocale(state.settings.locale)
+    ? state.settings.locale
+    : i18n.getLocale();
+  const currentLabel = localeLabel(currentLocale);
+
+  const applyLocale = async (locale: Locale, event: Event) => {
+    event.preventDefault();
+    const details = (event.currentTarget as HTMLElement | null)?.closest("details");
+    if (locale !== currentLocale) {
+      await i18n.setLocale(locale);
+      state.applySettings({ ...state.settings, locale });
+    }
+    details?.removeAttribute("open");
+  };
+
+  return html`
+    <details class="topbar-language-menu">
+      <summary
+        class="topbar-language-menu__trigger"
+        title="${t("overview.access.language")}: ${currentLabel}"
+        aria-label="${t("overview.access.language")}: ${currentLabel}"
+      >
+        <span class="topbar-language-menu__icon" aria-hidden="true">${icons.globe}</span>
+        <span class="topbar-language-menu__current">${localeTriggerLabel(currentLocale)}</span>
+        <span class="topbar-language-menu__chevron" aria-hidden="true">${icons.chevronDown}</span>
+      </summary>
+      <div class="topbar-language-menu__panel">
+        ${SUPPORTED_LOCALES.map(
+          (locale) => html`
+            <button
+              type="button"
+              class="topbar-language-menu__option ${locale === currentLocale
+                ? "topbar-language-menu__option--active"
+                : ""}"
+              data-locale=${locale}
+              @click=${(event: Event) => void applyLocale(locale, event)}
+            >
+              <span class="topbar-language-menu__option-code">${localeTriggerLabel(locale)}</span>
+              <span class="topbar-language-menu__option-label">${localeLabel(locale)}</span>
+            </button>
+          `,
+        )}
+      </div>
+    </details>
+  `;
+}
 
 export function renderTopbarThemeModeToggle(state: AppViewState) {
   const modeIcon = (mode: ThemeMode) => {
