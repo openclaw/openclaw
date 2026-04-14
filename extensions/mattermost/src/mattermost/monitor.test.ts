@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   buildMattermostModelPickerSelectMessageSid,
+  didDeliverAllMattermostDeferredFinalReplies,
   evaluateMattermostMentionGate,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
@@ -434,5 +435,25 @@ describe("resolveMattermostReactionChannelId", () => {
 
   it("returns undefined when neither payload location includes channel_id", () => {
     expect(resolveMattermostReactionChannelId({})).toBeUndefined();
+  });
+});
+
+describe("didDeliverAllMattermostDeferredFinalReplies", () => {
+  it("returns true when all deferred finals were delivered", () => {
+    expect(
+      didDeliverAllMattermostDeferredFinalReplies({
+        deliveredCount: 2,
+        deferredCount: 2,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when a later deferred final failed", () => {
+    expect(
+      didDeliverAllMattermostDeferredFinalReplies({
+        deliveredCount: 1,
+        deferredCount: 2,
+      }),
+    ).toBe(false);
   });
 });

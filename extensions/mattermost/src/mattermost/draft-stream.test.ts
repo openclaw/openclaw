@@ -7,25 +7,31 @@ type RequestRecord = {
   init?: RequestInit;
 };
 
-function createMockClient(): { client: MattermostClient; calls: RequestRecord[] } {
+function createMockClient(): {
+  client: MattermostClient;
+  calls: RequestRecord[];
+  request: ReturnType<typeof vi.fn>;
+} {
   const calls: RequestRecord[] = [];
   let nextId = 1;
+  const request = vi.fn(async <T>(path: string, init?: RequestInit): Promise<T> => {
+    calls.push({ path, init });
+    if (path === "/posts") {
+      return { id: `post-${nextId++}` } as T;
+    }
+    if (path.startsWith("/posts/")) {
+      return { id: "patched" } as T;
+    }
+    return {} as T;
+  });
   const client: MattermostClient = {
     baseUrl: "https://chat.example.com",
     apiBaseUrl: "https://chat.example.com/api/v4",
     token: "token",
-    request: vi.fn(async (path: string, init?: RequestInit) => {
-      calls.push({ path, init });
-      if (path === "/posts") {
-        return { id: `post-${nextId++}` };
-      }
-      if (path.startsWith("/posts/")) {
-        return { id: "patched" };
-      }
-      return {};
-    }),
+    request: request as MattermostClient["request"],
+    fetchImpl: vi.fn(async () => new Response(null, { status: 204 })),
   };
-  return { client, calls };
+  return { client, calls, request };
 }
 
 describe("createMattermostDraftStream", () => {
@@ -73,13 +79,15 @@ describe("createMattermostDraftStream", () => {
 
   it("warns and stops when preview creation fails", async () => {
     const warn = vi.fn();
+    const request = vi.fn(async () => {
+      throw new Error("boom");
+    });
     const client: MattermostClient = {
       baseUrl: "https://chat.example.com",
       apiBaseUrl: "https://chat.example.com/api/v4",
       token: "token",
-      request: vi.fn(async () => {
-        throw new Error("boom");
-      }),
+      request: request as MattermostClient["request"],
+      fetchImpl: vi.fn(async () => new Response(null, { status: 204 })),
     };
     const stream = createMattermostDraftStream({
       client,
@@ -94,7 +102,7 @@ describe("createMattermostDraftStream", () => {
     await stream.flush();
 
     expect(warn).toHaveBeenCalled();
-    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
     expect(stream.postId()).toBeUndefined();
   });
 });

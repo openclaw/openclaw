@@ -10,6 +10,7 @@ import {
   createMattermostClient,
   fetchMattermostMe,
   normalizeMattermostBaseUrl,
+  updateMattermostPost,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
@@ -235,6 +236,13 @@ export function resolveMattermostReplyRootId(params: {
     return threadRootId;
   }
   return normalizeOptionalString(params.replyToId);
+}
+
+export function didDeliverAllMattermostDeferredFinalReplies(params: {
+  deliveredCount: number;
+  deferredCount: number;
+}): boolean {
+  return params.deferredCount > 0 && params.deliveredCount === params.deferredCount;
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {
@@ -2006,6 +2014,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     let lastPartialText = "";
     let finalizedViaPreviewPost = false;
+    let previewCompletionNotePosted = false;
+    type DeferredMattermostFinal = {
+      payload: ReplyPayload;
+      replyRootId?: string;
+      previewPostId?: string;
+      previewFinalText?: string;
+      canFinalizeInPlace: boolean;
+    };
+    const deferredFinalReplies: DeferredMattermostFinal[] = [];
 
     const resolvePreviewFinalText = (text?: string) => {
       if (typeof text !== "string") {
@@ -2032,6 +2049,86 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         return undefined;
       }
       return trimmed;
+    };
+
+    const updateDraftPreviewToNormalSend = async (previewPostId?: string) => {
+      if (
+        previewCompletionNotePosted ||
+        finalizedViaPreviewPost ||
+        typeof previewPostId !== "string"
+      ) {
+        return;
+      }
+      try {
+        await updateMattermostPost(client, previewPostId, {
+          message: "↓ See below.",
+        });
+        previewCompletionNotePosted = true;
+      } catch (err) {
+        logVerboseMessage(
+          `mattermost preview completion update failed; continuing with normal send (${String(err)})`,
+        );
+      }
+    };
+
+    const deliverDeferredFinalReply = async (entry: DeferredMattermostFinal) => {
+      await deliverMattermostReplyPayload({
+        core,
+        cfg,
+        payload: entry.payload,
+        to,
+        accountId: account.accountId,
+        agentId: route.agentId,
+        replyToId: entry.replyRootId,
+        textLimit,
+        tableMode,
+        sendMessage: sendMessageMattermost,
+      });
+      runtime.log?.(`delivered reply to ${to}`);
+    };
+
+    const finalizeOrDeliverDeferredFinalReplies = async (finalCount: number) => {
+      if (!deferredFinalReplies.length) {
+        return;
+      }
+      await draftStream.flush();
+      const pendingFinalReplies = deferredFinalReplies.splice(0);
+      const firstFinal = pendingFinalReplies[0];
+      if (
+        finalCount === 1 &&
+        firstFinal?.canFinalizeInPlace === true &&
+        typeof firstFinal.previewPostId === "string" &&
+        typeof firstFinal.previewFinalText === "string"
+      ) {
+        try {
+          await updateMattermostPost(client, firstFinal.previewPostId, {
+            message: firstFinal.previewFinalText,
+          });
+          finalizedViaPreviewPost = true;
+          return;
+        } catch (err) {
+          logVerboseMessage(
+            `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
+          );
+        }
+      }
+
+      const previewPostId = pendingFinalReplies.find(
+        (entry) => typeof entry.previewPostId === "string",
+      )?.previewPostId;
+      await updateDraftPreviewToNormalSend(previewPostId);
+      let deliveredDeferredCount = 0;
+      for (const entry of pendingFinalReplies) {
+        await deliverDeferredFinalReply(entry);
+        deliveredDeferredCount += 1;
+      }
+      if (
+        didDeliverAllMattermostDeferredFinalReplies({
+          deliveredCount: deliveredDeferredCount,
+          deferredCount: pendingFinalReplies.length,
+        })
+      ) {
+      }
     };
 
     const updateDraftFromPartial = (text?: string) => {
@@ -2068,37 +2165,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
             const previewFinalText = resolvePreviewFinalText(payload.text);
             const previewPostId = draftStream.postId();
-
-            if (
-              typeof previewPostId === "string" &&
-              !hasMedia &&
-              typeof previewFinalText === "string" &&
-              !payload.isError
-            ) {
-              try {
-                await updateMattermostPost(client, previewPostId, {
-                  message: previewFinalText,
-                });
-                finalizedViaPreviewPost = true;
-                return;
-              } catch (err) {
-                logVerboseMessage(
-                  `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
-                );
-              }
-            }
-
-            if (typeof previewPostId === "string" && !finalizedViaPreviewPost) {
-              try {
-                await updateMattermostPost(client, previewPostId, {
-                  message: "↓ See below.",
-                });
-              } catch (err) {
-                logVerboseMessage(
-                  `mattermost preview completion update failed; continuing with normal send (${String(err)})`,
-                );
-              }
-            }
+            deferredFinalReplies.push({
+              payload,
+              replyRootId: resolveMattermostReplyRootId({
+                threadRootId: effectiveReplyToId,
+                replyToId: payload.replyToId,
+              }),
+              previewPostId,
+              previewFinalText,
+              canFinalizeInPlace:
+                typeof previewPostId === "string" &&
+                !hasMedia &&
+                typeof previewFinalText === "string" &&
+                !payload.isError,
+            });
+            return;
           }
 
           await deliverMattermostReplyPayload({
@@ -2124,7 +2205,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
 
     try {
-      await core.channel.reply.withReplyDispatcher({
+      const dispatchResult = await core.channel.reply.withReplyDispatcher({
         dispatcher,
         onSettled: () => {
           markDispatchIdle();
@@ -2158,6 +2239,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           }),
       });
+      await finalizeOrDeliverDeferredFinalReplies(dispatchResult.counts.final);
     } finally {
       try {
         await draftStream.stop();

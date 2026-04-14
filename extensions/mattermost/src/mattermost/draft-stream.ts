@@ -1,4 +1,4 @@
-import { createFinalizableDraftStreamControlsForState } from "../../../../src/channels/draft-stream-controls.js";
+import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createMattermostPost, updateMattermostPost, type MattermostClient } from "./client.js";
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
