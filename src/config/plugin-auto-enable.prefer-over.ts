@@ -72,6 +72,10 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
 
 const catalogCache = new Map<string, ExternalCatalogChannelEntry[] | null>();
 
+export function clearCatalogCache(): void {
+  catalogCache.clear();
+}
+
 function readCatalogEntries(resolved: string): ExternalCatalogChannelEntry[] | null {
   const cached = catalogCache.get(resolved);
   if (cached !== undefined) {

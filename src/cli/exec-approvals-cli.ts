@@ -164,6 +164,8 @@ function formatCliError(err: unknown): string {
 
 function isTimeoutError(err: unknown): boolean {
   if (err instanceof Error) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ETIMEDOUT" || code === "ECONNABORTED") return true;
     const msg = err.message.toLowerCase();
     return msg.includes("timeout") || msg.includes("timed out");
   }
