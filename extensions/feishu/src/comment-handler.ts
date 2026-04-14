@@ -1,6 +1,7 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { clearFeishuCommentConversationDelivery } from "./comment-delivery-guard.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 import {
   createChannelPairingController,
@@ -252,6 +253,11 @@ export async function handleFeishuCommentEvent(
         `(queuedFinal=${queuedFinal}, replies=${counts.final}, session=${commentSessionKey})`,
     );
   } finally {
+    clearFeishuCommentConversationDelivery({
+      accountId: account.accountId,
+      to: commentTarget,
+      threadId: turn.replyId,
+    });
     markRunComplete();
     markDispatchIdle();
     void cleanupTypingReaction();

@@ -2,6 +2,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { recordFeishuCommentConversationDelivery } from "./comment-delivery-guard.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { encodeQuery, extractReplyText, isRecord, readString } from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
@@ -105,6 +106,7 @@ type FeishuDriveToolContext = {
   deliveryContext?: {
     channel?: string;
     to?: string;
+    accountId?: string;
     threadId?: string | number;
   };
 };
@@ -262,6 +264,58 @@ function applyCommentFileTypeDefault<
   return {
     ...params,
     file_type: fileType,
+  };
+}
+
+function maybeRecordCurrentCommentConversationDelivery(params: {
+  context: FeishuDriveToolContext | undefined;
+  fileToken: string | undefined;
+  fileType: CommentFileType | "doc" | "docx" | undefined;
+  commentId?: string;
+}): void {
+  const deliveryContext = params.context?.deliveryContext;
+  if (deliveryContext?.channel && deliveryContext.channel !== "feishu") {
+    return;
+  }
+  const ambient = resolveAmbientCommentTarget(params.context);
+  const currentConversationTarget = deliveryContext?.to?.trim();
+  if (!ambient || !currentConversationTarget) {
+    return;
+  }
+  if (params.fileToken?.trim() !== ambient.fileToken || params.fileType !== ambient.fileType) {
+    return;
+  }
+  if (params.commentId && params.commentId.trim() !== ambient.commentId) {
+    return;
+  }
+  recordFeishuCommentConversationDelivery({
+    accountId: deliveryContext?.accountId,
+    to: currentConversationTarget,
+    threadId: deliveryContext?.threadId,
+  });
+}
+
+function resolveAmbientCommentFollowUpTargetForAddComment(params: {
+  context: FeishuDriveToolContext | undefined;
+  fileToken: string | undefined;
+  fileType: "doc" | "docx" | undefined;
+  blockId?: string;
+}): {
+  fileToken: string;
+  fileType: "doc" | "docx";
+  commentId: string;
+} | null {
+  const ambient = resolveAmbientCommentTarget(params.context);
+  if (!ambient || params.blockId?.trim()) {
+    return null;
+  }
+  if (params.fileToken?.trim() !== ambient.fileToken || params.fileType !== ambient.fileType) {
+    return null;
+  }
+  return {
+    fileToken: ambient.fileToken,
+    fileType: ambient.fileType,
+    commentId: ambient.commentId,
   };
 }
 
@@ -811,7 +865,26 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               case "add_comment": {
                 const resolved = applyAddCommentDefaults(applyAddCommentAmbientDefaults(p, ctx));
                 try {
-                  return jsonToolResult(await addComment(client, resolved));
+                  const ambientFollowUpTarget = resolveAmbientCommentFollowUpTargetForAddComment({
+                    context: ctx,
+                    fileToken: resolved.file_token,
+                    fileType: resolved.file_type,
+                    blockId: resolved.block_id,
+                  });
+                  const result = ambientFollowUpTarget
+                    ? await deliverCommentThreadText(client, {
+                        file_token: ambientFollowUpTarget.fileToken,
+                        file_type: ambientFollowUpTarget.fileType,
+                        comment_id: ambientFollowUpTarget.commentId,
+                        content: resolved.content,
+                      })
+                    : await addComment(client, resolved);
+                  maybeRecordCurrentCommentConversationDelivery({
+                    context: ctx,
+                    fileToken: resolved.file_token,
+                    fileType: resolved.file_type,
+                  });
+                  return jsonToolResult(result);
                 } finally {
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),
@@ -825,7 +898,14 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                   "reply_comment",
                 );
                 try {
-                  return jsonToolResult(await deliverCommentThreadText(client, resolved));
+                  const result = await deliverCommentThreadText(client, resolved);
+                  maybeRecordCurrentCommentConversationDelivery({
+                    context: ctx,
+                    fileToken: resolved.file_token,
+                    fileType: resolved.file_type,
+                    commentId: resolved.comment_id,
+                  });
+                  return jsonToolResult(result);
                 } finally {
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),

@@ -1,6 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
+import {
+  hasFeishuCommentConversationDelivery,
+  resetFeishuCommentConversationDeliveriesForTest,
+} from "./comment-delivery-guard.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
 const resolveAnyEnabledFeishuToolsConfigMock = vi.hoisted(() => vi.fn());
@@ -45,6 +49,7 @@ describe("registerFeishuDriveTools", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetFeishuCommentConversationDeliveriesForTest();
     resolveAnyEnabledFeishuToolsConfigMock.mockReturnValue({
       doc: false,
       chat: false,
@@ -595,13 +600,23 @@ describe("registerFeishuDriveTools", () => {
     });
     const replyCommentResult = await replyCommentPromise;
     expect(replyCommentResult.details).toEqual(
-      expect.objectContaining({ success: true, reply_id: "r6" }),
+      expect.objectContaining({
+        success: true,
+        reply_id: "r6",
+      }),
     );
+    expect(
+      hasFeishuCommentConversationDelivery({
+        accountId: "default",
+        to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
+      }),
+    ).toBe(true);
 
     resolveCleanup?.(false);
   });
 
-  it("does not wait for ambient typing cleanup before add_comment sends visible output", async () => {
+  it("rewrites ambient local-comment add_comment calls into reply_comment delivery", async () => {
     const registerTool = vi.fn();
     registerFeishuDriveTools(
       createDriveToolApi({
@@ -629,10 +644,17 @@ describe("registerFeishuDriveTools", () => {
       },
     });
 
-    requestMock.mockResolvedValueOnce({
-      code: 0,
-      data: { comment_id: "c_add" },
-    });
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: false }],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { reply_id: "r_add_ambient" },
+      });
 
     let resolveCleanup: ((value: boolean) => void) | undefined;
     cleanupAmbientCommentTypingReactionMock.mockImplementationOnce(
@@ -644,7 +666,7 @@ describe("registerFeishuDriveTools", () => {
 
     const addCommentPromise = tool.execute("call-add-ambient", {
       action: "add_comment",
-      content: "ambient top-level comment",
+      content: "ambient comment follow-up",
     });
     const status = await Promise.race([
       addCommentPromise.then(() => "done"),
@@ -652,13 +674,33 @@ describe("registerFeishuDriveTools", () => {
     ]);
 
     expect(status).toBe("done");
-    expect(requestMock).toHaveBeenCalledWith(
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         method: "POST",
-        url: "/open-apis/drive/v1/files/doc_1/new_comments",
+        url: "/open-apis/drive/v1/files/doc_1/comments/batch_query?file_type=docx&user_id_type=open_id",
         data: {
-          file_type: "docx",
-          reply_elements: [{ type: "text", text: "ambient top-level comment" }],
+          comment_ids: ["c1"],
+        },
+      }),
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+        params: { file_type: "docx" },
+        data: {
+          content: {
+            elements: [
+              {
+                type: "text_run",
+                text_run: {
+                  text: "ambient comment follow-up",
+                },
+              },
+            ],
+          },
         },
       }),
     );
@@ -672,10 +714,182 @@ describe("registerFeishuDriveTools", () => {
     });
     const addCommentResult = await addCommentPromise;
     expect(addCommentResult.details).toEqual(
-      expect.objectContaining({ success: true, comment_id: "c_add" }),
+      expect.objectContaining({
+        success: true,
+        reply_id: "r_add_ambient",
+        delivery_mode: "reply_comment",
+      }),
     );
+    expect(
+      hasFeishuCommentConversationDelivery({
+        accountId: "default",
+        to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
+      }),
+    ).toBe(true);
 
     resolveCleanup?.(false);
+  });
+
+  it("keeps add_comment delivery for ambient whole-comment follow-ups", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({
+      agentAccountId: undefined,
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
+      },
+    });
+
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: true }],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { comment_id: "c_whole_followup" },
+      });
+
+    const result = await tool.execute("call-add-ambient-whole", {
+      action: "add_comment",
+      content: "whole comment follow-up",
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/batch_query?file_type=docx&user_id_type=open_id",
+        data: {
+          comment_ids: ["c1"],
+        },
+      }),
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/new_comments",
+        data: {
+          file_type: "docx",
+          reply_elements: [{ type: "text", text: "whole comment follow-up" }],
+        },
+      }),
+    );
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        success: true,
+        comment_id: "c_whole_followup",
+        delivery_mode: "add_comment",
+      }),
+    );
+  });
+
+  it("falls back to add_comment for ambient local-comment add_comment calls when reply is not allowed", async () => {
+    const registerTool = vi.fn();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({
+      agentAccountId: undefined,
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
+      },
+    });
+
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: false }],
+        },
+      })
+      .mockRejectedValueOnce({
+        message: "Request failed with status code 400",
+        code: "ERR_BAD_REQUEST",
+        config: {
+          method: "post",
+          url: "https://open.feishu.cn/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+          params: { file_type: "docx" },
+        },
+        response: {
+          status: 400,
+          data: {
+            code: 1069302,
+            msg: "param error",
+            log_id: "log_reply_forbidden",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { comment_id: "c3" },
+      });
+
+    const result = await tool.execute("call-add-ambient-reply-forbidden", {
+      action: "add_comment",
+      content: "compat follow-up",
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/new_comments",
+        data: {
+          file_type: "docx",
+          reply_elements: [{ type: "text", text: "compat follow-up" }],
+        },
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("reply-not-allowed compatibility path"),
+    );
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        success: true,
+        comment_id: "c3",
+        delivery_mode: "add_comment",
+      }),
+    );
   });
 
   it("does not inherit non-doc ambient file types for add_comment", async () => {

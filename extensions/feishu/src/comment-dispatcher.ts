@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { hasFeishuCommentConversationDelivery } from "./comment-delivery-guard.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -8,6 +9,7 @@ import {
   type RuntimeEnv,
 } from "./comment-dispatcher-runtime-api.js";
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
+import { buildFeishuCommentTarget } from "./comment-target.js";
 import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -28,6 +30,11 @@ export function createFeishuCommentReplyDispatcher(
   params: CreateFeishuCommentReplyDispatcherParams,
 ) {
   const core = getFeishuRuntime();
+  const commentTarget = buildFeishuCommentTarget({
+    fileType: params.fileType,
+    fileToken: params.fileToken,
+    commentId: params.commentId,
+  });
   const prefixContext = createReplyPrefixContext({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -73,6 +80,19 @@ export function createFeishuCommentReplyDispatcher(
               `feishu[${params.accountId ?? "default"}]: comment reply ignored media-only payload for comment=${params.commentId}`,
             );
           }
+          return;
+        }
+        if (
+          hasFeishuCommentConversationDelivery({
+            accountId: params.accountId,
+            to: commentTarget,
+            threadId: params.replyId,
+          })
+        ) {
+          params.runtime.log?.(
+            `feishu[${params.accountId ?? "default"}]: suppressing automatic comment final reply ` +
+              `after successful tool delivery for comment=${params.commentId}`,
+          );
           return;
         }
         const chunks = core.channel.text.chunkTextWithMode(reply.text, textChunkLimit, chunkMode);
