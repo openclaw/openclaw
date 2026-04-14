@@ -63,8 +63,14 @@ function fileExtensionForMimeType(mimeType: string): string {
 }
 
 function resolveVideoMimeTypeFromUrl(url: string): string {
-  const normalized = url.trim().toLowerCase();
-  if (normalized.endsWith(".webm")) {
+  const trimmed = url.trim();
+  let pathname = trimmed;
+  try {
+    pathname = new URL(trimmed).pathname;
+  } catch {
+    pathname = trimmed.split(/[?#]/, 1)[0] ?? trimmed;
+  }
+  if (pathname.toLowerCase().endsWith(".webm")) {
     return "video/webm";
   }
   return "video/mp4";

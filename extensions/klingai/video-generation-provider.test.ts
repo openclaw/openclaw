@@ -211,6 +211,54 @@ describe("klingai video generation provider", () => {
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(1);
   });
 
+  it("infers webm mime type from signed output URLs in url-only mode", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-vid-webm-signed-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              videos: [
+                {
+                  url: "https://cdn.kling.ai/output/video-webm-signed-1.webm?X-Amz-Signature=sig&X-Amz-Expires=60",
+                },
+              ],
+            },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "a dragon flying over mountains",
+      cfg: {},
+      providerOptions: {
+        return_url_only: true,
+      },
+    });
+
+    expect(result.videos).toEqual([
+      {
+        url: "https://cdn.kling.ai/output/video-webm-signed-1.webm?X-Amz-Signature=sig&X-Amz-Expires=60",
+        mimeType: "video/webm",
+        fileName: "video-1.webm",
+      },
+    ]);
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves explicit watermark=false in request payload", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

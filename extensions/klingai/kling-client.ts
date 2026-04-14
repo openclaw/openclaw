@@ -240,7 +240,11 @@ export async function pollKlingTaskUntilComplete(params: {
         `${params.context} failed: ${normalizeOptionalString(data.task_status_msg) || "task failed"}`,
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
   }
   throw new Error(`${params.context} timed out while waiting for task completion (${lastStatus})`);
 }
