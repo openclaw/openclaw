@@ -126,6 +126,37 @@ struct HealthStoreStateTests {
         #expect(store.summaryLine == "Health check pending")
     }
 
+    @Test @MainActor func `probe with nil ok field treats state as unknown`() {
+        let snap = HealthSnapshot(
+            ok: true,
+            ts: 0,
+            durationMs: 1,
+            channels: [
+                "slack": .init(
+                    configured: true,
+                    linked: nil,
+                    authAgeMs: nil,
+                    probe: .init(
+                        ok: nil,
+                        status: 200,
+                        error: nil,
+                        elapsedMs: 5,
+                        bot: nil,
+                        webhook: nil),
+                    lastProbeAt: 0),
+            ],
+            channelOrder: ["slack"],
+            channelLabels: ["slack": "Slack"],
+            heartbeatSeconds: 60,
+            sessions: .init(path: "/tmp/sessions.json", count: 0, recent: []))
+
+        let store = HealthStore.shared
+        store.__setSnapshotForTest(snap, lastError: nil)
+
+        #expect(store.state == .unknown)
+        #expect(store.summaryLine == "Health check pending")
+    }
+
     @Test @MainActor func `nil probe on configured channel treats state as unknown`() {
         let snap = HealthSnapshot(
             ok: true,

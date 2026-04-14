@@ -210,7 +210,9 @@ final class HealthStore {
                 return .unknown
             }
             let hasFailedProbe = configuredChannels.contains { $0.probe?.ok == false }
-            return hasFailedProbe ? .degraded("channel probe failed") : .ok
+            if hasFailedProbe { return .degraded("channel probe failed") }
+            let allProbesHealthy = configuredChannels.allSatisfy { $0.probe?.ok == true }
+            return allProbesHealthy ? .ok : .unknown
         }
         if link.summary.linked != true {
             // Linking is optional if any other channel is healthy; don't paint the whole app red.
@@ -241,7 +243,8 @@ final class HealthStore {
             if let failedChannel, let probe = failedChannel.probe {
                 return "Gateway degraded: \(Self.describeProbeFailure(probe))"
             }
-            return "Gateway healthy"
+            let allProbesHealthy = configuredChannels.allSatisfy { $0.probe?.ok == true }
+            return allProbesHealthy ? "Gateway healthy" : "Health check pending"
         }
         if link.summary.linked != true {
             if let fallback = self.resolveFallbackChannel(snap, excluding: link.id) {
