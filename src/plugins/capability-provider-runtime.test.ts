@@ -201,6 +201,72 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   });
 
+  it("discovers allowlisted bundled providers even when another provider already self-registered", () => {
+    // Regression: openai TTS registers in the main runtime registry as a side-effect of being
+    // loaded for LLM. Without the fix, the early-return short-circuited before the compat path,
+    // so allowlisted bundled providers like microsoft Edge TTS were never discovered.
+    const openaiProvider = {
+      id: "openai",
+      label: "openai",
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.from("x"),
+        outputFormat: "mp3",
+        voiceCompatible: false,
+        fileExtension: ".mp3",
+      }),
+    };
+    const microsoftProvider = {
+      id: "microsoft",
+      label: "microsoft",
+      aliases: ["edge"],
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.from("x"),
+        outputFormat: "mp3",
+        voiceCompatible: true,
+        fileExtension: ".mp3",
+      }),
+    };
+
+    // Main registry: only openai (registered as LLM side-effect)
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: openaiProvider,
+    } as never);
+
+    // Compat registry: both openai + microsoft (from allowlisted bundled providers)
+    const compat = createEmptyPluginRegistry();
+    compat.speechProviders.push(
+      { pluginId: "microsoft", pluginName: "microsoft", source: "test", provider: microsoftProvider } as never,
+      { pluginId: "openai", pluginName: "openai", source: "test", provider: openaiProvider } as never,
+    );
+
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : compat,
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "microsoft", origin: "bundled", contracts: { speechProviders: ["microsoft"] } },
+        { id: "openai", origin: "bundled", contracts: { speechProviders: ["openai"] } },
+      ] as never,
+      diagnostics: [],
+    });
+
+    const cfg = { plugins: { allow: ["openai", "microsoft"] } } as OpenClawConfig;
+    const providers = resolvePluginCapabilityProviders({ key: "speechProviders", cfg });
+
+    // Both providers should be returned (compat path ran, not short-circuited by openai alone)
+    expectResolvedCapabilityProviderIds(providers, ["microsoft", "openai"]);
+    // Compat path must have been invoked
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config: expect.anything(),
+    });
+  });
+
   it("keeps active capability providers even when cfg is passed", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({

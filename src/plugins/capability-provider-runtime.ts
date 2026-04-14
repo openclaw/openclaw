@@ -84,13 +84,21 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0) {
+  // When no cfg is available there is no allowlist to apply, so the active registry is
+  // the best we can do.
+  if (activeProviders.length > 0 && !params.cfg) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
+  // When cfg is provided, always run the compat path so that allowlisted bundled providers
+  // (e.g. "microsoft" Edge TTS) are discovered even when another provider (e.g. "openai")
+  // has already self-registered in the main runtime registry as a side-effect of being
+  // loaded for a different capability (e.g. LLM completions).
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
   const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const registry = resolveRuntimePluginRegistry(loadOptions);
-  return (registry?.[params.key] ?? []).map(
+  const compatProviders = (registry?.[params.key] ?? []).map(
     (entry) => entry.provider,
   ) as CapabilityProviderForKey<K>[];
+  // Fall back to the active registry if the compat path found nothing.
+  return compatProviders.length > 0 ? compatProviders : (activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[]);
 }
