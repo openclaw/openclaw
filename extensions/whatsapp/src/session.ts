@@ -20,8 +20,8 @@ import {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
-  useMultiFileAuthState,
 } from "./session.runtime.js";
+import { useAtomicAuthState } from "./use-atomic-auth-state.js";
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
@@ -122,7 +122,7 @@ export async function createWaSocket(
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  const { state, saveCreds } = await useAtomicAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
@@ -137,6 +137,9 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    keepAliveIntervalMs: 15_000,
+    connectTimeoutMs: 60_000,
+    retryRequestDelayMs: 500,
     agent,
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.
