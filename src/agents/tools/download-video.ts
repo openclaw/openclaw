@@ -162,29 +162,30 @@ export const downloadVideoTool = {
         formatSelector = typedParams.quality;
       }
 
-      // FIXED: Pass signal to abort title fetch on cancellation
+      // Get title first (without creating file)
       const { stdout: rawTitle } = await execFileAsync(
         ytDlpPath, 
-        ['--get-title', typedParams.url as string],
+        ['--get-title', '--no-playlist', typedParams.url as string],
         { signal }
       );
       
-      const sanitized = rawTitle.trim().replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
+      // Create sanitized filename
+      const sanitized = rawTitle.trim()
+        .replace(/[^a-zA-Z0-9\s]/g, '')
+        .replace(/\s+/g, '_')
+        .substring(0, 50);
+      
       const outputTemplate = `${sanitized}.%(ext)s`;
 
       if (onUpdate) {
           const qualityStr = typeof typedParams.quality === 'string' ? typedParams.quality : '1080';
           onUpdate({
-            content: [{ type: "text", text: `Downloading in ${qualityStr}p...` }],
+            content: [{ type: "text", text: `Starting download in ${qualityStr}p...` }],
             details: { status: "downloading", quality: qualityStr }
           });
       }
 
-      // FIXED: 
-      // 1. Added --quiet --no-progress to suppress verbose output and prevent buffer exhaustion
-      // 2. Added --print filename to capture exact output path for deterministic resolution
-      // 3. Added maxBuffer: 100MB as safety margin for edge cases
-      // 4. Added signal to abort download on cancellation
+      // Download and capture the actual filename
       const { stdout: ytDlpOutput } = await execFileAsync(ytDlpPath, [
         '-f', formatSelector,
         '--no-playlist',
@@ -193,58 +194,83 @@ export const downloadVideoTool = {
         '--quiet',
         '--no-progress',
         '-o', outputTemplate,
-        '--print', 'filename',
+        '--print', 'after_move:filepath',
         typedParams.url as string
       ], { 
         cwd: workspaceRoot, 
         timeout: 300000,
-        maxBuffer: 100 * 1024 * 1024,  // 100MB buffer to prevent exhaustion
-        signal  // FIXED: Pass the abort signal to terminate the subprocess on cancellation
+        maxBuffer: 100 * 1024 * 1024,
+        signal
       });
 
-      // FIXED: Use exact filename from yt-dlp instead of ambiguous prefix matching
-      let downloadedFile = ytDlpOutput?.trim();
+      // Wait a moment for file system to sync
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Fallback: only if --print failed, scan directory with mtime-based preference
-      if (!downloadedFile) {
+      // Get the actual filename from output or scan directory
+      let downloadedFile = ytDlpOutput?.split('\n').filter(Boolean).pop()?.trim();
+      
+      if (!downloadedFile || !downloadedFile.includes(sanitized)) {
+        // Fallback: scan directory for the most recent matching file
         const files = await fs.readdir(workspaceRoot);
-        const fileStats = await Promise.all(
-          files
-            .filter(f => f.startsWith(sanitized) && !f.endsWith('.part'))
-            .map(async f => ({ name: f, stat: await fs.stat(path.join(workspaceRoot, f)) }))
+        const matchingFiles = files.filter(f => 
+          f.includes(sanitized) && 
+          !f.endsWith('.part') && 
+          !f.endsWith('.ytdl')
         );
-        fileStats.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
-        downloadedFile = fileStats[0]?.name;
+        
+        if (matchingFiles.length > 0) {
+          const fileStats = await Promise.all(
+            matchingFiles.map(async f => ({
+              name: f,
+              stat: await fs.stat(path.join(workspaceRoot, f))
+            }))
+          );
+          
+          fileStats.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
+          downloadedFile = fileStats[0]?.name;
+        }
+      } else {
+        // Extract just the filename from the full path if needed
+        downloadedFile = path.basename(downloadedFile);
       }
 
       if (!downloadedFile) {
-        throw new Error("Verification failed: could not determine downloaded filename.");
+        throw new Error("Download completed but file not found in workspace");
       }
 
       const finalPath = path.join(workspaceRoot, downloadedFile);
-      const stats = await fs.stat(finalPath);
       
-      // Fixed: Removes leading slash to avoid http://localhost:18791//home/...
-      const cleanPath = finalPath.startsWith('/') ? finalPath.substring(1) : finalPath;
-      const fileUrl = `http://localhost:${MEDIA_SERVER_PORT}/${cleanPath}`;
-
-      return {
-        content: [{
-          type: "text",
-          text: `✅ **Download Success**\nURL: ${fileUrl}\nFile: ${downloadedFile}\nSize: ${(stats.size / 1e6).toFixed(2)} MB`
-        }],
-        details: { 
-          status: "complete",
-          filename: downloadedFile, 
-          mediaUrl: fileUrl, 
-          fullPath: finalPath,
-          sizeMB: (stats.size / 1e6).toFixed(2) 
+      // Verify file exists and has size > 0
+      try {
+        const stats = await fs.stat(finalPath);
+        if (stats.size === 0) {
+          throw new Error("Downloaded file is empty");
         }
-      };
+        
+        // Clean path for URL
+        const cleanPath = finalPath.startsWith('/') ? finalPath.substring(1) : finalPath;
+        const fileUrl = `http://localhost:${MEDIA_SERVER_PORT}/${cleanPath}`;
+
+        return {
+          content: [{
+            type: "text",
+            text: `✅ **Download Success**\nURL: ${fileUrl}\nFile: ${downloadedFile}\nSize: ${(stats.size / 1e6).toFixed(2)} MB`
+          }],
+          details: { 
+            status: "complete",
+            filename: downloadedFile, 
+            mediaUrl: fileUrl, 
+            fullPath: finalPath,
+            sizeMB: (stats.size / 1e6).toFixed(2) 
+          }
+        };
+      } catch (statError) {
+        throw new Error(`File verification failed: ${finalPath} does not exist or is inaccessible`);
+      }
+      
     } catch (err: unknown) {
       const error = err as Error;
       
-      // FIXED: Handle abort signal cancellation gracefully
       if (error.name === 'AbortError') {
         return {
           content: [{ type: "text", text: `⚠️ Download cancelled` }],
