@@ -16,16 +16,25 @@ export type TableSpan = {
  * A separator row must contain at least one `|` so that plain thematic breaks
  * (`---`) are not mistaken for table separators.
  */
-const TABLE_SEPARATOR_RE = /^\|[\s:]*-{3,}[\s:|-]*$|^[\s:]*-{3,}[\s:|-]*\|[\s:|-]*$/;
+const TABLE_SEPARATOR_RE =
+  /^\|[\s:]*-{3,}[\s:|-]*$|^[\s:]*-{3,}[\s:|-]*\|[\s:|-]*$/;
 
-function splitLines(text: string): { line: string; start: number; end: number }[] {
+function splitLines(
+  text: string,
+): { line: string; start: number; end: number }[] {
   const result: { line: string; start: number; end: number }[] = [];
   let offset = 0;
   while (offset <= text.length) {
     const nl = text.indexOf("\n", offset);
     const lineEnd = nl === -1 ? text.length : nl;
-    result.push({ line: text.slice(offset, lineEnd), start: offset, end: lineEnd });
-    if (nl === -1) break;
+    result.push({
+      line: text.slice(offset, lineEnd),
+      start: offset,
+      end: lineEnd,
+    });
+    if (nl === -1) {
+      break;
+    }
     offset = nl + 1;
   }
   return result;
@@ -35,7 +44,10 @@ function splitLines(text: string): { line: string; start: number; end: number }[
  * Detect contiguous markdown table regions in `text`, skipping any tables that
  * overlap with fenced code blocks described by `fenceSpans`.
  */
-export function parseTableSpans(text: string, fenceSpans: FenceSpan[]): TableSpan[] {
+export function parseTableSpans(
+  text: string,
+  fenceSpans: FenceSpan[],
+): TableSpan[] {
   const lines = splitLines(text);
   const spans: TableSpan[] = [];
   let i = 0;
@@ -48,7 +60,11 @@ export function parseTableSpans(text: string, fenceSpans: FenceSpan[]): TableSpa
       TABLE_SEPARATOR_RE.test(separatorLine.line.trim())
     ) {
       // Skip tables that start inside a fenced code block.
-      if (fenceSpans.some((f) => headerLine.start >= f.start && headerLine.start < f.end)) {
+      if (
+        fenceSpans.some(
+          (f) => headerLine.start >= f.start && headerLine.start < f.end,
+        )
+      ) {
         i += 1;
         continue;
       }
@@ -69,13 +85,18 @@ export function parseTableSpans(text: string, fenceSpans: FenceSpan[]): TableSpa
   return spans;
 }
 
-function findTableSpanAt(spans: TableSpan[], index: number): TableSpan | undefined {
+function findTableSpanAt(
+  spans: TableSpan[],
+  index: number,
+): TableSpan | undefined {
   let low = 0;
   let high = spans.length - 1;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
     const span = spans[mid];
-    if (!span) break;
+    if (!span) {
+      break;
+    }
     if (index <= span.start) {
       high = mid - 1;
       continue;

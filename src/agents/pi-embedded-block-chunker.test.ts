@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import * as fences from "../markdown/fences.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 
-function createFlushOnParagraphChunker(params: { minChars: number; maxChars: number }) {
+function createFlushOnParagraphChunker(params: {
+  minChars: number;
+  maxChars: number;
+}) {
   return new EmbeddedBlockChunker({
     minChars: params.minChars,
     maxChars: params.maxChars,
@@ -47,7 +50,10 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("waits until minChars before flushing paragraph boundaries when flushOnParagraph is set", () => {
-    const chunker = createFlushOnParagraphChunker({ minChars: 30, maxChars: 200 });
+    const chunker = createFlushOnParagraphChunker({
+      minChars: 30,
+      maxChars: 200,
+    });
 
     chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
 
@@ -58,12 +64,17 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("still force flushes buffered paragraphs below minChars at the end", () => {
-    const chunker = createFlushOnParagraphChunker({ minChars: 100, maxChars: 200 });
+    const chunker = createFlushOnParagraphChunker({
+      minChars: 100,
+      maxChars: 200,
+    });
 
     chunker.append("First paragraph.\n \nSecond paragraph.");
 
     expect(drainChunks(chunker)).toEqual([]);
-    expect(drainChunks(chunker, true)).toEqual(["First paragraph.\n \nSecond paragraph."]);
+    expect(drainChunks(chunker, true)).toEqual([
+      "First paragraph.\n \nSecond paragraph.",
+    ]);
     expect(chunker.bufferedText).toBe("");
   });
 
@@ -192,7 +203,10 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("splits before and after a table on paragraph boundaries", () => {
-    const chunker = createFlushOnParagraphChunker({ minChars: 10, maxChars: 200 });
+    const chunker = createFlushOnParagraphChunker({
+      minChars: 10,
+      maxChars: 200,
+    });
 
     const text = [
       "First paragraph text.",
@@ -220,12 +234,11 @@ describe("EmbeddedBlockChunker", () => {
       breakPreference: "paragraph",
     });
 
-    const text = "| A | B |\n|---|---|\n" + "| x | " + "y".repeat(40) + " |";
+    const text = `| A | B |\n|---|---|\n| x | ${"y".repeat(40)} |`;
     chunker.append(text);
     const chunks = drainChunks(chunker, true);
 
     // With maxChars=30 and a very long row the chunker must eventually break.
     expect(chunks.length).toBeGreaterThan(1);
   });
-
 });
