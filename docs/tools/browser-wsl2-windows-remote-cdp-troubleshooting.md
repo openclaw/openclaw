@@ -155,6 +155,9 @@ New-NetFirewallRule `
   -Profile Any
 
 # Option B: Constrained to WSL2/Tailscale subnets only (recommended)
+# Use 100.64.0.0/10 for Tailscale, and your specific WSL2 gateway IP
+# (e.g. 172.28.0.1/32) instead of the broad 172.16.0.0/12 range.
+# Find your WSL2 gateway with: ip route show default | awk '{print $3}'
 New-NetFirewallRule `
   -DisplayName "Chrome CDP (WSL2 only)" `
   -Direction Inbound `
@@ -162,7 +165,7 @@ New-NetFirewallRule `
   -Protocol TCP `
   -Action Allow `
   -Profile Any `
-  -RemoteAddress "100.64.0.0/10","172.16.0.0/12"
+  -RemoteAddress "100.64.0.0/10","172.28.0.1/32"
 ```
 
 > **Important:** Do not run both firewall rules. Option A and Option B are
