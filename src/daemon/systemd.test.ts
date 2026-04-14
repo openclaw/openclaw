@@ -525,7 +525,8 @@ describe("readSystemdServiceExecStart", () => {
 
     const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
     expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("env-file-token");
-    expect(readFileSpy).toHaveBeenCalledTimes(2);
+    // Main unit + managed drop-in probe (absent here) + resolved env file.
+    expect(readFileSpy).toHaveBeenCalledTimes(3);
   });
 
   it("lets EnvironmentFile override inline Environment values", async () => {
