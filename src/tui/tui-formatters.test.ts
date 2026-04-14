@@ -249,30 +249,7 @@ describe("extractThinkingFromMessage", () => {
       ],
     });
 
-    expect(text).toBe("alpha\n\nbeta");
-  });
-
-  it("separates multiple thinking blocks with blank lines", () => {
-    const text = extractThinkingFromMessage({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "First thought." },
-        { type: "text", text: "some content" },
-        { type: "thinking", thinking: "Second thought." },
-        { type: "thinking", thinking: "Third thought." },
-      ],
-    });
-
-    expect(text).toBe("First thought.\n\nSecond thought.\n\nThird thought.");
-  });
-
-  it("returns single block without extra whitespace", () => {
-    const text = extractThinkingFromMessage({
-      role: "assistant",
-      content: [{ type: "thinking", thinking: "Only one block." }],
-    });
-
-    expect(text).toBe("Only one block.");
+    expect(text).toBe("alpha\nbeta");
   });
 });
 

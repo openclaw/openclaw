@@ -199,10 +199,7 @@ final class HealthStore {
             return .degraded(error)
         }
         guard let snap = self.snapshot else { return .unknown }
-        guard let link = self.resolveLinkChannel(snap) else {
-            // No channel has linking info — fall back to the top-level gateway health.
-            return snap.ok == true ? .ok : .unknown
-        }
+        guard let link = self.resolveLinkChannel(snap) else { return .unknown }
         if link.summary.linked != true {
             // Linking is optional if any other channel is healthy; don't paint the whole app red.
             let fallback = self.resolveFallbackChannel(snap, excluding: link.id)
@@ -219,10 +216,7 @@ final class HealthStore {
         if self.isRefreshing { return "Health check running…" }
         if let error = self.lastError { return "Health check failed: \(error)" }
         guard let snap = self.snapshot else { return "Health check pending" }
-        guard let link = self.resolveLinkChannel(snap) else {
-            // No channel has linking info — use top-level gateway health.
-            return snap.ok == true ? "Gateway healthy" : "Health check pending"
-        }
+        guard let link = self.resolveLinkChannel(snap) else { return "Health check pending" }
         if link.summary.linked != true {
             if let fallback = self.resolveFallbackChannel(snap, excluding: link.id) {
                 let fallbackLabel = snap.channelLabels?[fallback.id] ?? fallback.id.capitalized
