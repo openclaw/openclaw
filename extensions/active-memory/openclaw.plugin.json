@@ -24,7 +24,7 @@
         "type": "array",
         "items": {
           "type": "string",
-          "enum": ["direct", "group", "channel"]
+          "enum": ["direct", "group", "channel", "explicit"]
         }
       },
       "allowedChatIds": {
@@ -101,7 +101,7 @@
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
-      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only."
+      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only, but explicit portal/webchat sessions can also be enabled."
     },
     "allowedChatIds": {
       "label": "Allowed Chat IDs",
