@@ -102,14 +102,18 @@ export function isBinaryContent(text: string): boolean {
   return false;
 }
 
+export function resolveTelegramTextContent(text: unknown, caption?: unknown): string {
+  const raw = typeof text === "string" ? text : typeof caption === "string" ? caption : "";
+  return isBinaryContent(raw) ? "" : raw;
+}
+
 export function getTelegramTextParts(
   msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
 ): {
   text: string;
   entities: TelegramTextEntity[];
 } {
-  const raw = msg.text ?? msg.caption ?? "";
-  const text = isBinaryContent(raw) ? "" : raw;
+  const text = resolveTelegramTextContent(msg.text, msg.caption);
   const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
   return { text, entities };
 }
