@@ -24,7 +24,8 @@ const PROTECTED_BASENAMES = new Set([
 ]);
 
 export function isProtectedInstructionFile(filePath: string): boolean {
-  const basename = path.basename(filePath).toLowerCase();
+  // Normalize: strip trailing dots/spaces (Windows aliases that resolve to the same file)
+  const basename = path.basename(filePath).toLowerCase().replace(/[\s.]+$/, "");
   return PROTECTED_BASENAMES.has(basename);
 }
 

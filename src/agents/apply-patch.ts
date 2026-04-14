@@ -13,6 +13,7 @@ import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-g
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { isProtectedInstructionFile } from "./pi-tools.instruction-file-guard.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
@@ -146,6 +147,27 @@ export async function applyPatch(
     deleted: new Set<string>(),
   };
   const fileOps = resolvePatchFileOps(options);
+
+  // Guard: block patches targeting protected instruction files.
+  for (const hunk of parsed.hunks) {
+    const targetPath = hunk.path;
+    if (targetPath && isProtectedInstructionFile(targetPath)) {
+      const basename = path.basename(targetPath);
+      throw new Error(
+        `Patch targets protected instruction file "${basename}". ` +
+          `Agent sessions cannot modify protected instruction files. ` +
+          `Ask the operator to make this change directly.`,
+      );
+    }
+    if (hunk.movePath && isProtectedInstructionFile(hunk.movePath)) {
+      const basename = path.basename(hunk.movePath);
+      throw new Error(
+        `Patch moves to protected instruction file "${basename}". ` +
+          `Agent sessions cannot modify protected instruction files. ` +
+          `Ask the operator to make this change directly.`,
+      );
+    }
+  }
 
   for (const hunk of parsed.hunks) {
     if (options.signal?.aborted) {

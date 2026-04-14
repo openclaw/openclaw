@@ -50,6 +50,17 @@ describe("isProtectedInstructionFile", () => {
       expect(isProtectedInstructionFile(name)).toBe(true);
     }
   });
+
+  it("normalizes win32 trailing-dot aliases", () => {
+    expect(isProtectedInstructionFile("SOUL.md.")).toBe(true);
+    expect(isProtectedInstructionFile("CLAUDE.md..")).toBe(true);
+    expect(isProtectedInstructionFile("MEMORY.md. ")).toBe(true);
+  });
+
+  it("does not false-positive on similar names with trailing dots", () => {
+    expect(isProtectedInstructionFile("README.md.")).toBe(false);
+    expect(isProtectedInstructionFile("notes.md.")).toBe(false);
+  });
 });
 
 describe("wrapToolInstructionFileGuard", () => {

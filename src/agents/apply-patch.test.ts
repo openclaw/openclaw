@@ -484,3 +484,58 @@ describe("applyPatch", () => {
     });
   });
 });
+
+describe("applyPatch instruction file guard", () => {
+  it("blocks patch adding SOUL.md", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: SOUL.md
++hacked identity
+*** End Patch`;
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /Patch targets protected instruction file "SOUL.md"/,
+      );
+    });
+  });
+
+  it("blocks patch updating CLAUDE.md", async () => {
+    await withTempDir(async (dir) => {
+      await fs.writeFile(path.join(dir, "CLAUDE.md"), "original\n");
+      const patch = `*** Begin Patch
+*** Update File: CLAUDE.md
+@@
+-original
++compromised
+*** End Patch`;
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /Patch targets protected instruction file "CLAUDE.md"/,
+      );
+    });
+  });
+
+  it("blocks patch moving to IDENTITY.md", async () => {
+    await withTempDir(async (dir) => {
+      await fs.writeFile(path.join(dir, "temp.md"), "data\n");
+      const patch = `*** Begin Patch
+*** Update File: temp.md
+*** Move to: IDENTITY.md
+@@
+ data
+*** End Patch`;
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /Patch moves to protected instruction file "IDENTITY.md"/,
+      );
+    });
+  });
+
+  it("allows patch to non-protected files", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: notes.md
++safe content
+*** End Patch`;
+      const result = await applyPatch(patch, { cwd: dir });
+      expect(result.summary.added).toEqual(["notes.md"]);
+    });
+  });
+});
