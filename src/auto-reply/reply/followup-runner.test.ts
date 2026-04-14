@@ -526,6 +526,56 @@ describe("createFollowupRunner runtime config", () => {
     expect(call?.config).toBe(runtimeConfig);
   });
 
+  it("uses the active runtime snapshot for queued CLI followup runs", async () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude-source" },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude-runtime" },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "cli reply" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude-cli/opus",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: sourceConfig,
+          provider: "claude-cli",
+          model: "opus",
+        },
+      }),
+    );
+
+    const call = runCliAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          config?: unknown;
+        }
+      | undefined;
+    expect(call?.config).toBe(runtimeConfig);
+  });
+
   it("resolves queued embedded followups before preflight helpers read config", async () => {
     const sourceConfig: OpenClawConfig = {
       skills: {
