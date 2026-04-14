@@ -298,6 +298,39 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'nested';\n");
   });
 
+  it("does not change the runtime-deps stamp when only a symlinked directory target changes", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const linkedTargetDir = path.join(repoRoot, "linked-target");
+    const linkedPath = path.join(directDir, "node_modules", "linked");
+    fs.mkdirSync(path.join(directDir, "node_modules"), { recursive: true });
+    fs.mkdirSync(linkedTargetDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(path.join(linkedTargetDir, "marker.txt"), "first\n", "utf8");
+    fs.symlinkSync(linkedTargetDir, linkedPath);
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+    const stampPath = path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
+    const firstStamp = fs.readFileSync(stampPath, "utf8");
+
+    fs.writeFileSync(path.join(linkedTargetDir, "marker.txt"), "second\n", "utf8");
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(fs.readFileSync(stampPath, "utf8")).toBe(firstStamp);
+  });
+
   it("falls back to install when the root transitive closure is incomplete", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
