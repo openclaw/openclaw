@@ -237,7 +237,7 @@ export function renderChatControls(state: AppViewState) {
     <div class="chat-controls">
       <button
         class="btn btn--sm btn--icon"
-        ?disabled=${state.chatLoading || !state.connected}
+        ?disabled=${state.chatLoading || !state.connected || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null}
         @click=${async () => {
           const app = state as unknown as ChatRefreshHost;
           app.chatManualRefreshInFlight = true;
