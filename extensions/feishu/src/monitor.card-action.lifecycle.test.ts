@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import { resetProcessedFeishuCardActionTokensForTests } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
-import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,

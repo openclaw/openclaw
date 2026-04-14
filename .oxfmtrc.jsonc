@@ -1,5 +1,14 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "overrides": [
+    {
+      "files": ["extensions/feishu/src/monitor.card-action.lifecycle.test.ts"],
+      "options": {
+        // Vitest vi.mock in lifecycle.test-support must load before ./card-action.ts (pulls ./send.js).
+        "sortImports": false,
+      },
+    },
+  ],
   "sortImports": {
     "newlinesBetween": false,
   },
