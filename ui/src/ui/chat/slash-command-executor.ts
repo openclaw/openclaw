@@ -380,7 +380,11 @@ async function executeUsage(
     const output = session.outputTokens ?? 0;
     const total = session.totalTokens ?? input + output;
     const ctx = session.contextTokens ?? 0;
-    const pct = ctx > 0 ? Math.round((input / ctx) * 100) : null;
+    // Align with backend/UI context notice: prefer canonical totalTokens when fresh.
+    const pct =
+      (session.totalTokensFresh === true && typeof session.totalTokens === "number" && ctx > 0)
+        ? Math.round(Math.min((session.totalTokens / ctx) * 100, 100))
+        : null;
 
     const lines = [
       "**Session Usage**",

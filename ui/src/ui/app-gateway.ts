@@ -438,10 +438,23 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (host.onboarding) {
       return;
     }
-    handleAgentEvent(
-      host as unknown as Parameters<typeof handleAgentEvent>[0],
-      evt.payload as AgentEventPayload | undefined,
-    );
+    const payload = evt.payload as AgentEventPayload | undefined;
+    handleAgentEvent(host as unknown as Parameters<typeof handleAgentEvent>[0], payload);
+    // If a compaction just completed for the active session, refresh chat history so
+    // the UI reflects the compacted transcript and cleared token counters immediately.
+    try {
+      const data = (payload?.data ?? {}) as Record<string, unknown>;
+      const phase = typeof data.phase === "string" ? data.phase : "";
+      const completed = data.completed === true;
+      const sessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey : undefined;
+      if (payload?.stream === "compaction" && phase === "end" && completed) {
+        if (!sessionKey || sessionKey === host.sessionKey) {
+          void loadChatHistory(host as unknown as ChatState);
+        }
+      }
+    } catch {
+      // ignore
+    }
     return;
   }
 
