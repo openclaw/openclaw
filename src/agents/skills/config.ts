@@ -4,6 +4,7 @@ import {
   evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
+  isTruthy,
   resolveConfigPath,
   resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
@@ -19,8 +20,43 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
+/**
+ * Match paths like `channels.<channel>.token` — returns the channel name if
+ * matched, otherwise `undefined`.
+ */
+const CHANNEL_TOKEN_RE = /^channels\.([^.]+)\.token$/;
+
+/**
+ * When the literal dot-path lookup fails for a channel token requirement,
+ * check whether the config uses a multi-account layout where tokens live at
+ * `channels.<channel>.accounts.<id>.token`.  If *any* account entry has a
+ * truthy token the requirement is satisfied.
+ */
+function isMultiAccountTokenPresent(config: unknown, channel: string): boolean {
+  const accounts = resolveConfigPath(config, `channels.${channel}.accounts`);
+  if (typeof accounts !== "object" || accounts === null) {
+    return false;
+  }
+  return Object.values(accounts as Record<string, unknown>).some((account) => {
+    if (typeof account !== "object" || account === null) {
+      return false;
+    }
+    return isTruthy((account as Record<string, unknown>).token);
+  });
+}
+
 export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
-  return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
+  if (isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES)) {
+    return true;
+  }
+
+  // Fall back to multi-account token check for channel token requirements.
+  const match = CHANNEL_TOKEN_RE.exec(pathStr);
+  if (match) {
+    return isMultiAccountTokenPresent(config, match[1]!);
+  }
+
+  return false;
 }
 
 export function resolveSkillConfig(

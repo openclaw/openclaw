@@ -41,6 +41,40 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(report.skills[0]?.install).toEqual([]);
   });
 
+  it("recognises multi-account Discord config as satisfying channels.discord.token", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "discord",
+        description: "test",
+        filePath: "/tmp/discord/SKILL.md",
+        baseDir: "/tmp/discord",
+        source: "test",
+      }),
+      frontmatter: {},
+      metadata: {
+        requires: { config: ["channels.discord.token"] },
+      },
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", {
+      entries: [entry],
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              default: { token: "tok-default" }, // pragma: allowlist secret
+              agent2: { token: "tok-agent2" }, // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    });
+
+    const discord = report.skills.find((s) => s.name === "discord");
+    const check = discord?.configChecks.find((c) => c.path === "channels.discord.token");
+    expect(check).toEqual({ path: "channels.discord.token", satisfied: true });
+  });
+
   it("does not expose raw config values in config checks", () => {
     const secret = "discord-token-secret-abc"; // pragma: allowlist secret
     const entry: SkillEntry = {
