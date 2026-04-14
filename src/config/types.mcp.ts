@@ -17,6 +17,8 @@ export type McpServerConfig = {
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
+  /** When false, the server is excluded from bundled MCP configs for CLI backends. */
+  enabled?: boolean;
   [key: string]: unknown;
 };
 
