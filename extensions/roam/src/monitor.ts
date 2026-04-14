@@ -129,7 +129,7 @@ function webhookEventToInbound(event: RoamWebhookEvent): RoamInboundMessage {
   };
 
   // Extract media URLs from attached items
-  if (event.items?.length) {
+  if (Array.isArray(event.items) && event.items.length) {
     const mediaUrls: string[] = [];
     const mediaTypes: string[] = [];
     for (const item of event.items) {
