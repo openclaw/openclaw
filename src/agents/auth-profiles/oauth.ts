@@ -177,6 +177,34 @@ async function loadFreshStoredOAuthCredential(params: {
   return reloaded;
 }
 
+function normalizeOAuthProfileContractValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function hasMatchingOAuthProfileSyncContract(params: {
+  existing: AuthProfileStore["profiles"][string] | undefined;
+  expected: OAuthCredential;
+}): boolean {
+  const { existing, expected } = params;
+  if (existing?.type !== "oauth") {
+    return false;
+  }
+  return (
+    existing.provider === expected.provider &&
+    normalizeOAuthProfileContractValue(existing.managedBy) ===
+      normalizeOAuthProfileContractValue(expected.managedBy) &&
+    normalizeOAuthProfileContractValue(existing.clientId) ===
+      normalizeOAuthProfileContractValue(expected.clientId) &&
+    normalizeOAuthProfileContractValue(existing.enterpriseUrl) ===
+      normalizeOAuthProfileContractValue(expected.enterpriseUrl) &&
+    normalizeOAuthProfileContractValue(existing.projectId) ===
+      normalizeOAuthProfileContractValue(expected.projectId) &&
+    normalizeOAuthProfileContractValue(existing.accountId) ===
+      normalizeOAuthProfileContractValue(expected.accountId)
+  );
+}
+
 type ResolveApiKeyForProfileParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -231,6 +259,7 @@ function resolveOAuthRefreshCoordinationPath(profileId: string): string {
 async function syncRefreshedOAuthCredentialToMainAgent(params: {
   profileId: string;
   agentDir?: string;
+  sourceCredential: OAuthCredential;
   credentials: OAuthCredential;
 }): Promise<void> {
   if (!params.agentDir) {
@@ -245,18 +274,35 @@ async function syncRefreshedOAuthCredentialToMainAgent(params: {
 
   ensureAuthStoreFile(mainAuthPath);
   await withFileLock(mainAuthPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-    const mainStore = ensureAuthProfileStore(undefined);
+    // Reload the main store from disk while holding the lock so we never sync
+    // refreshed credentials back onto a stale runtime snapshot.
+    const mainStore = loadAuthProfileStoreForSecretsRuntime(undefined);
     const existing = mainStore.profiles[params.profileId];
     if (
-      existing?.type === "oauth" &&
-      existing.provider === params.credentials.provider &&
-      Number.isFinite(existing.expires) &&
-      existing.expires > params.credentials.expires
+      existing?.type !== "oauth" ||
+      !hasMatchingOAuthProfileSyncContract({
+        existing,
+        expected: params.sourceCredential,
+      })
     ) {
+      log.info("skipped syncing refreshed OAuth credentials to main agent", {
+        profileId: params.profileId,
+        agentDir: params.agentDir,
+        reason: "profile_contract_diverged",
+        mainType: existing?.type,
+        mainProvider: existing?.provider,
+        sourceProvider: params.sourceCredential.provider,
+      });
+      return;
+    }
+    if (Number.isFinite(existing.expires) && existing.expires > params.credentials.expires) {
       return;
     }
 
-    mainStore.profiles[params.profileId] = { ...params.credentials };
+    mainStore.profiles[params.profileId] = {
+      ...existing,
+      ...params.credentials,
+    };
     saveAuthProfileStore(mainStore, undefined);
     log.info("synced refreshed OAuth credentials to main agent", {
       profileId: params.profileId,
@@ -345,6 +391,7 @@ async function refreshOAuthTokenWithLock(params: {
                   await syncRefreshedOAuthCredentialToMainAgent({
                     profileId: params.profileId,
                     agentDir: params.agentDir,
+                    sourceCredential: externallyManaged,
                     credentials: refreshedCredentials,
                   });
                   return {
@@ -381,6 +428,7 @@ async function refreshOAuthTokenWithLock(params: {
               await syncRefreshedOAuthCredentialToMainAgent({
                 profileId: params.profileId,
                 agentDir: params.agentDir,
+                sourceCredential: activeCred,
                 credentials: refreshedCredentials,
               });
               return {
@@ -423,6 +471,7 @@ async function refreshOAuthTokenWithLock(params: {
             await syncRefreshedOAuthCredentialToMainAgent({
               profileId: params.profileId,
               agentDir: params.agentDir,
+              sourceCredential: activeCred,
               credentials: syncedCredentials,
             });
 

@@ -23,9 +23,17 @@ import { resolveApiKeyForProfile } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+
+function createStore(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
+  return {
+    version: 1,
+    profiles,
+  };
+}
 
 function createExpiredOauthStore(params: {
   profileId: string;
@@ -34,18 +42,15 @@ function createExpiredOauthStore(params: {
   refresh: string;
   expires: number;
 }): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: params.access,
-        refresh: params.refresh,
-        expires: params.expires,
-      },
+  return createStore({
+    [params.profileId]: {
+      type: "oauth",
+      provider: params.provider,
+      access: params.access,
+      refresh: params.refresh,
+      expires: params.expires,
     },
-  };
+  });
 }
 
 describe("cross-agent OAuth refresh serialization", () => {
@@ -200,6 +205,146 @@ describe("cross-agent OAuth refresh serialization", () => {
       expires: refreshedAt,
     });
     expect(selfAnalysisStore.profiles[profileId]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-access-token",
+      refresh: "fresh-refresh-token",
+      expires: refreshedAt,
+    });
+  });
+
+  it("reloads the main store from disk before syncing refreshed credentials", async () => {
+    const profileId = "openai-codex:default";
+    const expiredAt = Date.now() - 60_000;
+    const refreshedAt = Date.now() + 60 * 60 * 1000;
+
+    saveAuthProfileStore(
+      createStore({
+        [profileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "main-stale-access",
+          refresh: "main-stale-refresh",
+          expires: expiredAt,
+        },
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-main-only",
+        },
+      }),
+      mainAgentDir,
+    );
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        access: "operator-stale-access",
+        refresh: "operator-stale-refresh",
+        expires: expiredAt,
+      }),
+      operatorAgentDir,
+    );
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir: mainAgentDir,
+        store: createExpiredOauthStore({
+          profileId,
+          provider: "openai-codex",
+          access: "snapshot-stale-access",
+          refresh: "snapshot-stale-refresh",
+          expires: expiredAt,
+        }),
+      },
+    ]);
+
+    getOAuthApiKeyMock.mockResolvedValue({
+      apiKey: "fresh-access-token",
+      newCredentials: {
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+        expires: refreshedAt,
+      },
+    });
+
+    await expect(resolveFromAgent(operatorAgentDir, profileId)).resolves.toEqual({
+      apiKey: "fresh-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    const mainStore = JSON.parse(
+      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+
+    expect(mainStore.profiles[profileId]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-access-token",
+      refresh: "fresh-refresh-token",
+      expires: refreshedAt,
+    });
+    expect(mainStore.profiles["anthropic:default"]).toEqual({
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-main-only",
+    });
+  });
+
+  it("skips syncing refreshed credentials when the main profile contract diverged", async () => {
+    const profileId = "openai-codex:default";
+    const expiredAt = Date.now() - 60_000;
+    const refreshedAt = Date.now() + 60 * 60 * 1000;
+
+    saveAuthProfileStore(
+      createStore({
+        [profileId]: {
+          type: "token",
+          provider: "openai-codex",
+          token: "main-static-token",
+        },
+      }),
+      mainAgentDir,
+    );
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        access: "operator-stale-access",
+        refresh: "operator-stale-refresh",
+        expires: expiredAt,
+      }),
+      operatorAgentDir,
+    );
+
+    getOAuthApiKeyMock.mockResolvedValue({
+      apiKey: "fresh-access-token",
+      newCredentials: {
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+        expires: refreshedAt,
+      },
+    });
+
+    await expect(resolveFromAgent(operatorAgentDir, profileId)).resolves.toEqual({
+      apiKey: "fresh-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    const mainStore = JSON.parse(
+      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    const operatorStore = JSON.parse(
+      await fs.readFile(path.join(operatorAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+
+    expect(mainStore.profiles[profileId]).toEqual({
+      type: "token",
+      provider: "openai-codex",
+      token: "main-static-token",
+    });
+    expect(operatorStore.profiles[profileId]).toMatchObject({
       type: "oauth",
       provider: "openai-codex",
       access: "fresh-access-token",
