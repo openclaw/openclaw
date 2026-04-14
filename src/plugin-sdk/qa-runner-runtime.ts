@@ -2,7 +2,10 @@ import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { listBundledQaRunnerCatalog } from "../plugins/qa-runner-catalog.js";
-import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import {
+  loadBundledPluginPublicSurfaceModuleSync,
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
+} from "./facade-runtime.js";
 
 export type QaRunnerCliRegistration = {
   commandName: string;
@@ -98,6 +101,19 @@ function buildKnownQaRunnerCatalog(): readonly QaRunnerCliContribution[] {
   });
 }
 
+function loadQaRunnerRuntimeSurface(plugin: PluginManifestRecord): QaRunnerRuntimeSurface | null {
+  if (plugin.origin === "bundled") {
+    return loadBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
+      dirName: plugin.id,
+      artifactBasename: "runtime-api.js",
+    });
+  }
+  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
+    dirName: plugin.id,
+    artifactBasename: "runtime-api.js",
+  });
+}
+
 export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
   const contributions = new Map<string, QaRunnerCliContribution>();
 
@@ -106,11 +122,7 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
   }
 
   for (const plugin of listDeclaredQaRunnerPlugins()) {
-    const runtimeSurface =
-      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
-        dirName: plugin.id,
-        artifactBasename: "runtime-api.js",
-      });
+    const runtimeSurface = loadQaRunnerRuntimeSurface(plugin);
     const runtimeRegistrationByCommandName = runtimeSurface
       ? indexRuntimeRegistrations(plugin.id, runtimeSurface)
       : null;
