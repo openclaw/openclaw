@@ -133,6 +133,8 @@ const ERROR_PATTERNS = {
     /out of extra usage/i,
     /draw from your extra usage/i,
     /extra usage is required(?: for long context requests)?/i,
+    // Internally-generated message when all profiles are in billing cooldown (#66314)
+    "has billing issue",
     // Z.ai: error 1311 = model not included in current subscription plan (#48988)
     ZAI_BILLING_CODE_1311_RE,
   ],

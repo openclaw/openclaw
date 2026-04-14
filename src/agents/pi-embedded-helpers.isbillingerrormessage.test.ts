@@ -233,6 +233,20 @@ describe("isBillingErrorMessage", () => {
       expect(classifyFailoverReason(sample, { provider: "anthropic" })).toBe("billing");
     }
   });
+
+  it("classifies internally-generated billing-cooldown skip messages as billing (#66314)", () => {
+    // model-fallback.ts emits these when all profiles are in billing cooldown
+    const samples = [
+      "Provider anthropic has billing issue (skipping all models)",
+      "Provider openai has billing issue (skipping all models)",
+      "Provider google has billing issue (skipping all models)",
+    ];
+
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample, { provider: "anthropic" })).toBe("billing");
+    }
+  });
 });
 
 describe("isCloudCodeAssistFormatError", () => {
