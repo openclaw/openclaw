@@ -457,8 +457,16 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
       const overrideVoiceSettings = asObject(overrides.voiceSettings);
       const latencyTier = asFiniteNumber(overrides.latencyTier);
+      // Apply Turkish text normalization when language is Turkish.
+      const effectiveLanguageCode =
+        trimToUndefined(overrides.languageCode) ?? config.languageCode;
+      let synthesisText = req.text;
+      if (effectiveLanguageCode === "tr") {
+        const { normalizeTurkishForTts } = await import("./turkish-text-normalize.js");
+        synthesisText = normalizeTurkishForTts(synthesisText);
+      }
       const audioBuffer = await elevenLabsTTS({
-        text: req.text,
+        text: synthesisText,
         apiKey,
         baseUrl: config.baseUrl,
         voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
