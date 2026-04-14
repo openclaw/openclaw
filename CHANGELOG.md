@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Docs/showcase: add a scannable hero, complete section jump links, and a responsive video grid for community examples. (#48493) Thanks @jchopard69.
 - Agents/local models: add `agents.defaults.localModelMode: "lean"` to drop heavyweight default tools like `browser`, `cron`, and `message`, reducing prompt size for weaker local-model setups without changing the normal path. Thanks @ImLukeF.
+- QA/Matrix: split Matrix live QA into a source-linked `qa-matrix` runner and keep repo-private `qa-*` surfaces out of packaged and published builds. (#66723) Thanks @gumadeiras.
 
 ### Fixes
 
@@ -26,6 +27,9 @@ Docs: https://docs.openclaw.ai
 - Slack/native commands: fix option menus for slash commands such as `/verbose` when Slack renders native buttons by giving each button a unique action ID while still routing them through the shared `openclaw_cmdarg*` listener. Thanks @Wangmerlyn.
 - Feishu/webhook: harden the webhook transport and card-action replay guards to fail closed on missing `encryptKey` and blank callback tokens — refuse to start the webhook transport without an `encryptKey`, reject unsigned requests when no key is present instead of accepting them, and drop blank card-action tokens before the dedupe claim and dispatcher. Defense-in-depth over the already-closed monitor-account layer. (#66707) Thanks @eleqtrizit.
 - Agents/workspace files: route `agents.files.get`, `agents.files.set`, and workspace listing through the shared `fs-safe` helpers (`openFileWithinRoot`/`readFileWithinRoot`/`writeFileWithinRoot`), reject symlink aliases for allowlisted agent files, and have `fs-safe` resolve opened-file real paths from the file descriptor before falling back to path-based `realpath` so a symlink swap between `open` and `realpath` can no longer redirect the validated path off the intended inode. (#66636) Thanks @eleqtrizit.
+- Gateway/MCP loopback: switch the `/mcp` bearer comparison from plain `!==` to constant-time `safeEqualSecret` (matching the convention every other auth surface in the codebase uses), and reject non-loopback browser-origin requests via `checkBrowserOrigin` before the auth gate runs. Loopback origins (`127.0.0.1:*`, `localhost:*`, same-origin) still go through, including the `localhost`↔`127.0.0.1` host mismatch that browsers flag as `Sec-Fetch-Site: cross-site`. (#66665) Thanks @eleqtrizit.
+- Auto-reply/billing: classify pure billing cooldown fallback summaries from structured fallback reasons so users see billing guidance instead of the generic failure reply. (#66363) Thanks @Rohan5commit.
+- Agents/fallback: preserve the original prompt body on model fallback retries with session history so the retrying model keeps the active task instead of only seeing a generic continue message. (#66029) Thanks @WuKongAI-CMU.
 
 ## 2026.4.14
 
