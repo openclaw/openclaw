@@ -52,6 +52,19 @@ export async function ensureLoaded(
         "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
       );
     }
+    // normalizeCronJobInput returns a new object without runtime state fields
+    // (state, createdAtMs, updatedAtMs). Merge the original state back so that
+    // runningAtMs, nextRunAtMs, lastStatus etc. survive normalization.
+    if (normalized && typeof normalized === "object") {
+      const originalState = (raw as Record<string, unknown>).state;
+      if (originalState && typeof originalState === "object") {
+        normalized.state = originalState;
+      } else {
+        normalized.state = {};
+      }
+      if (typeof raw.createdAtMs === "number") normalized.createdAtMs = raw.createdAtMs;
+      if (typeof raw.updatedAtMs === "number") normalized.updatedAtMs = raw.updatedAtMs;
+    }
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
     jobs[index] = hydrated;
