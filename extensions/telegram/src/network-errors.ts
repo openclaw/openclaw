@@ -232,6 +232,150 @@ export function isTelegramClientRejection(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 400 && code < 500);
 }
 
+/**
+ * Error codes that indicate a broken/stale *existing* TCP connection rather than
+ * a failure to establish a new connection.
+ *
+ * Excludes connect-time codes (ENOTFOUND, ECONNREFUSED, EAI_AGAIN, ENETUNREACH,
+ * EHOSTUNREACH) because those only mean the health-check probe could not open a
+ * new connection -- the current long-poll socket may still be healthy.
+ */
+const STALE_CONNECTION_ERROR_CODES = new Set([
+  "ECONNRESET", // Existing connection reset by peer
+  "EPIPE", // Write to a broken pipe/socket
+  "ETIMEDOUT", // Existing connection timed out
+  "ESOCKETTIMEDOUT", // Socket-level timeout on existing connection
+  "UND_ERR_HEADERS_TIMEOUT", // Undici headers timeout on existing connection
+  "UND_ERR_BODY_TIMEOUT", // Undici body timeout on existing connection
+  "UND_ERR_SOCKET", // Undici socket error on existing connection
+  "UND_ERR_ABORTED", // Undici aborted (e.g. socket closed mid-stream)
+  "ECONNABORTED", // Connection aborted
+  "ERR_NETWORK", // Generic network failure
+  // UND_ERR_CONNECT_TIMEOUT excluded: indicates a TCP connect-phase timeout in the
+  // health-check probe, not a broken existing long-poll socket.
+]);
+
+/**
+ * Error names that indicate stale/broken connections (not connect-time failures).
+ *
+ * AbortError is intentionally excluded: polling-session aborts in-flight fetches
+ * itself via fetchAbortController.abort() during stall recovery and forced
+ * restarts, so treating self-induced AbortError on a pending health-check getMe
+ * as a stale-connection signal would misclassify our own teardown path.
+ */
+const STALE_CONNECTION_ERROR_NAMES = new Set([
+  "TimeoutError",
+  "HeadersTimeoutError",
+  "BodyTimeoutError",
+  // ConnectTimeoutError excluded: could mean the probe failed to connect,
+  // not that the existing polling socket is stale.
+]);
+
+/**
+ * Error codes that indicate a connect-time failure rather than a broken existing
+ * socket. If any candidate in the error graph carries one of these, the failure
+ * is treated as "could not open a new connection" and NOT classified as a stale
+ * existing connection. This lets broad wrappers like TypeError("fetch failed")
+ * with nested cause.code=ENOTFOUND / ECONNREFUSED fall through without forcing
+ * a polling restart.
+ */
+const CONNECT_TIME_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/**
+ * Connection-level message snippets for stale-connection detection.
+ * Intentionally excludes the broad "timeout" / "timed out" snippets from
+ * RECOVERABLE_MESSAGE_SNIPPETS because those match HTTP timeout responses
+ * (e.g. 504 Gateway Timeout) where the server actually responded.
+ * Also excludes "getaddrinfo" since DNS failures are connect-time errors.
+ */
+const STALE_CONNECTION_MESSAGE_SNIPPETS = [
+  "undici",
+  "network error",
+  "network request",
+  "client network socket disconnected",
+  "socket hang up",
+  "health check timeout",
+];
+
+/**
+ * Returns true when the error indicates a dead or stale TCP connection rather than
+ * a Telegram API-level HTTP error response or a connect-time failure.
+ *
+ * Key distinction 1: an HTTP 504 Gateway Timeout (or any other HTTP status error) means
+ * the server actually responded -- the underlying TCP link is alive and the health-check
+ * watchdog should NOT treat it as a stale socket.  Only connection-level failures
+ * (ECONNRESET, ETIMEDOUT, socket hang up, fetch failed, our own "Health check timeout",
+ * etc.) indicate that the TCP connection itself is dead or unusable.
+ *
+ * Key distinction 2: connect-time failures (ENOTFOUND, ECONNREFUSED, EAI_AGAIN) only
+ * mean the health-check probe could not open a *new* connection.  The existing
+ * long-poll socket may still be healthy, so these should NOT trigger a restart.
+ *
+ * Used by the health-check watchdog so it does not force-restart polling sessions
+ * during transient Telegram-side outages or DNS blips.
+ */
+export function isStaleConnectionError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  // If the error carries a Telegram HTTP error_code, the server responded --
+  // the connection is alive regardless of the status code (429, 5xx, etc.).
+  if (hasTelegramErrorCode(err, () => true)) {
+    return false;
+  }
+
+  // Pre-scan for connect-time codes anywhere in the error graph. A broad
+  // wrapper like TypeError("fetch failed") whose `cause.code` is ENOTFOUND /
+  // ECONNREFUSED / EAI_AGAIN is a probe-side failure to open a new connection,
+  // not evidence that the existing long-poll socket is dead. We must check
+  // this before the outer message matches "fetch failed" / "network request".
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code && CONNECT_TIME_ERROR_CODES.has(code)) {
+      return false;
+    }
+  }
+
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    // Skip candidates that are themselves Telegram HTTP error objects
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      "error_code" in candidate &&
+      typeof (candidate as { error_code: unknown }).error_code === "number"
+    ) {
+      continue;
+    }
+
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code && STALE_CONNECTION_ERROR_CODES.has(code)) {
+      return true;
+    }
+
+    const name = readErrorName(candidate);
+    if (name && STALE_CONNECTION_ERROR_NAMES.has(name)) {
+      return true;
+    }
+
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
+      return true;
+    }
+    if (message && STALE_CONNECTION_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function isRecoverableTelegramNetworkError(
   err: unknown,
   options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},

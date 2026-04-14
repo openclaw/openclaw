@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
+const isStaleConnectionErrorMock = vi.hoisted(() => vi.fn(() => true));
 const computeBackoffMock = vi.hoisted(() => vi.fn(() => 0));
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -16,6 +17,7 @@ vi.mock("./bot.js", () => ({
 
 vi.mock("./network-errors.js", () => ({
   isRecoverableTelegramNetworkError: isRecoverableTelegramNetworkErrorMock,
+  isStaleConnectionError: isStaleConnectionErrorMock,
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -58,11 +60,44 @@ function installPollingStallWatchdogHarness(
     return 1 as unknown as ReturnType<typeof setInterval>;
   });
   const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
-    void Promise.resolve().then(() => (fn as () => void)());
-    return 1 as unknown as ReturnType<typeof setTimeout>;
+  // Track pending timeouts so clearTimeout can actually suppress the callback.
+  // Without this the health-check's inner HEALTH_CHECK_TIMEOUT_MS timer leaks
+  // unhandled "Health check timeout" rejections after the finally-block clears it.
+  //
+  // We also skip auto-firing timers whose delay exceeds STALL_HARNESS_AUTO_FIRE_MAX_MS.
+  // The stall watchdog and its forced-cycle fallback use short delays (<=15s), but
+  // the health-check interval is 120s. Auto-firing the health-check timer would
+  // run the watchdog concurrently with the stall-watchdog path and corrupt
+  // expectations. Long timers still register a handle for clearTimeout, so teardown
+  // behaves correctly.
+  const STALL_HARNESS_AUTO_FIRE_MAX_MS = 30_000;
+  let nextTimerHandle = 1;
+  const pendingTimers = new Map<number, () => void>();
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn, delayMs) => {
+    const handle = nextTimerHandle++;
+    const cb = fn as () => void;
+    const delay = typeof delayMs === "number" ? delayMs : 0;
+    if (delay > STALL_HARNESS_AUTO_FIRE_MAX_MS) {
+      // Retain the handle so clearTimeout remains consistent, but never fire.
+      pendingTimers.set(handle, () => {});
+      return handle as unknown as ReturnType<typeof setTimeout>;
+    }
+    pendingTimers.set(handle, cb);
+    void Promise.resolve().then(() => {
+      const pending = pendingTimers.get(handle);
+      if (!pending) {
+        return;
+      }
+      pendingTimers.delete(handle);
+      pending();
+    });
+    return handle as unknown as ReturnType<typeof setTimeout>;
   });
-  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation((handle) => {
+    if (typeof handle === "number") {
+      pendingTimers.delete(handle);
+    }
+  });
   const dateNowSpy = vi.spyOn(Date, "now");
   for (const value of dateNowSequence) {
     dateNowSpy.mockImplementationOnce(() => value);
