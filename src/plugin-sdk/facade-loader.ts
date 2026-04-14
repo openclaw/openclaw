@@ -10,8 +10,7 @@ import {
   type PluginJitiLoaderFactory,
 } from "../plugins/jiti-loader-cache.js";
 import {
-  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
-  normalizeBundledPluginArtifactSubpath,
+  resolveBundledPluginSourcePublicSurfacePath,
   resolveBundledPluginPublicSurfacePath,
 } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
@@ -58,24 +57,6 @@ function createFacadeResolutionKey(params: { dirName: string; artifactBasename: 
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
 }
 
-function resolveSourceFirstPublicSurfacePath(params: {
-  bundledPluginsDir?: string;
-  dirName: string;
-  artifactBasename: string;
-}): string | null {
-  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  const sourceRoot =
-    params.bundledPluginsDir ?? path.resolve(getOpenClawPackageRoot(), "extensions");
-  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-    const candidate = path.resolve(sourceRoot, params.dirName, `${sourceBaseName}${ext}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 function resolveFacadeModuleLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
@@ -84,11 +65,10 @@ function resolveFacadeModuleLocationUncached(params: {
   const preferSource = !CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`);
   if (preferSource) {
     const modulePath =
-      resolveSourceFirstPublicSurfacePath({
+      resolveBundledPluginSourcePublicSurfacePath({
         ...params,
-        ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+        sourceRoot: bundledPluginsDir ?? path.resolve(getOpenClawPackageRoot(), "extensions"),
       }) ??
-      resolveSourceFirstPublicSurfacePath(params) ??
       resolveBundledPluginPublicSurfacePath({
         rootDir: getOpenClawPackageRoot(),
         ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
