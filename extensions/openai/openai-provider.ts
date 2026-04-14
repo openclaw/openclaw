@@ -9,7 +9,6 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
@@ -20,6 +19,7 @@ import {
   findCatalogTemplate,
   isOpenAIApiBaseUrl,
   matchesExactOrPrefix,
+  OPENAI_RESPONSES_STREAM_HOOKS,
 } from "./shared.js";
 import {
   resolveOpenAITransportTurnState,
@@ -70,8 +70,6 @@ const OPENAI_MODERN_MODEL_IDS = [
 ] as const;
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
-const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
-
 function shouldUseOpenAIResponsesTransport(params: {
   provider: string;
   api?: string | null;

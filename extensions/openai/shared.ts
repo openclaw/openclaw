@@ -4,6 +4,7 @@ import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 type SyntheticOpenAIModelCatalogCost = {
@@ -25,6 +26,9 @@ type SyntheticOpenAIModelCatalogEntry = {
 };
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
+  "openai-responses-defaults",
+);
 
 export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
