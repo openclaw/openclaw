@@ -6,6 +6,13 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
+type SyntheticOpenAIModelCatalogCost = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
 type SyntheticOpenAIModelCatalogEntry = {
   provider: string;
   id: string;
@@ -14,6 +21,7 @@ type SyntheticOpenAIModelCatalogEntry = {
   input?: ("text" | "image")[];
   contextWindow?: number;
   contextTokens?: number;
+  cost?: SyntheticOpenAIModelCatalogCost;
 };
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
@@ -50,6 +58,7 @@ export function buildOpenAISyntheticCatalogEntry(
     input: readonly ("text" | "image")[];
     contextWindow: number;
     contextTokens?: number;
+    cost?: SyntheticOpenAIModelCatalogCost;
   },
 ): SyntheticOpenAIModelCatalogEntry | undefined {
   if (!template) {
@@ -63,6 +72,7 @@ export function buildOpenAISyntheticCatalogEntry(
     input: [...entry.input],
     contextWindow: entry.contextWindow,
     ...(entry.contextTokens === undefined ? {} : { contextTokens: entry.contextTokens }),
+    ...(entry.cost === undefined ? {} : { cost: entry.cost }),
   };
 }
 

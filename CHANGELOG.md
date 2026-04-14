@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- OpenAI Codex/models: add forward-compat support for `gpt-5.4-pro`, including Codex pricing/limits and list/status visibility before the upstream catalog catches up. (#66453) Thanks @jepson-liu.
+
 ### Fixes
 
 - Agents/Ollama: forward the configured embedded-run timeout into the global undici stream timeout tuning so slow local Ollama runs no longer inherit the default stream cutoff instead of the operator-set run timeout. (#63175) Thanks @mindcraftreader and @vincentkoc.
@@ -19,16 +21,21 @@ Docs: https://docs.openclaw.ai
 - Ollama/OpenAI-compat: send `stream_options.include_usage` for Ollama streaming completions so local Ollama runs report real usage instead of falling back to bogus prompt-token counts that trigger premature compaction. (#64568) Thanks @xchunzhao and @vincentkoc.
 - Doctor/plugins: cache external `preferOver` catalog lookups within each plugin auto-enable pass so large `agents.list` configs no longer peg CPU and repeatedly reread plugin catalogs during doctor/plugins resolution. (#66246) Thanks @yfge.
 - GitHub Copilot/thinking: allow `github-copilot/gpt-5.4` to use `xhigh` reasoning so Copilot GPT-5.4 matches the rest of the GPT-5.4 family. (#50168) Thanks @jakepresent and @vincentkoc.
+- Memory/embeddings: preserve non-OpenAI provider prefixes when normalizing OpenAI-compatible embedding model refs so proxy-backed memory providers stop failing with `Unknown memory embedding provider`. (#66452) Thanks @jlapenna.
 - Agents/local models: clarify low-context preflight hints for self-hosted models, point config-backed caps at the relevant OpenClaw setting, and stop suggesting larger models when `agents.defaults.contextTokens` is the real limit. (#66236) Thanks @ImLukeF.
 - Browser/SSRF: restore hostname navigation under the default browser SSRF policy while keeping explicit strict mode reachable from config, and keep managed loopback CDP `/json/new` fallback requests on the local CDP control policy so browser follow-up fixes stop regressing normal navigation or self-blocking local CDP control. (#66386) Thanks @obviyus.
 - Models/Codex: canonicalize the legacy `openai-codex/gpt-5.4-codex` runtime alias to `openai-codex/gpt-5.4` while still honoring alias-specific and canonical per-model overrides. (#43060) Thanks @Sapientropic and @vincentkoc.
 - Browser/SSRF: preserve explicit strict browser navigation mode for legacy `browser.ssrfPolicy.allowPrivateNetwork: false` configs by normalizing the legacy alias to the canonical strict marker instead of silently widening those installs to the default non-strict hostname-navigation path.
+- Onboarding/custom providers: use `max_tokens=16` for OpenAI-compatible verification probes so stricter custom endpoints stop rejecting onboarding checks that only need a tiny completion. (#66450) Thanks @WuKongAI-CMU.
 - Agents/subagents: emit the subagent registry lazy-runtime stub on the stable dist path that both source and bundled runtime imports resolve, so the follow-up dist fix no longer still fails with `ERR_MODULE_NOT_FOUND` at runtime. (#66420) Thanks @obviyus.
 - Media-understanding/proxy env: auto-upgrade provider HTTP helper requests to trusted env-proxy mode only when `HTTP_PROXY`/`HTTPS_PROXY` is active and the target is not bypassed by `NO_PROXY`, so remote media-understanding and transcription requests stop failing local DNS pre-resolution in proxy-only environments without widening SSRF bypasses. (#52162) Thanks @mjamiv and @vincentkoc.
+- Telegram/media downloads: let Telegram media fetches trust an operator-configured explicit proxy for target DNS resolution after hostname-policy checks, so proxy-backed installs stop failing `could not download media` on Bot API file downloads after the DNS-pinning regression. (#66245) Thanks @dawei41468 and @vincentkoc.
 - Browser: keep loopback CDP readiness checks reachable under strict SSRF defaults so OpenClaw can reconnect to locally started managed Chrome. (#66354) Thanks @hxy91819.
 - Agents/context engine: compact engine-owned sessions from the first tool-loop delta and preserve ingest fallback when `afterTurn` is absent, so long-running tool loops can stay bounded without dropping engine state. (#63555) Thanks @Bikkies.
+- OpenAI Codex/auth: keep malformed Codex CLI auth-file diagnostics on the debug logger instead of stdout so interactive command output stays clean while auth read failures remain traceable. (#66451) Thanks @SimbaKingjoe.
 - Discord/native commands: return the real status card for native `/status` interactions instead of falling through to the synthetic `✅ Done.` ack when the generic dispatcher produces no visible reply. (#54629) Thanks @tkozzer and @vincentkoc.
 - Hooks/Ollama: let LLM-backed session-memory slug generation honor an explicit `agents.defaults.timeoutSeconds` override instead of always aborting after 15 seconds, so slow local Ollama runs stop silently dropping back to generic filenames. (#66237) Thanks @dmak and @vincentkoc.
+- Media/transcription: remap `.aac` filenames to `.m4a` for OpenAI-compatible audio uploads so AAC voice notes stop failing MIME-sensitive transcription endpoints. (#66446) Thanks @ben-z.
 
 ## 2026.4.14-beta.1
 
