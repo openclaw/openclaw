@@ -670,6 +670,49 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(instruction).toContain("Do not recap or restate the plan");
   });
 
+  it("enables planning-only retry for non-OpenAI providers with strict-agentic contract", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "lmstudio",
+      modelId: "qwen/qwen3.5-35b-a3b",
+      executionContract: "strict-agentic",
+      prompt: "Run the morning research pipeline.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("does not enable planning-only retry for non-OpenAI providers with default contract", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "lmstudio",
+      modelId: "qwen/qwen3.5-35b-a3b",
+      executionContract: "default",
+      prompt: "Run the morning research pipeline.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("enables ack-turn fast-path for non-OpenAI providers with strict-agentic contract", () => {
+    const instruction = resolveAckExecutionFastPathInstruction({
+      provider: "lmstudio",
+      modelId: "qwen/qwen3.5-35b-a3b",
+      executionContract: "strict-agentic",
+      prompt: "go ahead",
+    });
+
+    expect(instruction).toContain("Do not recap or restate the plan");
+  });
+
   it("extracts structured steps from planning-only narration", () => {
     expect(
       extractPlanningOnlyPlanDetails(

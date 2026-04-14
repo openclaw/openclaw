@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
+import {
+  isStrictAgenticExecutionContractActive,
+  isStrictAgenticSupportedProviderModel,
+} from "./execution-contract.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export function collectPresentOpenClawTools(
@@ -19,11 +22,20 @@ export function isUpdatePlanToolEnabledForOpenClawTools(params: {
   if (configured !== undefined) {
     return configured;
   }
-  return isStrictAgenticExecutionContractActive({
-    config: params.config,
-    sessionKey: params.agentSessionKey,
-    agentId: params.agentId,
-    provider: params.modelProvider,
-    modelId: params.modelId,
-  });
+  // Auto-enable update_plan only for supported provider/model combinations
+  // where strict-agentic is active. Operators on other providers can use
+  // tools.experimental.planTool: true to force-enable.
+  return (
+    isStrictAgenticExecutionContractActive({
+      config: params.config,
+      sessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+      provider: params.modelProvider,
+      modelId: params.modelId,
+    }) &&
+    isStrictAgenticSupportedProviderModel({
+      provider: params.modelProvider,
+      modelId: params.modelId,
+    })
+  );
 }

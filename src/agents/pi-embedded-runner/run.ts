@@ -473,6 +473,7 @@ export async function runEmbeddedPiAgent(
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
         modelId,
+        executionContract: configuredExecutionContract,
         prompt: params.prompt,
       });
       let rateLimitProfileRotations = 0;
@@ -1675,6 +1676,7 @@ export async function runEmbeddedPiAgent(
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
+            executionContract: configuredExecutionContract,
             prompt: params.prompt,
             aborted,
             timedOut,
@@ -1683,6 +1685,7 @@ export async function runEmbeddedPiAgent(
           const nextReasoningOnlyRetryInstruction = resolveReasoningOnlyRetryInstruction({
             provider: activeErrorContext.provider,
             modelId: activeErrorContext.model,
+            executionContract: configuredExecutionContract,
             aborted,
             timedOut,
             attempt,
@@ -1690,6 +1693,7 @@ export async function runEmbeddedPiAgent(
           const nextEmptyResponseRetryInstruction = resolveEmptyResponseRetryInstruction({
             provider: activeErrorContext.provider,
             modelId: activeErrorContext.model,
+            executionContract: configuredExecutionContract,
             payloadCount,
             aborted,
             timedOut,
