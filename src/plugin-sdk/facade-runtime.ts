@@ -36,39 +36,9 @@ const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "speech-core",
 ]);
 const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
-
-// These maps are intentionally stored on globalThis so that every jiti module
-// instance shares the same cache.  When root-alias.cjs creates a new jiti
-// context to load compat.ts, which in turn imports facade-runtime.ts, that
-// second module instance would otherwise have an empty local Map and re-enter
-// loadBundledPluginPublicSurfaceModuleSync for the same path, causing an
-// unbounded call stack.  Using a process-scoped symbol guarantees a single
-// source of truth regardless of how many jiti contexts are alive.
-const FACADE_MODULES_KEY = Symbol.for("openclaw.facade-runtime.loadedFacadeModules");
-const FACADE_PLUGIN_IDS_KEY = Symbol.for("openclaw.facade-runtime.loadedFacadePluginIds");
-
-type GlobalWithFacadeState = typeof globalThis & {
-  [FACADE_MODULES_KEY]?: Map<string, unknown>;
-  [FACADE_PLUGIN_IDS_KEY]?: Set<string>;
-};
-
-function getProcessScopedFacadeModules(): Map<string, unknown> {
-  const g = globalThis as GlobalWithFacadeState;
-  if (!g[FACADE_MODULES_KEY]) {
-    g[FACADE_MODULES_KEY] = new Map<string, unknown>();
-  }
-  return g[FACADE_MODULES_KEY]!;
-}
-
-function getProcessScopedFacadePluginIds(): Set<string> {
-  const g = globalThis as GlobalWithFacadeState;
-  if (!g[FACADE_PLUGIN_IDS_KEY]) {
-    g[FACADE_PLUGIN_IDS_KEY] = new Set<string>();
-  }
-  return g[FACADE_PLUGIN_IDS_KEY]!;
-}
-
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const loadedFacadeModules = new Map<string, unknown>();
+const loadedFacadePluginIds = new Set<string>();
 let cachedBoundaryRawConfig: OpenClawConfig | undefined;
 let cachedBoundaryResolvedConfig:
   | {
@@ -330,8 +300,7 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const facadeModules = getProcessScopedFacadeModules();
-  const cached = facadeModules.get(location.modulePath);
+  const cached = loadedFacadeModules.get(location.modulePath);
   if (cached) {
     return cached as T;
   }
@@ -360,17 +329,17 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
   // loading, Object.assign() back-fills the sentinel so any references
   // captured during the circular load phase see the final exports.
   const sentinel = {} as T;
-  facadeModules.set(location.modulePath, sentinel);
+  loadedFacadeModules.set(location.modulePath, sentinel);
 
   let loaded: T;
   try {
     // Track the owning plugin once module evaluation begins. Facade top-level
     // code may have already executed even if the module later throws.
-    getProcessScopedFacadePluginIds().add(resolveTrackedFacadePluginId(params.dirName));
+    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
     loaded = getJiti(location.modulePath)(location.modulePath) as T;
     Object.assign(sentinel, loaded);
   } catch (err) {
-    facadeModules.delete(location.modulePath);
+    loadedFacadeModules.delete(location.modulePath);
     throw err;
   }
 
@@ -410,14 +379,12 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
 }
 
 export function listImportedBundledPluginFacadeIds(): string[] {
-  return [...getProcessScopedFacadePluginIds()].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return [...loadedFacadePluginIds].toSorted((left, right) => left.localeCompare(right));
 }
 
 export function resetFacadeRuntimeStateForTest(): void {
-  getProcessScopedFacadeModules().clear();
-  getProcessScopedFacadePluginIds().clear();
+  loadedFacadeModules.clear();
+  loadedFacadePluginIds.clear();
   jitiLoaders.clear();
   cachedBoundaryRawConfig = undefined;
   cachedBoundaryResolvedConfig = undefined;
