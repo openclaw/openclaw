@@ -819,6 +819,55 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it("retries reasoning-only Ollama turns without visible text", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:26b",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "ollama",
+          model: "gemma4:26b",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "ollama_reasoning_only", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries generic empty Ollama turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:26b",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "ollama",
+          model: "gemma4:26b",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("detects generic empty GPT turns without visible text", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "openai",

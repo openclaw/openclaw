@@ -48,12 +48,19 @@ export function isStrictAgenticSupportedProviderModel(params: {
   modelId?: string | null;
 }): boolean {
   const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
-  if (provider !== "openai" && provider !== "openai-codex" && provider !== "mock-openai") {
-    return false;
+  if (provider === "openai" || provider === "openai-codex") {
+    const modelId = typeof params.modelId === "string" ? params.modelId : "";
+    const bareModelId = stripProviderPrefix(modelId);
+    return STRICT_AGENTIC_MODEL_ID_PATTERN.test(bareModelId);
   }
-  const modelId = typeof params.modelId === "string" ? params.modelId : "";
-  const bareModelId = stripProviderPrefix(modelId);
-  return STRICT_AGENTIC_MODEL_ID_PATTERN.test(bareModelId);
+  // Local/native Ollama models can also produce reasoning-only turns where the
+  // model emits internal thinking without a visible answer yet. Reuse the same
+  // incomplete-turn recovery guards for this provider so those turns continue
+  // instead of surfacing as empty/incomplete responses.
+  if (provider === "ollama") {
+    return true;
+  }
+  return false;
 }
 
 /**
