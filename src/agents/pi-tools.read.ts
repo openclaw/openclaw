@@ -641,7 +641,7 @@ export function createOpenClawReadTool(
       } catch (err) {
         // Check if error was due to abort
         if (signal?.aborted) {
-          throw new Error("Read operation aborted");
+          throw new Error("Read operation aborted", { cause: err });
         }
         const error = err as Error;
         return {

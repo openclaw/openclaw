@@ -6,7 +6,6 @@ import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
-import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type {
@@ -1412,7 +1411,7 @@ function renderGroupedMessage(
     if (el.hasAttribute('data-resize-initialized')) {return;}
     el.setAttribute('data-resize-initialized', 'true');
     setTimeout(() => {
-      setupResizeHandles(el as HTMLElement, 'bottom-right', messageId);
+      setupResizeHandles(el, 'bottom-right', messageId);
     }, 100);
   };
 
