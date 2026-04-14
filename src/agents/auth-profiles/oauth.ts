@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   getOAuthApiKey,
   getOAuthProviders,
@@ -5,15 +6,18 @@ import {
   type OAuthProvider,
 } from "@mariozechner/pi-ai/oauth";
 import { loadConfig } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
+import { resolveProcessScopedMap } from "../../shared/process-scoped-map.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { writeCodexCliCredentials } from "../cli-credentials.js";
@@ -55,6 +59,9 @@ function listOAuthProviderIds(): string[] {
 }
 
 const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
+const OAUTH_REFRESH_TAILS = resolveProcessScopedMap<Promise<void>>(
+  Symbol.for("openclaw.authProfiles.oauthRefreshTails"),
+);
 
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
@@ -183,8 +190,8 @@ function adoptNewerMainOAuthCredential(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
-  cred: OAuthCredentials & { type: "oauth"; provider: string; email?: string };
-}): (OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null {
+  cred: OAuthCredential;
+}): OAuthCredential | null {
   if (!params.agentDir) {
     return null;
   }
@@ -216,6 +223,49 @@ function adoptNewerMainOAuthCredential(params: {
   return null;
 }
 
+function resolveOAuthRefreshCoordinationPath(profileId: string): string {
+  const normalizedProfileId = profileId.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return path.join(resolveStateDir(), "locks", "oauth-refresh", normalizedProfileId);
+}
+
+async function syncRefreshedOAuthCredentialToMainAgent(params: {
+  profileId: string;
+  agentDir?: string;
+  credentials: OAuthCredential;
+}): Promise<void> {
+  if (!params.agentDir) {
+    return;
+  }
+
+  const authPath = resolveAuthStorePath(params.agentDir);
+  const mainAuthPath = resolveAuthStorePath();
+  if (authPath === mainAuthPath) {
+    return;
+  }
+
+  ensureAuthStoreFile(mainAuthPath);
+  await withFileLock(mainAuthPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+    const mainStore = ensureAuthProfileStore(undefined);
+    const existing = mainStore.profiles[params.profileId];
+    if (
+      existing?.type === "oauth" &&
+      existing.provider === params.credentials.provider &&
+      Number.isFinite(existing.expires) &&
+      existing.expires > params.credentials.expires
+    ) {
+      return;
+    }
+
+    mainStore.profiles[params.profileId] = { ...params.credentials };
+    saveAuthProfileStore(mainStore, undefined);
+    log.info("synced refreshed OAuth credentials to main agent", {
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+      expires: new Date(params.credentials.expires).toISOString(),
+    });
+  });
+}
+
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   agentDir?: string;
@@ -223,120 +273,167 @@ async function refreshOAuthTokenWithLock(params: {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
-  return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-    // Locked refresh must bypass runtime snapshots so we can adopt fresher
-    // on-disk credentials written by another refresh attempt.
-    const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
-    const cred = store.profiles[params.profileId];
-    if (!cred || cred.type !== "oauth") {
-      return null;
-    }
+  return await enqueueKeyedTask({
+    tails: OAUTH_REFRESH_TAILS,
+    key: params.profileId,
+    task: async () => {
+      return await withFileLock(
+        resolveOAuthRefreshCoordinationPath(params.profileId),
+        AUTH_STORE_LOCK_OPTIONS,
+        async () => {
+          return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+            // Locked refresh must bypass runtime snapshots so we can adopt fresher
+            // on-disk credentials written by another refresh attempt.
+            const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+            const cred = store.profiles[params.profileId];
+            if (!cred || cred.type !== "oauth") {
+              return null;
+            }
 
-    if (Date.now() < cred.expires) {
-      return {
-        apiKey: await buildOAuthApiKey(cred.provider, cred),
-        newCredentials: cred,
-      };
-    }
+            const activeCred =
+              adoptNewerMainOAuthCredential({
+                store,
+                profileId: params.profileId,
+                agentDir: params.agentDir,
+                cred,
+              }) ?? cred;
 
-    const externallyManaged = readManagedExternalCliCredential({
-      profileId: params.profileId,
-      credential: cred,
-    });
-    if (externallyManaged) {
-      if (!areOAuthCredentialsEquivalent(cred, externallyManaged)) {
-        store.profiles[params.profileId] = externallyManaged;
-        saveAuthProfileStore(store, params.agentDir);
-      }
-      if (Date.now() < externallyManaged.expires) {
-        return {
-          apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
-          newCredentials: externallyManaged,
-        };
-      }
-      if (externallyManaged.managedBy === "codex-cli") {
-        const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
-          provider: externallyManaged.provider,
-          context: externallyManaged,
-        });
-        if (pluginRefreshed) {
-          const refreshedCredentials: OAuthCredential = {
-            ...externallyManaged,
-            ...pluginRefreshed,
-            type: "oauth",
-            managedBy: "codex-cli",
-          };
-          if (!writeCodexCliCredentials(refreshedCredentials)) {
-            log.warn("failed to persist refreshed codex credentials back to Codex storage", {
+            if (Date.now() < activeCred.expires) {
+              return {
+                apiKey: await buildOAuthApiKey(activeCred.provider, activeCred),
+                newCredentials: activeCred,
+              };
+            }
+
+            const externallyManaged = readManagedExternalCliCredential({
               profileId: params.profileId,
+              credential: activeCred,
             });
-          }
-          store.profiles[params.profileId] = refreshedCredentials;
-          saveAuthProfileStore(store, params.agentDir);
-          return {
-            apiKey: await buildOAuthApiKey(refreshedCredentials.provider, refreshedCredentials),
-            newCredentials: refreshedCredentials,
-          };
-        }
-      }
-      throw new Error(
-        `${externallyManaged.managedBy} credential is expired; refresh it in the external CLI and retry.`,
-      );
-    }
-    if (cred.managedBy) {
-      throw new Error(
-        `${cred.managedBy} credential is unavailable; re-authenticate in the external CLI and retry.`,
-      );
-    }
+            if (externallyManaged) {
+              if (!areOAuthCredentialsEquivalent(activeCred, externallyManaged)) {
+                store.profiles[params.profileId] = externallyManaged;
+                saveAuthProfileStore(store, params.agentDir);
+              }
+              if (Date.now() < externallyManaged.expires) {
+                return {
+                  apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
+                  newCredentials: externallyManaged,
+                };
+              }
+              if (externallyManaged.managedBy === "codex-cli") {
+                const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
+                  provider: externallyManaged.provider,
+                  context: externallyManaged,
+                });
+                if (pluginRefreshed) {
+                  const refreshedCredentials: OAuthCredential = {
+                    ...externallyManaged,
+                    ...pluginRefreshed,
+                    type: "oauth",
+                    managedBy: "codex-cli",
+                  };
+                  if (!writeCodexCliCredentials(refreshedCredentials)) {
+                    log.warn(
+                      "failed to persist refreshed codex credentials back to Codex storage",
+                      {
+                        profileId: params.profileId,
+                      },
+                    );
+                  }
+                  store.profiles[params.profileId] = refreshedCredentials;
+                  saveAuthProfileStore(store, params.agentDir);
+                  await syncRefreshedOAuthCredentialToMainAgent({
+                    profileId: params.profileId,
+                    agentDir: params.agentDir,
+                    credentials: refreshedCredentials,
+                  });
+                  return {
+                    apiKey: await buildOAuthApiKey(
+                      refreshedCredentials.provider,
+                      refreshedCredentials,
+                    ),
+                    newCredentials: refreshedCredentials,
+                  };
+                }
+              }
+              throw new Error(
+                `${externallyManaged.managedBy} credential is expired; refresh it in the external CLI and retry.`,
+              );
+            }
+            if (activeCred.managedBy) {
+              throw new Error(
+                `${activeCred.managedBy} credential is unavailable; re-authenticate in the external CLI and retry.`,
+              );
+            }
 
-    const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
-      provider: cred.provider,
-      context: cred,
-    });
-    if (pluginRefreshed) {
-      const refreshedCredentials: OAuthCredential = {
-        ...cred,
-        ...pluginRefreshed,
-        type: "oauth",
-      };
-      store.profiles[params.profileId] = refreshedCredentials;
-      saveAuthProfileStore(store, params.agentDir);
-      return {
-        apiKey: await buildOAuthApiKey(cred.provider, refreshedCredentials),
-        newCredentials: refreshedCredentials,
-      };
-    }
-
-    const oauthCreds: Record<string, OAuthCredentials> = { [cred.provider]: cred };
-    const result =
-      cred.provider === "chutes"
-        ? await (async () => {
-            const newCredentials = await refreshChutesTokens({
-              credential: cred,
+            const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
+              provider: activeCred.provider,
+              context: activeCred,
             });
-            return { apiKey: newCredentials.access, newCredentials };
-          })()
-        : await (async () => {
-            const oauthProvider = resolveOAuthProvider(cred.provider);
-            if (!oauthProvider) {
+            if (pluginRefreshed) {
+              const refreshedCredentials: OAuthCredential = {
+                ...activeCred,
+                ...pluginRefreshed,
+                type: "oauth",
+              };
+              store.profiles[params.profileId] = refreshedCredentials;
+              saveAuthProfileStore(store, params.agentDir);
+              await syncRefreshedOAuthCredentialToMainAgent({
+                profileId: params.profileId,
+                agentDir: params.agentDir,
+                credentials: refreshedCredentials,
+              });
+              return {
+                apiKey: await buildOAuthApiKey(activeCred.provider, refreshedCredentials),
+                newCredentials: refreshedCredentials,
+              };
+            }
+
+            const oauthCreds: Record<string, OAuthCredentials> = {
+              [activeCred.provider]: activeCred,
+            };
+            const result =
+              activeCred.provider === "chutes"
+                ? await (async () => {
+                    const newCredentials = await refreshChutesTokens({
+                      credential: activeCred,
+                    });
+                    return { apiKey: newCredentials.access, newCredentials };
+                  })()
+                : await (async () => {
+                    const oauthProvider = resolveOAuthProvider(activeCred.provider);
+                    if (!oauthProvider) {
+                      return null;
+                    }
+                    if (typeof getOAuthApiKey !== "function") {
+                      return null;
+                    }
+                    return await getOAuthApiKey(oauthProvider, oauthCreds);
+                  })();
+            if (!result) {
               return null;
             }
-            if (typeof getOAuthApiKey !== "function") {
-              return null;
-            }
-            return await getOAuthApiKey(oauthProvider, oauthCreds);
-          })();
-    if (!result) {
-      return null;
-    }
-    store.profiles[params.profileId] = {
-      ...cred,
-      ...result.newCredentials,
-      type: "oauth",
-    };
-    saveAuthProfileStore(store, params.agentDir);
+            const syncedCredentials: OAuthCredential = {
+              ...activeCred,
+              ...result.newCredentials,
+              type: "oauth",
+            };
+            store.profiles[params.profileId] = syncedCredentials;
+            saveAuthProfileStore(store, params.agentDir);
+            await syncRefreshedOAuthCredentialToMainAgent({
+              profileId: params.profileId,
+              agentDir: params.agentDir,
+              credentials: syncedCredentials,
+            });
 
-    return result;
+            return {
+              apiKey: result.apiKey,
+              newCredentials: syncedCredentials,
+            };
+          });
+        },
+      );
+    },
   });
 }
 
