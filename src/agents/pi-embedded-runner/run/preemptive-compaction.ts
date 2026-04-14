@@ -1,12 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
-import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
-import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../pi-compaction-constants.js";
+import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
+import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";

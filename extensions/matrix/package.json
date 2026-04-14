@@ -50,9 +50,6 @@
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10",
       "allowInvalidConfigRecovery": true
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
     }
   }
 }
