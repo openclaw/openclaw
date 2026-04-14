@@ -480,10 +480,22 @@ async function writeSystemdUnit({
   workingDirectory,
   environment,
   description,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ unitPath: string; backedUp: boolean }> {
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
+  unitPath: string;
+  backedUp: boolean;
+  scope: "user" | "system";
+}> {
   await assertSystemdAvailable(env);
 
-  const unitPath = resolveSystemdUnitPath(env);
+  const existing = await resolveSystemdStatusUnit(env);
+  const isRoot = env.USER === "root" || env.LOGNAME === "root";
+  const scope = existing ? existing.scope : isRoot ? "system" : "user";
+  const unitPath = existing
+    ? existing.unitPath
+    : scope === "system"
+      ? resolveSystemdSystemUnitPath(env)
+      : resolveSystemdUnitPath(env);
+
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
 
   // Preserve user customizations: back up existing unit file before overwriting.
@@ -532,7 +544,7 @@ async function writeSystemdUnit({
     environmentFiles,
   });
   await fs.writeFile(unitPath, unit, "utf8");
-  return { unitPath, backedUp };
+  return { unitPath, backedUp, scope };
 }
 
 async function writeSystemdGatewayEnvironmentFile(params: {
@@ -583,20 +595,23 @@ export async function stageSystemdService({
   return { unitPath };
 }
 
-async function activateSystemdService(params: { env: GatewayServiceEnv }) {
+async function activateSystemdService(params: {
+  env: GatewayServiceEnv;
+  scope: "user" | "system";
+}) {
   const serviceName = resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
-  const reload = await execSystemctlUser(params.env, ["daemon-reload"]);
+  const reload = await execSystemctlForScope(params.env, params.scope, ["daemon-reload"]);
   if (reload.code !== 0) {
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
   }
 
-  const enable = await execSystemctlUser(params.env, ["enable", unitName]);
+  const enable = await execSystemctlForScope(params.env, params.scope, ["enable", unitName]);
   if (enable.code !== 0) {
     throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
   }
 
-  const restart = await execSystemctlUser(params.env, ["restart", unitName]);
+  const restart = await execSystemctlForScope(params.env, params.scope, ["restart", unitName]);
   if (restart.code !== 0) {
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
@@ -605,8 +620,8 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
-  const { unitPath, backedUp } = await writeSystemdUnit(args);
-  await activateSystemdService({ env: args.env });
+  const { unitPath, backedUp, scope } = await writeSystemdUnit(args);
+  await activateSystemdService({ env: args.env, scope });
   writeFormattedLines(
     args.stdout,
     [
