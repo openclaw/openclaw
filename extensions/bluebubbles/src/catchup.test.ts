@@ -254,15 +254,66 @@ describe("runBlueBubblesCatchup", () => {
     expect(called.proc).toBe(0);
   });
 
-  it("skips a rapid second run within MIN_INTERVAL_MS", async () => {
+  it("runs catchup even on rapid restarts (no min-interval gate)", async () => {
+    // Catchup runs once per gateway startup, so a quick restart MUST run
+    // it again — otherwise messages dropped between the two startups
+    // (gateway down → BB ECONNREFUSED → gateway up <30s later) are lost
+    // permanently. Bounded by perRunLimit/maxAge + dedupe-protected.
     const now = 10_000;
-    await saveBlueBubblesCatchupCursor("test-account", now - 5_000); // 5s ago
+    await saveBlueBubblesCatchupCursor("test-account", now - 5_000);
+    let fetched = false;
     const summary = await runBlueBubblesCatchup(makeTarget(), {
       now: () => now,
-      fetchMessages: async () => ({ resolved: true, messages: [] }),
+      fetchMessages: async () => {
+        fetched = true;
+        return { resolved: true, messages: [] };
+      },
       processMessageFn: async () => {},
     });
-    expect(summary).toBeNull();
+    expect(fetched).toBe(true);
+    expect(summary).not.toBeNull();
+  });
+
+  it("advances cursor only to last fetched ts when result is truncated (perRunLimit hit)", async () => {
+    // Long-outage scenario: 4 messages arrived during downtime but
+    // perRunLimit=2. Sort:ASC means we get the 2 oldest. Cursor must
+    // advance to the 2nd's timestamp (not nowMs) so the next startup
+    // picks up the remaining 2.
+    const now = 100 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 50 * 60 * 1000);
+    const summary = await runBlueBubblesCatchup(
+      makeTarget({
+        account: {
+          accountId: "test-account",
+          enabled: true,
+          configured: true,
+          baseUrl: "http://127.0.0.1:1234",
+          config: {
+            serverUrl: "http://127.0.0.1:1234",
+            password: "x",
+            network: { dangerouslyAllowPrivateNetwork: true },
+            catchup: { perRunLimit: 2 },
+          } as unknown as WebhookTarget["account"]["config"],
+        },
+      }),
+      {
+        now: () => now,
+        fetchMessages: async () => ({
+          resolved: true,
+          // Only the 2 the cap allows BB to return (oldest first via ASC).
+          messages: [
+            makeBbMessage({ guid: "p1", dateCreated: 60 * 60 * 1000 }),
+            makeBbMessage({ guid: "p2", dateCreated: 70 * 60 * 1000 }),
+          ],
+        }),
+        processMessageFn: async () => {},
+      },
+    );
+    expect(summary?.replayed).toBe(2);
+    expect(summary?.fetchedCount).toBe(2);
+    expect(summary?.cursorAfter).toBe(70 * 60 * 1000); // page boundary, not nowMs
+    const cursor = await loadBlueBubblesCatchupCursor("test-account");
+    expect(cursor?.lastSeenMs).toBe(70 * 60 * 1000);
   });
 
   it("filters isFromMe before dispatch and still advances cursor", async () => {

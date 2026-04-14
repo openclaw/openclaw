@@ -21,9 +21,6 @@ const MAX_MAX_AGE_MINUTES = 12 * 60;
 const DEFAULT_PER_RUN_LIMIT = 50;
 const MAX_PER_RUN_LIMIT = 500;
 const DEFAULT_FIRST_RUN_LOOKBACK_MINUTES = 30;
-// Skip catchup on restarts <30s apart to avoid churn on healthy rolling
-// restarts (e.g. automated repair loops, deploy scripts).
-const MIN_INTERVAL_MS = 30_000;
 const FETCH_TIMEOUT_MS = 15_000;
 
 export type BlueBubblesCatchupConfig = {
@@ -225,14 +222,15 @@ export async function runBlueBubblesCatchup(
   const existing = await loadBlueBubblesCatchupCursor(accountId).catch(() => null);
   const cursorBefore = existing?.lastSeenMs ?? null;
 
-  if (existing && nowMs >= existing.lastSeenMs && nowMs - existing.lastSeenMs < MIN_INTERVAL_MS) {
-    // A recent run just committed; skip to avoid churn on rolling restarts.
-    // The `nowMs >= existing.lastSeenMs` guard avoids a wall-clock-skew
-    // hazard: if the host clock jumps backwards (NTP correction, manual
-    // adjust), a future-dated cursor would otherwise satisfy this gate
-    // forever and silently disable catchup until wall time caught up.
-    return null;
-  }
+  // Catchup runs once per gateway startup (called from monitor.ts after
+  // webhook target registration). We deliberately do NOT short-circuit on
+  // a "ran recently" gate, because catchup is the only mechanism that
+  // recovers messages dropped during the gateway-down window. A short
+  // gap (e.g. <30s) between two startups can still have lost messages in
+  // the middle, and skipping the second startup's catchup would lose
+  // them permanently. The bounded query (perRunLimit, maxAge) and the
+  // inbound-dedupe cache from #66230 cap the cost of running the query
+  // every startup.
 
   const earliestAllowed = nowMs - maxAgeMs;
   // A future-dated cursor (clock rollback via NTP correction or manual
@@ -299,12 +297,20 @@ export async function runBlueBubblesCatchup(
   // unlikely to ever normalize on retry, and blocking on them would wedge
   // catchup forever.
   let earliestProcessFailureTs: number | null = null;
+  // Track the latest fetched message timestamp regardless of fate, so a
+  // truncated query (fetchedCount === perRunLimit) can advance the cursor
+  // exactly to the page boundary. Without this, the unfetched tail past
+  // the cap is permanently unreachable.
+  let latestFetchedTs = windowStartMs;
 
   for (const rec of messages) {
     // Defense in depth: the server-side `after:` filter should already
     // exclude pre-cursor messages, but guard here against BB API variants
     // that return inclusive-of-boundary data.
     const ts = typeof rec.dateCreated === "number" ? rec.dateCreated : 0;
+    if (ts > 0 && ts > latestFetchedTs) {
+      latestFetchedTs = ts;
+    }
     if (ts > 0 && ts <= windowStartMs) {
       summary.skippedPreCursor++;
       continue;
@@ -339,17 +345,29 @@ export async function runBlueBubblesCatchup(
     }
   }
 
-  // Compute the new cursor. Default is `nowMs` so subsequent runs start
-  // from the moment this sweep finished (avoiding stuck rescans of a
-  // message with `dateCreated > nowMs` from minor clock skew between the
-  // BB Server host and the gateway host). If any `processMessage` call
-  // threw, hold the cursor just before the earliest failure so the next
-  // run retries from there. The inbound-dedupe cache from #66230 keeps
-  // already-replayed messages from being re-processed on that retry.
+  // Compute the new cursor.
+  //
+  // - Default: advance to `nowMs` so subsequent runs start from the moment
+  //   this sweep finished (avoiding stuck rescans of a message with
+  //   `dateCreated > nowMs` from minor clock skew between BB host and
+  //   gateway host).
+  // - On retryable failure (any `processMessage` throw): hold the cursor
+  //   just before the earliest failed timestamp so the next run retries
+  //   from there. The inbound-dedupe cache from #66230 keeps successfully
+  //   replayed messages from being re-processed.
+  // - On truncation (fetched === perRunLimit): advance only to the latest
+  //   fetched timestamp so the next run picks up from the page boundary.
+  //   Otherwise the unfetched tail past the cap (which can be substantial
+  //   during long outages) would be permanently unreachable.
+  const isTruncated = summary.fetchedCount >= perRunLimit;
   let nextCursorMs = nowMs;
   if (earliestProcessFailureTs !== null) {
     const heldCursor = Math.max(earliestProcessFailureTs - 1, cursorBefore ?? windowStartMs);
     nextCursorMs = Math.min(heldCursor, nowMs);
+  } else if (isTruncated) {
+    // Use latestFetchedTs (clamped to >= prior cursor and <= nowMs) so the
+    // next run starts where this page ended.
+    nextCursorMs = Math.min(Math.max(latestFetchedTs, cursorBefore ?? windowStartMs), nowMs);
   }
   summary.cursorAfter = nextCursorMs;
   await saveBlueBubblesCatchupCursor(accountId, nextCursorMs).catch((err) => {
@@ -363,17 +381,18 @@ export async function runBlueBubblesCatchup(
       `window_ms=${nowMs - windowStartMs}`,
   );
 
-  // Emit a distinct warning when the BB result hits perRunLimit. The cursor
-  // has already advanced to nowMs, so any older messages BB would have
-  // returned past the cap are unreachable on the next sweep. Loud signal
-  // for operators to raise perRunLimit before a long outage silently
-  // truncates inbound history.
-  if (summary.fetchedCount >= perRunLimit) {
+  // Distinct WARNING when the BB result hits perRunLimit so operators
+  // know a single startup didn't drain the full backlog. The cursor was
+  // advanced only to the page boundary above, so the unfetched tail will
+  // be picked up on the next gateway startup — but if startups are
+  // infrequent, raising perRunLimit drains larger backlogs in one pass.
+  if (isTruncated) {
     error?.(
       `[${accountId}] BlueBubbles catchup: WARNING fetched=${summary.fetchedCount} ` +
-        `hit perRunLimit=${perRunLimit}; older messages in the window may have ` +
-        `been truncated. Raise channels.bluebubbles...catchup.perRunLimit if ` +
-        `outages can exceed this many inbound messages.`,
+        `hit perRunLimit=${perRunLimit}; cursor advanced only to page boundary, ` +
+        `remaining messages will be picked up on next startup. Raise ` +
+        `channels.bluebubbles...catchup.perRunLimit to drain larger backlogs ` +
+        `in a single pass.`,
     );
   }
 
