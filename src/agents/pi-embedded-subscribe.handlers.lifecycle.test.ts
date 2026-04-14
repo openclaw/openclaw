@@ -47,6 +47,15 @@ function createContext(
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
+async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedPiSubscribeContext) {
+  await handleAgentEnd(ctx);
+
+  const warn = vi.mocked(ctx.log.warn);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
+  return warn.mock.calls[0]?.[1];
+}
+
 describe("handleAgentEnd", () => {
   it("logs the resolved error message when run ends with assistant error", async () => {
     const onAgentEvent = vi.fn();
@@ -61,12 +70,8 @@ describe("handleAgentEnd", () => {
     );
     ctx.state.livenessState = "working";
 
-    await handleAgentEnd(ctx);
-
-    const warn = vi.mocked(ctx.log.warn);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
-    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+    const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
+    expect(warnMeta).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
       error: "LLM request failed: connection refused by the provider endpoint.",
@@ -95,12 +100,8 @@ describe("handleAgentEnd", () => {
       content: [{ type: "text", text: "" }],
     });
 
-    await handleAgentEnd(ctx);
-
-    const warn = vi.mocked(ctx.log.warn);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
-    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+    const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
+    expect(warnMeta).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
       error: "The AI service is temporarily overloaded. Please try again in a moment.",
@@ -292,6 +293,26 @@ describe("handleAgentEnd", () => {
     });
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("emits orphaned tool media before the lifecycle end event", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
+    ctx.state.pendingToolAudioAsVoice = true;
+
+    await handleAgentEnd(ctx);
+
+    const blockReplyOrder =
+      (vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as number | undefined) ?? 0;
+    const lifecycleOrder = onAgentEvent.mock.invocationCallOrder[0] as number | undefined;
+
+    expect(blockReplyOrder).toBeGreaterThan(0);
+    expect(lifecycleOrder).toBeGreaterThan(blockReplyOrder);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
   });
 
   it("resolves compaction wait before awaiting an async block reply flush", async () => {
