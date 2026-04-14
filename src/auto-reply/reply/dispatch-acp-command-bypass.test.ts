@@ -15,13 +15,42 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
   });
 
-  it("returns false for ACP slash commands", () => {
+  it("returns true for /acp slash commands — regression for #66298", () => {
+    // /acp text commands sent inside a thread bound to an ACP session must
+    // bypass the ACP dispatch so they reach handleAcpCommand. Otherwise the
+    // ACP agent consumes them as conversational input and the session stays
+    // open regardless of what the user typed.
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
-      CommandBody: "/acp cancel",
-      BodyForCommands: "/acp cancel",
-      BodyForAgent: "/acp cancel",
+      CommandBody: "/acp close",
+      BodyForCommands: "/acp close",
+      BodyForAgent: "/acp close",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for /acp slash commands via native command source", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      CommandBody: "/acp status",
+      BodyForCommands: "/acp status",
+      BodyForAgent: "/acp status",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns false for unrecognized slash commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/foo cancel",
+      BodyForCommands: "/foo cancel",
+      BodyForAgent: "/foo cancel",
     });
 
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
@@ -52,13 +81,13 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
-  it("returns false for slash commands when text commands are disabled", () => {
+  it("returns false for unrecognized slash commands when text commands are disabled", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
-      CommandBody: "/acp cancel",
-      BodyForCommands: "/acp cancel",
-      BodyForAgent: "/acp cancel",
+      CommandBody: "/foo cancel",
+      BodyForCommands: "/foo cancel",
+      BodyForAgent: "/foo cancel",
       CommandSource: "text",
     });
     const cfg = {

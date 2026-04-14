@@ -27,6 +27,10 @@ function isResetCommandCandidate(text: string): boolean {
   return /^\/(?:new|reset)(?:\s|$)/i.test(text);
 }
 
+function isAcpCommandCandidate(text: string): boolean {
+  return /^\/acp(?:\s|$)/i.test(text);
+}
+
 export function shouldBypassAcpDispatchForCommand(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -47,6 +51,15 @@ export function shouldBypassAcpDispatchForCommand(
 
   if (isResetCommandCandidate(normalized)) {
     return true;
+  }
+
+  // `/acp ...` must bypass the ACP dispatch so that handleAcpCommand runs
+  // instead of the ACP session consuming the text as conversational input.
+  // Without this bypass, `/acp close` issued inside a bound Discord thread
+  // reaches the ACP agent and gets replied to with a hallucinated natural-
+  // language message while the session stays open.
+  if (isAcpCommandCandidate(normalized)) {
+    return allowTextCommands;
   }
 
   if (!normalized.startsWith("!")) {
