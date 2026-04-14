@@ -780,7 +780,7 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
     const video = videoBlocks[i];
     const handleError = (e: Event) => {
       const videoEl = e.target as HTMLVideoElement;
-      const wrapper = videoEl.closest('.chat-media-wrapper');
+      const wrapper = videoEl.closest('.chat-media-wrapper') as HTMLElement;
       if (wrapper) {
         wrapper.style.display = 'none';
       }
@@ -1412,7 +1412,7 @@ function renderGroupedMessage(
     if (el.hasAttribute('data-resize-initialized')) {return;}
     el.setAttribute('data-resize-initialized', 'true');
     setTimeout(() => {
-      setupResizeHandles(el, 'bottom-right', messageId);
+      setupResizeHandles(el as HTMLElement, 'bottom-right', messageId);
     }, 100);
   };
 
