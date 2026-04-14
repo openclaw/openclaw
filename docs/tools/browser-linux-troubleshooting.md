@@ -166,6 +166,58 @@ Notes:
   Use HTTP(S) for `/json/version` discovery, or WS(S) when your browser
   service gives you a direct DevTools socket URL.
 
+## Problem: Headed viewport screenshots time out on Hyprland/Wayland (Omarchy)
+
+On Hyprland-based desktops (e.g. Omarchy), headed Chromium sessions may produce:
+
+```
+Page.captureScreenshot timed out after 10000ms
+```
+
+This happens because Chrome's compositor can stall on certain pages when the
+browser window is on a real Wayland output. The fix captures the window via
+`grim` (Wayland screenshotter) against a dedicated virtual output instead.
+
+### How the workaround works
+
+OpenClaw creates a headless virtual output with `hyprctl create-output`, moves
+the managed browser window onto its workspace, and captures with
+`grim -o <output> -t png -`. This bypasses Chrome's screenshot API entirely and
+completes in roughly 20–170 ms. The virtual output is removed when the process exits.
+
+### Required tools
+
+Both must be available in standard system directories (`/usr/bin`, `/usr/local/bin`,
+`/run/current-system/sw/bin`, etc.):
+
+| Tool      | Purpose                              | Install (Arch/Omarchy) |
+| --------- | ------------------------------------ | ---------------------- |
+| `hyprctl` | Create/remove virtual Wayland output | ships with `hyprland`  |
+| `grim`    | Wayland screenshot capture           | `sudo pacman -S grim`  |
+
+### Enable the feature
+
+The feature is **opt-in** and disabled by default. Add to `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "browser": {
+    "hyprlandCapture": true
+  }
+}
+```
+
+The capture path only activates when all of the following are true:
+
+- Running on Linux (`process.platform === "linux"`)
+- `HYPRLAND_INSTANCE_SIGNATURE` is set in the environment
+- The browser profile is headed (not `browser.headless: true`)
+- The screenshot is a plain viewport shot (not full-page, not element, no labels)
+- `browser.hyprlandCapture: true` in config
+
+On any failure (binary not found, hyprctl error, grim crash) the route falls
+back to the standard CDP `Page.captureScreenshot` call transparently.
+
 ## Related
 
 - [Browser](/tools/browser)

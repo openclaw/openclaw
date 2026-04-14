@@ -92,4 +92,10 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /**
+   * Use grim + Hyprland virtual output for headed viewport screenshots on Wayland.
+   * Fixes Page.captureScreenshot timeouts on Hyprland. Requires hyprctl and grim.
+   * Default: false (opt-in).
+   */
+  hyprlandCapture?: boolean;
 };

@@ -64,3 +64,4 @@ export * from "../utils/fetch-timeout.js";
 export * from "../utils/run-with-concurrency.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
 export * from "./ssrf-policy.js";
+export { resolveSystemBin, type SystemBinTrust } from "../infra/resolve-system-bin.js";
