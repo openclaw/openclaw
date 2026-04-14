@@ -18,7 +18,7 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
 export async function maybeHandleResetCommand(
   params: HandleCommandsParams,
 ): Promise<CommandHandlerResult | null> {
-  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:[\s:@]|$)/);
+  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
   if (!resetMatch) {
     return null;
   }

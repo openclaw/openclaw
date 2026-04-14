@@ -24,11 +24,11 @@ function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
 }
 
 function isResetCommandCandidate(text: string): boolean {
-  return /^\/(?:new|reset)(?:[\s:@]|$)/i.test(text);
+  return /^\/(?:new|reset)(?:\s|$)/i.test(text);
 }
 
 function isAcpCommandCandidate(text: string): boolean {
-  return /^\/acp(?:[\s:@]|$)/i.test(text);
+  return /^\/acp(?:\s|$)/i.test(text);
 }
 
 export function shouldBypassAcpDispatchForCommand(

@@ -66,14 +66,14 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(true);
   });
 
-  it("returns true for /acp@otherbot slash commands (multi-bot mention not stripped)", () => {
-    // Regression for Codex P2 on #66407. In multi-bot environments
-    // `normalizeCommandBody` only strips `@mention` when the mention matches
-    // `options.botUsername`; a wrong-bot mention is preserved as-is and
-    // reaches `handleAcpCommand`, which uses `startsWith("/acp")`. The bypass
-    // regex must accept the same `/cmd@bot` form the handler accepts, or
-    // `/acp@otherbot close` slips past the bypass and gets consumed by the
-    // ACP session as conversational input.
+  it("returns false for /acp@otherbot (mention for another bot is intentionally ignored, see command-control.test.ts:901)", () => {
+    // Project-wide convention (src/auto-reply/command-control.test.ts:901-912):
+    // a `/cmd@bot` mention addressed to someone else's bot is intentionally
+    // ignored. `normalizeCommandBody` only strips the `@mention` suffix when
+    // it matches `options.botUsername`; otherwise the form is preserved and
+    // downstream code must treat it as "not for us". The bypass regex must
+    // stay tight (`(?:\s|$)`) so `/acp@otherbot close` does NOT short-circuit
+    // ACP dispatch on our bot.
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -82,30 +82,15 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       BodyForAgent: "/acp@otherbot close",
     });
 
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
   });
 
-  it("returns true for /acp:close colon-syntax", () => {
-    // In the production fast path `normalizeCommandBody` would rewrite
-    // `/acp:close` to `/acp close`, but the bypass should still catch the
-    // unnormalized form for defense in depth — the handler regex in
-    // commands-reset.ts also accepts `:` after the command token.
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/acp:close",
-      BodyForCommands: "/acp:close",
-      BodyForAgent: "/acp:close",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
-  it("returns true for /reset@otherbot reset-tail", () => {
-    // Symmetric regression to the /acp@otherbot case. `maybeHandleResetCommand`
-    // is gated on its own regex which is loosened in the same commit; the
-    // bypass regex must stay in lockstep so `/reset@otherbot continue` does
-    // not leak into the ACP session.
+  it("returns false for /reset@otherbot (mention for another bot is intentionally ignored, see command-control.test.ts:901)", () => {
+    // Symmetric to the /acp@otherbot case above. Same convention: a
+    // `/reset@otherbot foo` form targeted at another bot must not cause our
+    // bot to reset its session. Keeping the bypass regex tight (`(?:\s|$)`)
+    // lets the message flow through to the normal dispatch, where the wrong-
+    // bot form is ignored per `command-control.test.ts:901-912`.
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -114,19 +99,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       BodyForAgent: "/reset@otherbot continue",
     });
 
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
-  it("returns true for /reset:foo colon-syntax", () => {
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/reset:foo",
-      BodyForCommands: "/reset:foo",
-      BodyForAgent: "/reset:foo",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
   });
 
   it("returns false for unrecognized slash commands", () => {
