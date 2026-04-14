@@ -35,7 +35,7 @@ function buildApprovalAdaptiveCard(
     actions: buttons.map((b) => ({
       type: "Action.Submit",
       title: b.label,
-      style: b.style === "danger" ? "destructive" : "default",
+      style: b.style === "danger" ? "destructive" : b.style === "primary" || b.style === "success" ? "positive" : "default",
       data: {
         msteams: {
           type: "messageBack",

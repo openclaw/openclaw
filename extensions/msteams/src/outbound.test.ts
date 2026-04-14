@@ -175,6 +175,7 @@ describe("msteamsOutbound cfg threading", () => {
     expect(card.actions[0].data.msteams.type).toBe("messageBack");
     expect(card.actions[0].data.msteams.text).toBe("/approve abc123 yes");
     expect(card.actions[0].data.msteams.displayText).toBe("Approve");
+    expect(card.actions[0].style).toBe("positive");
     expect(card.actions[1].style).toBe("destructive");
   });
 
