@@ -129,6 +129,12 @@ endpoint directly — even over Tailscale or the WSL2 virtual NIC.
 The standard fix is **netsh portproxy**, a Windows kernel-level TCP forwarder
 that relays inbound connections on a public address to localhost:
 
+> ⚠️ **Security note:** This exposes Chrome's unauthenticated CDP endpoint on
+> `0.0.0.0:9222`. On shared or public networks, any reachable host could attach
+> to CDP and control the browser. Restrict the firewall rule to trusted IPs when
+> possible (see the constrained variant below), or use Tailscale ACLs to limit
+> which devices can reach port 9222.
+
 ```powershell
 # Run in an elevated PowerShell on Windows
 
@@ -145,6 +151,20 @@ New-NetFirewallRule `
   -Protocol TCP `
   -Action Allow `
   -Profile Any
+```
+
+**Constrained variant — limit to WSL2/Tailscale subnet only:**
+
+```powershell
+# Replace RemoteAddress with your WSL2 gateway or Tailscale subnet
+New-NetFirewallRule `
+  -DisplayName "Chrome CDP (WSL2 only)" `
+  -Direction Inbound `
+  -LocalPort 9222 `
+  -Protocol TCP `
+  -Action Allow `
+  -Profile Any `
+  -RemoteAddress "100.64.0.0/10","172.16.0.0/12"
 ```
 
 **Why both steps are needed:**
@@ -268,8 +288,6 @@ Fix: ensure the netsh portproxy targets `connectaddress=127.0.0.1` exactly.
 If you use a relay on a different port (e.g. 9223), you need a separate
 firewall rule for that port too. The simplest approach: use port 9222
 with netsh portproxy directly, avoiding the need for extra ports.
-
-## Common misleading errors (continued)
 
 Treat each message as a layer-specific clue:
 
