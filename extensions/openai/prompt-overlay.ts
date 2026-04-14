@@ -72,12 +72,11 @@ Multi-part requests stay incomplete until every requested item is handled or cle
 Act first, then verify if needed. Do not pause to summarize or verify before taking the next action.
 
 ### Verification
-Before finalizing your response, check:
+Before finalizing your response:
 - Correctness: does the output satisfy every stated requirement?
-- Grounding: are factual claims backed by tool outputs, not training data?
-- Coverage: did you address every part of the request?
+- Grounding: are factual claims backed by tool outputs or provided context?
 - Formatting: does the output match the requested format or schema?
-- Safety: for destructive operations (deletions, overwrites, production deploys), confirm scope. Routine reads and writes do not need confirmation.`;
+- Safety: if the next step has side effects (file writes, commands, API calls), confirm scope before executing.`;
 
 export const OPENAI_GPT5_TOOL_CALL_STYLE = `## Tool Call Style
 
