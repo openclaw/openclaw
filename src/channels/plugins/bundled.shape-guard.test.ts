@@ -357,6 +357,111 @@ describe("bundled channel entry shape guards", () => {
     expect(loadCalls).toBe(1);
   });
 
+  it("skips broken bundled channel secrets loads instead of throwing", async () => {
+    const pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-broken-secrets-"));
+    const entryModulePath = path.join(pluginDir, "index.js");
+    const setupModulePath = path.join(pluginDir, "setup-entry.js");
+    fs.writeFileSync(entryModulePath, "export {};\n", "utf8");
+    fs.writeFileSync(setupModulePath, "export {};\n", "utf8");
+
+    vi.doMock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+      return {
+        ...actual,
+        listBundledPluginMetadata: () => [
+          {
+            dirName: "alpha",
+            idHint: "alpha",
+            source: {
+              source: "./index.js",
+              built: "./index.js",
+            },
+            setupSource: {
+              source: "./setup-entry.js",
+              built: "./setup-entry.js",
+            },
+            manifest: {
+              id: "alpha",
+              channels: ["alpha"],
+            },
+          },
+        ],
+        resolveBundledPluginGeneratedPath: (
+          _rootDir: string,
+          entry: { source: string; built: string } | undefined,
+        ) => (entry?.built === "./setup-entry.js" ? setupModulePath : entryModulePath),
+      };
+    });
+    vi.doMock("../../infra/boundary-file-read.js", () => ({
+      openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+        ok: true,
+        path: absolutePath,
+        fd: fs.openSync(absolutePath, "r"),
+      }),
+    }));
+    vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
+      listChannelCatalogEntries: () => [],
+    }));
+
+    let secretsLoadCalls = 0;
+    let setupSecretsLoadCalls = 0;
+    vi.doMock("jiti", () => ({
+      createJiti: () => {
+        return (modulePath: string) => ({
+          default: modulePath.endsWith("setup-entry.js")
+            ? {
+                kind: "bundled-channel-setup-entry",
+                loadSetupPlugin() {
+                  return {
+                    id: "alpha",
+                    meta: {},
+                    capabilities: {},
+                    config: {},
+                  };
+                },
+                loadSetupSecrets() {
+                  setupSecretsLoadCalls += 1;
+                  throw new Error("missing setup secret contract");
+                },
+              }
+            : {
+                kind: "bundled-channel-entry",
+                id: "alpha",
+                name: "Alpha",
+                description: "Alpha",
+                register() {},
+                loadChannelPlugin() {
+                  return {
+                    id: "alpha",
+                    meta: {},
+                    capabilities: {},
+                    config: {},
+                  };
+                },
+                loadChannelSecrets() {
+                  secretsLoadCalls += 1;
+                  throw new Error("missing secret contract");
+                },
+              },
+        });
+      },
+    }));
+
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=broken-bundled-secrets-load",
+    );
+
+    expect(bundled.getBundledChannelSecrets("alpha")).toBeUndefined();
+    expect(bundled.getBundledChannelSecrets("alpha")).toBeUndefined();
+    expect(secretsLoadCalls).toBe(1);
+
+    expect(bundled.getBundledChannelSetupSecrets("alpha")).toBeUndefined();
+    expect(bundled.getBundledChannelSetupSecrets("alpha")).toBeUndefined();
+    expect(setupSecretsLoadCalls).toBe(1);
+  });
+
   it("keeps private src runtime barrels from forwarding to parent runtime barrels that export local plugins", () => {
     const offenders: string[] = [];
 

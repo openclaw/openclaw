@@ -208,14 +208,39 @@ const lazySetupPluginsById = new Map<ChannelId, ChannelPlugin | null>();
 const lazySecretsById = new Map<ChannelId, ChannelPlugin["secrets"] | null>();
 const lazySetupSecretsById = new Map<ChannelId, ChannelPlugin["secrets"] | null>();
 
+function sanitizeLogFragment(value: unknown): string {
+  let sanitized = "";
+  for (const char of String(value)) {
+    const codePoint = char.codePointAt(0);
+    sanitized +=
+      codePoint === undefined ||
+      codePoint < 0x20 ||
+      codePoint === 0x7f ||
+      codePoint === 0x2028 ||
+      codePoint === 0x2029
+        ? " "
+        : char;
+  }
+  return sanitized;
+}
+
 function warnBrokenBundledChannelLoad(params: {
   id: ChannelId;
   error: unknown;
-  kind: "plugin" | "setup";
+  kind: "plugin" | "setup" | "secrets" | "setup-secrets";
 }): void {
-  const detail = formatErrorMessage(params.error);
-  const target = params.kind === "setup" ? "setup entry" : "entry";
-  log.warn(`[channels] failed to load bundled channel ${target} ${params.id}: ${detail}`);
+  const detail = sanitizeLogFragment(formatErrorMessage(params.error));
+  const target =
+    params.kind === "setup"
+      ? "setup entry"
+      : params.kind === "secrets"
+        ? "secrets"
+        : params.kind === "setup-secrets"
+          ? "setup secrets"
+          : "entry";
+  log.warn(
+    `[channels] failed to load bundled channel ${target} ${sanitizeLogFragment(params.id)}: ${detail}`,
+  );
 }
 
 function resolveBundledChannelMetadata(id: ChannelId): BundledChannelPluginMetadata | undefined {
@@ -308,9 +333,15 @@ export function getBundledChannelSecrets(id: ChannelId): ChannelPlugin["secrets"
   if (!entry) {
     return undefined;
   }
-  const secrets = entry.loadChannelSecrets?.() ?? getBundledChannelPlugin(id)?.secrets;
-  lazySecretsById.set(id, secrets ?? null);
-  return secrets;
+  try {
+    const secrets = entry.loadChannelSecrets?.() ?? getBundledChannelPlugin(id)?.secrets;
+    lazySecretsById.set(id, secrets ?? null);
+    return secrets;
+  } catch (error) {
+    warnBrokenBundledChannelLoad({ id, error, kind: "secrets" });
+    lazySecretsById.set(id, null);
+    return undefined;
+  }
 }
 
 export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
@@ -348,9 +379,15 @@ export function getBundledChannelSetupSecrets(id: ChannelId): ChannelPlugin["sec
   if (!entry) {
     return undefined;
   }
-  const secrets = entry.loadSetupSecrets?.() ?? getBundledChannelSetupPlugin(id)?.secrets;
-  lazySetupSecretsById.set(id, secrets ?? null);
-  return secrets;
+  try {
+    const secrets = entry.loadSetupSecrets?.() ?? getBundledChannelSetupPlugin(id)?.secrets;
+    lazySetupSecretsById.set(id, secrets ?? null);
+    return secrets;
+  } catch (error) {
+    warnBrokenBundledChannelLoad({ id, error, kind: "setup-secrets" });
+    lazySetupSecretsById.set(id, null);
+    return undefined;
+  }
 }
 
 export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
