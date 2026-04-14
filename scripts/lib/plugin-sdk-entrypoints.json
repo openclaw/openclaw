@@ -108,6 +108,7 @@
   "command-auth",
   "command-auth-native",
   "command-status",
+  "command-status-runtime",
   "command-detection",
   "command-surface",
   "collection-runtime",
