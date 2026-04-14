@@ -11,6 +11,7 @@ const ChannelActionsSchema = z
   .optional();
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
+export const FeishuCommentPolicySchema = z.enum(["open", "pairing", "allowlist"]);
 const GroupPolicySchema = z.union([
   z.enum(["open", "allowlist", "disabled"]),
   z.literal("allowall").transform(() => "open" as const),
@@ -36,6 +37,25 @@ const DmConfigSchema = z
   })
   .strict()
   .optional();
+
+const FeishuAllowFromSchema = z.array(z.union([z.string(), z.number()])).optional();
+
+export const FeishuCommentDocumentRuleSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    policy: FeishuCommentPolicySchema.optional(),
+    allowFrom: FeishuAllowFromSchema,
+  })
+  .strict();
+
+export const FeishuCommentsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    policy: FeishuCommentPolicySchema.optional(),
+    allowFrom: FeishuAllowFromSchema,
+    documents: z.record(z.string(), FeishuCommentDocumentRuleSchema.optional()).optional(),
+  })
+  .strict();
 
 const MarkdownConfigSchema = z
   .object({
@@ -144,7 +164,7 @@ export const FeishuGroupSchema = z
     tools: ToolPolicySchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: FeishuAllowFromSchema,
     systemPrompt: z.string().optional(),
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
@@ -159,10 +179,11 @@ const FeishuSharedConfigShape = {
   markdown: MarkdownConfigSchema,
   configWrites: z.boolean().optional(),
   dmPolicy: DmPolicySchema.optional(),
-  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  allowFrom: FeishuAllowFromSchema,
+  comments: FeishuCommentsSchema.optional(),
   groupPolicy: GroupPolicySchema.optional(),
-  groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  groupAllowFrom: FeishuAllowFromSchema,
+  groupSenderAllowFrom: FeishuAllowFromSchema,
   requireMention: z.boolean().optional(),
   groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
   historyLimit: z.number().int().min(0).optional(),

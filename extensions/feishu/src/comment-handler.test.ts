@@ -6,8 +6,6 @@ import { setFeishuRuntime } from "./runtime.js";
 const resolveDriveCommentEventTurnMock = vi.hoisted(() => vi.fn());
 const createFeishuCommentReplyDispatcherMock = vi.hoisted(() => vi.fn());
 const maybeCreateDynamicAgentMock = vi.hoisted(() => vi.fn());
-const createFeishuClientMock = vi.hoisted(() => vi.fn(() => ({ request: vi.fn() })));
-const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./monitor.comment.js", () => ({
   resolveDriveCommentEventTurn: resolveDriveCommentEventTurnMock,
@@ -21,20 +19,14 @@ vi.mock("./dynamic-agent.js", () => ({
   maybeCreateDynamicAgent: maybeCreateDynamicAgentMock,
 }));
 
-vi.mock("./client.js", () => ({
-  createFeishuClient: createFeishuClientMock,
-}));
-
-vi.mock("./drive.js", () => ({
-  deliverCommentThreadText: deliverCommentThreadTextMock,
-}));
-
 function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
   return {
     channels: {
       feishu: {
         enabled: true,
-        dmPolicy: "open",
+        comments: {
+          policy: "open",
+        },
       },
     },
     ...overrides,
@@ -149,10 +141,6 @@ describe("handleFeishuCommentEvent", () => {
       rootCommentText: "root comment",
       targetReplyText: "latest reply",
     });
-    deliverCommentThreadTextMock.mockResolvedValue({
-      delivery_mode: "reply_comment",
-      reply_id: "r1",
-    });
 
     const runtime = createTestRuntime();
     setFeishuRuntime(runtime);
@@ -222,8 +210,10 @@ describe("handleFeishuCommentEvent", () => {
         channels: {
           feishu: {
             enabled: true,
-            dmPolicy: "allowlist",
-            allowFrom: ["on_sender_user"],
+            comments: {
+              policy: "allowlist",
+              allowFrom: ["on_sender_user"],
+            },
           },
         },
       }),
@@ -240,11 +230,12 @@ describe("handleFeishuCommentEvent", () => {
       typeof vi.fn
     >;
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
   });
 
-  it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {
-    const runtime = createTestRuntime();
+  it("allows comments from pairing-store users when comments.policy=pairing", async () => {
+    const runtime = createTestRuntime({
+      readAllowFromStore: async () => ["ou_sender"],
+    });
     setFeishuRuntime(runtime);
 
     await handleFeishuCommentEvent({
@@ -252,8 +243,9 @@ describe("handleFeishuCommentEvent", () => {
         channels: {
           feishu: {
             enabled: true,
-            dmPolicy: "pairing",
-            allowFrom: [],
+            comments: {
+              policy: "pairing",
+            },
           },
         },
       }),
@@ -266,15 +258,108 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        file_token: "doc_token_1",
-        file_type: "docx",
-        comment_id: "comment_1",
-        is_whole_comment: false,
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("silently drops unauthorized comments when comments.policy=pairing", async () => {
+    const runtime = createTestRuntime();
+    setFeishuRuntime(runtime);
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            comments: {
+              policy: "pairing",
+              allowFrom: [],
+            },
+          },
+        },
       }),
-    );
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("ignores pairing-store users when comments.policy=allowlist", async () => {
+    const runtime = createTestRuntime({
+      readAllowFromStore: async () => ["ou_sender"],
+    });
+    setFeishuRuntime(runtime);
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            comments: {
+              policy: "allowlist",
+              allowFrom: [],
+            },
+          },
+        },
+      }),
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("prefers exact document overrides over global comment policy", async () => {
+    const runtime = createTestRuntime({
+      readAllowFromStore: async () => ["ou_sender"],
+    });
+    setFeishuRuntime(runtime);
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            comments: {
+              policy: "open",
+              documents: {
+                "docx:doc_token_1": {
+                  policy: "allowlist",
+                  allowFrom: ["ou_other"],
+                },
+              },
+            },
+          },
+        },
+      }),
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
     const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
       typeof vi.fn
     >;

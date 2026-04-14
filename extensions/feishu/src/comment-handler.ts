@@ -1,6 +1,5 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
 import { clearFeishuCommentConversationDelivery } from "./comment-delivery-guard.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 import {
@@ -8,8 +7,8 @@ import {
   type ClawdbotConfig,
   type RuntimeEnv,
 } from "./comment-handler-runtime-api.js";
+import { resolveFeishuCommentAccess } from "./comment-policy.js";
 import { buildFeishuCommentTarget } from "./comment-target.js";
-import { deliverCommentThreadText } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import {
   resolveDriveCommentEventTurn,
@@ -80,56 +79,42 @@ export async function handleFeishuCommentEvent(
     fileToken: turn.fileToken,
     commentId: turn.commentId,
   });
-  const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
-  const configAllowFrom = feishuCfg?.allowFrom ?? [];
-  const pairing = createChannelPairingController({
-    core,
-    channel: "feishu",
-    accountId: account.accountId,
+  const commentAccess = resolveFeishuCommentAccess({
+    comments: feishuCfg?.comments,
+    fileType: turn.fileType,
+    fileToken: turn.fileToken,
   });
-  const storeAllowFrom =
-    dmPolicy !== "allowlist" && dmPolicy !== "open"
-      ? await pairing.readAllowFromStore().catch(() => [])
-      : [];
-  const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
-  const senderAllowed = resolveFeishuAllowlistMatch({
-    allowFrom: effectiveDmAllowFrom,
-    senderId: turn.senderId,
-    senderIds: [turn.senderUserId],
-  }).allowed;
-  if (dmPolicy !== "open" && !senderAllowed) {
-    if (dmPolicy === "pairing") {
-      const client = createFeishuClient(account);
-      await pairing.issueChallenge({
-        senderId: turn.senderId,
-        senderIdLine: `Your Feishu user id: ${turn.senderId}`,
-        meta: { name: turn.senderId },
-        onCreated: ({ code }) => {
-          log(
-            `feishu[${account.accountId}]: comment pairing request sender=${turn.senderId} code=${code}`,
-          );
-        },
-        sendPairingReply: async (text) => {
-          await deliverCommentThreadText(client, {
-            file_token: turn.fileToken,
-            file_type: turn.fileType,
-            comment_id: turn.commentId,
-            content: text,
-            is_whole_comment: turn.isWholeComment,
-          });
-        },
-        onReplyError: (err) => {
-          log(
-            `feishu[${account.accountId}]: comment pairing reply failed for ${turn.senderId}: ${String(err)}`,
-          );
-        },
-      });
-    } else {
-      log(
-        `feishu[${account.accountId}]: blocked unauthorized comment sender ${turn.senderId} ` +
-          `(dmPolicy=${dmPolicy}, comment=${turn.commentId})`,
-      );
-    }
+  if (!commentAccess.enabled) {
+    log(
+      `feishu[${account.accountId}]: comment handling disabled ` +
+        `(document=${commentAccess.documentKey}, comment=${turn.commentId})`,
+    );
+    return;
+  }
+
+  let storeAllowFrom: Array<string | number> = [];
+  if (commentAccess.usePairingStore) {
+    const pairing = createChannelPairingController({
+      core,
+      channel: "feishu",
+      accountId: account.accountId,
+    });
+    storeAllowFrom = await pairing.readAllowFromStore().catch(() => []);
+  }
+  const effectiveAllowFrom = [...commentAccess.allowFrom, ...storeAllowFrom];
+  const senderAllowed =
+    commentAccess.policy === "open"
+      ? true
+      : resolveFeishuAllowlistMatch({
+          allowFrom: effectiveAllowFrom,
+          senderId: turn.senderId,
+          senderIds: [turn.senderUserId],
+        }).allowed;
+  if (!senderAllowed) {
+    log(
+      `feishu[${account.accountId}]: blocked unauthorized comment sender ${turn.senderId} ` +
+        `(commentPolicy=${commentAccess.policy}, document=${commentAccess.documentKey}, comment=${turn.commentId})`,
+    );
     return;
   }
 

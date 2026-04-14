@@ -3470,6 +3470,64 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             ],
           },
         },
+        comments: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            policy: {
+              type: "string",
+              enum: ["open", "pairing", "allowlist"],
+            },
+            allowFrom: {
+              type: "array",
+              items: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "number",
+                  },
+                ],
+              },
+            },
+            documents: {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  policy: {
+                    type: "string",
+                    enum: ["open", "pairing", "allowlist"],
+                  },
+                  allowFrom: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+          },
+          additionalProperties: false,
+        },
         groupPolicy: {
           default: "allowlist",
           anyOf: [
@@ -4026,6 +4084,64 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                   ],
                 },
+              },
+              comments: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  policy: {
+                    type: "string",
+                    enum: ["open", "pairing", "allowlist"],
+                  },
+                  allowFrom: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  documents: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        policy: {
+                          type: "string",
+                          enum: ["open", "pairing", "allowlist"],
+                        },
+                        allowFrom: {
+                          type: "array",
+                          items: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                            ],
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                additionalProperties: false,
               },
               groupPolicy: {
                 anyOf: [

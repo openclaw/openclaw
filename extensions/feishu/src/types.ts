@@ -3,6 +3,9 @@ import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
   FeishuAccountConfigSchema,
+  FeishuCommentsSchema,
+  FeishuCommentDocumentRuleSchema,
+  FeishuCommentPolicySchema,
   z,
 } from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -10,6 +13,9 @@ import type { MentionTarget } from "./mention-target.types.js";
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;
 export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
+export type FeishuCommentsConfig = z.infer<typeof FeishuCommentsSchema>;
+export type FeishuCommentDocumentRule = z.infer<typeof FeishuCommentDocumentRuleSchema>;
+export type FeishuCommentPolicy = z.infer<typeof FeishuCommentPolicySchema>;
 
 export type FeishuDomain = "feishu" | "lark" | (string & {});
 export type FeishuConnectionMode = "websocket" | "webhook";

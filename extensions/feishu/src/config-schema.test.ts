@@ -220,6 +220,39 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema comments", () => {
+  it("accepts comment-specific policy and document rules", () => {
+    const result = FeishuConfigSchema.safeParse({
+      comments: {
+        policy: "pairing",
+        allowFrom: ["ou_global"],
+        documents: {
+          "*": {
+            policy: "pairing",
+            allowFrom: ["ou_default"],
+          },
+          "docx:token_123": {
+            policy: "allowlist",
+            allowFrom: ["ou_exact"],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid comment policy values", () => {
+    const result = FeishuConfigSchema.safeParse({
+      comments: {
+        policy: "paired",
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema actions", () => {
   it("accepts top-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({
