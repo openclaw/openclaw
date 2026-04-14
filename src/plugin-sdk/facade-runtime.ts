@@ -187,28 +187,37 @@ function getFacadeActivationCheckRuntimeJiti(): JitiLoader {
   return facadeActivationCheckRuntimeJiti;
 }
 
+function loadFacadeActivationCheckRuntimeFromCandidates(
+  loadCandidate: (
+    candidate: (typeof FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES)[number],
+  ) => unknown,
+): FacadeActivationCheckRuntimeModule | undefined {
+  for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
+    try {
+      return loadCandidate(candidate) as FacadeActivationCheckRuntimeModule;
+    } catch {
+      // Try source/runtime candidates in order.
+    }
+  }
+  return undefined;
+}
+
 function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
   if (facadeActivationCheckRuntimeModule) {
     return facadeActivationCheckRuntimeModule;
   }
-  for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
-    try {
-      facadeActivationCheckRuntimeModule = nodeRequire(
-        candidate,
-      ) as FacadeActivationCheckRuntimeModule;
-      return facadeActivationCheckRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
+  facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
+    nodeRequire(candidate),
+  );
+  if (facadeActivationCheckRuntimeModule) {
+    return facadeActivationCheckRuntimeModule;
   }
   const jiti = getFacadeActivationCheckRuntimeJiti();
-  for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
-    try {
-      facadeActivationCheckRuntimeModule = jiti(candidate) as FacadeActivationCheckRuntimeModule;
-      return facadeActivationCheckRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
+  facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
+    jiti(candidate),
+  );
+  if (facadeActivationCheckRuntimeModule) {
+    return facadeActivationCheckRuntimeModule;
   }
   throw new Error("Unable to load facade activation check runtime");
 }
