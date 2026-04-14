@@ -1,7 +1,7 @@
 export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
 
 export type OutboundMediaAccess = {
-  localRoots?: readonly string[] | "any";
+  localRoots?: readonly string[];
   readFile?: OutboundMediaReadFile;
   /** Agent workspace directory for resolving relative MEDIA: paths. */
   workspaceDir?: string;
@@ -10,7 +10,7 @@ export type OutboundMediaAccess = {
 export type OutboundMediaLoadParams = {
   maxBytes?: number;
   mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
+  mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: OutboundMediaReadFile;
   optimizeImages?: boolean;
   /** Agent workspace directory for resolving relative MEDIA: paths. */
@@ -43,9 +43,10 @@ export function resolveOutboundMediaAccess(
     mediaReadFile?: OutboundMediaReadFile;
   } = {},
 ): OutboundMediaAccess | undefined {
-  const localRoots = resolveOutboundMediaLocalRoots(
+  const resolvedLocalRoots = resolveOutboundMediaLocalRoots(
     params.mediaAccess?.localRoots ?? params.mediaLocalRoots,
   );
+  const localRoots = resolvedLocalRoots === "any" ? undefined : resolvedLocalRoots;
   const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
   const workspaceDir = params.mediaAccess?.workspaceDir;
   if (!localRoots && !readFile && !workspaceDir) {
@@ -61,10 +62,16 @@ export function resolveOutboundMediaAccess(
 export function buildOutboundMediaLoadOptions(
   params: OutboundMediaLoadParams = {},
 ): OutboundMediaLoadOptions {
-  const mediaAccess = resolveOutboundMediaAccess(params);
+  const explicitLocalRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
+  const mediaAccess = resolveOutboundMediaAccess({
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: explicitLocalRoots === "any" ? undefined : explicitLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  });
   const workspaceDir = mediaAccess?.workspaceDir ?? params.workspaceDir;
-  const localRoots = mediaAccess?.localRoots;
-  if (mediaAccess?.readFile) {
+  const localRoots = mediaAccess?.localRoots ?? explicitLocalRoots;
+  const readFile = mediaAccess?.readFile;
+  if (readFile) {
     if (!localRoots) {
       throw new Error(
         'Host media read requires explicit localRoots. Pass mediaAccess.localRoots or opt in with localRoots: "any".',
@@ -73,7 +80,7 @@ export function buildOutboundMediaLoadOptions(
     return {
       ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
       localRoots,
-      readFile: mediaAccess.readFile,
+      readFile,
       hostReadCapability: true,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),

@@ -117,6 +117,39 @@ describe("createReplyMediaPathNormalizer", () => {
     );
   });
 
+  it("prefers channel account media limits when staging reply attachments", async () => {
+    const absolutePath = "/Users/peter/.openclaw/workspace/exports/images/chart.png";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {
+        channels: {
+          whatsapp: {
+            mediaMaxMb: 50,
+            accounts: {
+              work: {
+                mediaMaxMb: 64,
+              },
+            },
+          },
+        },
+        agents: { defaults: { mediaMaxMb: 8 } },
+      },
+      sessionKey: undefined,
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+      messageProvider: "whatsapp",
+      accountId: "work",
+    });
+
+    await normalize({
+      mediaUrls: [absolutePath],
+    });
+
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
+      absolutePath,
+      64 * 1024 * 1024,
+      expect.any(Object),
+    );
+  });
+
   it("drops workspace-relative media paths that escape the agent workspace", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},

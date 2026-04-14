@@ -3,8 +3,8 @@ import { buildOutboundMediaLoadOptions, resolveOutboundMediaLocalRoots } from ".
 
 describe("media load options", () => {
   function expectResolvedOutboundMediaRoots(
-    mediaLocalRoots: readonly string[] | undefined,
-    expectedLocalRoots: readonly string[] | undefined,
+    mediaLocalRoots: readonly string[] | "any" | undefined,
+    expectedLocalRoots: readonly string[] | "any" | undefined,
   ) {
     expect(resolveOutboundMediaLocalRoots(mediaLocalRoots)).toEqual(expectedLocalRoots);
   }
@@ -52,10 +52,8 @@ describe("media load options", () => {
     {
       params: {
         maxBytes: 4096,
-        mediaAccess: {
-          localRoots: "any",
-          readFile: async () => Buffer.from("x"),
-        },
+        mediaLocalRoots: "any",
+        mediaReadFile: async () => Buffer.from("x"),
       },
       expected: {
         maxBytes: 4096,
