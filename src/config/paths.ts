@@ -64,6 +64,10 @@ export function resolveStateDir(
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
+    // Enhanced Windows path handling for OPENCLAW_STATE_DIR
+    if (process.platform === "win32" && /^[A-Za-z]:\\/.test(override)) {
+      return path.resolve(override);
+    }
     return resolveUserPath(override, env, effectiveHomedir);
   }
   const newDir = newStateDir(effectiveHomedir);

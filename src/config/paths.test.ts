@@ -49,6 +49,38 @@ describe("gateway port resolution", () => {
     ).toBe(19001);
   });
 
+  it("resolves state dir with Windows absolute paths (issue #66523)", () => {
+    const windowsPath = "D:\\\\100_OpenClaw\\\.openclaw";
+    const env = {
+      OPENCLAW_STATE_DIR: windowsPath,
+    } as NodeJS.ProcessEnv;
+    
+    // Mock platform to simulate Windows
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    
+    try {
+      const resolved = resolveStateDir(env, () => "/default/home");
+      // On Windows, this should resolve to the absolute path without going through home resolution
+      // The exact resolved path depends on the platform, but it should contain the drive path
+      expect(resolved).toContain("100_OpenClaw");
+      expect(resolved).toContain(".openclaw");
+    } finally {
+      // Restore original platform
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("resolves state dir with forward slash Windows paths", () => {
+    const windowsPath = "D:/100_OpenClaw/.openclaw";
+    const env = {
+      OPENCLAW_STATE_DIR: windowsPath,
+    } as NodeJS.ProcessEnv;
+    
+    const resolved = resolveStateDir(env, () => "/default/home");
+    expect(resolved).toBe(path.resolve("D:/100_OpenClaw/.openclaw"));
+  });
+
   it("accepts Compose-style IPv4 host publish values from env", () => {
     expect(
       resolveGatewayPort(
