@@ -262,6 +262,36 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps ordinary snippets that only quote dreaming prompt markers", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "debug note",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet:
+              "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
+          },
+        ],
+      });
+
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { entries: Record<string, { snippet: string }> };
+      expect(Object.values(store.entries)).toEqual([
+        expect.objectContaining({
+          snippet:
+            "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
+        }),
+      ]);
+    });
+  });
+
   it("records recalls and ranks candidates with weighted scores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -1059,6 +1089,22 @@ describe("short-term promotion", () => {
     expect(
       __testing.isContaminatedDreamingSnippet(
         "([ Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat ordinary candidate notes with daily-memory evidence as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "Candidate: move backups weekly. confidence: 0.76 evidence: memory/2026-04-08.md:1-1",
+      ),
+    ).toBe(false);
+  });
+
+  it("treats transcript-style dreaming prompt echoes as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
       ),
     ).toBe(true);
   });
