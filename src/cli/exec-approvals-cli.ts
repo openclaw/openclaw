@@ -162,36 +162,48 @@ function formatCliError(err: unknown): string {
   return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 
+function isTimeoutError(err: unknown): boolean {
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    return msg.includes("timeout") || msg.includes("timed out");
+  }
+  return false;
+}
+
 async function loadConfigForApprovalsTarget(params: {
   opts: ExecApprovalsCliOpts;
   source: ApprovalsTargetSource;
-}): Promise<OpenClawConfig | null> {
+}): Promise<{ config: OpenClawConfig | null; timedOut?: boolean }> {
   try {
     if (params.source === "local") {
-      return await readBestEffortConfig();
+      return { config: await readBestEffortConfig() };
     }
     const snapshot = (await callGatewayFromCli(
       "config.get",
       params.opts,
       {},
     )) as ConfigSnapshotLike;
-    return snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null;
-  } catch {
-    return null;
+    return {
+      config: snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null,
+    };
+  } catch (err) {
+    return { config: null, timedOut: isTimeoutError(err) };
   }
 }
 
 function buildEffectivePolicyReport(params: {
   cfg: OpenClawConfig | null;
+  configTimedOut?: boolean;
   source: ApprovalsTargetSource;
   approvals: ExecApprovalsFile;
   hostPath: string;
 }): EffectivePolicyReport {
   if (params.source === "node") {
     if (!params.cfg) {
+      const timeoutHint = params.configTimedOut ? " (timed out — try increasing --timeout)" : "";
       return {
         scopes: [],
-        note: "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
+        note: `Gateway config unavailable${timeoutHint}. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.`,
       };
     }
     return {
@@ -204,6 +216,12 @@ function buildEffectivePolicyReport(params: {
     };
   }
   if (!params.cfg) {
+    if (params.configTimedOut) {
+      return {
+        scopes: [],
+        note: "Config timed out (gateway is responsive but config.get was slow — try increasing --timeout).",
+      };
+    }
     return {
       scopes: [],
       note: "Config unavailable.",
@@ -473,9 +491,13 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts) => {
       try {
         const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
-        const cfg = await loadConfigForApprovalsTarget({ opts, source });
+        const { config: cfg, timedOut: configTimedOut } = await loadConfigForApprovalsTarget({
+          opts,
+          source,
+        });
         const effectivePolicy = buildEffectivePolicyReport({
           cfg,
+          configTimedOut,
           source,
           approvals: snapshot.file,
           hostPath: snapshot.path,
@@ -498,7 +520,7 @@ export function registerExecApprovalsCli(program: Command) {
         defaultRuntime.exit(1);
       }
     });
-  nodesCallOpts(getCmd);
+  nodesCallOpts(getCmd, { timeoutMs: 30_000 });
 
   const setCmd = approvals
     .command("set")
@@ -530,7 +552,7 @@ export function registerExecApprovalsCli(program: Command) {
         defaultRuntime.exit(1);
       }
     });
-  nodesCallOpts(setCmd);
+  nodesCallOpts(setCmd, { timeoutMs: 30_000 });
 
   const allowlist = approvals
     .command("allowlist")
