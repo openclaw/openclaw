@@ -245,6 +245,90 @@ describe("resolveTelegramToken", () => {
     });
   });
 
+  it("does not bypass env provider allowlists for env-backed SecretRefs", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "secretref-env-token");
+    const cfg = {
+      secrets: {
+        providers: {
+          "telegram-env": {
+            source: "env",
+            allowlist: ["OTHER_TELEGRAM_BOT_TOKEN"],
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "telegram-env", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /not allowlisted in secrets\.providers\.telegram-env\.allowlist/i,
+    );
+  });
+
+  it("throws when an env SecretRef points at a provider configured with another source", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          "telegram-env": {
+            source: "file",
+            path: "/tmp/secrets.json",
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "telegram-env", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /Secret provider "telegram-env" has source "file" but ref requests "env"/i,
+    );
+  });
+
+  it("throws when an env SecretRef provider is not configured and not the default env alias", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "ops-env", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /Secret provider "ops-env" is not configured \(ref: env:ops-env:TELEGRAM_BOT_TOKEN\)/i,
+    );
+  });
+
+  it("accepts env SecretRefs that use the configured default env provider alias", () => {
+    vi.stubEnv("TELEGRAM_RUNTIME_TOKEN", "secretref-env-token");
+    const cfg = {
+      secrets: {
+        defaults: {
+          env: "telegram-runtime",
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: {
+            source: "env",
+            provider: "telegram-runtime",
+            id: "TELEGRAM_RUNTIME_TOKEN",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramToken(cfg)).toEqual({
+      token: "secretref-env-token",
+      source: "config",
+    });
+  });
+
   it("keeps strict runtime behavior for unresolved non-env SecretRefs", () => {
     const cfg = {
       channels: {

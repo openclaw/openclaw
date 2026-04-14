@@ -3,6 +3,7 @@ import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   normalizeSecretInputString,
@@ -15,10 +16,43 @@ export type TelegramTokenResolution = BaseTokenResolution & {
   source: TelegramTokenSource;
 };
 
-function resolveRuntimeTokenValue(params: { value: unknown; path: string }): string | undefined {
+function resolveEnvSecretRefValue(params: {
+  cfg?: Pick<OpenClawConfig, "secrets">;
+  provider: string;
+  id: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
+  if (providerConfig) {
+    if (providerConfig.source !== "env") {
+      throw new Error(
+        `Secret provider "${params.provider}" has source "${providerConfig.source}" but ref requests "env".`,
+      );
+    }
+    if (providerConfig.allowlist && !providerConfig.allowlist.includes(params.id)) {
+      throw new Error(
+        `Environment variable "${params.id}" is not allowlisted in secrets.providers.${params.provider}.allowlist.`,
+      );
+    }
+  } else if (
+    params.provider !== resolveDefaultSecretProviderAlias({ secrets: params.cfg?.secrets }, "env")
+  ) {
+    throw new Error(
+      `Secret provider "${params.provider}" is not configured (ref: env:${params.provider}:${params.id}).`,
+    );
+  }
+  return normalizeSecretInputString((params.env ?? process.env)[params.id]);
+}
+
+function resolveRuntimeTokenValue(params: {
+  cfg?: Pick<OpenClawConfig, "secrets">;
+  value: unknown;
+  path: string;
+}): string | undefined {
   const resolved = resolveSecretInputString({
     value: params.value,
     path: params.path,
+    defaults: params.cfg?.secrets?.defaults,
     mode: "inspect",
   });
   if (resolved.status === "available") {
@@ -28,12 +62,17 @@ function resolveRuntimeTokenValue(params: { value: unknown; path: string }): str
     return undefined;
   }
   if (resolved.ref.source === "env") {
-    return normalizeSecretInputString(process.env[resolved.ref.id]);
+    return resolveEnvSecretRefValue({
+      cfg: params.cfg,
+      provider: resolved.ref.provider,
+      id: resolved.ref.id,
+    });
   }
   // Runtime resolution stays strict for non-env SecretRefs.
   resolveSecretInputString({
     value: params.value,
     path: params.path,
+    defaults: params.cfg?.secrets?.defaults,
     mode: "strict",
   });
   return undefined;
@@ -107,6 +146,7 @@ export function resolveTelegramToken(
   }
 
   const accountToken = resolveRuntimeTokenValue({
+    cfg,
     value: accountCfg?.botToken,
     path: `channels.telegram.accounts.${accountId}.botToken`,
   });
@@ -128,6 +168,7 @@ export function resolveTelegramToken(
   }
 
   const configToken = resolveRuntimeTokenValue({
+    cfg,
     value: telegramCfg?.botToken,
     path: "channels.telegram.botToken",
   });
