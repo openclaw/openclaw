@@ -6,7 +6,14 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+### Fixes
+
+## 2026.4.14
+
+### Changes
+
 - OpenAI Codex/models: add forward-compat support for `gpt-5.4-pro`, including Codex pricing/limits and list/status visibility before the upstream catalog catches up. (#66453) Thanks @jepson-liu.
+- Telegram/forum topics: surface human topic names in agent context, prompt metadata, and plugin hook metadata by learning names from Telegram forum service messages. (#65973) Thanks @ptahdunbar.
 
 ### Fixes
 
@@ -16,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Slack/interactions: apply the configured global `allowFrom` owner allowlist to channel block-action and modal interactive events, require an expected sender id for cross-verification, and reject ambiguous channel types so interactive triggers can no longer bypass the documented allowlist intent in channels without a `users` list. Open-by-default behavior is preserved when no allowlists are configured. (#66028) Thanks @eleqtrizit.
 - Media-understanding/attachments: fail closed when a local attachment path cannot be canonically resolved via `realpath`, so a `realpath` error can no longer downgrade the canonical-roots allowlist check to a non-canonical comparison; attachments that also have a URL still fall back to the network fetch path. (#66022) Thanks @eleqtrizit.
 - Agents/gateway-tool: reject `config.patch` and `config.apply` calls from the model-facing gateway tool when they would newly enable any flag enumerated by `openclaw security audit` (for example `dangerouslyDisableDeviceAuth`, `allowInsecureAuth`, `dangerouslyAllowHostHeaderOriginFallback`, `hooks.gmail.allowUnsafeExternalContent`, `tools.exec.applyPatch.workspaceOnly: false`); already-enabled flags pass through unchanged so non-dangerous edits in the same patch still apply, and direct authenticated operator RPC behavior is unchanged. (#62006) Thanks @eleqtrizit.
+- Google image generation: strip a trailing `/openai` suffix from configured Google base URLs only when calling the native Gemini image API so Gemini image requests stop 404ing without breaking explicit OpenAI-compatible Google endpoints. (#66445) Thanks @dapzthelegend.
 - Telegram/forum topics: persist learned topic names to the Telegram session sidecar store so agent context can keep using human topic names after a restart instead of relearning from future service metadata. (#66107) Thanks @obviyus.
 - Doctor/systemd: keep `openclaw doctor --repair` and service reinstall from re-embedding dotenv-backed secrets in user systemd units, while preserving newer inline overrides over stale state-dir `.env` values. (#66249) Thanks @tmimmanuel.
 - Ollama/OpenAI-compat: send `stream_options.include_usage` for Ollama streaming completions so local Ollama runs report real usage instead of falling back to bogus prompt-token counts that trigger premature compaction. (#64568) Thanks @xchunzhao and @vincentkoc.
@@ -32,18 +40,10 @@ Docs: https://docs.openclaw.ai
 - Telegram/media downloads: let Telegram media fetches trust an operator-configured explicit proxy for target DNS resolution after hostname-policy checks, so proxy-backed installs stop failing `could not download media` on Bot API file downloads after the DNS-pinning regression. (#66245) Thanks @dawei41468 and @vincentkoc.
 - Browser: keep loopback CDP readiness checks reachable under strict SSRF defaults so OpenClaw can reconnect to locally started managed Chrome. (#66354) Thanks @hxy91819.
 - Agents/context engine: compact engine-owned sessions from the first tool-loop delta and preserve ingest fallback when `afterTurn` is absent, so long-running tool loops can stay bounded without dropping engine state. (#63555) Thanks @Bikkies.
+- OpenAI Codex/auth: keep malformed Codex CLI auth-file diagnostics on the debug logger instead of stdout so interactive command output stays clean while auth read failures remain traceable. (#66451) Thanks @SimbaKingjoe.
 - Discord/native commands: return the real status card for native `/status` interactions instead of falling through to the synthetic `✅ Done.` ack when the generic dispatcher produces no visible reply. (#54629) Thanks @tkozzer and @vincentkoc.
 - Hooks/Ollama: let LLM-backed session-memory slug generation honor an explicit `agents.defaults.timeoutSeconds` override instead of always aborting after 15 seconds, so slow local Ollama runs stop silently dropping back to generic filenames. (#66237) Thanks @dmak and @vincentkoc.
 - Media/transcription: remap `.aac` filenames to `.m4a` for OpenAI-compatible audio uploads so AAC voice notes stop failing MIME-sensitive transcription endpoints. (#66446) Thanks @ben-z.
-
-## 2026.4.14-beta.1
-
-### Changes
-
-- Telegram/forum topics: surface human topic names in agent context, prompt metadata, and plugin hook metadata by learning names from Telegram forum service messages. (#65973) Thanks @ptahdunbar.
-
-### Fixes
-
 - UI/chat: replace marked.js with markdown-it so maliciously crafted markdown can no longer freeze the Control UI via ReDoS. (#46707) Thanks @zhangfnf.
 - Auto-reply/send policy: keep `sendPolicy: "deny"` from blocking inbound message processing, so the agent still runs its turn while all outbound delivery is suppressed for observer-style setups. (#65461, #53328) Thanks @omarshahine.
 - BlueBubbles: lazy-refresh the Private API server-info cache on send when reply threading or message effects are requested but status is unknown, so sends no longer silently degrade to plain messages when the 10-minute cache expires. (#65447, #43764) Thanks @omarshahine.
