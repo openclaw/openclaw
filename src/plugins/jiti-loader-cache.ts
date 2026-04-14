@@ -1,9 +1,5 @@
 import { createJiti } from "jiti";
-import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  shouldPreferNativeJiti,
-} from "./sdk-alias.js";
+import { buildPluginLoaderJitiOptions, resolvePluginLoaderJitiConfig } from "./sdk-alias.js";
 
 export type PluginJitiLoaderCache = Map<string, ReturnType<typeof createJiti>>;
 
@@ -12,25 +8,24 @@ export function getCachedPluginJitiLoader(params: {
   modulePath: string;
   importerUrl: string;
   argvEntry?: string;
+  preferBuiltDist?: boolean;
+  jitiFilename?: string;
 }): ReturnType<typeof createJiti> {
-  const aliasMap = buildPluginLoaderAliasMap(
-    params.modulePath,
-    params.argvEntry ?? process.argv[1],
-    params.importerUrl,
-  );
-  const tryNative = shouldPreferNativeJiti(params.modulePath);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    modulePath: params.modulePath,
+    argv1: params.argvEntry ?? process.argv[1],
+    moduleUrl: params.importerUrl,
+    ...(params.preferBuiltDist ? { preferBuiltDist: true } : {}),
   });
-  const cached = params.cache.get(cacheKey);
+  const scopedCacheKey = `${params.jitiFilename ?? params.modulePath}::${cacheKey}`;
+  const cached = params.cache.get(scopedCacheKey);
   if (cached) {
     return cached;
   }
-  const loader = createJiti(params.modulePath, {
+  const loader = createJiti(params.jitiFilename ?? params.modulePath, {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
-  params.cache.set(cacheKey, loader);
+  params.cache.set(scopedCacheKey, loader);
   return loader;
 }
