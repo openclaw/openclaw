@@ -1,17 +1,22 @@
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/core";
 import {
+  applyAuthProfileConfig,
+  buildApiKeyCredential,
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
   type SecretInput,
+  upsertAuthProfile,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { applyYandexConfig, YANDEX_DEFAULT_MODEL_REF } from "./onboard.js";
+import { YANDEX_BASE_URL } from "./models.js";
 import { buildYandexProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "yandex";
@@ -84,37 +89,100 @@ const yandexApiKeyAuthMethod: ProviderAuthMethod = {
       throw new Error("Yandex Cloud folder ID is required.");
     }
 
-    const config = applyYandexConfig({
-      ...ctx.config,
-      models: {
-        ...ctx.config.models,
-        providers: {
-          ...ctx.config.models?.providers,
-          [PROVIDER_ID]: {
-            ...(ctx.config.models?.providers?.[PROVIDER_ID] ?? {}),
-            headers: { "OpenAI-Project": folderId },
-          },
-        },
-      },
-    });
-
     return {
       profiles: [
         {
           profileId: `${PROVIDER_ID}:default`,
-          credential: {
-            type: "api_key",
-            provider: PROVIDER_ID,
-            apiKey: capturedApiKey,
-          },
+          credential: buildApiKeyCredential(
+            PROVIDER_ID,
+            capturedApiKey,
+            undefined,
+            ctx.secretInputMode ? { secretInputMode: ctx.secretInputMode, config: ctx.config } : undefined,
+          ),
         },
       ],
-      config,
+      configPatch: {
+        models: {
+          providers: {
+            [PROVIDER_ID]: {
+              baseUrl: YANDEX_BASE_URL,
+              api: "openai-completions" as const,
+              headers: { "OpenAI-Project": folderId },
+            },
+          },
+        },
+      },
       defaultModel: YANDEX_DEFAULT_MODEL_REF,
       notes: [
         `Folder ID: ${folderId}`,
         "Models: yandex/aliceai-llm, yandex/yandexgpt/latest, yandex/yandexgpt/rc, yandex/yandexgpt-lite/latest",
       ],
+    };
+  },
+  runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
+    const opts = ctx.opts as Record<string, unknown> | undefined;
+
+    // Resolve API key from flag / env
+    const resolved = await ctx.resolveApiKey({
+      provider: PROVIDER_ID,
+      flagValue: normalizeOptionalSecretInput(opts?.yandexApiKey),
+      flagName: "--yandex-api-key",
+      envVar: "YANDEX_API_KEY",
+    });
+    if (!resolved) {
+      return null;
+    }
+
+    // Resolve folder ID from flag / env
+    const folderId =
+      (typeof opts?.yandexFolderId === "string" && opts.yandexFolderId.trim()
+        ? opts.yandexFolderId.trim()
+        : undefined) ?? (process.env["YANDEX_FOLDER_ID"] ?? "").trim() || undefined;
+
+    if (!folderId) {
+      ctx.runtime.error(
+        "Yandex Cloud folder ID is required. Provide it via --yandex-folder-id or YANDEX_FOLDER_ID env var.",
+      );
+      ctx.runtime.exit(1);
+      return null;
+    }
+
+    if (resolved.source !== "profile") {
+      const credential = ctx.toApiKeyCredential({
+        provider: PROVIDER_ID,
+        resolved,
+      });
+      if (!credential) {
+        return null;
+      }
+      upsertAuthProfile({
+        profileId: `${PROVIDER_ID}:default`,
+        credential,
+        agentDir: ctx.agentDir,
+      });
+    }
+
+    const next = applyAuthProfileConfig(
+      applyYandexConfig(ctx.config),
+      {
+        profileId: `${PROVIDER_ID}:default`,
+        provider: PROVIDER_ID,
+        mode: "api_key",
+      },
+    );
+
+    return {
+      ...next,
+      models: {
+        ...next.models,
+        providers: {
+          ...next.models?.providers,
+          [PROVIDER_ID]: {
+            ...(next.models?.providers?.[PROVIDER_ID] ?? {}),
+            headers: { "OpenAI-Project": folderId },
+          },
+        },
+      },
     };
   },
 };

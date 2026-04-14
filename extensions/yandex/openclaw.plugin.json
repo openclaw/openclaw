@@ -22,7 +22,7 @@
     {
       "provider": "yandex",
       "method": "api-key",
-      "choiceId": "yandex-folder-id",
+      "choiceId": "yandex-api-key",
       "optionKey": "yandexFolderId",
       "cliFlag": "--yandex-folder-id",
       "cliOption": "--yandex-folder-id <id>",
