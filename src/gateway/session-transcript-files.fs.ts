@@ -7,6 +7,7 @@ import {
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
 import {
+  resolveAgentsDirFromSessionStorePath,
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
@@ -67,6 +68,36 @@ function canonicalizePathForComparison(filePath: string): string {
   }
 }
 
+function resolveAgentRootDirFromStorePath(storePath: string): string | undefined {
+  const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);
+  if (!agentsDir) {
+    return undefined;
+  }
+  const sessionsDir = path.dirname(path.resolve(storePath));
+  if (path.basename(sessionsDir) !== "sessions") {
+    return undefined;
+  }
+  const agentDir = path.dirname(sessionsDir);
+  const agentId = path.basename(agentDir);
+  if (!agentId) {
+    return undefined;
+  }
+  return path.join(agentsDir, agentId);
+}
+
+function resolveAgentRootDirFromAgentId(sessionId: string, agentId?: string): string | undefined {
+  if (!agentId?.trim()) {
+    return undefined;
+  }
+  try {
+    const sessionPath = resolveSessionTranscriptPath(sessionId, agentId);
+    const sessionsDir = path.dirname(sessionPath);
+    return path.dirname(sessionsDir);
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -75,6 +106,9 @@ export function resolveSessionTranscriptCandidates(
 ): string[] {
   const candidates: string[] = [];
   const sessionFileState = classifySessionTranscriptCandidate(sessionId, sessionFile);
+  const rootFallbackDir =
+    (storePath ? resolveAgentRootDirFromStorePath(storePath) : undefined) ??
+    resolveAgentRootDirFromAgentId(sessionId, agentId);
   const pushCandidate = (resolve: () => string): void => {
     try {
       candidates.push(resolve());
@@ -91,6 +125,9 @@ export function resolveSessionTranscriptCandidates(
       );
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
+    if (rootFallbackDir) {
+      pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, rootFallbackDir));
+    }
     if (sessionFile && sessionFileState === "stale") {
       pushCandidate(() =>
         resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
@@ -111,6 +148,9 @@ export function resolveSessionTranscriptCandidates(
 
   if (agentId) {
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
+    if (rootFallbackDir) {
+      pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, rootFallbackDir));
+    }
     if (sessionFile && sessionFileState === "stale") {
       pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
     }
