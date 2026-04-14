@@ -23,3 +23,4 @@
 - **Moltbook integration** — integrate Moltbook into agent containers
 - **GEMA (Google open-source model) deploy option** — add GEMA as a selectable model for agent deployments
 - **Agent memory system (QMD / Obsidian)** — persistent structured memory for agents, markdown-based vault style (ref: mempalace)
+- **Agent landing page** — each agent gets a hosted page (HTML, member DB, embedded chat, payments)
