@@ -67,8 +67,9 @@ function createBaileysMessagesMediaSource(params?: {
   dispatcherPatched?: boolean;
   encryptedStreamPatched?: boolean;
   encryptedStreamPatchedSequentially?: boolean;
+  encryptedStreamPatchedSequentiallyWithComments?: boolean;
 }) {
-  const encryptedLines = params?.encryptedStreamPatchedSequentially
+  const encryptedLines = params?.encryptedStreamPatchedSequentiallyWithComments
     ? [
         "        encFileWriteStream.write(mac);",
         "        const encFinishPromise = once(encFileWriteStream, 'finish');",
@@ -76,11 +77,14 @@ function createBaileysMessagesMediaSource(params?: {
         "        encFileWriteStream.end();",
         "        originalFileStream?.end?.();",
         "        stream.destroy();",
+        "        // Wait for write streams to fully flush to disk before returning encFilePath.",
+        "        // Without this await, the caller may open a read stream on the file before",
+        "        // the OS has created it, causing a race-condition ENOENT crash.",
         "        await encFinishPromise;",
         "        await originalFinishPromise;",
         "        logger?.debug('encrypted data successfully');",
       ]
-    : params?.encryptedStreamPatched
+    : params?.encryptedStreamPatchedSequentially
       ? [
           "        encFileWriteStream.write(mac);",
           "        const encFinishPromise = once(encFileWriteStream, 'finish');",
@@ -88,16 +92,28 @@ function createBaileysMessagesMediaSource(params?: {
           "        encFileWriteStream.end();",
           "        originalFileStream?.end?.();",
           "        stream.destroy();",
-          "        await Promise.all([encFinishPromise, originalFinishPromise]);",
+          "        await encFinishPromise;",
+          "        await originalFinishPromise;",
           "        logger?.debug('encrypted data successfully');",
         ]
-      : [
-          "        encFileWriteStream.write(mac);",
-          "        encFileWriteStream.end();",
-          "        originalFileStream?.end?.();",
-          "        stream.destroy();",
-          "        logger?.debug('encrypted data successfully');",
-        ];
+      : params?.encryptedStreamPatched
+        ? [
+            "        encFileWriteStream.write(mac);",
+            "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+            "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+            "        encFileWriteStream.end();",
+            "        originalFileStream?.end?.();",
+            "        stream.destroy();",
+            "        await Promise.all([encFinishPromise, originalFinishPromise]);",
+            "        logger?.debug('encrypted data successfully');",
+          ]
+        : [
+            "        encFileWriteStream.write(mac);",
+            "        encFileWriteStream.end();",
+            "        originalFileStream?.end?.();",
+            "        stream.destroy();",
+            "        logger?.debug('encrypted data successfully');",
+          ];
   const dispatcherLines = params?.dispatcherPatched
     ? [
         "                const response = await fetch(url, {",
@@ -337,6 +353,40 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
       "...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
     );
+  });
+
+  it("patches the Baileys dispatcher guard when sequential awaits include comments", async () => {
+    const repoRoot = makeRepoRoot(
+      "openclaw-stage-bundled-runtime-hotfix-dispatcher-sequential-comments-",
+    );
+    const targetPath = path.join(
+      repoRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    writeRepoFile(
+      repoRoot,
+      "node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js",
+      createBaileysMessagesMediaSource({ encryptedStreamPatchedSequentiallyWithComments: true }),
+    );
+
+    const { applyBaileysEncryptedStreamFinishHotfix } = await loadPostinstallBundledPluginsModule();
+    const result = applyBaileysEncryptedStreamFinishHotfix({ packageRoot: repoRoot });
+
+    expect(result).toEqual({
+      applied: true,
+      reason: "patched",
+      targetPath,
+    });
+    expect(fs.readFileSync(targetPath, "utf8")).toContain(
+      "...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+    );
+    expect(fs.readFileSync(targetPath, "utf8")).toContain("await encFinishPromise;");
+    expect(fs.readFileSync(targetPath, "utf8")).toContain("await originalFinishPromise;");
   });
 
   it("patches the Baileys dispatcher guard when the flush hotfix uses sequential awaits", async () => {

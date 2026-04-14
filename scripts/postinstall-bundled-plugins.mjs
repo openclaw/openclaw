@@ -66,6 +66,12 @@ const BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT = [
   "        await originalFinishPromise;",
   "        logger?.debug('encrypted data successfully');",
 ].join("\n");
+const BAILEYS_MEDIA_HOTFIX_FINISH_PROMISES_RE =
+  /const\s+encFinishPromise\s*=\s*once\(encFileWriteStream,\s*'finish'\);\s*\n[\s\S]*const\s+originalFinishPromise\s*=\s*originalFileStream\s*\?\s*once\(originalFileStream,\s*'finish'\)\s*:\s*Promise\.resolve\(\);/u;
+const BAILEYS_MEDIA_HOTFIX_PROMISE_ALL_RE =
+  /await\s+Promise\.all\(\[\s*encFinishPromise\s*,\s*originalFinishPromise\s*\]\);/u;
+const BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_AWAITS_RE =
+  /await\s+encFinishPromise;\s*(?:\/\/[^\n]*\n|\s)*await\s+originalFinishPromise;/u;
 const BAILEYS_MEDIA_DISPATCHER_NEEDLE = [
   "                const response = await fetch(url, {",
   "                    dispatcher: fetchAgent,",
@@ -283,7 +289,10 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
 
     const encryptedStreamAlreadyPatched =
       patchedText.includes(BAILEYS_MEDIA_HOTFIX_REPLACEMENT) ||
-      patchedText.includes(BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT);
+      patchedText.includes(BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT) ||
+      (BAILEYS_MEDIA_HOTFIX_FINISH_PROMISES_RE.test(patchedText) &&
+        (BAILEYS_MEDIA_HOTFIX_PROMISE_ALL_RE.test(patchedText) ||
+          BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_AWAITS_RE.test(patchedText)));
 
     if (!encryptedStreamAlreadyPatched) {
       if (!patchedText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE)) {
