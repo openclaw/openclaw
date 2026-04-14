@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(bluebubbles): replay missed webhook messages after gateway restart via a persistent per-account cursor and `/api/v1/message/query?after=<ts>` pass, so messages delivered while the gateway was down no longer disappear. Uses the existing `processMessage` path and is deduped by #66230's inbound GUID cache. (#66721) thanks @omarshahine
 - fix(heartbeat): force owner downgrade for untrusted hook:wake system events [AI-assisted]. (#66031) Thanks @pgondhi987.
 - fix(browser): enforce SSRF policy on snapshot, screenshot, and tab routes [AI]. (#66040) Thanks @pgondhi987.
 - fix(msteams): enforce sender allowlist checks on SSO signin invokes [AI]. (#66033) Thanks @pgondhi987.
