@@ -69,4 +69,24 @@ describe("getFeishuSequentialKey", () => {
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
   });
+
+  it("does not throw when message content is undefined (pure @mention with no text)", () => {
+    // Simulates a pure @mention event where content is undefined after parseFeishuMessageEvent
+    const event = createTextEvent({ text: "" });
+    (event.message as { content?: string }).content = undefined;
+
+    expect(() =>
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+      }),
+    ).not.toThrow();
+    // Should return base key since empty content is not an abort/btw control message
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
+  });
 });

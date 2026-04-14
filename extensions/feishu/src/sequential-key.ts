@@ -11,7 +11,7 @@ export function getFeishuSequentialKey(params: {
   const chatId = event.message.chat_id?.trim() || "unknown";
   const baseKey = `feishu:${accountId}:${chatId}`;
   const parsed = parseFeishuMessageEvent(event, botOpenId, botName);
-  const text = parsed.content.trim();
+  const text = parsed.content?.trim() ?? "";
 
   if (isAbortRequestText(text)) {
     return `${baseKey}:control`;
