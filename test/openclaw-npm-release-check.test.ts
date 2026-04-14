@@ -284,12 +284,19 @@ describe("collectControlUiPackErrors", () => {
     ]);
   });
 
-  it("accepts packs that ship dashboard HTML and bundled assets", () => {
+  it("accepts packs that ship dashboard HTML, bundled assets, and workspace templates", () => {
     expect(
       collectControlUiPackErrors([
         "dist/control-ui/index.html",
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
+        "docs/reference/templates/AGENTS.md",
+        "docs/reference/templates/SOUL.md",
+        "docs/reference/templates/TOOLS.md",
+        "docs/reference/templates/IDENTITY.md",
+        "docs/reference/templates/USER.md",
+        "docs/reference/templates/HEARTBEAT.md",
+        "docs/reference/templates/BOOTSTRAP.md",
       ]),
     ).toEqual([]);
   });
