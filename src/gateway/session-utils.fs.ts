@@ -432,6 +432,11 @@ function readLastMessagePreviewFromOpenTranscript(params: {
     const line = tailLines[i];
     try {
       const parsed = JSON.parse(line);
+      // Keep session selectors usable: heartbeat/diagnostic lines are not
+      // meaningful "last message" previews and can overwrite session titles.
+      if (typeof parsed?.type === "string" && parsed.type === "diagnostic.heartbeat") {
+        continue;
+      }
       const msg = parsed?.message as TranscriptMessage | undefined;
       if (msg?.role !== "user" && msg?.role !== "assistant") {
         continue;

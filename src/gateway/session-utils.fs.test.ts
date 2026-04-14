@@ -235,6 +235,22 @@ describe("readLastMessagePreviewFromTranscript", () => {
     expect(result).toBe("Real last");
   });
 
+  test("skips diagnostic heartbeat entries when deriving last message preview", () => {
+    const sessionId = "test-last-skip-heartbeat";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ message: { role: "user", content: "Real last" } }),
+      JSON.stringify({
+        type: "diagnostic.heartbeat",
+        message: { role: "assistant", content: "heartbeat: ok" },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
+    expect(result).toBe("Real last");
+  });
+
   test("returns null when no user/assistant messages exist", () => {
     const sessionId = "test-last-no-match";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
