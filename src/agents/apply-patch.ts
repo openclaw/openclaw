@@ -149,6 +149,8 @@ export async function applyPatch(
   const fileOps = resolvePatchFileOps(options);
 
   // Guard: block patches targeting protected instruction files.
+  // Check hunk paths BEFORE resolution (isProtectedInstructionFile normalizes
+  // @-prefix, unicode spaces, and trailing dots to match the resolution pipeline).
   for (const hunk of parsed.hunks) {
     const targetPath = hunk.path;
     if (targetPath && isProtectedInstructionFile(targetPath)) {

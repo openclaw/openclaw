@@ -61,6 +61,18 @@ describe("isProtectedInstructionFile", () => {
     expect(isProtectedInstructionFile("README.md.")).toBe(false);
     expect(isProtectedInstructionFile("notes.md.")).toBe(false);
   });
+
+  it("normalizes @-prefix bypass (resolvePathFromInput strips @)", () => {
+    expect(isProtectedInstructionFile("@SOUL.md")).toBe(true);
+    expect(isProtectedInstructionFile("@CLAUDE.md")).toBe(true);
+    expect(isProtectedInstructionFile("@IDENTITY.md")).toBe(true);
+    expect(isProtectedInstructionFile("@README.md")).toBe(false);
+  });
+
+  it("normalizes unicode space variants", () => {
+    expect(isProtectedInstructionFile("SOUL\u00A0.md")).toBe(true);
+    expect(isProtectedInstructionFile("CLAUDE\u200B.md")).toBe(true);
+  });
 });
 
 describe("wrapToolInstructionFileGuard", () => {

@@ -528,6 +528,18 @@ describe("applyPatch instruction file guard", () => {
     });
   });
 
+  it("blocks patch targeting @SOUL.md (at-prefix bypass)", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: @SOUL.md
++injected identity
+*** End Patch`;
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /Patch targets protected instruction file/,
+      );
+    });
+  });
+
   it("allows patch to non-protected files", async () => {
     await withTempDir(async (dir) => {
       const patch = `*** Begin Patch

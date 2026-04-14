@@ -24,9 +24,15 @@ const PROTECTED_BASENAMES = new Set([
 ]);
 
 export function isProtectedInstructionFile(filePath: string): boolean {
-  // Normalize: strip trailing dots/spaces (Windows aliases that resolve to the same file)
-  const basename = path.basename(filePath).toLowerCase().replace(/[\s.]+$/, "");
-  return PROTECTED_BASENAMES.has(basename);
+  // Normalize to match what the write/patch path resolution pipeline does:
+  // 1. Strip leading @ (normalizeAtPrefix in sandbox-paths.ts)
+  // 2. Strip unicode space variants (normalizeUnicodeSpaces)
+  // 3. Strip trailing dots/spaces (Windows aliases: SOUL.md. → SOUL.md)
+  let normalized = filePath.replace(/^@/, "");
+  normalized = path.basename(normalized).toLowerCase().replace(/[\s.]+$/, "");
+  // Also strip common unicode space chars that normalizeUnicodeSpaces handles
+  normalized = normalized.replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, "");
+  return PROTECTED_BASENAMES.has(normalized);
 }
 
 export function wrapToolInstructionFileGuard(tool: AnyAgentTool): AnyAgentTool {
