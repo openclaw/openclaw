@@ -577,8 +577,21 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         data,
         mkdir: true,
       }),
-    mkdir: (relativePath: string) => 
-      fs.mkdir(path.join(root, relativePath), { recursive: true }).then(() => {})
+    mkdir: async (relativePath: string) => {
+      // Use writeFileWithinRoot with empty data to safely create directory
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: path.join(relativePath, '.placeholder'),
+        data: '',
+        mkdir: true,
+      });
+      // Remove the placeholder file if it was created
+      try {
+        await fs.unlink(path.join(root, relativePath, '.placeholder'));
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   };
 }
 
@@ -610,7 +623,16 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         relativePath,
         data,
       }),
-    access: (relativePath: string) => fs.access(path.join(root, relativePath))
+    access: (relativePath: string) => 
+      writeFileWithinRoot({
+        rootDir: root,
+        relativePath,
+        data: '',
+        mkdir: false,
+      }).then(() => {}).catch(() => {
+        // If writeFileWithinRoot fails, try access check
+        return fs.access(path.join(root, relativePath));
+      })
   };
 }
 
