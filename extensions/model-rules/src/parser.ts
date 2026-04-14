@@ -1,30 +1,57 @@
-import { readFile, stat } from "node:fs/promises";
+import { constants as fsConstants, open } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
+const MAX_CACHE_ENTRIES = 64;
+const MAX_FILE_BYTES = 512 * 1024; // 512 KB — far beyond any reasonable MODELS.md
 const fileCache = new Map<string, { content: string; mtimeMs: number }>();
+
+const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const readFlags =
+  fsConstants.O_RDONLY |
+  (supportsNoFollow ? (fsConstants as Record<string, number>).O_NOFOLLOW : 0);
 
 /**
  * Read MODELS.md from the workspace directory with mtime-based caching.
  * Supports multiple concurrent workspaces without cache thrashing.
+ * Rejects symlinks via O_NOFOLLOW on POSIX (ELOOP on symlink open).
+ * On Windows, symlinks are not explicitly blocked but require elevated
+ * privileges to create; the lexical boundary check prevents path escapes.
  */
 export async function readModelsFile(
   workspaceDir: string,
   filename: string = "MODELS.md",
 ): Promise<string | null> {
+  if (!filename || !filename.trim()) {
+    return null;
+  }
   const filePath = resolve(workspaceDir, filename);
   const boundary = resolve(workspaceDir) + sep;
-  if (!filePath.startsWith(boundary) && filePath !== resolve(workspaceDir)) {
+  if (!filePath.startsWith(boundary)) {
     return null;
   }
   try {
-    const fileStat = await stat(filePath);
-    const cached = fileCache.get(filePath);
-    if (cached && fileStat.mtimeMs === cached.mtimeMs) {
-      return cached.content;
+    const fd = await open(filePath, readFlags);
+    try {
+      const fileInfo = await fd.stat();
+      if (!fileInfo.isFile() || fileInfo.size > MAX_FILE_BYTES) {
+        return null;
+      }
+      const cached = fileCache.get(filePath);
+      if (cached && fileInfo.mtimeMs === cached.mtimeMs) {
+        return cached.content;
+      }
+      const content = await fd.readFile("utf-8");
+      if (fileCache.size >= MAX_CACHE_ENTRIES) {
+        const oldest = fileCache.keys().next().value;
+        if (oldest !== undefined) {
+          fileCache.delete(oldest);
+        }
+      }
+      fileCache.set(filePath, { content, mtimeMs: fileInfo.mtimeMs });
+      return content;
+    } finally {
+      await fd.close();
     }
-    const content = await readFile(filePath, "utf-8");
-    fileCache.set(filePath, { content, mtimeMs: fileStat.mtimeMs });
-    return content;
   } catch {
     fileCache.delete(filePath);
     return null;
@@ -86,16 +113,13 @@ function findHeadingEnd(content: string, target: string): number {
     }
 
     const afterTarget = idx + target.length;
-    const charAfter = content[afterTarget];
-    if (
-      charAfter === undefined ||
-      charAfter === "\n" ||
-      charAfter === "\r" ||
-      (charAfter === " " &&
-        (content[afterTarget + 1] === "\n" ||
-          content[afterTarget + 1] === "\r" ||
-          content[afterTarget + 1] === undefined))
-    ) {
+    // Skip any trailing horizontal whitespace (spaces, tabs) after model id
+    let wsEnd = afterTarget;
+    while (wsEnd < content.length && (content[wsEnd] === " " || content[wsEnd] === "\t")) {
+      wsEnd++;
+    }
+    const endChar = content[wsEnd];
+    if (endChar === undefined || endChar === "\n" || endChar === "\r") {
       const newlineIdx = content.indexOf("\n", afterTarget);
       return newlineIdx === -1 ? content.length : newlineIdx + 1;
     }

@@ -89,4 +89,38 @@ describe("ensureDefaultModelsFile", () => {
     const created = await ensureDefaultModelsFile(tmpDir, "../escape.md");
     expect(created).toBe(false);
   });
+
+  it("rejects empty filename (resolves to workspace dir)", async () => {
+    const created = await ensureDefaultModelsFile(tmpDir, "");
+    expect(created).toBe(false);
+  });
+
+  it("rejects absolute paths outside workspace", async () => {
+    const created = await ensureDefaultModelsFile(tmpDir, "/tmp/escape.md");
+    expect(created).toBe(false);
+  });
+
+  it("rejects symlink leaf pointing outside workspace", async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "model-rules-outside-"));
+    try {
+      const linkPath = path.join(tmpDir, "MODELS.md");
+      const outsideTarget = path.join(outsideDir, "target.md");
+      try {
+        await fs.symlink(outsideTarget, linkPath);
+      } catch {
+        return; // symlinks not supported
+      }
+      // symlink exists but target does not — should not write through symlink
+      const created = await ensureDefaultModelsFile(tmpDir);
+      expect(created).toBe(false);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not write when path exists as a directory", async () => {
+    await fs.mkdir(path.join(tmpDir, "MODELS.md"));
+    const created = await ensureDefaultModelsFile(tmpDir);
+    expect(created).toBe(false);
+  });
 });

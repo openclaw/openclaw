@@ -1,4 +1,4 @@
-import { writeFile, access } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
 /**
@@ -214,21 +214,30 @@ Flag clearly when you're speculating vs. stating facts. If you don't know, say y
 /**
  * Copy the default MODELS.md to the workspace if it doesn't exist yet.
  * Rejects filenames that resolve outside the workspace directory.
+ * Uses exclusive-create (O_CREAT|O_EXCL) to avoid TOCTOU races and
+ * reject dangling symlinks atomically on POSIX.
  */
 export async function ensureDefaultModelsFile(
   workspaceDir: string,
   filename: string = "MODELS.md",
 ): Promise<boolean> {
+  if (!filename || !filename.trim()) {
+    return false;
+  }
   const filePath = resolve(workspaceDir, filename);
   const boundary = resolve(workspaceDir) + sep;
-  if (!filePath.startsWith(boundary) && filePath !== resolve(workspaceDir)) {
+  if (!filePath.startsWith(boundary)) {
     return false;
   }
   try {
-    await access(filePath);
-    return false;
-  } catch {
-    await writeFile(filePath, DEFAULT_MODELS_MD, "utf-8");
+    const fd = await open(filePath, "wx");
+    try {
+      await fd.writeFile(DEFAULT_MODELS_MD, "utf-8");
+    } finally {
+      await fd.close();
+    }
     return true;
+  } catch {
+    return false;
   }
 }

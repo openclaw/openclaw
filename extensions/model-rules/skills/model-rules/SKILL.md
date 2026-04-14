@@ -6,7 +6,9 @@ metadata: { "openclaw": { "emoji": "🎯" } }
 
 # Model Rules
 
-Injects model-specific corrective instructions into the system prompt on every turn. Only rules for the currently active model are injected. If no rules exist for the current model, nothing is injected and zero tokens are spent.
+Injects model-specific corrective instructions into the system prompt (via `appendSystemContext`) on every turn. Only rules for the currently active model are injected. If no rules exist for the current model, nothing is injected and zero tokens are spent.
+
+On first use in a workspace, the plugin creates a default `MODELS.md` with rules for 28 common models. You can edit this file freely -- it is never overwritten once created.
 
 ## How to enable
 
@@ -66,7 +68,8 @@ The first example addresses specific GPT-5.4 failure modes (verbosity, describin
 4. Matching is case-insensitive.
 5. Only the matched section is injected — other models' rules never enter context.
 6. If you switch models mid-session, rules update automatically on the next message.
-7. Sections containing only `[paste rules here]` (the default placeholder) are skipped.
+7. Sections containing only `[paste rules here]` (case-insensitive) are skipped.
+8. Sections longer than 10,000 characters are truncated.
 
 ## Local models
 
@@ -79,11 +82,11 @@ Check your active model ID with `openclaw config get agents.defaults.model`.
 
 ## Config options
 
-| Option           | Default     | Description                                  |
-| ---------------- | ----------- | -------------------------------------------- |
-| `enabled`        | `true`      | Toggle the plugin on or off                  |
-| `modelsFile`     | `MODELS.md` | Custom filename for the rules file           |
-| `disabledModels` | `[]`        | Model IDs to skip even if they have sections |
+| Option           | Default     | Description                                                                                                                                                     |
+| ---------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`        | `true`      | Toggle the plugin on or off                                                                                                                                     |
+| `modelsFile`     | `MODELS.md` | Custom filename for the rules file                                                                                                                              |
+| `disabledModels` | `[]`        | Model IDs to skip even if they have sections. Accepts bare IDs (`gpt-5.4`) or full refs (`openai/gpt-5.4`). Entries are trimmed and matched case-insensitively. |
 
 Example:
 
@@ -111,15 +114,21 @@ openclaw config get agents.defaults.model
 
 The output (e.g., `openai/gpt-5.4`) must match a `## MODEL:` heading in MODELS.md. Either `## MODEL: openai/gpt-5.4` (full ref) or `## MODEL: gpt-5.4` (bare ID) will work.
 
-**Section skipped?** Sections containing only the default placeholder text `[paste rules here]` are ignored. Replace the placeholder with real rules.
+**Section skipped?** Sections containing only the placeholder text `[paste rules here]` (any casing) are ignored. Replace the placeholder with real rules.
 
-**File not found?** The plugin looks for MODELS.md in the workspace root. If you moved it, set `modelsFile` in plugin config.
+**Section truncated?** Sections longer than 10,000 characters are silently truncated to that limit. If rules appear incomplete, check the section length.
+
+**File not found?** The plugin looks for MODELS.md in the workspace root. If you moved it, set `modelsFile` in plugin config. Blank or whitespace-only `modelsFile` values fall back to the default.
 
 ## Format notes
 
 - `## MODEL:` must start at the beginning of a line.
+- Trailing spaces or tabs after the model ID on the heading line are ignored.
 - Everything between one `## MODEL:` heading and the next is the section body.
 - Avoid writing `## MODEL:` inside fenced code blocks — the parser reads line-by-line and cannot distinguish headings inside code fences.
+- Symlinks to MODELS.md are rejected for security. The file must be a regular file inside the workspace.
+- MODELS.md files larger than 512 KB are ignored.
+- Model IDs are expected to be ASCII. Non-ASCII characters in headings may cause incorrect section extraction in the case-insensitive fallback path.
 
 ## When NOT to use model-rules
 

@@ -3,6 +3,7 @@ import { ensureDefaultModelsFile } from "./defaults.js";
 import { findModelSection, parseModelRef, readModelsFile } from "./parser.js";
 
 const PLACEHOLDER_TEXT = "[paste rules here]";
+const MAX_SECTION_CHARS = 10_000;
 
 interface ModelRulesConfig {
   enabled?: boolean;
@@ -23,9 +24,9 @@ export default definePluginEntry({
       return;
     }
 
-    const modelsFilename = pluginConfig.modelsFile ?? "MODELS.md";
+    const modelsFilename = pluginConfig.modelsFile?.trim() || "MODELS.md";
     const disabledModels = new Set(
-      (pluginConfig.disabledModels ?? []).map((id) => id.toLowerCase()),
+      (pluginConfig.disabledModels ?? []).map((id) => id.trim().toLowerCase()).filter(Boolean),
     );
 
     const seededWorkspaces = new Set<string>();
@@ -61,12 +62,16 @@ export default definePluginEntry({
         }
 
         const section = findModelSection(content, modelRef);
-        if (!section || section === PLACEHOLDER_TEXT) {
+        if (!section || section.toLowerCase() === PLACEHOLDER_TEXT) {
           return undefined;
         }
 
-        api.logger.debug?.(`model-rules: matched section for ${bareId} (${section.length} chars)`);
-        const framed = `[Corrective behavioral rules for ${bareId}]\n\n${section}`;
+        const trimmedSection =
+          section.length > MAX_SECTION_CHARS ? section.slice(0, MAX_SECTION_CHARS) : section;
+        api.logger.debug?.(
+          `model-rules: matched section for ${bareId} (${trimmedSection.length} chars)`,
+        );
+        const framed = `[Corrective behavioral rules for ${bareId}]\n\n${trimmedSection}`;
         return { appendSystemContext: framed };
       } catch (err) {
         api.logger.warn(
