@@ -37,6 +37,7 @@ vi.mock("./model-pricing-cache.js", () => ({
 
 const { activateGatewayScheduledServices, startGatewayRuntimeServices } =
   await import("./server-runtime-services.js");
+const DELIVERY_RECOVERY_WAIT_TIMEOUT_MS = 10_000;
 
 describe("server-runtime-services", () => {
   beforeEach(() => {
@@ -91,7 +92,7 @@ describe("server-runtime-services", () => {
           cfg: {},
         }),
       );
-    });
+    }, DELIVERY_RECOVERY_WAIT_TIMEOUT_MS);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
