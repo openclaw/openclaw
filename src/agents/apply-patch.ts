@@ -152,16 +152,15 @@ export async function applyPatch(
   // Check hunk paths BEFORE resolution (isProtectedInstructionFile normalizes
   // @-prefix, unicode spaces, and trailing dots to match the resolution pipeline).
   for (const hunk of parsed.hunks) {
-    const targetPath = hunk.path;
-    if (targetPath && isProtectedInstructionFile(targetPath)) {
-      const basename = path.basename(targetPath);
+    if (isProtectedInstructionFile(hunk.path)) {
+      const basename = path.basename(hunk.path);
       throw new Error(
         `Patch targets protected instruction file "${basename}". ` +
           `Agent sessions cannot modify protected instruction files. ` +
           `Ask the operator to make this change directly.`,
       );
     }
-    if (hunk.movePath && isProtectedInstructionFile(hunk.movePath)) {
+    if (hunk.kind === "update" && hunk.movePath && isProtectedInstructionFile(hunk.movePath)) {
       const basename = path.basename(hunk.movePath);
       throw new Error(
         `Patch moves to protected instruction file "${basename}". ` +

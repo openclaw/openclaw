@@ -6,6 +6,7 @@
  * without explicit operator approval. This mitigates prompt injection attacks
  * where a compromised session removes safety constraints from its own files.
  */
+import fs from "node:fs";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getToolParamsRecord } from "./pi-tools.params.js";
@@ -45,7 +46,12 @@ export function wrapToolInstructionFileGuard(tool: AnyAgentTool): AnyAgentTool {
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
       const filePath = typeof record?.path === "string" ? record.path.trim() : "";
-      if (filePath && isProtectedInstructionFile(filePath)) {
+      // Check both the literal path and the resolved target (symlink defense).
+      const resolvedPath = filePath ? safeRealpath(filePath) : "";
+      if (
+        filePath &&
+        (isProtectedInstructionFile(filePath) || (resolvedPath && isProtectedInstructionFile(resolvedPath)))
+      ) {
         const basename = path.basename(filePath);
         log.warn(
           `Blocked ${tool.name} targeting protected instruction file: ${basename} (${filePath})`,
@@ -60,4 +66,13 @@ export function wrapToolInstructionFileGuard(tool: AnyAgentTool): AnyAgentTool {
       return execute(toolCallId, args, signal, onUpdate);
     },
   };
+}
+
+/** Resolve symlinks without throwing on non-existent paths. */
+function safeRealpath(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return "";
+  }
 }
