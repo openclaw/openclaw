@@ -82,6 +82,7 @@ function buildDistCandidates(...inputs: string[]): string[] {
     appendDistCandidates(candidates, seen, path.resolve(baseDir, ".."));
     appendDistCandidates(candidates, seen, baseDir);
     appendNodeModulesBinCandidates(candidates, seen, inputPath);
+    appendPnpmPackageCandidates(candidates, seen, inputPath);
   }
 
   return candidates;
@@ -121,6 +122,66 @@ function appendNodeModulesBinCandidates(
   const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
   const packageRoot = path.join(nodeModulesDir, binName);
   appendDistCandidates(candidates, seen, packageRoot);
+}
+
+function parseNodeModulesPackagePath(relativePath: string):
+  | {
+      packageName: string;
+      remainder: string;
+    }
+  | null {
+  const cleaned = relativePath.replace(/^[/\\]+/, "");
+  const parts = cleaned.split(/[\\/]+/).filter(Boolean);
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const packageName = parts[0]?.startsWith("@")
+    ? parts.length >= 3
+      ? `${parts[0]}/${parts[1]}`
+      : null
+    : parts[0];
+  if (!packageName) {
+    return null;
+  }
+
+  const remainderStart = packageName.startsWith("@") ? 2 : 1;
+  const remainder = parts.slice(remainderStart).join(path.sep);
+  return { packageName, remainder };
+}
+
+function appendPnpmPackageCandidates(
+  candidates: string[],
+  seen: Set<string>,
+  inputPath: string,
+): void {
+  const normalized = path.resolve(inputPath);
+  const pnpmMarker = `${path.sep}.pnpm${path.sep}`;
+  const pnpmIndex = normalized.lastIndexOf(pnpmMarker);
+  if (pnpmIndex === -1) {
+    return;
+  }
+
+  const afterPnpm = normalized.slice(pnpmIndex + pnpmMarker.length);
+  const nodeModulesMarker = `${path.sep}node_modules${path.sep}`;
+  const nodeModulesIndex = afterPnpm.indexOf(nodeModulesMarker);
+  if (nodeModulesIndex === -1) {
+    return;
+  }
+
+  const parsed = parseNodeModulesPackagePath(
+    afterPnpm.slice(nodeModulesIndex + nodeModulesMarker.length),
+  );
+  if (!parsed) {
+    return;
+  }
+
+  const stablePackageRoot = path.join(normalized.slice(0, pnpmIndex), "node_modules", parsed.packageName);
+  appendDistCandidates(candidates, seen, stablePackageRoot);
+
+  if (parsed.remainder) {
+    appendDistCandidates(candidates, seen, path.join(stablePackageRoot, path.dirname(parsed.remainder)));
+  }
 }
 
 function resolveRepoRootForDev(): string {

@@ -87,4 +87,31 @@ describe("resolveGatewayProgramArguments", () => {
       "18789",
     ]);
   });
+
+  it("prefers stable pnpm package path when invoked via a versioned global shim entrypoint", async () => {
+    const versionedEntrypoint = path.resolve(
+      "/Users/test/Library/pnpm/global/5/.pnpm/openclaw@2026.4.12/node_modules/openclaw/openclaw.mjs",
+    );
+    const stableIndexPath = path.resolve(
+      "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
+    );
+    process.argv = ["node", versionedEntrypoint];
+    fsMocks.realpath.mockResolvedValue(versionedEntrypoint);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === stableIndexPath) {
+        return;
+      }
+      throw new Error(`missing: ${target}`);
+    });
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      stableIndexPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
 });
