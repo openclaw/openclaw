@@ -193,7 +193,11 @@ export function resolveRunLivenessState(params: {
 function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
 }): boolean {
+  if (params.executionContract === "strict-agentic") {
+    return true;
+  }
   const provider = normalizeLowercaseStringOrEmpty(params.provider);
   if (provider !== "openai" && provider !== "openai-codex") {
     return false;
@@ -222,12 +226,14 @@ export function isLikelyExecutionAckPrompt(text: string): boolean {
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   prompt: string;
 }): string | null {
   if (
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     }) ||
     !isLikelyExecutionAckPrompt(params.prompt)
   ) {
@@ -345,7 +351,7 @@ export function resolveToolCallInThinkingRetryInstruction(params: {
   // Collect thinking/reasoning text from all thinking blocks.
   const thinkingText = content
     .filter((block: { type?: string }) => block.type === "thinking")
-    .map((block: { thinking?: string }) => block.thinking ?? "")
+    .map((block) => (block as { thinking?: string }).thinking ?? "")
     .join("");
 
   if (!thinkingText || !TOOL_CALL_IN_THINKING_RE.test(thinkingText)) {
@@ -366,6 +372,7 @@ export function resolvePlanningOnlyRetryLimit(
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
@@ -375,6 +382,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     }) ||
     params.aborted ||
     params.timedOut ||

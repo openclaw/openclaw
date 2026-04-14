@@ -23,7 +23,5 @@ export function isUpdatePlanToolEnabledForOpenClawTools(params: {
     config: params.config,
     sessionKey: params.agentSessionKey,
     agentId: params.agentId,
-    provider: params.modelProvider,
-    modelId: params.modelId,
   });
 }

@@ -407,8 +407,6 @@ export async function runEmbeddedPiAgent(
         config: params.config,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
-        provider,
-        modelId,
       });
       const executionContract = strictAgenticActive ? "strict-agentic" : "default";
       const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
@@ -435,6 +433,7 @@ export async function runEmbeddedPiAgent(
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
         modelId,
+        executionContract,
         prompt: params.prompt,
       });
       let rateLimitProfileRotations = 0;
@@ -1575,6 +1574,7 @@ export async function runEmbeddedPiAgent(
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
+            executionContract,
             aborted,
             timedOut,
             attempt,
