@@ -69,6 +69,15 @@ function dependencyVersionSatisfied(spec, installedVersion) {
   return semverSatisfies(installedVersion, spec, { includePrerelease: false });
 }
 
+function readInstalledDependencyVersionFromRoot(depRoot) {
+  const packageJsonPath = path.join(depRoot, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
+    return null;
+  }
+  const version = readJson(packageJsonPath).version;
+  return typeof version === "string" ? version : null;
+}
+
 const defaultStagedRuntimeDepGlobalPruneSuffixes = [".d.ts", ".map"];
 const defaultStagedRuntimeDepPruneRules = new Map([
   // Type declarations only; runtime resolves through lib/es entrypoints.
@@ -120,38 +129,103 @@ function resolveRuntimeDepPruneConfig(params = {}) {
   };
 }
 
-function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
-  const packageCache = new Map();
-  const closure = new Set();
-  const queue = Object.entries(dependencySpecs);
-
-  while (queue.length > 0) {
-    const [depName, spec] = queue.shift();
-    const installedVersion = readInstalledDependencyVersion(rootNodeModulesDir, depName);
-    if (installedVersion === null || !dependencyVersionSatisfied(spec, installedVersion)) {
-      return null;
-    }
-    if (closure.has(depName)) {
-      continue;
-    }
-
-    const packageJsonPath = path.join(
-      dependencyNodeModulesPath(rootNodeModulesDir, depName),
-      "package.json",
+function resolveInstalledDependencyRoot(params) {
+  const candidates = [];
+  if (params.parentPackageRoot) {
+    candidates.push(
+      path.join(params.parentPackageRoot, "node_modules", ...params.depName.split("/")),
     );
-    const packageJson = packageCache.get(depName) ?? readJson(packageJsonPath);
-    packageCache.set(depName, packageJson);
-    closure.add(depName);
+  }
+  candidates.push(dependencyNodeModulesPath(params.rootNodeModulesDir, params.depName));
 
-    for (const [childName, childSpec] of Object.entries(packageJson.dependencies ?? {})) {
-      queue.push([childName, childSpec]);
-    }
-    for (const [childName, childSpec] of Object.entries(packageJson.optionalDependencies ?? {})) {
-      queue.push([childName, childSpec]);
+  for (const depRoot of candidates) {
+    const installedVersion = readInstalledDependencyVersionFromRoot(depRoot);
+    if (installedVersion !== null && dependencyVersionSatisfied(params.spec, installedVersion)) {
+      return depRoot;
     }
   }
 
-  return [...closure];
+  return null;
+}
+
+function collectInstalledRuntimeDependencyRoots(rootNodeModulesDir, dependencySpecs) {
+  const packageCache = new Map();
+  const directRoots = [];
+  const allRoots = [];
+  const queue = Object.entries(dependencySpecs).map(([depName, spec]) => ({
+    depName,
+    spec,
+    parentPackageRoot: null,
+    direct: true,
+  }));
+  const seen = new Set();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const depRoot = resolveInstalledDependencyRoot({
+      depName: current.depName,
+      spec: current.spec,
+      parentPackageRoot: current.parentPackageRoot,
+      rootNodeModulesDir,
+    });
+    if (depRoot === null) {
+      return null;
+    }
+
+    const seenKey = `${current.depName}\0${depRoot}`;
+    if (seen.has(seenKey)) {
+      continue;
+    }
+    seen.add(seenKey);
+
+    const record = { name: current.depName, root: depRoot };
+    allRoots.push(record);
+    if (current.direct) {
+      directRoots.push(record);
+    }
+
+    const packageJson = packageCache.get(depRoot) ?? readJson(path.join(depRoot, "package.json"));
+    packageCache.set(depRoot, packageJson);
+    for (const [childName, childSpec] of Object.entries(packageJson.dependencies ?? {})) {
+      queue.push({
+        depName: childName,
+        spec: childSpec,
+        parentPackageRoot: depRoot,
+        direct: false,
+      });
+    }
+    for (const [childName, childSpec] of Object.entries(packageJson.optionalDependencies ?? {})) {
+      queue.push({
+        depName: childName,
+        spec: childSpec,
+        parentPackageRoot: depRoot,
+        direct: false,
+      });
+    }
+  }
+
+  return { allRoots, directRoots };
+}
+
+function pathIsInsideCopiedRoot(candidateRoot, copiedRoot) {
+  return candidateRoot === copiedRoot || candidateRoot.startsWith(`${copiedRoot}${path.sep}`);
+}
+
+function selectRuntimeDependencyRootsToCopy(resolution) {
+  const rootsToCopy = [];
+
+  for (const record of resolution.directRoots) {
+    rootsToCopy.push(record);
+  }
+
+  for (const record of resolution.allRoots) {
+    if (rootsToCopy.some((entry) => pathIsInsideCopiedRoot(record.root, entry.root))) {
+      continue;
+    }
+    rootsToCopy.push(record);
+  }
+
+  return rootsToCopy;
 }
 
 function resolveInstalledDirectDependencyNames(rootNodeModulesDir, dependencySpecs) {
@@ -209,24 +283,17 @@ function resolveInstalledRuntimeClosureFingerprint(params) {
   if (Object.keys(dependencySpecs).length === 0 || !fs.existsSync(params.rootNodeModulesDir)) {
     return null;
   }
-  const directDependencyNames = resolveInstalledDirectDependencyNames(
+  const resolution = collectInstalledRuntimeDependencyRoots(
     params.rootNodeModulesDir,
     dependencySpecs,
   );
-  if (directDependencyNames === null) {
+  if (resolution === null) {
     return null;
   }
-  const dependencyNames = new Set(directDependencyNames);
-  const transitiveClosure = collectInstalledRuntimeClosure(
+  return createInstalledRuntimeClosureFingerprint(
     params.rootNodeModulesDir,
-    dependencySpecs,
+    selectRuntimeDependencyRootsToCopy(resolution).map((record) => record.name),
   );
-  if (transitiveClosure !== null) {
-    for (const depName of transitiveClosure) {
-      dependencyNames.add(depName);
-    }
-  }
-  return createInstalledRuntimeClosureFingerprint(params.rootNodeModulesDir, dependencyNames);
 }
 
 function walkFiles(rootDir, visitFile) {
@@ -369,7 +436,6 @@ function createRuntimeDepsFingerprint(packageJson, pruneConfig, params = {}) {
         pruneRules: [...pruneConfig.pruneRules.entries()],
         rootInstalledRuntimeFingerprint: params.rootInstalledRuntimeFingerprint ?? null,
         rootLockfile,
-        pruneRules: [...pruneConfig.pruneRules.entries()],
         version: runtimeDepsStagingVersion,
       }),
     )
@@ -405,13 +471,11 @@ function stageInstalledRootRuntimeDeps(params) {
   if (directDependencyNames === null) {
     return false;
   }
-  const dependencyNames = new Set(directDependencyNames);
-  const transitiveClosure = collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs);
-  if (transitiveClosure !== null) {
-    for (const depName of transitiveClosure) {
-      dependencyNames.add(depName);
-    }
+  const resolution = collectInstalledRuntimeDependencyRoots(rootNodeModulesDir, dependencySpecs);
+  if (resolution === null) {
+    return false;
   }
+  const rootsToCopy = selectRuntimeDependencyRootsToCopy(resolution);
 
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   const stampPath = resolveRuntimeDepsStampPath(pluginDir);
@@ -424,11 +488,11 @@ function stageInstalledRootRuntimeDeps(params) {
   );
 
   try {
-    for (const depName of [...dependencyNames].toSorted((left, right) =>
-      left.localeCompare(right),
+    for (const record of rootsToCopy.toSorted((left, right) =>
+      left.name.localeCompare(right.name),
     )) {
-      const sourcePath = dependencyNodeModulesPath(rootNodeModulesDir, depName);
-      const targetPath = dependencyNodeModulesPath(stagedNodeModulesDir, depName);
+      const sourcePath = record.root;
+      const targetPath = dependencyNodeModulesPath(stagedNodeModulesDir, record.name);
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.cpSync(sourcePath, targetPath, { recursive: true, force: true, dereference: true });
     }
