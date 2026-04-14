@@ -8,6 +8,7 @@ import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
+  resolveOutboundMediaLocalRoots,
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
 } from "../../media/load-options.js";
@@ -177,12 +178,14 @@ export type AttachmentMediaPolicy =
   | {
       mode: "host";
       mediaAccess?: OutboundMediaAccess;
+      mediaLocalRoots?: readonly string[] | "any";
+      mediaReadFile?: OutboundMediaReadFile;
     };
 
 export function resolveAttachmentMediaPolicy(params: {
   sandboxRoot?: string;
   mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
+  mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: OutboundMediaReadFile;
 }): AttachmentMediaPolicy {
   const sandboxRoot = params.sandboxRoot?.trim();
@@ -192,13 +195,20 @@ export function resolveAttachmentMediaPolicy(params: {
       sandboxRoot,
     };
   }
+  const explicitLocalRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
   return {
     mode: "host",
     mediaAccess: resolveOutboundMediaAccess({
       mediaAccess: params.mediaAccess,
-      mediaLocalRoots: params.mediaLocalRoots,
-      mediaReadFile: params.mediaReadFile,
+      mediaLocalRoots: explicitLocalRoots === "any" ? undefined : explicitLocalRoots,
+      mediaReadFile: params.mediaAccess?.readFile ? undefined : params.mediaReadFile,
     }),
+    ...(explicitLocalRoots !== undefined ? { mediaLocalRoots: explicitLocalRoots } : {}),
+    ...(params.mediaAccess?.readFile
+      ? {}
+      : params.mediaReadFile
+        ? { mediaReadFile: params.mediaReadFile }
+        : {}),
   };
 }
 
@@ -230,6 +240,8 @@ function buildAttachmentMediaLoadOptions(params: {
   return buildOutboundMediaLoadOptions({
     maxBytes: params.maxBytes,
     mediaAccess: params.policy.mediaAccess,
+    mediaLocalRoots: params.policy.mediaLocalRoots,
+    mediaReadFile: params.policy.mediaReadFile,
   });
 }
 

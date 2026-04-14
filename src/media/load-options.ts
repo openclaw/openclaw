@@ -70,8 +70,7 @@ export function buildOutboundMediaLoadOptions(
   });
   const workspaceDir = mediaAccess?.workspaceDir ?? params.workspaceDir;
   const readFile = mediaAccess?.readFile ?? params.mediaReadFile;
-  const localRoots =
-    mediaAccess?.localRoots ?? explicitLocalRoots ?? (params.mediaReadFile ? "any" : undefined);
+  const localRoots = mediaAccess?.localRoots ?? explicitLocalRoots;
   if (readFile) {
     if (!localRoots) {
       throw new Error(

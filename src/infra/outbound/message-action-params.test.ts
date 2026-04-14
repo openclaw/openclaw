@@ -36,6 +36,24 @@ describe("message action media helpers", () => {
       mediaAccess: {
         localRoots: ["/tmp/a"],
       },
+      mediaLocalRoots: ["/tmp/a"],
+    });
+  });
+
+  it("preserves explicit any local roots for host read opt-ins", () => {
+    const mediaReadFile = async () => Buffer.from("x");
+    expect(
+      resolveAttachmentMediaPolicy({
+        mediaLocalRoots: "any",
+        mediaReadFile,
+      }),
+    ).toEqual({
+      mode: "host",
+      mediaAccess: {
+        readFile: mediaReadFile,
+      },
+      mediaLocalRoots: "any",
+      mediaReadFile,
     });
   });
 

@@ -75,20 +75,11 @@ describe("media load options", () => {
         },
       }),
     ).toThrow("Host media read requires explicit localRoots");
-  });
-
-  it("preserves backward compatibility for direct mediaReadFile callers", () => {
-    expectBuiltOutboundMediaLoadOptions(
-      {
+    expect(() =>
+      buildOutboundMediaLoadOptions({
         maxBytes: 1024,
         mediaReadFile: async () => Buffer.from("x"),
-      },
-      {
-        maxBytes: 1024,
-        localRoots: "any",
-        readFile: expect.any(Function),
-        hostReadCapability: true,
-      },
-    );
+      }),
+    ).toThrow("Host media read requires explicit localRoots");
   });
 });
