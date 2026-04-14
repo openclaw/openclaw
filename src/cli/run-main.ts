@@ -278,11 +278,6 @@ export async function runCli(argv: string[] = process.argv) {
   } finally {
     await closeCliMemoryManagers();
   }
-  // Explicitly exit to prevent dangling handles (open WebSocket sockets,
-  // unref'd timers, etc.) from keeping the Node.js event loop alive after
-  // the CLI command has completed. All async cleanup is done above in the
-  // finally block; process.once('exit', ...) handlers still run normally.
-  process.exit(process.exitCode ?? 0);
 }
 
 export function isCliMainModule(): boolean {

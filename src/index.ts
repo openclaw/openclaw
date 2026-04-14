@@ -95,9 +95,18 @@ if (isMain) {
     process.exit(1);
   });
 
-  void runLegacyCliEntry(process.argv).catch((err) => {
-    console.error("[openclaw] CLI failed:", formatUncaughtError(err));
-    restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
-    process.exit(1);
-  });
+  void runLegacyCliEntry(process.argv)
+    .then(() => {
+      // Explicitly exit after the CLI command finishes. runCli() may leave
+      // dangling handles alive (e.g. a WebSocket socket awaiting a close
+      // frame after a gateway RPC call). All async cleanup inside runCli()
+      // is already done before it resolves; process.once('exit', ...) sync
+      // handlers still fire normally.
+      process.exit(process.exitCode ?? 0);
+    })
+    .catch((err) => {
+      console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+      restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
+      process.exit(1);
+    });
 }

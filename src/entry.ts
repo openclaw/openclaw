@@ -203,11 +203,19 @@ function runMainOrRootHelp(argv: string[]): void {
   }
   import("./cli/run-main.js")
     .then(({ runCli }) => runCli(argv))
+    .then(() => {
+      // Explicitly exit after the CLI command finishes. runCli() may leave
+      // dangling handles alive (e.g. a WebSocket socket awaiting a close
+      // frame after a gateway RPC call). All async cleanup inside runCli()
+      // is already done before it resolves; process.once('exit', ...) sync
+      // handlers still fire normally.
+      process.exit(process.exitCode ?? 0);
+    })
     .catch((error) => {
       console.error(
         "[openclaw] Failed to start CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );
-      process.exitCode = 1;
+      process.exit(1);
     });
 }
