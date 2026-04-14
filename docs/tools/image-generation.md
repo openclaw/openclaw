@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, MiniMax, ComfyUI, Vydra)"
+summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, KlingAI, MiniMax, ComfyUI, Vydra)"
 read_when:
   - Generating images via the agent
   - Configuring image generation providers and models
@@ -43,6 +43,7 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 | OpenAI   | `gpt-image-1`                    | Yes (up to 5 images)               | `OPENAI_API_KEY`                                      |
 | Google   | `gemini-3.1-flash-image-preview` | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | fal      | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
+| KlingAI  | `kling-v3`                       | Yes (up to 1 image)                | `KLING_API_KEY`                                       |
 | MiniMax  | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
 | ComfyUI  | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
 | Vydra    | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
@@ -115,13 +116,13 @@ Notes:
 
 ### Image editing
 
-OpenAI, Google, fal, MiniMax, and ComfyUI support editing reference images. Pass a reference image path or URL:
+OpenAI, Google, fal, KlingAI, MiniMax, and ComfyUI support editing reference images. Pass a reference image path or URL:
 
 ```
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-OpenAI and Google support up to 5 reference images via the `images` parameter. fal, MiniMax, and ComfyUI support 1.
+OpenAI and Google support up to 5 reference images via the `images` parameter. fal, KlingAI, MiniMax, and ComfyUI support 1.
 
 MiniMax image generation is available through both bundled MiniMax auth paths:
 
@@ -130,13 +131,13 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 
 ## Provider capabilities
 
-| Capability            | OpenAI               | Google               | fal                 | MiniMax                    | ComfyUI                            | Vydra   |
-| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- | ---------------------------------- | ------- |
-| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              | Yes (workflow-defined outputs)     | Yes (1) |
-| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) | No      |
-| Size control          | Yes                  | Yes                  | Yes                 | No                         | No                                 | No      |
-| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        | No                                 | No      |
-| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         | No                                 | No      |
+| Capability            | OpenAI               | Google               | fal                 | KlingAI            | MiniMax                    | ComfyUI                            | Vydra   |
+| --------------------- | -------------------- | -------------------- | ------------------- | ------------------ | -------------------------- | ---------------------------------- | ------- |
+| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 4)      | Yes (up to 9)              | Yes (workflow-defined outputs)     | Yes (1) |
+| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image)      | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) | No      |
+| Size control          | Yes                  | Yes                  | Yes                 | No                 | No                         | No                                 | No      |
+| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                | Yes                        | No                                 | No      |
+| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | Yes                | No                         | No                                 | No      |
 
 ## Related
 
@@ -144,6 +145,7 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 - [fal](/providers/fal) — fal image and video provider setup
 - [ComfyUI](/providers/comfy) — local ComfyUI and Comfy Cloud workflow setup
 - [Google (Gemini)](/providers/google) — Gemini image provider setup
+- [KlingAI](/providers/klingai) — KlingAI image and video provider setup
 - [MiniMax](/providers/minimax) — MiniMax image provider setup
 - [OpenAI](/providers/openai) — OpenAI Images provider setup
 - [Vydra](/providers/vydra) — Vydra image, video, and speech setup

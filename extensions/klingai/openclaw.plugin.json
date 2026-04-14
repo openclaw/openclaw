@@ -1,0 +1,49 @@
+{
+  "id": "klingai",
+  "enabledByDefault": true,
+  "providers": ["klingai"],
+  "providerAuthEnvVars": {
+    "klingai": ["KLING_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "klingai",
+      "method": "api-global",
+      "choiceId": "klingai-global-api",
+      "choiceLabel": "KlingAI API key (Global)",
+      "choiceHint": "Global endpoint - api-singapore.klingai.com",
+      "groupId": "klingai",
+      "groupLabel": "KlingAI",
+      "groupHint": "Image and video generation",
+      "onboardingScopes": ["image-generation"],
+      "optionKey": "klingApiKey",
+      "cliFlag": "--kling-api-key",
+      "cliOption": "--kling-api-key <key>",
+      "cliDescription": "KlingAI API key"
+    },
+    {
+      "provider": "klingai",
+      "method": "api-cn",
+      "choiceId": "klingai-cn-api",
+      "choiceLabel": "KlingAI API key (CN)",
+      "choiceHint": "CN endpoint - api-beijing.klingai.com",
+      "groupId": "klingai",
+      "groupLabel": "KlingAI",
+      "groupHint": "Image and video generation",
+      "onboardingScopes": ["image-generation"],
+      "optionKey": "klingApiKey",
+      "cliFlag": "--kling-api-key",
+      "cliOption": "--kling-api-key <key>",
+      "cliDescription": "KlingAI API key"
+    }
+  ],
+  "contracts": {
+    "imageGenerationProviders": ["klingai"],
+    "videoGenerationProviders": ["klingai"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

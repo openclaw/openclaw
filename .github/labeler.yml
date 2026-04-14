@@ -369,3 +369,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: klingai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/klingai/**"
