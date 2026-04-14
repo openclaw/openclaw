@@ -185,16 +185,16 @@ function buildDynamicModel(
       const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
       const template =
         lower === "gpt-5.4" || isLegacyGpt54Alias || lower === "gpt-5.4-pro"
-          ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4"])
+          ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
           : lower === "gpt-5.4-mini"
             ? findTemplate(params, "openai-codex", [
                 "gpt-5.4",
                 "gpt-5.1-codex-mini",
                 "gpt-5.3-codex",
-                "gpt-5.4",
+                "gpt-5.2-codex",
               ])
             : lower === "gpt-5.3-codex-spark"
-              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4"])
+              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
               : findTemplate(params, "openai-codex", ["gpt-5.4"]);
       const fallback = {
         provider: "openai-codex",
