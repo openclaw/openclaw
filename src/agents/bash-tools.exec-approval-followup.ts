@@ -194,6 +194,13 @@ export async function sendExecApprovalFollowup(
   if (!resultText) {
     return false;
   }
+
+  // Suppress ALL exec approval followups for subagent sessions
+  // Subagent completion is clean and already includes result summary
+  if (isSubagentSessionKey(sessionKey)) {
+    return false;
+  }
+
   const isDenied = isExecDeniedResultText(resultText);
   if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
     return false;

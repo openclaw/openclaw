@@ -210,6 +210,22 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("suppresses ALL followups for subagent sessions (not just denied ones)", async () => {
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-success-subagent",
+        sessionKey: "agent:main:subagent:test",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        resultText: "Exec finished (gateway id=req-success-subagent, code 0)\nSuccess output",
+      }),
+    ).resolves.toBe(false);
+
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     "Exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",
     "exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",
