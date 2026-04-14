@@ -203,10 +203,20 @@ const pluginLoadInProgressIds = new Set<ChannelId>();
 const setupPluginLoadInProgressIds = new Set<ChannelId>();
 const entryLoadInProgressIds = new Set<ChannelId>();
 const lazyEntriesById = new Map<ChannelId, GeneratedBundledChannelEntry | null>();
-const lazyPluginsById = new Map<ChannelId, ChannelPlugin>();
-const lazySetupPluginsById = new Map<ChannelId, ChannelPlugin>();
+const lazyPluginsById = new Map<ChannelId, ChannelPlugin | null>();
+const lazySetupPluginsById = new Map<ChannelId, ChannelPlugin | null>();
 const lazySecretsById = new Map<ChannelId, ChannelPlugin["secrets"] | null>();
 const lazySetupSecretsById = new Map<ChannelId, ChannelPlugin["secrets"] | null>();
+
+function warnBrokenBundledChannelLoad(params: {
+  id: ChannelId;
+  error: unknown;
+  kind: "plugin" | "setup";
+}): void {
+  const detail = formatErrorMessage(params.error);
+  const target = params.kind === "setup" ? "setup entry" : "entry";
+  log.warn(`[channels] failed to load bundled channel ${target} ${params.id}: ${detail}`);
+}
 
 function resolveBundledChannelMetadata(id: ChannelId): BundledChannelPluginMetadata | undefined {
   return listBundledChannelMetadata().find(
@@ -264,9 +274,8 @@ export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
 }
 
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const cached = lazyPluginsById.get(id);
-  if (cached) {
-    return cached;
+  if (lazyPluginsById.has(id)) {
+    return lazyPluginsById.get(id) ?? undefined;
   }
   if (pluginLoadInProgressIds.has(id)) {
     return undefined;
@@ -277,9 +286,15 @@ export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefine
   }
   pluginLoadInProgressIds.add(id);
   try {
-    const plugin = entry.loadChannelPlugin();
-    lazyPluginsById.set(id, plugin);
-    return plugin;
+    try {
+      const plugin = entry.loadChannelPlugin();
+      lazyPluginsById.set(id, plugin);
+      return plugin;
+    } catch (error) {
+      warnBrokenBundledChannelLoad({ id, error, kind: "plugin" });
+      lazyPluginsById.set(id, null);
+      return undefined;
+    }
   } finally {
     pluginLoadInProgressIds.delete(id);
   }
@@ -299,9 +314,8 @@ export function getBundledChannelSecrets(id: ChannelId): ChannelPlugin["secrets"
 }
 
 export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const cached = lazySetupPluginsById.get(id);
-  if (cached) {
-    return cached;
+  if (lazySetupPluginsById.has(id)) {
+    return lazySetupPluginsById.get(id) ?? undefined;
   }
   if (setupPluginLoadInProgressIds.has(id)) {
     return undefined;
@@ -312,9 +326,15 @@ export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | und
   }
   setupPluginLoadInProgressIds.add(id);
   try {
-    const plugin = entry.loadSetupPlugin();
-    lazySetupPluginsById.set(id, plugin);
-    return plugin;
+    try {
+      const plugin = entry.loadSetupPlugin();
+      lazySetupPluginsById.set(id, plugin);
+      return plugin;
+    } catch (error) {
+      warnBrokenBundledChannelLoad({ id, error, kind: "setup" });
+      lazySetupPluginsById.set(id, null);
+      return undefined;
+    }
   } finally {
     setupPluginLoadInProgressIds.delete(id);
   }

@@ -290,6 +290,73 @@ describe("bundled channel entry shape guards", () => {
     expect(reentered).toBe(true);
   });
 
+  it("skips broken bundled channel plugin loads instead of throwing", async () => {
+    const pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-broken-"));
+    const modulePath = path.join(pluginDir, "index.js");
+    fs.writeFileSync(modulePath, "export {};\n", "utf8");
+
+    vi.doMock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+      return {
+        ...actual,
+        listBundledPluginMetadata: () => [
+          {
+            dirName: "alpha",
+            idHint: "alpha",
+            source: {
+              source: "./index.js",
+              built: "./index.js",
+            },
+            manifest: {
+              id: "alpha",
+              channels: ["alpha"],
+            },
+          },
+        ],
+        resolveBundledPluginGeneratedPath: () => modulePath,
+      };
+    });
+    vi.doMock("../../infra/boundary-file-read.js", () => ({
+      openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+        ok: true,
+        path: absolutePath,
+        fd: fs.openSync(absolutePath, "r"),
+      }),
+    }));
+    vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
+      listChannelCatalogEntries: () => [],
+    }));
+
+    let loadCalls = 0;
+    vi.doMock("jiti", () => ({
+      createJiti: () => {
+        return () => ({
+          default: {
+            kind: "bundled-channel-entry",
+            id: "alpha",
+            name: "Alpha",
+            description: "Alpha",
+            register() {},
+            loadChannelPlugin() {
+              loadCalls += 1;
+              throw new Error("missing api.js");
+            },
+          },
+        });
+      },
+    }));
+
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=broken-bundled-plugin-load",
+    );
+
+    expect(bundled.listBundledChannelPlugins()).toEqual([]);
+    expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+    expect(loadCalls).toBe(1);
+  });
+
   it("keeps private src runtime barrels from forwarding to parent runtime barrels that export local plugins", () => {
     const offenders: string[] = [];
 
