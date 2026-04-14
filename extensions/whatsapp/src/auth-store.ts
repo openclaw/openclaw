@@ -73,17 +73,22 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
   } catch {
     return false;
   }
-  try {
-    const stats = await fs.stat(credsPath);
-    if (!stats.isFile() || stats.size <= 1) {
-      return false;
+  // Check consolidated auth state (useAtomicAuthState) first, then legacy creds.json
+  const atomicPath = path.join(resolvedAuthDir, "auth-state.json");
+  for (const candidate of [credsPath, atomicPath]) {
+    try {
+      const stats = await fs.stat(candidate);
+      if (!stats.isFile() || stats.size <= 1) {
+        continue;
+      }
+      const raw = await fs.readFile(candidate, "utf-8");
+      JSON.parse(raw);
+      return true;
+    } catch {
+      continue;
     }
-    const raw = await fs.readFile(credsPath, "utf-8");
-    JSON.parse(raw);
-    return true;
-  } catch {
-    return false;
   }
+  return false;
 }
 
 async function clearLegacyBaileysAuthState(authDir: string) {
