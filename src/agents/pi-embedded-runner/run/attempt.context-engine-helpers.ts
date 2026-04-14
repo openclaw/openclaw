@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { MemoryCitationsMode } from "../../../config/types.memory.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../../context-engine/types.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -95,11 +96,11 @@ export function buildContextEnginePromptCacheInfo(params: {
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
-}): AgentMessage | undefined {
+}): AssistantMessage | undefined {
   return params.messagesSnapshot
     .slice(Math.max(0, params.prePromptMessageCount))
     .toReversed()
-    .find((message) => message.role === "assistant");
+    .find((message): message is AssistantMessage => message.role === "assistant");
 }
 
 export async function runAttemptContextEngineBootstrap(params: {
@@ -206,50 +207,51 @@ export async function finalizeAttemptContextEngineTurn(params: {
   let postTurnFinalizationSucceeded = true;
 
   if (typeof params.contextEngine.afterTurn === "function") {
-    try {
-      await params.contextEngine.afterTurn({
-        sessionId: params.sessionIdUsed,
-        sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
-        messages: params.messagesSnapshot,
-        prePromptMessageCount: params.prePromptMessageCount,
-        tokenBudget: params.tokenBudget,
-        runtimeContext: params.runtimeContext,
-      });
-    } catch (afterTurnErr) {
-      postTurnFinalizationSucceeded = false;
-      params.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
-    }
-  } else {
-    const newMessages = params.messagesSnapshot.slice(params.prePromptMessageCount);
-    if (newMessages.length > 0) {
-      if (typeof params.contextEngine.ingestBatch === "function") {
-        try {
-          await params.contextEngine.ingestBatch({
-            sessionId: params.sessionIdUsed,
-            sessionKey: params.sessionKey,
-            messages: newMessages,
-          });
-        } catch (ingestErr) {
-          postTurnFinalizationSucceeded = false;
-          params.warn(`context engine ingest failed: ${String(ingestErr)}`);
-        }
-      } else {
-        for (const msg of newMessages) {
+      try {
+        await params.contextEngine.afterTurn({
+          sessionId: params.sessionIdUsed,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          messages: params.messagesSnapshot,
+          prePromptMessageCount: params.prePromptMessageCount,
+          tokenBudget: params.tokenBudget,
+          runtimeContext: params.runtimeContext,
+        });
+      } catch (afterTurnErr) {
+        postTurnFinalizationSucceeded = false;
+        params.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
+      }
+    } else {
+      const newMessages = params.messagesSnapshot.slice(params.prePromptMessageCount);
+      if (newMessages.length > 0) {
+        if (typeof params.contextEngine.ingestBatch === "function") {
           try {
-            await params.contextEngine.ingest?.({
+            await params.contextEngine.ingestBatch({
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
-              message: msg,
+              messages: newMessages,
             });
           } catch (ingestErr) {
             postTurnFinalizationSucceeded = false;
             params.warn(`context engine ingest failed: ${String(ingestErr)}`);
           }
+        } else {
+          for (const msg of newMessages) {
+            try {
+              await params.contextEngine.ingest?.({
+                sessionId: params.sessionIdUsed,
+                sessionKey: params.sessionKey,
+                message: msg,
+              });
+            } catch (ingestErr) {
+              postTurnFinalizationSucceeded = false;
+              params.warn(`context engine ingest failed: ${String(ingestErr)}`);
+            }
+          }
         }
       }
     }
-  }
+
 
   if (
     !params.promptError &&

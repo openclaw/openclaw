@@ -4,7 +4,6 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -12,6 +11,7 @@ import {
 } from "../../config/sessions/paths.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -45,6 +45,7 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -96,6 +97,7 @@ let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runti
 let sessionStoreRuntimePromise: Promise<
   typeof import("../../config/sessions/store.runtime.js")
 > | null = null;
+const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
 
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
@@ -115,6 +117,18 @@ function loadSessionUpdatesRuntime() {
 function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
   return sessionStoreRuntimePromise;
+}
+
+function stripPromptThinkingDirectives(body: string): string {
+  return body
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/(^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:\s*|\s+)?[A-Za-z-]*/gi, "$1")
+        .replace(/[ \t]{2,}/g, " ")
+        .trimEnd(),
+    )
+    .join("\n");
 }
 
 type RunPreparedReplyParams = {
@@ -287,8 +301,11 @@ export async function runPreparedReply(
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
-  const isWholeMessageCommand = command.commandBodyNormalized.trim() === rawBodyTrimmed;
-  const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/.test(rawBodyTrimmed);
+  const normalizedCommandBody = command.commandBodyNormalized.trim();
+  const isWholeMessageCommand =
+    normalizedCommandBody === rawBodyTrimmed ||
+    normalizedCommandBody === rawBodyTrimmed.toLowerCase();
+  const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/.test(normalizedCommandBody);
   if (
     allowTextCommands &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
@@ -298,11 +315,21 @@ export async function runPreparedReply(
     typing.cleanup();
     return undefined;
   }
-  const isBareNewOrReset = rawBodyTrimmed === "/new" || rawBodyTrimmed === "/reset";
+  const isBareNewOrReset = /^\/(new|reset)$/.test(normalizedCommandBody);
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
+  const startupAction = /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
+  const startupContextPrelude =
+    isBareSessionReset && shouldApplyStartupContext({ cfg, action: startupAction })
+      ? await buildSessionStartupContextPrelude({
+          workspaceDir,
+          cfg,
+        })
+      : null;
+  const baseBodyFinal = isBareSessionReset
+    ? buildBareSessionResetPrompt(cfg)
+    : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
@@ -316,14 +343,19 @@ export async function runPreparedReply(
     envelopeOptions,
   );
   const baseBodyForPrompt = isBareSessionReset
-    ? baseBodyFinal
+    ? [startupContextPrelude, baseBodyFinal].filter(Boolean).join("\n\n")
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
   if (!baseBodyTrimmed && !hasMediaAttachment) {
-    await typing.onReplyStart();
+    // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
+    // otherwise channels that wire onReplyStart to typing indicators leak
+    // visible signals even though outbound delivery is suppressed.
+    if (!suppressTyping) {
+      await typing.onReplyStart();
+    }
     logVerbose("Inbound body empty after normalization; skipping agent run");
     typing.cleanup();
     return {
@@ -366,6 +398,7 @@ export async function runPreparedReply(
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
+  let forceSenderIsOwnerFalseFromSystemEvents = false;
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
@@ -379,6 +412,9 @@ export async function runPreparedReply(
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
+        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
+          forceSenderIsOwnerFalseFromSystemEvents = true;
+        }
       }
     }
     return buildReplyPromptBodies({
@@ -602,7 +638,10 @@ export async function runPreparedReply(
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
-      senderIsOwner: command.senderIsOwner,
+      senderIsOwner: forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner,
+      traceAuthorized:
+        (forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner) ||
+        (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       config: cfg,

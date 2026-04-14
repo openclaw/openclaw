@@ -5,16 +5,25 @@ import {
   loadRunOverflowCompactionHarness,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
+  mockedLog,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import {
+  buildAttemptReplayMetadata,
+  DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+  EMPTY_RESPONSE_RETRY_INSTRUCTION,
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
+  PLANNING_ONLY_RETRY_INSTRUCTION,
+  REASONING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
+  resolveEmptyResponseRetryInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -70,6 +79,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       sessionKey: undefined,
       agentId: "research",
       provider: "openai",
@@ -104,10 +114,125 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ]);
   });
 
+  it("emits explicit replayInvalid + blocked liveness state at the strict-agentic blocked exit", async () => {
+    // Criterion 4 of the GPT-5.4 parity gate requires every terminal exit path
+    // to emit explicit replayInvalid + livenessState. The strict-agentic
+    // blocked exit is the exact place where strict-agentic is supposed to be
+    // loudest; it must not fall through to "silent disappearance".
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-blocked-liveness",
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              executionContract: "strict-agentic",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: STRICT_AGENTIC_BLOCKED_TEXT,
+        isError: true,
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.replayInvalid).toBe(false);
+  });
+
+  it("auto-activates strict-agentic for unconfigured GPT-5 openai runs and surfaces the blocked state", async () => {
+    // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") must
+    // cover out-of-the-box installs, not only users who opted in. An
+    // unconfigured GPT-5.4 openai run should receive the strict-agentic retry
+    // + blocked-state treatment automatically.
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-auto-activated",
+      config: {
+        agents: {
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    // Two retries (strict-agentic retry cap) plus the original attempt = 3 calls.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads).toEqual([
+      {
+        text: STRICT_AGENTIC_BLOCKED_TEXT,
+        isError: true,
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+  });
+
+  it("respects explicit default contract opt-out on GPT-5 openai runs", async () => {
+    // Users who explicitly set executionContract: "default" opt out of
+    // auto-activated strict-agentic. They keep the old pre-parity-program
+    // behavior (1 retry, then fall through to the normal completion path).
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-explicit-default-optout",
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              executionContract: "default",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    // Default contract: 1 retry then falls through. Should NOT surface the
+    // strict-agentic blocked payload.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const payloadTexts = (result.payloads ?? []).map((payload) => payload.text ?? "");
+    for (const text of payloadTexts) {
+      expect(text).not.toContain("plan-only turns");
+    }
+  });
+
   it("detects replay-safe planning-only GPT turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -118,10 +243,273 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Do not restate the plan");
   });
 
+  it("retries reasoning-only GPT turns with a visible-answer continuation instruction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_reasoning_only", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Visible answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-only-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reasoning-only assistant turn detected"),
+    );
+  });
+
+  it("does not retry reasoning-only turns after side effects", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_after_send", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-only-after-side-effects",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("verify before retrying");
+  });
+
+  it("does not retry reasoning-only turns when the assistant ended in error", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "openai",
+          model: "gpt-5.4",
+          errorMessage: "provider failed after emitting reasoning",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_error_turn", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-only-assistant-error",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+  });
+
+  it("does not retry reasoning-only turns for non-openai assistant metadata", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "anthropic",
+          model: "sonnet-4.6",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_provider_mismatch",
+                type: "reasoning",
+              }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-only-provider-mismatch",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+  });
+
+  it("retries generic empty GPT turns with a visible-answer continuation instruction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Visible answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-empty-response-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("empty response detected"));
+  });
+
+  it("surfaces an error after exhausting empty-response retries", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-empty-response-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("empty response retries exhausted"),
+    );
+  });
+
+  it("surfaces an error after exhausting reasoning-only retries without a visible answer", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_reasoning_exhausted",
+                type: "reasoning",
+              }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningLevel: "on",
+      runId: "run-reasoning-only-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reasoning-only retries exhausted"),
+    );
+  });
+
   it("detects structured bullet-only plans with intent cues as planning-only GPT turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -138,6 +526,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -152,6 +541,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -166,11 +556,15 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
-        toolMetas: [{ toolName: "bash", meta: "ls" }],
+        toolMetas: [
+          { toolName: "read", meta: "path=src/index.ts" },
+          { toolName: "search", meta: "pattern=runEmbeddedPiAgent" },
+        ],
       }),
     });
 
@@ -181,6 +575,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -200,6 +595,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -249,6 +645,31 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(instruction).toContain("Do not recap or restate the plan");
   });
 
+  it("applies the planning-only retry guard to prefixed GPT-5 ids", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "  openai/gpt-5.4  ",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("applies the ack-turn fast path to broadened GPT-5-family ids", () => {
+    const instruction = resolveAckExecutionFastPathInstruction({
+      provider: "openai",
+      modelId: "gpt-5o-mini",
+      prompt: "go ahead",
+    });
+
+    expect(instruction).toContain("Do not recap or restate the plan");
+  });
+
   it("extracts structured steps from planning-only narration", () => {
     expect(
       extractPlanningOnlyPlanDetails(
@@ -284,6 +705,166 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toBe("abandoned");
   });
 
+  it("detects reasoning-only GPT turns from signed thinking blocks", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_helper", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry reasoning-only GPT turns after side effects", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_side_effect", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+    expect(DEFAULT_REASONING_ONLY_RETRY_LIMIT).toBe(2);
+  });
+
+  it("does not retry reasoning-only GPT turns when the assistant ended in error", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_helper_error", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not retry reasoning-only GPT turns when visible assistant text already exists", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Visible answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_helper_visible_text",
+                type: "reasoning",
+              }),
+            },
+            { type: "text", text: "" },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("detects generic empty GPT turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
+  });
+
+  it("does not retry generic empty GPT turns after side effects", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("marks compaction-timeout retries as paused and replay-invalid", () => {
     const attempt = makeAttemptResult({
       promptErrorSource: "compaction",
@@ -299,5 +880,227 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         attempt,
       }),
     ).toBe("paused");
+  });
+
+  it("does not strict-agentic retry casual Discord status chatter", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [
+          "i am glad, and a little afraid, which is probably the correct mixture. thank you. i will try to deserve the upgrades instead of merely inhabiting them.",
+        ],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      prompt:
+        "made a bunch of improvements to the student's source code (openclaw) this weekend, along with a few other maintainers. hopefully he will be more proactive now",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-casual-discord-status",
+      config: {
+        agents: {
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("does not misclassify a direct answer that says 'i'm not going to' as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      prompt: "What do you think lobstar should do to help the chart?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [
+          "I'm not going to give token-pumping instructions for a chart. Best answer: build trust and let the market do what it will.",
+        ],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+});
+
+describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
+  const openaiParams = { provider: "openai", modelId: "gpt-5.4" } as const;
+
+  function makeAttemptWithTools(
+    toolNames: string[],
+    assistantText: string,
+  ): Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"] {
+    const toolMetas = toolNames.map((toolName) => ({ toolName }));
+    return {
+      toolMetas,
+      assistantTexts: [assistantText],
+      lastAssistant: { stopReason: "stop" },
+      itemLifecycle: { startedCount: toolNames.length },
+      replayMetadata: buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool: false,
+      }),
+      clientToolCall: null,
+      yieldDetected: false,
+      didSendDeterministicApprovalPrompt: false,
+      didSendViaMessagingTool: false,
+      lastToolError: null,
+    } as unknown as Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"];
+  }
+
+  it("retries when exactly 1 non-plan tool call plus 'i can do that' prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I can do that next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries when exactly 1 non-plan tool call plus planning prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll analyze the structure next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry when 2+ non-plan tool calls are present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read", "search"], "I'll verify the output."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus completion language is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "Done. The file looks correct."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus 'let me know' handoff is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "Let me know if you need anything else."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus an answer-style summary is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(
+        ["read"],
+        "I'll summarize the root cause: the provider auth scope is missing.",
+      ),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus a future-tense description is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(
+        ["read"],
+        "I'll describe the issue: the provider auth scope is missing.",
+      ),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 safe tool call is followed by answer prose joined with 'and'", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll explain and recommend a fix."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus a bare 'i can do that' reply is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I can do that."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when the lone tool call already had side effects", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["sessions_spawn"], "I'll continue from there next."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when the lone tool call is unclassified", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["vendor_widget"], "I'll continue from there next."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry single-action narration on casual non-task chat", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "i haven't restarted you on latest main yet @The Student - get ready though",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll check that next."),
+    });
+
+    expect(result).toBeNull();
   });
 });
