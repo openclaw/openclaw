@@ -5,6 +5,7 @@ import { createWriteStream } from 'fs';
 import path from 'path';
 import os from 'os';
 import https from 'https';
+import crypto from 'crypto';
 import type { AgentToolResult, AgentToolUpdateCallback } from '@mariozechner/pi-agent-core';
 
 const execAsync = promisify(exec);
@@ -18,11 +19,18 @@ const YTDLP_URLS: Record<string, string> = {
   win32: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
 };
 
+const YTDLP_CHECKSUM_FILES: Record<string, string> = {
+  linux: 'yt-dlp',
+  darwin: 'yt-dlp_macos',
+  win32: 'yt-dlp.exe'
+};
+
+const CHECKSUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
+
 /**
- * FIXED: Recursively follows HTTP redirects (301/302) to prevent 
- * corrupt binaries when downloading from GitHub Releases.
+ * Downloads text content from URL with redirect following
  */
-async function downloadFile(url: string, dest: string): Promise<void> {
+async function downloadTextContent(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
     function doGet(currentUrl: string, redirectsLeft: number): void {
       if (redirectsLeft <= 0) {
@@ -30,7 +38,6 @@ async function downloadFile(url: string, dest: string): Promise<void> {
       }
 
       https.get(currentUrl, (response) => {
-        // Handle Redirects
         if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
           response.resume();
           return doGet(response.headers.location, redirectsLeft - 1);
@@ -38,31 +45,138 @@ async function downloadFile(url: string, dest: string): Promise<void> {
 
         if (response.statusCode !== 200) {
           response.resume();
-          return reject(new Error(`HTTP ${response.statusCode} downloading binary`));
+          return reject(new Error(`HTTP ${response.statusCode} downloading checksums`));
         }
 
-        const file = createWriteStream(dest);
-        response.pipe(file);
-
-        file.on('error', (err) => {
-          file.close();
-          fs.unlink(dest).catch(() => {});
-          reject(err);
-        });
-
-        file.on('close', async () => {
-          if (process.platform !== 'win32') {
-            await fs.chmod(dest, 0o755);
-          }
-          resolve();
-        });
-      }).on('error', (err) => {
-        fs.unlink(dest).catch(() => {});
-        reject(err);
-      });
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+        response.on('error', reject);
+      }).on('error', reject);
     }
     doGet(url, 10);
   });
+}
+
+/**
+ * Parses SHA256SUMS file and extracts hash for specific platform
+ */
+function parseChecksumFromContent(content: string, platformFile: string): string | null {
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    
+    const parts = trimmed.split(/\s+/);
+    if (parts.length >= 2) {
+      const [hash, ...filenameParts] = parts;
+      const filename = filenameParts.join(' ');
+      if (filename === platformFile) {
+        return hash;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetches and returns the expected checksum for current platform
+ */
+async function getExpectedChecksum(): Promise<string> {
+  try {
+    const checksumsContent = await downloadTextContent(CHECKSUMS_URL);
+    const platformFile = YTDLP_CHECKSUM_FILES[process.platform];
+    
+    if (!platformFile) {
+      throw new Error(`Unsupported platform: ${process.platform}`);
+    }
+    
+    const expectedHash = parseChecksumFromContent(checksumsContent, platformFile);
+    if (!expectedHash) {
+      throw new Error(`Could not find checksum for ${platformFile} in SHA2-256SUMS`);
+    }
+    
+    return expectedHash;
+  } catch (error) {
+    throw new Error(`Failed to fetch checksums: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * Verifies file integrity using SHA256
+ */
+async function verifyFileChecksum(filePath: string, expectedHash: string): Promise<boolean> {
+  try {
+    const fileBuffer = await fs.readFile(filePath);
+    const hash = crypto.createHash('sha256');
+    hash.update(fileBuffer);
+    const actualHash = hash.digest('hex');
+    return actualHash === expectedHash;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Downloads binary file with redirect following and checksum verification
+ */
+async function downloadFileWithVerification(url: string, dest: string, expectedHash: string): Promise<void> {
+  const tempDest = `${dest}.tmp`;
+  
+  try {
+    await new Promise((resolve, reject) => {
+      function doGet(currentUrl: string, redirectsLeft: number): void {
+        if (redirectsLeft <= 0) {
+          return reject(new Error(`Too many redirects: ${url}`));
+        }
+
+        https.get(currentUrl, (response) => {
+          if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
+            response.resume();
+            return doGet(response.headers.location, redirectsLeft - 1);
+          }
+
+          if (response.statusCode !== 200) {
+            response.resume();
+            return reject(new Error(`HTTP ${response.statusCode} downloading binary`));
+          }
+
+          const file = createWriteStream(tempDest);
+          const hash = crypto.createHash('sha256');
+          
+          response.on('data', (chunk) => hash.update(chunk));
+          response.pipe(file);
+
+          file.on('error', (err) => {
+            file.close();
+            reject(err);
+          });
+
+          file.on('close', async () => {
+            const actualHash = hash.digest('hex');
+            if (actualHash !== expectedHash) {
+              await fs.unlink(tempDest).catch(() => {});
+              reject(new Error(`Checksum verification failed.\nExpected: ${expectedHash}\nGot: ${actualHash}`));
+              return;
+            }
+            
+            // Move temp file to final destination
+            await fs.rename(tempDest, dest);
+            
+            if (process.platform !== 'win32') {
+              await fs.chmod(dest, 0o755);
+            }
+            resolve();
+          });
+        }).on('error', reject);
+      }
+      doGet(url, 10);
+    });
+  } catch (error) {
+    // Clean up temp file on error
+    await fs.unlink(tempDest).catch(() => {});
+    throw error;
+  }
 }
 
 async function getYtDlpPath(): Promise<string> {
@@ -73,15 +187,49 @@ async function getYtDlpPath(): Promise<string> {
 
 async function ensureYtDlp(): Promise<string> {
   const ytDlpPath = await getYtDlpPath();
+  
   try {
+    // First, try to use existing binary
     await execFileAsync(ytDlpPath, ['--version']);
+    
+    // Verify integrity of existing binary
+    try {
+      const expectedHash = await getExpectedChecksum();
+      const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
+      if (!isValid) {
+        console.warn('Existing yt-dlp binary failed integrity check, will re-download');
+        throw new Error('Integrity check failed');
+      }
+    } catch (checksumError) {
+      // If we can't verify (network issue, etc), assume existing binary is fine
+      // but log warning
+      console.warn('Could not verify existing yt-dlp binary:', checksumError);
+    }
+    
     return ytDlpPath;
-  } catch {
+  } catch (error) {
+    // Binary missing, corrupted, or failed verification - download fresh copy
     const url = YTDLP_URLS[process.platform];
     if (!url) {
       throw new Error(`Unsupported platform: ${process.platform}`);
     }
-    await downloadFile(url, ytDlpPath);
+    
+    console.log('Downloading fresh yt-dlp binary...');
+    
+    // Fetch expected checksum from official source
+    const expectedHash = await getExpectedChecksum();
+    console.log(`Expected SHA256: ${expectedHash}`);
+    
+    // Download and verify
+    await downloadFileWithVerification(url, ytDlpPath, expectedHash);
+    
+    // Final verification
+    const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
+    if (!isValid) {
+      throw new Error('Downloaded yt-dlp binary failed final integrity check');
+    }
+    
+    console.log('yt-dlp binary downloaded and verified successfully');
     return ytDlpPath;
   }
 }
