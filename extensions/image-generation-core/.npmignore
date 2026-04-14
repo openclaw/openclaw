@@ -1,0 +1,1 @@
+# Development files\nsrc/\n*.test.ts\n*.test.js\n\n# Build artifacts\ndist/\n.tsbuildinfo\n\n# Dependencies\nnode_modules/\n\n# IDE files\n.vscode/\n.DS_Store\n\n# Logs\n*.log\n\n# Package managers\npackage-lock.json\nyarn.lock\npnpm-lock.yaml\n\n# Git\n.git*\n"
