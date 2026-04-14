@@ -1624,7 +1624,7 @@ export async function runEmbeddedAttempt(
             activeSession.agent.streamFn = wrapper(activeSession.agent.streamFn);
           } catch (err) {
             // Isolate wrapper failures — skip the failing wrapper rather than stalling the attempt.
-            log.warn("plugin streamFn wrapper failed; skipping", { err });
+            log.warn(`plugin streamFn wrapper failed; skipping: ${String(err)}`);
           }
         }
       }
