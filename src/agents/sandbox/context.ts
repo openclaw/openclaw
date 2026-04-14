@@ -131,9 +131,94 @@ export async function resolveSandboxContext(params: {
   if (!resolved) {
     return null;
   }
+
+  // Wrap sandbox initialization in a timeout to prevent a hung Docker daemon
+  // (or slow remote backend) from blocking the message pipeline indefinitely.
+  // The timeout is configurable via sandbox config (initTimeoutMs) with
+  // backend-aware defaults: 60s for Docker, 300s for SSH/remote backends.
+  // An AbortController signals cooperative cancellation into
+  // resolveSandboxContextInner so that in-flight await points stop new work
+  // when the timeout fires, preventing zombie child processes.
+  // The timer is cleared via .finally() so it cannot keep the event loop alive
+  // after initialization succeeds. timer.unref() allows the process to exit
+  // cleanly if the event loop is otherwise idle.
+  const initTimeoutMs = resolved.cfg.initTimeoutMs;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(
+        `Sandbox initialization timed out after ${initTimeoutMs / 1000}s (backend "${resolved.cfg.backend}" may be unresponsive)`,
+      );
+      defaultRuntime.error?.(err.message);
+      // Abort the inner work so pending await points exit early.
+      // Reuse the same Error instance for both abort reason and rejection so
+      // the aborted-check path (throw abortSignal.reason) and the race-winning
+      // rejection surface the same Error identity.
+      controller.abort(err);
+      reject(err);
+    }, initTimeoutMs);
+    timer.unref?.();
+  });
+
+  return Promise.race([
+    resolveSandboxContextInner(resolved, params, controller.signal),
+    timeoutPromise,
+  ]).finally(() => {
+    clearTimeout(timer);
+    // Abort the controller on the success path too so any detached inner work
+    // (from the losing side of the race) is cancelled promptly. This is safe
+    // because onEnsureAttachTarget creates its own AbortController per attach
+    // attempt and does not capture the init-phase signal.
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  });
+}
+
+/** Race a promise against an AbortSignal — resolves/rejects with whichever wins first. */
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  if (signal.aborted) {
+    const reason =
+      signal.reason instanceof Error ? signal.reason : new Error("Sandbox init aborted");
+    return Promise.reject(reason);
+  }
+  // Track the listener so we can remove it when the wrapped promise settles,
+  // preventing a leaked abort listener on the success path.
+  let abortListener: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortListener = () => {
+      const r = signal.reason instanceof Error ? signal.reason : new Error("Sandbox init aborted");
+      reject(r);
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  return Promise.race([promise, abortPromise]).finally(() => {
+    if (abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  });
+}
+
+async function resolveSandboxContextInner(
+  resolved: NonNullable<ReturnType<typeof resolveSandboxSession>>,
+  params: { config?: OpenClawConfig; workspaceDir?: string },
+  abortSignal?: AbortSignal,
+): Promise<SandboxContext> {
   const { rawSessionKey, cfg, runtime } = resolved;
 
-  await maybePruneSandboxes(cfg);
+  // Check abort before each major async step to provide cooperative
+  // cancellation and prevent zombie Docker child processes on timeout.
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
+
+  await raceAbort(maybePruneSandboxes(cfg), abortSignal);
 
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
@@ -149,6 +234,12 @@ export async function resolveSandboxContext(params: {
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
+
   const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
   const backend = await backendFactory({
     sessionKey: rawSessionKey,
@@ -156,6 +247,7 @@ export async function resolveSandboxContext(params: {
     workspaceDir,
     agentWorkspaceDir,
     cfg: resolvedCfg,
+    abortSignal,
   });
   await updateRegistry({
     containerName: backend.runtimeId,
@@ -167,6 +259,15 @@ export async function resolveSandboxContext(params: {
     image: backend.configLabel ?? resolvedCfg.docker.image,
     configLabelKind: backend.configLabelKind ?? "Image",
   });
+
+  // Abort before the browser setup phase — ensureSandboxBrowser involves
+  // multiple Docker operations (inspect, network create, container start,
+  // CDP wait loop) and is likely the longest remaining step.
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
 
   const evaluateEnabled =
     params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
@@ -187,6 +288,12 @@ export async function resolveSandboxContext(params: {
         return browserAuth;
       })()
     : undefined;
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
+
   if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
     throw new Error(
       `Sandbox backend "${resolvedCfg.backend}" does not support browser sandboxes yet.`,
@@ -201,6 +308,7 @@ export async function resolveSandboxContext(params: {
           cfg: resolvedCfg,
           evaluateEnabled,
           bridgeAuth,
+          abortSignal,
         })
       : null;
 

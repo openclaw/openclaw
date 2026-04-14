@@ -154,6 +154,7 @@ function createSandboxConfig(
     },
     tools: { allow: [], deny: [] },
     prune: { idleHours: 24, maxAgeDays: 7 },
+    initTimeoutMs: 60_000,
   };
 }
 

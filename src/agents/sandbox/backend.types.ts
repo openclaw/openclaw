@@ -28,6 +28,7 @@ export type CreateSandboxBackendParams = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  abortSignal?: AbortSignal;
 };
 
 export type SandboxBackendFactory = (

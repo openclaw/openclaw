@@ -103,6 +103,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       idleHours: 24,
       maxAgeDays: 7,
     },
+    initTimeoutMs: 60_000,
   };
 }
 
@@ -249,7 +250,10 @@ describe("ensureSandboxBrowser create args", () => {
     expect(labels).toContain(`openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`);
   });
 
-  it("force-removes the browser container when CDP never becomes reachable", async () => {
+  it("surfaces a CDP-unreachable error without force-removing the container", async () => {
+    // Attach callbacks run later during the session lifetime and use a fresh
+    // AbortController; they must not force-rm the container on CDP timeout
+    // since the surrounding bridge is still valid for later retry/reuse.
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("timeout"));
     bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
       await params.onEnsureAttachTarget?.({});
@@ -276,11 +280,11 @@ describe("ensureSandboxBrowser create args", () => {
         agentWorkspaceDir: "/tmp/workspace",
         cfg,
       }),
-    ).rejects.toThrow("hung container has been forcefully removed");
+    ).rejects.toThrow(/CDP did not become reachable/);
 
-    expect(dockerMocks.execDocker).toHaveBeenCalledWith(
+    expect(dockerMocks.execDocker).not.toHaveBeenCalledWith(
       ["rm", "-f", expect.stringMatching(/^openclaw-sbx-browser-session-test-/)],
-      { allowFailure: true },
+      expect.anything(),
     );
   });
 

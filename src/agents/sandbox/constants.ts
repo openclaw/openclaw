@@ -48,6 +48,20 @@ export const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
 export const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;
 export const DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS = 12_000;
 
+/**
+ * Default init timeout for local (Docker) sandbox backends.
+ * 60s is generous for a warm container start but short enough to unblock the
+ * message pipeline when Docker is hung or unreachable.
+ */
+export const DEFAULT_SANDBOX_INIT_TIMEOUT_MS = 60_000;
+
+/**
+ * Default init timeout for remote (SSH/OpenShell) sandbox backends.
+ * Remote backends may need to seed workspaces, run setup commands, or transfer
+ * files over the network, so they get a larger budget by default.
+ */
+export const DEFAULT_SANDBOX_REMOTE_INIT_TIMEOUT_MS = 300_000;
+
 export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 
 export const SANDBOX_STATE_DIR = path.join(STATE_DIR, "sandbox");

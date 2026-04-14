@@ -48,13 +48,24 @@ import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./worksp
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
 
-async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
+async function waitForSandboxCdp(params: {
+  cdpPort: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
   const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
   while (Date.now() < deadline) {
+    // Bail out immediately if the caller has been cancelled.
+    if (params.signal?.aborted) {
+      return false;
+    }
     try {
       const ctrl = new AbortController();
+      // Combine the per-attempt timeout with the caller's abort signal.
       const t = setTimeout(ctrl.abort.bind(ctrl), 1000);
+      const handleExternalAbort = () => ctrl.abort();
+      params.signal?.addEventListener("abort", handleExternalAbort);
       try {
         const res = await fetch(url, { signal: ctrl.signal });
         if (res.ok) {
@@ -62,9 +73,13 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
         }
       } finally {
         clearTimeout(t);
+        params.signal?.removeEventListener("abort", handleExternalAbort);
       }
     } catch {
-      // ignore
+      // ignore fetch/timeout errors; re-check abort before sleeping
+    }
+    if (params.signal?.aborted) {
+      return false;
     }
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -106,9 +121,10 @@ function buildSandboxBrowserResolvedConfig(params: {
   };
 }
 
-async function ensureSandboxBrowserImage(image: string) {
+async function ensureSandboxBrowserImage(image: string, abortSignal?: AbortSignal) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
+    signal: abortSignal,
   });
   if (result.code === 0) {
     return;
@@ -120,7 +136,7 @@ async function ensureSandboxBrowserImage(image: string) {
 
 async function ensureDockerNetwork(
   network: string,
-  opts?: { allowContainerNamespaceJoin?: boolean },
+  opts?: { allowContainerNamespaceJoin?: boolean; abortSignal?: AbortSignal },
 ) {
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
@@ -129,11 +145,16 @@ async function ensureDockerNetwork(
   if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }
-  const inspect = await execDocker(["network", "inspect", network], { allowFailure: true });
+  const inspect = await execDocker(["network", "inspect", network], {
+    allowFailure: true,
+    signal: opts?.abortSignal,
+  });
   if (inspect.code === 0) {
     return;
   }
-  await execDocker(["network", "create", "--driver", "bridge", network]);
+  await execDocker(["network", "create", "--driver", "bridge", network], {
+    signal: opts?.abortSignal,
+  });
 }
 
 export async function ensureSandboxBrowser(params: {
@@ -143,6 +164,7 @@ export async function ensureSandboxBrowser(params: {
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
+  abortSignal?: AbortSignal;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -154,7 +176,7 @@ export async function ensureSandboxBrowser(params: {
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const name = `${params.cfg.browser.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
-  const state = await dockerContainerState(containerName);
+  const state = await dockerContainerState(containerName, params.abortSignal);
   const browserImage = params.cfg.browser.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE;
   const cdpSourceRange = normalizeOptionalString(params.cfg.browser.cdpSourceRange);
   const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
@@ -219,7 +241,10 @@ export async function ensureSandboxBrowser(params: {
           `Sandbox browser config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
         );
       } else {
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        await execDocker(["rm", "-f", containerName], {
+          allowFailure: true,
+          signal: params.abortSignal,
+        });
         hasContainer = false;
         running = false;
       }
@@ -232,8 +257,9 @@ export async function ensureSandboxBrowser(params: {
     }
     await ensureDockerNetwork(browserDockerCfg.network, {
       allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
+      abortSignal: params.abortSignal,
     });
-    await ensureSandboxBrowserImage(browserImage);
+    await ensureSandboxBrowserImage(browserImage, params.abortSignal);
     // Derive effective CDP source range: explicit config > Docker network gateway > fail-closed.
     // Only IPv4 gateways are usable for auto-derivation because the CDP relay
     // binds on 0.0.0.0 (IPv4); an IPv6 CIDR would cause an address-family mismatch.
@@ -308,19 +334,23 @@ export async function ensureSandboxBrowser(params: {
       args.push("-e", `${NOVNC_PASSWORD_ENV_KEY}=${noVncPassword}`);
     }
     args.push(browserImage);
-    await execDocker(args);
-    await execDocker(["start", containerName]);
+    await execDocker(args, { signal: params.abortSignal });
+    await execDocker(["start", containerName], { signal: params.abortSignal });
   } else if (!running) {
-    await execDocker(["start", containerName]);
+    await execDocker(["start", containerName], { signal: params.abortSignal });
   }
 
-  const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
+  const mappedCdp = await readDockerPort(
+    containerName,
+    params.cfg.browser.cdpPort,
+    params.abortSignal,
+  );
   if (!mappedCdp) {
     throw new Error(`Failed to resolve CDP port mapping for ${containerName}.`);
   }
 
   const mappedNoVnc = noVncEnabled
-    ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
+    ? await readDockerPort(containerName, params.cfg.browser.noVncPort, params.abortSignal)
     : null;
   if (noVncEnabled && !noVncPassword) {
     noVncPassword =
@@ -370,19 +400,31 @@ export async function ensureSandboxBrowser(params: {
 
     const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {
-          const currentState = await dockerContainerState(containerName);
-          if (currentState.exists && !currentState.running) {
-            await execDocker(["start", containerName]);
-          }
-          const ok = await waitForSandboxCdp({
-            cdpPort: mappedCdp,
-            timeoutMs: params.cfg.browser.autoStartTimeoutMs,
-          });
-          if (!ok) {
-            await execDocker(["rm", "-f", containerName], { allowFailure: true });
-            throw new Error(
-              `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
-            );
+          // The init abort signal can already be aborted (60s guard), but the
+          // browser bridge is still valid — attach callbacks run later during
+          // the session lifetime and must not inherit stale abort state.
+          const attachCtrl = new AbortController();
+          const attachTimeout = setTimeout(
+            () => attachCtrl.abort(),
+            params.cfg.browser.autoStartTimeoutMs,
+          );
+          try {
+            const currentState = await dockerContainerState(containerName, attachCtrl.signal);
+            if (currentState.exists && !currentState.running) {
+              await execDocker(["start", containerName], { signal: attachCtrl.signal });
+            }
+            const ok = await waitForSandboxCdp({
+              cdpPort: mappedCdp,
+              timeoutMs: params.cfg.browser.autoStartTimeoutMs,
+              signal: attachCtrl.signal,
+            });
+            if (!ok) {
+              throw new Error(
+                `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
+              );
+            }
+          } finally {
+            clearTimeout(attachTimeout);
           }
         }
       : undefined;

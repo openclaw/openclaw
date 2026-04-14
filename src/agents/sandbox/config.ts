@@ -14,7 +14,9 @@ import {
   DEFAULT_SANDBOX_CONTAINER_PREFIX,
   DEFAULT_SANDBOX_IDLE_HOURS,
   DEFAULT_SANDBOX_IMAGE,
+  DEFAULT_SANDBOX_INIT_TIMEOUT_MS,
   DEFAULT_SANDBOX_MAX_AGE_DAYS,
+  DEFAULT_SANDBOX_REMOTE_INIT_TIMEOUT_MS,
   DEFAULT_SANDBOX_WORKDIR,
   DEFAULT_SANDBOX_WORKSPACE_ROOT,
 } from "./constants.js";
@@ -241,9 +243,23 @@ export function resolveSandboxConfigForAgent(
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
+  const backend = agentSandbox?.backend?.trim() || agent?.backend?.trim() || "docker";
+
+  // Remote backends (ssh, etc.) get a longer default init timeout because
+  // workspace seeding, setup commands, and network transfers can legitimately
+  // exceed 60s on a first run.
+  const isRemoteBackend = backend !== "docker";
+  const defaultInitTimeoutMs = isRemoteBackend
+    ? DEFAULT_SANDBOX_REMOTE_INIT_TIMEOUT_MS
+    : DEFAULT_SANDBOX_INIT_TIMEOUT_MS;
+
+  // Allow env-var override for operational flexibility (e.g. known-slow images).
+  const envOverride = process.env.SANDBOX_INIT_TIMEOUT_MS;
+  const envTimeoutMs = envOverride !== undefined ? Number.parseInt(envOverride, 10) : undefined;
+
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
-    backend: agentSandbox?.backend?.trim() || agent?.backend?.trim() || "docker",
+    backend,
     scope,
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
@@ -272,5 +288,10 @@ export function resolveSandboxConfigForAgent(
       globalPrune: agent?.prune,
       agentPrune: agentSandbox?.prune,
     }),
+    initTimeoutMs:
+      agentSandbox?.initTimeoutMs ??
+      agent?.initTimeoutMs ??
+      (Number.isFinite(envTimeoutMs) && envTimeoutMs! > 0 ? envTimeoutMs! : undefined) ??
+      defaultInitTimeoutMs,
   };
 }
