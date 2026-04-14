@@ -32,8 +32,5 @@ export function getMemoryEmbeddingProvider(
   if (registered) {
     return registered.adapter;
   }
-  if (listRegisteredMemoryEmbeddingProviders().length > 0) {
-    return undefined;
-  }
   return listMemoryEmbeddingProviders(cfg).find((adapter) => adapter.id === id);
 }
