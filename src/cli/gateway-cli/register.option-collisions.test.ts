@@ -72,6 +72,7 @@ vi.mock("../../commands/health.js", () => ({
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
   readBestEffortConfig: async () => ({}),
+  readSourceConfigBestEffort: async () => ({}),
 }));
 
 vi.mock("../../infra/bonjour-discovery.js", () => ({

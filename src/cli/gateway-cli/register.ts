@@ -265,7 +265,7 @@ export function registerGatewayCli(program: Command) {
     .action(async (opts: GatewayDiscoverOpts) => {
       await runGatewayCommand(async () => {
         const [
-          { readBestEffortConfig },
+          { readSourceConfigBestEffort },
           { discoverGatewayBeacons },
           { resolveWideAreaDiscoveryDomain },
         ] = await Promise.all([
@@ -273,7 +273,7 @@ export function registerGatewayCli(program: Command) {
           loadBonjourDiscoveryModule(),
           loadWideAreaDnsModule(),
         ]);
-        const cfg = await readBestEffortConfig();
+        const cfg = await readSourceConfigBestEffort();
         const wideAreaDomain = resolveWideAreaDiscoveryDomain({
           configDomain: cfg.discovery?.wideArea?.domain,
         });

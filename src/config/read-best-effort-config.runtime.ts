@@ -1,1 +1,1 @@
-export { readBestEffortConfig } from "./io.js";
+export { readBestEffortConfig, readSourceConfigBestEffort } from "./io.js";
