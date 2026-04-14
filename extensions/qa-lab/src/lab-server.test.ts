@@ -111,7 +111,9 @@ describe("qa-lab server", () => {
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
     expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/");
-    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=qa-token");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("qa-token");
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
@@ -145,6 +147,26 @@ describe("qa-lab server", () => {
     const markdown = await readFile(outputPath, "utf8");
     expect(markdown).toContain("Synthetic Slack-class roundtrip");
     expect(markdown).toContain("- Status: pass");
+  });
+
+  it("does not expose control-ui hash fragments in bootstrap URLs", async () => {
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      controlUiUrl: "http://127.0.0.1:18789/#token=from-url-fragment",
+      controlUiToken: "qa-token",
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+      controlUiUrl: string | null;
+      controlUiEmbeddedUrl: string | null;
+    };
+    expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
@@ -256,9 +278,8 @@ describe("qa-lab server", () => {
       controlUiEmbeddedUrl: string | null;
     };
     expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:43124/control-ui/");
-    expect(bootstrap.controlUiEmbeddedUrl).toBe(
-      "http://127.0.0.1:43124/control-ui/#token=proxy-token",
-    );
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:43124/control-ui/");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
 
     const healthResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/healthz`);
     expect(healthResponse.status).toBe(200);
@@ -647,7 +668,8 @@ describe("qa-lab server", () => {
     const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
       controlUiEmbeddedUrl: string | null;
     };
-    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=late-token");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
 
     const outcomes = (await (await fetchWithRetry(`${lab.baseUrl}/api/outcomes`)).json()) as {
       run: {

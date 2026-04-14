@@ -46,8 +46,8 @@ describe("qa docker harness", () => {
     const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
     expect(compose).toContain("image: openclaw:qa-local-prebaked");
     expect(compose).toContain("qa-mock-openai:");
-    expect(compose).toContain("18889:18789");
-    expect(compose).toContain('      - "43124:43123"');
+    expect(compose).toContain('      - "127.0.0.1:18889:18789"');
+    expect(compose).toContain('      - "127.0.0.1:43124:43123"');
     expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
     expect(compose).toContain("      - sh");
     expect(compose).toContain("      - -lc");
@@ -56,6 +56,7 @@ describe("qa docker harness", () => {
     );
     expect(compose).toContain("      - --control-ui-proxy-target");
     expect(compose).toContain('      - "http://openclaw-qa-gateway:18789/"');
+    expect(compose).not.toContain("--control-ui-token");
     expect(compose).toContain("      - --send-kickoff-on-start");
     expect(compose).toContain("      - --ui-dist-dir");
     expect(compose).toContain('      - "/opt/openclaw-qa-lab-ui"');
@@ -96,6 +97,9 @@ describe("qa docker harness", () => {
 
     const readme = await readFile(path.join(outputDir, "README.md"), "utf8");
     expect(readme).toContain("in-process restarts inside Docker");
+    expect(readme).toContain(
+      "Published host ports are loopback-only (`127.0.0.1`) in this scaffold.",
+    );
     expect(readme).toContain("pnpm qa:lab:watch");
   });
 

@@ -73,7 +73,7 @@ ${
     ? `  qa-lab:
 ${imageBlock}    pull_policy: never
     ports:
-      - "${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
+      - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
 ${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
       test:
         - CMD
@@ -106,8 +106,6 @@ ${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY
       - "http://127.0.0.1:${params.gatewayPort}/"
       - --control-ui-proxy-target
       - "http://openclaw-qa-gateway:18789/"
-      - --control-ui-token
-      - "${params.gatewayToken}"
 ${params.bindUiDist ? `      - --ui-dist-dir\n      - "${QA_LAB_UI_OVERLAY_DIR}"\n` : ""}      - --auto-kickoff-target
       - direct
       - --send-kickoff-on-start
@@ -123,7 +121,7 @@ ${imageBlock}    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${params.gatewayPort}:18789"
+      - "127.0.0.1:${params.gatewayPort}:18789"
     environment:
       OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json
       OPENCLAW_STATE_DIR: /tmp/openclaw/state
@@ -220,6 +218,7 @@ Gateway:
 - health: \`http://127.0.0.1:${params.gatewayPort}/healthz\`
 - Control UI: \`http://127.0.0.1:${params.gatewayPort}/\`
 - Mock OpenAI: internal \`http://qa-mock-openai:44080/v1\`
+- Published host ports are loopback-only (\`127.0.0.1\`) in this scaffold.
 
 This scaffold uses localhost Control UI insecure-auth compatibility for QA only.
 The gateway runs with in-process restarts inside Docker so restart actions do not

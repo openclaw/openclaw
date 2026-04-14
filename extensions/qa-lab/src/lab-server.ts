@@ -362,6 +362,14 @@ function rewriteControlUiProxyPath(pathname: string, search: string) {
   return `${stripped}${search}`;
 }
 
+function stripUrlFragment(rawUrl: string | null): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  const hashIndex = rawUrl.indexOf("#");
+  return hashIndex >= 0 ? rawUrl.slice(0, hashIndex) : rawUrl;
+}
+
 function rewriteEmbeddedControlUiHeaders(
   headers: IncomingMessage["headers"],
 ): Record<string, string | string[] | number | undefined> {
@@ -572,7 +580,6 @@ export async function startQaLabServer(
     ? new URL(params.controlUiProxyTarget)
     : null;
   let controlUiUrl = params?.controlUiUrl?.trim() || null;
-  let controlUiToken = params?.controlUiToken?.trim() || null;
   let gateway:
     | {
         cfg: OpenClawConfig;
@@ -675,15 +682,12 @@ export async function startQaLabServer(
         const resolvedControlUiUrl = controlUiProxyTarget
           ? `${publicBaseUrl}/control-ui/`
           : controlUiUrl;
-        const controlUiEmbeddedUrl =
-          resolvedControlUiUrl && controlUiToken
-            ? `${resolvedControlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(controlUiToken)}`
-            : resolvedControlUiUrl;
+        const publicControlUiUrl = stripUrlFragment(resolvedControlUiUrl);
         writeJson(res, 200, {
           baseUrl: publicBaseUrl,
           latestReport,
-          controlUiUrl: resolvedControlUiUrl,
-          controlUiEmbeddedUrl,
+          controlUiUrl: publicControlUiUrl,
+          controlUiEmbeddedUrl: publicControlUiUrl,
           kickoffTask: scenarioCatalog.kickoffTask,
           scenarios: scenarioCatalog.scenarios,
           defaults: bootstrapDefaults,
@@ -1012,7 +1016,6 @@ export async function startQaLabServer(
       controlUiProxyTarget?: string | null;
     }) {
       controlUiUrl = next.controlUiUrl?.trim() || null;
-      controlUiToken = next.controlUiToken?.trim() || null;
       controlUiProxyTarget = next.controlUiProxyTarget?.trim()
         ? new URL(next.controlUiProxyTarget)
         : null;
