@@ -69,7 +69,7 @@ describe("tsdown config", () => {
         "agents/auth-profiles.runtime",
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
-        "agents/subagent-registry.runtime",
+        "subagent-registry.runtime",
         "agents/pi-model-discovery-runtime",
         "index",
         "commands/status.summary.runtime",
