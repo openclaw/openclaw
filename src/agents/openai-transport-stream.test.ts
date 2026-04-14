@@ -1196,6 +1196,33 @@ describe("openai transport stream", () => {
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
+  it("enables streaming usage compat for Ollama OpenAI-compat endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen2.5:7b",
+        name: "Qwen 2.5 7B",
+        api: "openai-completions",
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
+    expect(params.stream_options).toMatchObject({ include_usage: true });
+  });
+
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
