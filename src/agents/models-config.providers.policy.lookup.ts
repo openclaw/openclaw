@@ -21,8 +21,13 @@ export function resolveProviderPluginLookupKey(
   ) {
     return "google";
   }
+  // Runtime-constructed providers (e.g. the openrouter plugin) can surface a
+  // `models` value that isn't an array (see #66744). The static type says
+  // `models: ModelDefinitionConfig[]`, but trusting it here crashed HTTP
+  // `/v1/chat/completions` with `provider?.models?.some is not a function`.
   if (
-    provider?.models?.some((model) => normalizeOptionalString(model.api) === "google-generative-ai")
+    Array.isArray(provider?.models) &&
+    provider.models.some((model) => normalizeOptionalString(model.api) === "google-generative-ai")
   ) {
     return "google";
   }
