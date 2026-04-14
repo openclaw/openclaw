@@ -55,7 +55,9 @@ const {
 }));
 
 const { listQaRunnerCliContributions } = vi.hoisted(() => ({
-  listQaRunnerCliContributions: vi.fn(() => [createAvailableQaRunnerContribution()]),
+  listQaRunnerCliContributions: vi.fn<() => QaRunnerCliContribution[]>(() => [
+    createAvailableQaRunnerContribution(),
+  ]),
 }));
 
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
