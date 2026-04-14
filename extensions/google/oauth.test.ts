@@ -262,13 +262,13 @@ describe("extractGeminiCliCredentials", () => {
     });
     mockRealpathSync.mockReturnValue(resolvedPath);
     mockReaddirSync.mockImplementation((p: string) => {
-      if (normalizePath(String(p)) === normalizePath(bundleDir)) {
+      if (normalizePath(p) === normalizePath(bundleDir)) {
         return [dirent("chunk-ABC123.js", false)];
       }
       return [];
     });
     mockReadFileSync.mockImplementation((p: string) => {
-      if (normalizePath(String(p)) === normalizePath(chunkPath)) {
+      if (normalizePath(p) === normalizePath(chunkPath)) {
         return params.bundleContent;
       }
       throw new Error(`Unexpected read for ${p}`);
@@ -554,7 +554,13 @@ describe("loginGeminiCliOAuth", () => {
   } as const;
 
   function getRequestUrl(input: string | URL | Request): string {
-    return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (typeof input === "string") {
+      return input;
+    }
+    if (input instanceof URL) {
+      return input.toString();
+    }
+    return input.url;
   }
 
   function getHeaderValue(headers: HeadersInit | undefined, name: string): string | undefined {
@@ -584,6 +590,13 @@ describe("loginGeminiCliOAuth", () => {
     return body.get(name);
   }
 
+  function parseJsonString(value: unknown, label: string): unknown {
+    if (typeof value !== "string") {
+      throw new Error(`Expected ${label} JSON string`);
+    }
+    return JSON.parse(value);
+  }
+
   type LoginGeminiCliOAuthFn = (options: {
     isRemote: boolean;
     openUrl: () => Promise<void>;
@@ -607,7 +620,7 @@ describe("loginGeminiCliOAuth", () => {
       note: async () => {},
       prompt: async () => {
         const state = new URL(authUrl).searchParams.get("state");
-        return `${"http://localhost:8085/oauth2callback"}?code=oauth-code&state=${state}`;
+        return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
       },
       progress: { update: () => {}, stop: () => {} },
     });
@@ -704,9 +717,12 @@ describe("loginGeminiCliOAuth", () => {
 
     const clientMetadata = getHeaderValue(firstHeaders, "Client-Metadata");
     expect(clientMetadata).toBeDefined();
-    expect(JSON.parse(clientMetadata as string)).toEqual(EXPECTED_LOAD_CODE_ASSIST_METADATA);
+    expect(parseJsonString(clientMetadata, "Client-Metadata")).toEqual(
+      EXPECTED_LOAD_CODE_ASSIST_METADATA,
+    );
 
-    const body = JSON.parse(String(loadRequests[0]?.init?.body));
+    const loadBody = loadRequests[0]?.init?.body;
+    const body = parseJsonString(loadBody, "loadCodeAssist body");
     expect(body).toEqual({
       metadata: EXPECTED_LOAD_CODE_ASSIST_METADATA,
     });

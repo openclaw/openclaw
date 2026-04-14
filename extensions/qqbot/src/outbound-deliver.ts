@@ -501,6 +501,7 @@ async function sendQQBotTextChunk(params: {
   if (event.channelId) {
     return await sendChannelMessage(token, event.channelId, text, event.messageId);
   }
+  return undefined;
 }
 
 async function sendTextChunks(

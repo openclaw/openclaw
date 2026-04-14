@@ -1,11 +1,14 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listChatChannels } from "../channels/chat-meta.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelSetupPlugin,
   listChannelSetupPlugins,
 } from "../channels/plugins/setup-registry.js";
-import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
-import { listChatChannels } from "../channels/registry.js";
+import type {
+  ChannelSetupPlugin,
+  ChannelSetupWizardAdapter,
+} from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveChannelSetupEntries,
@@ -25,7 +28,7 @@ import type {
 } from "../commands/channel-setup/types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -75,6 +78,28 @@ export async function runCollectedChannelOnboardingPostWriteHooks(params: {
       );
     }
   }
+}
+
+export function createChannelOnboardingPostWriteHook(params: {
+  accountId?: string;
+  adapter?: Pick<ChannelSetupWizardAdapter, "afterConfigWritten">;
+  channel: ChannelChoice;
+  previousCfg: OpenClawConfig;
+}): ChannelOnboardingPostWriteHook | undefined {
+  if (!params.accountId || !params.adapter?.afterConfigWritten) {
+    return undefined;
+  }
+  return {
+    channel: params.channel,
+    accountId: params.accountId,
+    run: async ({ cfg, runtime }) =>
+      await params.adapter?.afterConfigWritten?.({
+        previousCfg: params.previousCfg,
+        cfg,
+        accountId: params.accountId!,
+        runtime,
+      }),
+  };
 }
 
 // Channel-specific prompts moved into setup flow adapters.
@@ -144,9 +169,10 @@ export async function setupChannels(
     }
     return resolveChannelSetupWizardAdapterForPlugin(getChannelSetupPlugin(channel));
   };
-  const preloadConfiguredExternalPlugins = () => {
+  const preloadConfiguredExternalPlugins = async () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
     const workspaceDir = resolveWorkspaceDir();
+    const preloadTasks: Promise<unknown>[] = [];
     // Security: keep trusted workspace overrides eligible during setup while
     // falling back from untrusted workspace shadows to the non-workspace entry.
     for (const entry of listTrustedChannelPluginCatalogEntries({ cfg: next, workspaceDir })) {
@@ -159,10 +185,11 @@ export async function setupChannels(
       if (!explicitlyEnabled && !isChannelConfigured(next, channel)) {
         continue;
       }
-      void loadScopedChannelPlugin(channel, entry.pluginId);
+      preloadTasks.push(loadScopedChannelPlugin(channel, entry.pluginId));
     }
+    await Promise.all(preloadTasks);
   };
-  preloadConfiguredExternalPlugins();
+  await preloadConfiguredExternalPlugins();
 
   const {
     installedPlugins,
@@ -336,18 +363,14 @@ export async function setupChannels(
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (result.accountId) {
       recordAccount(channel, result.accountId);
-      if (adapter?.afterConfigWritten) {
-        options?.onPostWriteHook?.({
-          channel,
-          accountId: result.accountId,
-          run: async ({ cfg, runtime }) =>
-            await adapter.afterConfigWritten?.({
-              previousCfg,
-              cfg,
-              accountId: result.accountId!,
-              runtime,
-            }),
-        });
+      const postWriteHook = createChannelOnboardingPostWriteHook({
+        accountId: result.accountId,
+        adapter,
+        channel,
+        previousCfg,
+      });
+      if (postWriteHook) {
+        options?.onPostWriteHook?.(postWriteHook);
       }
     }
     addSelection(channel);

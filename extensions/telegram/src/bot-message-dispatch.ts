@@ -36,7 +36,7 @@ import {
   resolveMarkdownTableMode,
   resolveSessionStoreEntry,
 } from "./bot-message-dispatch.runtime.js";
-import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -811,7 +811,7 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onToolStart: statusReactionController
           ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
+              await Promise.resolve(statusReactionController.setTool(payload.name ?? "tool"));
             }
           : undefined,
         onCompactionStart: statusReactionController
@@ -915,7 +915,7 @@ export const dispatchTelegramMessage = async ({
   const hasFinalResponse = queuedFinal || sentFallback;
 
   if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
+    void Promise.resolve(statusReactionController.setError()).catch((err: unknown) => {
       logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
     });
   }
@@ -964,7 +964,7 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void statusReactionController.setDone().catch((err) => {
+    void Promise.resolve(statusReactionController.setDone()).catch((err: unknown) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });
   } else {

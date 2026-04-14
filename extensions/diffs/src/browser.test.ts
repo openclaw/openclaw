@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
@@ -196,12 +196,16 @@ describe("diffs plugin registration", () => {
     type RegisteredTool = {
       execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
     };
+    type HttpRouteHandler = (
+      req: IncomingMessage,
+      res: ServerResponse,
+    ) => boolean | Promise<boolean>;
     type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
     let registeredToolFactory:
       | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
       | undefined;
-    let registeredHttpRouteHandler: RegisteredHttpRouteParams["handler"] | undefined;
+    let registeredHttpRouteHandler: HttpRouteHandler | undefined;
     const on = vi.fn();
 
     const api = createTestPluginApi({
@@ -234,7 +238,7 @@ describe("diffs plugin registration", () => {
         registeredToolFactory = typeof tool === "function" ? tool : () => tool;
       },
       registerHttpRoute(params: RegisteredHttpRouteParams) {
-        registeredHttpRouteHandler = params.handler;
+        registeredHttpRouteHandler = params.handler as HttpRouteHandler;
       },
       on,
     });

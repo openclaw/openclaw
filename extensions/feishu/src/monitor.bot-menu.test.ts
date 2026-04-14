@@ -169,7 +169,7 @@ describe("Feishu bot menu handler", () => {
       createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000001" }),
     );
     let settled = false;
-    pending.finally(() => {
+    void pending.finally(() => {
       settled = true;
     });
 
@@ -230,5 +230,29 @@ describe("Feishu bot menu handler", () => {
     expect(sentCard).toBeDefined();
     expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
     expect(sentCard?.config?.enable_forward).toBeUndefined();
+  });
+
+  it("reopens replay for explicit retryable fallback failures", async () => {
+    const onBotMenu = await registerHandlers();
+    sendCardFeishuMock
+      .mockImplementationOnce(async () => {
+        throw new Error("boom");
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error("boom");
+      });
+    handleFeishuMessageMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("retry me"), {
+          name: "FeishuRetryableSyntheticEventError",
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
+    await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(2);
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
   });
 });
