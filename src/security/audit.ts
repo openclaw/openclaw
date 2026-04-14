@@ -420,7 +420,7 @@ export function collectGatewayConfigFindings(
         "If you expose the Control UI through a reverse proxy, configure trusted proxies " +
         "so local-client checks cannot be spoofed.",
       remediation:
-        `Set gateway.trustedProxies to your proxy IPs, or bind to loopback if no reverse proxy is used.`,
+        "Set gateway.trustedProxies to your proxy IPs, or bind to loopback if no reverse proxy is used.",
     });
   }
 
