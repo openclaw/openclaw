@@ -714,8 +714,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
         respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
         return;
       }
-      respondWorkspaceFileUnsafe(respond, name);
-      return;
+      if (err instanceof SafeOpenError) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      throw err;
     }
     respond(
       true,
