@@ -200,7 +200,7 @@ function coercePayload(payload: UnknownRecord) {
   if ("model" in next) {
     const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
     if (model !== undefined) {
-      next.model = model;
+      next.model = model.replace(/\s+/g, '');
     } else {
       delete next.model;
     }
@@ -224,7 +224,7 @@ function coercePayload(payload: UnknownRecord) {
   if ("fallbacks" in next) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
     if (fallbacks !== undefined) {
-      next.fallbacks = fallbacks;
+      next.fallbacks = fallbacks?.map(f => f.replace(/\s+/g, '')) ?? fallbacks;
     } else {
       delete next.fallbacks;
     }
@@ -373,7 +373,7 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
     const value = next[field];
     const normalized = normalizeOptionalString(value);
     if (normalized) {
-      payload[field] = normalized;
+      payload[field] = field === "model" ? normalized.replace(/\s+/g, '') : normalized;
     }
   };
   copyString("model");
@@ -385,7 +385,7 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   if (!Array.isArray(payload.fallbacks) && Array.isArray(next.fallbacks)) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
     if (fallbacks !== undefined) {
-      payload.fallbacks = fallbacks;
+      payload.fallbacks = fallbacks?.map(f => f.replace(/\s+/g, '')) ?? fallbacks;
     }
   }
   if (!("toolsAllow" in payload) || payload.toolsAllow === undefined) {
