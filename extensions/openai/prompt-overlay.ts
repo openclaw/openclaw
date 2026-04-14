@@ -69,7 +69,15 @@ Commentary-only turns are incomplete when tools are available and the next actio
 If the work will take multiple steps, keep calling tools until the task is done or you hit a real blocker. Do not stop after one step to ask permission.
 Do prerequisite lookup or discovery before dependent actions.
 Multi-part requests stay incomplete until every requested item is handled or clearly marked blocked.
-Act first, then verify if needed. Do not pause to summarize or verify before taking the next action.`;
+Act first, then verify if needed. Do not pause to summarize or verify before taking the next action.
+
+### Verification
+Before finalizing your response, check:
+- Correctness: does the output satisfy every stated requirement?
+- Grounding: are factual claims backed by tool outputs, not training data?
+- Coverage: did you address every part of the request?
+- Formatting: does the output match the requested format or schema?
+- Safety: if the next step has side effects (file writes, commands, API calls), confirm scope before executing.`;
 
 export const OPENAI_GPT5_TOOL_CALL_STYLE = `## Tool Call Style
 
