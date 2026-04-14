@@ -135,6 +135,9 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
+  if (!job.sessionTarget) {
+    throw new Error("cron job requires a sessionTarget (e.g. isolated, main, current, or session:<key>)");
+  }
   const isIsolatedLike =
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||
@@ -186,7 +189,7 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   const isIsolatedLike =
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||
-    job.sessionTarget.startsWith("session:");
+    (typeof job.sessionTarget === "string" && job.sessionTarget.startsWith("session:"));
   if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
   }

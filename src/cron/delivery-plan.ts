@@ -72,7 +72,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     job.payload.kind === "agentTurn" &&
     (job.sessionTarget === "isolated" ||
       job.sessionTarget === "current" ||
-      job.sessionTarget.startsWith("session:"));
+      (typeof job.sessionTarget === "string" && job.sessionTarget.startsWith("session:")));
   const resolvedMode = isIsolatedAgentTurn ? "announce" : "none";
 
   return {
