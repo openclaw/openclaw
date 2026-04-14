@@ -39,6 +39,7 @@ import {
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { defaultRuntime } from "../runtime.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type {
@@ -168,6 +169,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     setEmbeddedMode(true);
+    // Suppress console output from logError/logInfo that would pollute the TUI.
+    // File logger (getLogger()) still captures everything via logger.ts:35.
+    defaultRuntime.log = () => undefined;
+    defaultRuntime.error = () => undefined;
     this.unsubscribe = onAgentEvent((evt) => {
       void this.handleAgentEvent(evt);
     });
