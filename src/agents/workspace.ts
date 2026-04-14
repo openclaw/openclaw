@@ -3,16 +3,41 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
+function resolveWorkspaceOverridePath(
+  override: string,
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string {
+  const trimmed = override.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("~")) {
+    return path.resolve(
+      expandHomePrefix(trimmed, {
+        home: resolveRequiredHomeDir(env, homedir),
+        env,
+        homedir,
+      }),
+    );
+  }
+  return path.resolve(trimmed);
+}
+
 export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
+  const workspaceOverride = env.OPENCLAW_WORKSPACE_DIR?.trim();
+  if (workspaceOverride) {
+    return resolveWorkspaceOverridePath(workspaceOverride, env, homedir);
+  }
   const home = resolveRequiredHomeDir(env, homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (profile && profile.toLowerCase() !== "default") {

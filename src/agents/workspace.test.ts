@@ -27,6 +27,16 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
 
     expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
   });
+
+  it("prefers OPENCLAW_WORKSPACE_DIR over profile-based fallback", () => {
+    const dir = resolveDefaultAgentWorkspaceDir({
+      OPENCLAW_HOME: "/srv/openclaw-home",
+      OPENCLAW_PROFILE: "ops",
+      OPENCLAW_WORKSPACE_DIR: "/mnt/openclaw-state/.openclaw/workspace",
+    } as NodeJS.ProcessEnv);
+
+    expect(dir).toBe(path.resolve("/mnt/openclaw-state/.openclaw/workspace"));
+  });
 });
 
 const WORKSPACE_STATE_PATH_SEGMENTS = [".openclaw", "workspace-state.json"] as const;
