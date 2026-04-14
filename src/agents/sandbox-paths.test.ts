@@ -168,8 +168,18 @@ describe("resolveSandboxedMediaSource", () => {
       expected: /remote hosts are not allowed/i,
     },
     {
+      name: "file:// container URLs with remote hosts",
+      media: "file://attacker/workspace/photo.png",
+      expected: /remote hosts are not allowed/i,
+    },
+    {
       name: "invalid file:// URLs",
       media: "file://not a valid url\x00",
+      expected: /Invalid file:\/\/ URL/,
+    },
+    {
+      name: "file:// URLs with malformed container pathname encoding",
+      media: "file:///workspace/%E0%A4%A",
       expected: /Invalid file:\/\/ URL/,
     },
   ])("rejects $name", async ({ media, expected }) => {

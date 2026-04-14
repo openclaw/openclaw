@@ -393,7 +393,12 @@ function mapContainerPathToWorkspaceRoot(params: {
       if (host && host !== "localhost") {
         return params.filePath;
       }
-      const normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      let normalizedPathname: string;
+      try {
+        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      } catch {
+        return params.filePath;
+      }
       if (
         normalizedPathname !== normalizedWorkdir &&
         !normalizedPathname.startsWith(`${normalizedWorkdir}/`)
