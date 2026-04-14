@@ -123,10 +123,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         await sendMessageBatch([createStickerMessage(parsed.packageId, parsed.stickerId)]);
         return createEmptyChannelResult("line", lastResult ?? { messageId: "sticker", chatId: to });
       }
+      // Malformed sticker token: send error message but continue to deliver any text payload below.
       await sendMessageBatch([
         { type: "text", text: "[Sticker send error: invalid sticker format]" },
       ]);
-      return createEmptyChannelResult("line", { messageId: "sticker-error", chatId: to });
     }
 
     const processed = payload.text
