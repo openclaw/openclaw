@@ -25,7 +25,8 @@ export async function readModelsFile(
     return null;
   }
   const filePath = resolve(workspaceDir, filename);
-  const boundary = resolve(workspaceDir) + sep;
+  const resolvedWorkspace = resolve(workspaceDir);
+  const boundary = resolvedWorkspace.endsWith(sep) ? resolvedWorkspace : resolvedWorkspace + sep;
   if (!filePath.startsWith(boundary)) {
     return null;
   }
