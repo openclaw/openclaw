@@ -206,6 +206,9 @@ final class HealthStore {
             if configuredChannels.isEmpty {
                 return .unknown
             }
+            if configuredChannels.contains(where: { $0.probe == nil }) {
+                return .unknown
+            }
             let hasFailedProbe = configuredChannels.contains { $0.probe?.ok == false }
             return hasFailedProbe ? .degraded("channel probe failed") : .ok
         }
@@ -231,6 +234,9 @@ final class HealthStore {
             if configuredChannels.isEmpty {
                 return "Health check pending"
             }
+            if configuredChannels.contains(where: { $0.probe == nil }) {
+                return "Health check pending"
+            }
             let failedChannel = configuredChannels.first { $0.probe?.ok == false }
             if let failedChannel, let probe = failedChannel.probe {
                 return "Gateway degraded: \(Self.describeProbeFailure(probe))"
@@ -240,7 +246,10 @@ final class HealthStore {
         if link.summary.linked != true {
             if let fallback = self.resolveFallbackChannel(snap, excluding: link.id) {
                 let fallbackLabel = snap.channelLabels?[fallback.id] ?? fallback.id.capitalized
-                let fallbackState = (fallback.summary.probe?.ok ?? true) ? "ok" : "degraded"
+                let fallbackState: String
+                if fallback.summary.probe == nil { fallbackState = "pending" }
+                else if fallback.summary.probe?.ok == false { fallbackState = "degraded" }
+                else { fallbackState = "ok" }
                 return "\(fallbackLabel) \(fallbackState) · Not linked — run openclaw login"
             }
             return "Not linked — run openclaw login"
