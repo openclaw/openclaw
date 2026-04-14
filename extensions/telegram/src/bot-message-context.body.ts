@@ -195,7 +195,7 @@ export async function resolveTelegramInboundBody(params: {
     try {
       const { transcribeFirstAudio } = await import("./media-understanding.runtime.js");
       const tempCtx: MsgContext = {
-        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
+        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path).filter(Boolean) : undefined,
         MediaTypes:
           allMedia.length > 0
             ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])

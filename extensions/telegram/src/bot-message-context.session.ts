@@ -351,8 +351,8 @@ export async function buildTelegramInboundContextPayload(params: {
     MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
     MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
     MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
+    MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path).filter(Boolean) : undefined,
+    MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path).filter(Boolean) : undefined,
     MediaTypes:
       contextMedia.length > 0
         ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
