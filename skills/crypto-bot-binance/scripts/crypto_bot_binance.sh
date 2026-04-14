@@ -39,43 +39,140 @@ json_escape() {
   printf '%s' "$s"
 }
 
+curl_cfg_escape() {
+  local s="${1:-}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
+
 build_url() {
   local path="$1"
   [[ "$path" == /* ]] || path="/$path"
   echo "${BASE}${PREFIX}${path}"
 }
 
-headers=(-H "Accept: application/json")
-curl_opts=(--connect-timeout "$TIMEOUT" --max-time "$TIMEOUT" --retry "$RETRIES")
-
-if [ -n "${CRYPTO_BOT_BINANCE_TOKEN:-}" ]; then
-  headers+=(-H "Authorization: Bearer ${CRYPTO_BOT_BINANCE_TOKEN}")
-fi
-
-if [ -n "${CRYPTO_BOT_BINANCE_X_OPENCLAW_TOKEN:-}" ]; then
-  headers+=(-H "X-OpenClaw-Token: ${CRYPTO_BOT_BINANCE_X_OPENCLAW_TOKEN}")
-fi
-
 basic_user="${CRYPTO_BOT_BINANCE_BASIC_AUTH_USER:-}"
 basic_pass="${CRYPTO_BOT_BINANCE_BASIC_AUTH_PASSWORD:-}"
 if [ -n "$basic_user" ] || [ -n "$basic_pass" ]; then
   [ -n "$basic_user" ] && [ -n "$basic_pass" ] || die "Both CRYPTO_BOT_BINANCE_BASIC_AUTH_USER and CRYPTO_BOT_BINANCE_BASIC_AUTH_PASSWORD are required for Basic Auth"
-  [ -z "${CRYPTO_BOT_BINANCE_TOKEN:-}" ] || die "Set either CRYPTO_BOT_BINANCE_TOKEN or Basic Auth credentials, not both"
-  curl_opts+=(-u "${basic_user}:${basic_pass}")
 fi
 
+run_curl_config() {
+  local cfg_file="$1"
+  local status=0
+  curl --config "$cfg_file" || status=$?
+  rm -f "$cfg_file"
+  return "$status"
+}
+
+write_common_config() {
+  local cfg_file="$1"
+  local url="$2"
+  local include_retry="$3"
+
+  {
+    printf 'silent\n'
+    printf 'show-error\n'
+    printf 'fail\n'
+    printf 'connect-timeout = "%s"\n' "$(curl_cfg_escape "$TIMEOUT")"
+    printf 'max-time = "%s"\n' "$(curl_cfg_escape "$TIMEOUT")"
+    if [ "$include_retry" = "true" ] && [ "$RETRIES" -gt 0 ]; then
+      printf 'retry = "%s"\n' "$(curl_cfg_escape "$RETRIES")"
+    fi
+    printf 'url = "%s"\n' "$(curl_cfg_escape "$url")"
+    printf 'header = "%s"\n' "$(curl_cfg_escape "Accept: application/json")"
+
+    if [ -n "${CRYPTO_BOT_BINANCE_TOKEN:-}" ]; then
+      printf 'header = "%s"\n' "$(curl_cfg_escape "Authorization: Bearer ${CRYPTO_BOT_BINANCE_TOKEN}")"
+    fi
+
+    if [ -n "${CRYPTO_BOT_BINANCE_X_OPENCLAW_TOKEN:-}" ]; then
+      printf 'header = "%s"\n' "$(curl_cfg_escape "X-OpenClaw-Token: ${CRYPTO_BOT_BINANCE_X_OPENCLAW_TOKEN}")"
+    fi
+
+    if [ -n "$basic_user" ]; then
+      printf 'user = "%s"\n' "$(curl_cfg_escape "${basic_user}:${basic_pass}")"
+    fi
+  } > "$cfg_file"
+}
+
 get() {
-  curl -fsS "$(build_url "$1")" "${headers[@]}" "${curl_opts[@]}"
+  local cfg_file
+  cfg_file="$(mktemp)"
+  write_common_config "$cfg_file" "$(build_url "$1")" "true"
+  run_curl_config "$cfg_file"
 }
 
 post() {
   local path="$1"
   local body="${2:-}"
+  local cfg_file
+  cfg_file="$(mktemp)"
 
-  if [ -n "$body" ]; then
-    curl -fsS -X POST "$(build_url "$path")" "${headers[@]}" "${curl_opts[@]}" -H "Content-Type: application/json" --data "$body"
+  write_common_config "$cfg_file" "$(build_url "$path")" "false"
+
+  {
+    printf 'request = "%s"\n' "$(curl_cfg_escape "POST")"
+    printf 'header = "%s"\n' "$(curl_cfg_escape "Content-Type: application/json")"
+    if [ -n "$body" ]; then
+      printf 'data = "%s"\n' "$(curl_cfg_escape "$body")"
+    fi
+  } >> "$cfg_file"
+
+  run_curl_config "$cfg_file"
+}
+
+require_safe_save_flag() {
+  case "$1" in
+    --integration-enabled|--remote-control-enabled|--monitoring-enabled|--ui-badge-enabled) ;;
+    *) die "Unsupported save-settings flag: $1" ;;
+  esac
+}
+
+require_boolean() {
+  local key="$1"
+  local value="$2"
+  [[ "$value" == "true" || "$value" == "false" ]] || die "Invalid boolean for $key: $value (expected true/false)"
+}
+
+normalize_save_field() {
+  local key="$1"
+  key="${key#--}"
+  key="${key//-/_}"
+  printf '%s' "$key"
+}
+
+parse_test_connection_args() {
+  api_key=""
+  api_secret=""
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --api-key)
+        [ "$#" -ge 2 ] || die "Missing value for --api-key"
+        api_key="$2"
+        shift 2
+        ;;
+      --api-secret)
+        [ "$#" -ge 2 ] || die "Missing value for --api-secret"
+        api_secret="$2"
+        shift 2
+        ;;
+      *)
+        die "Unknown flag for test-connection: $1"
+        ;;
+    esac
+  done
+
+  if [ -n "$api_key" ] || [ -n "$api_secret" ]; then
+    [ -n "$api_key" ] && [ -n "$api_secret" ] || die "Provide both --api-key and --api-secret together"
+    post "/test-connection" "{\"api_key\":\"$(json_escape "$api_key")\",\"api_secret\":\"$(json_escape "$api_secret")\"}"
   else
-    curl -fsS -X POST "$(build_url "$path")" "${headers[@]}" "${curl_opts[@]}" -H "Content-Type: application/json"
+    post "/test-connection"
   fi
 }
 
@@ -95,35 +192,7 @@ case "$cmd" in
   pause) post "/pause" ;;
   resume) post "/resume" ;;
   sync) post "/sync" ;;
-  test-connection)
-    api_key=""
-    api_secret=""
-
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --api-key)
-          [ "$#" -ge 2 ] || die "Missing value for --api-key"
-          api_key="$2"
-          shift 2
-          ;;
-        --api-secret)
-          [ "$#" -ge 2 ] || die "Missing value for --api-secret"
-          api_secret="$2"
-          shift 2
-          ;;
-        *)
-          die "Unknown flag for test-connection: $1"
-          ;;
-      esac
-    done
-
-    if [ -n "$api_key" ] || [ -n "$api_secret" ]; then
-      [ -n "$api_key" ] && [ -n "$api_secret" ] || die "Provide both --api-key and --api-secret together"
-      post "/test-connection" "{\"api_key\":\"$(json_escape "$api_key")\",\"api_secret\":\"$(json_escape "$api_secret")\"}"
-    else
-      post "/test-connection"
-    fi
-    ;;
+  test-connection) parse_test_connection_args "$@" ;;
 
   save-settings)
     [ "$#" -gt 0 ] || die "save-settings requires at least one supported flag"
@@ -137,15 +206,10 @@ case "$cmd" in
       val="$2"
       shift 2
 
-      case "$key" in
-        --integration-enabled|--remote-control-enabled|--monitoring-enabled|--ui-badge-enabled) ;;
-        *) die "Unsupported save-settings flag: $key" ;;
-      esac
+      require_safe_save_flag "$key"
+      require_boolean "$key" "$val"
 
-      [[ "$val" == "true" || "$val" == "false" ]] || die "Invalid boolean for $key: $val (expected true/false)"
-
-      field="${key#--}"
-      field="${field//-/_}"
+      field="$(normalize_save_field "$key")"
 
       [ "$first" -eq 0 ] && payload+=","
       payload+="\"$field\": $val"

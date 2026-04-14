@@ -55,7 +55,7 @@ Optional:
 - `CRYPTO_BOT_BINANCE_API_PREFIX` (default `/api/openclaw`)
 - Supports both `api/openclaw` and `/api/openclaw` forms.
 - `CRYPTO_BOT_BINANCE_TIMEOUT` (seconds, default `25`)
-- `CRYPTO_BOT_BINANCE_RETRIES` (default `1`)
+- `CRYPTO_BOT_BINANCE_RETRIES` (default `1`, applied to GET/read requests only)
 
 ## Quick start
 
@@ -104,6 +104,7 @@ Only these flags are accepted by `save-settings`, and each must be `true` or `fa
 
 - Control calls (`start/stop/pause/resume/sync/save-settings/test-connection`) require API enabled and valid auth on the deployment.
 - Supported auth in this script: `Authorization: Bearer`, `X-OpenClaw-Token`, or HTTP Basic Auth.
+- Control calls are sent without automatic retry to avoid accidental duplicate state changes.
 - If server enforces IP allowlist, run from an allowed host.
 - Treat this as a trading control plane. Always confirm environment (`paper/live`) before changing runtime state.
 - For endpoint details, check `references/openclaw-api-endpoints.md`.
