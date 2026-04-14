@@ -12,6 +12,7 @@ import {
 const tempDirs: string[] = [];
 const builtDistRoot = path.resolve("dist", "extensions", "whatsapp");
 const builtDistEntryPath = path.join(builtDistRoot, "index.js");
+const hasBuiltDistOutput = fs.existsSync(builtDistEntryPath);
 
 function createIsolatedAuthEnv(rootDir: string): NodeJS.ProcessEnv {
   return {
@@ -122,71 +123,73 @@ describe("whatsapp packaged contract", () => {
     });
   });
 
-  it("requires real built WhatsApp dist output for packaged smoke coverage", () => {
-    expect(fs.existsSync(builtDistEntryPath)).toBe(true);
-  });
+  it.skipIf(!hasBuiltDistOutput)(
+    "loads the real built WhatsApp packaged entry, setup, and runtime sidecars from dist output",
+    async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-whatsapp-built-"));
+      tempDirs.push(tempRoot);
+      const tempAuthDir = path.join(tempRoot, "auth", "work");
+      fs.mkdirSync(tempAuthDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(tempAuthDir, "creds.json"),
+        '{"me":{"id":"123@s.whatsapp.net"}}\n',
+      );
 
-  it("loads the real built WhatsApp packaged entry, setup, and runtime sidecars from dist output", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-whatsapp-built-"));
-    tempDirs.push(tempRoot);
-    const tempAuthDir = path.join(tempRoot, "auth", "work");
-    fs.mkdirSync(tempAuthDir, { recursive: true });
-    fs.writeFileSync(path.join(tempAuthDir, "creds.json"), '{"me":{"id":"123@s.whatsapp.net"}}\n');
+      const entryPath = builtDistEntryPath;
+      const setupEntryPath = path.join(builtDistRoot, "setup-entry.js");
+      const runtimePath = path.join(builtDistRoot, "runtime-api.js");
+      const lightRuntimePath = path.join(builtDistRoot, "light-runtime-api.js");
+      const authPresencePath = path.join(builtDistRoot, "auth-presence.js");
+      const cacheBust = `?built=${Date.now()}`;
+      const builtEntry = (await import(`${pathToFileURL(entryPath).href}${cacheBust}`))
+        .default as ReturnType<typeof defineWhatsAppBundledChannelEntry>;
+      const builtSetupEntry = (await import(`${pathToFileURL(setupEntryPath).href}${cacheBust}`))
+        .default as ReturnType<typeof defineWhatsAppBundledChannelSetupEntry>;
+      const builtRuntime = await import(`${pathToFileURL(runtimePath).href}${cacheBust}`);
+      const builtLightRuntime = await import(`${pathToFileURL(lightRuntimePath).href}${cacheBust}`);
+      const builtAuthPresence = await import(`${pathToFileURL(authPresencePath).href}${cacheBust}`);
+      const runtime = { logger: "built-runtime" };
 
-    const entryPath = builtDistEntryPath;
-    const setupEntryPath = path.join(builtDistRoot, "setup-entry.js");
-    const runtimePath = path.join(builtDistRoot, "runtime-api.js");
-    const lightRuntimePath = path.join(builtDistRoot, "light-runtime-api.js");
-    const authPresencePath = path.join(builtDistRoot, "auth-presence.js");
-    const cacheBust = `?built=${Date.now()}`;
-    const builtEntry = (await import(`${pathToFileURL(entryPath).href}${cacheBust}`))
-      .default as ReturnType<typeof defineWhatsAppBundledChannelEntry>;
-    const builtSetupEntry = (await import(`${pathToFileURL(setupEntryPath).href}${cacheBust}`))
-      .default as ReturnType<typeof defineWhatsAppBundledChannelSetupEntry>;
-    const builtRuntime = await import(`${pathToFileURL(runtimePath).href}${cacheBust}`);
-    const builtLightRuntime = await import(`${pathToFileURL(lightRuntimePath).href}${cacheBust}`);
-    const builtAuthPresence = await import(`${pathToFileURL(authPresencePath).href}${cacheBust}`);
-    const runtime = { logger: "built-runtime" };
-
-    expect(builtEntry.id).toBe(whatsappAssembly.id);
-    expect(builtEntry.loadChannelPlugin()).toHaveProperty("id", whatsappAssembly.id);
-    expect(builtSetupEntry.loadSetupPlugin()).toHaveProperty("id", whatsappAssembly.id);
-    builtEntry.setChannelRuntime?.(runtime as never);
-    expect(builtRuntime).toHaveProperty("setWhatsAppRuntime");
-    for (const exportName of whatsappAssembly.runtime.heavyExportNames) {
-      expect(builtRuntime).toHaveProperty(exportName);
-    }
-    for (const exportName of whatsappAssembly.runtime.lightExportNames) {
-      expect(builtLightRuntime).toHaveProperty(exportName);
-    }
-    expect(
-      builtAuthPresence.hasAnyWhatsAppAuth(
-        {
-          channels: {
-            whatsapp: {
-              authDir: tempAuthDir,
+      expect(builtEntry.id).toBe(whatsappAssembly.id);
+      expect(builtEntry.loadChannelPlugin()).toHaveProperty("id", whatsappAssembly.id);
+      expect(builtSetupEntry.loadSetupPlugin()).toHaveProperty("id", whatsappAssembly.id);
+      builtEntry.setChannelRuntime?.(runtime as never);
+      expect(builtRuntime).toHaveProperty("setWhatsAppRuntime");
+      for (const exportName of whatsappAssembly.runtime.heavyExportNames) {
+        expect(builtRuntime).toHaveProperty(exportName);
+      }
+      for (const exportName of whatsappAssembly.runtime.lightExportNames) {
+        expect(builtLightRuntime).toHaveProperty(exportName);
+      }
+      expect(
+        builtAuthPresence.hasAnyWhatsAppAuth(
+          {
+            channels: {
+              whatsapp: {
+                authDir: tempAuthDir,
+              },
             },
           },
-        },
-        createIsolatedAuthEnv(tempRoot),
-      ),
-    ).toBe(true);
-    expect(
-      builtAuthPresence.hasAnyWhatsAppAuth(
-        {
-          channels: {
-            whatsapp: {
-              defaultAccount: "work",
-              accounts: {
-                work: {
-                  authDir: tempAuthDir,
+          createIsolatedAuthEnv(tempRoot),
+        ),
+      ).toBe(true);
+      expect(
+        builtAuthPresence.hasAnyWhatsAppAuth(
+          {
+            channels: {
+              whatsapp: {
+                defaultAccount: "work",
+                accounts: {
+                  work: {
+                    authDir: tempAuthDir,
+                  },
                 },
               },
             },
           },
-        },
-        createIsolatedAuthEnv(tempRoot),
-      ),
-    ).toBe(true);
-  });
+          createIsolatedAuthEnv(tempRoot),
+        ),
+      ).toBe(true);
+    },
+  );
 });

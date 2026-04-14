@@ -157,20 +157,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { resolveTelegramPollVisibility } from "./src/poll-visibility.js";',
     ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "whatsapp", relativePath: "runtime-api.ts" })]:
-    [
-      'export * from "./src/active-listener.js";',
-      'export * from "./src/action-runtime.js";',
-      'export * from "./src/agent-tools-login.js";',
-      'export * from "./src/auth-store.js";',
-      'export * from "./src/auto-reply.js";',
-      'export * from "./src/inbound.js";',
-      'export * from "./src/login.js";',
-      'export * from "./src/media.js";',
-      'export * from "./src/send.js";',
-      'export * from "./src/session.js";',
-      'export { setWhatsAppRuntime } from "./src/runtime.js";',
-      'export { startWebLoginWithQr, waitForWebLogin } from "./login-qr-runtime.js";',
-    ],
+    ['export * from "./src/runtime-api.js";', 'export * from "./src/auto-reply.js";'],
 } as const;
 
 function collectRuntimeApiFiles(): string[] {

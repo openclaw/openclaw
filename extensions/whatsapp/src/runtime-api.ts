@@ -53,7 +53,6 @@ export {
 } from "./normalize-target.js";
 export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 export { resolveWhatsAppReactionLevel } from "./reaction-level.js";
-export { monitorWebChannel } from "./auto-reply/monitor.js";
 export * from "./inbound.js";
 export { loginWeb } from "./login.js";
 export { startWebLoginWithQr, waitForWebLogin } from "../login-qr-runtime.js";
