@@ -247,6 +247,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         signal,
       });
       return {
+        toolCallId,
         content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
         details: {
           path: options.relativePath,
@@ -297,7 +298,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
-const MAX_DIR_ENTRIES = 200; // P2 FIX: Maximum directory entries to display
+const MAX_DIR_ENTRIES = 200;
 
 function getImageMimeType(ext: string): string {
   if (ext === "svg") {return "image/svg+xml";}
@@ -366,78 +367,35 @@ export function createOpenClawReadTool(
 ): AnyAgentTool {
   return {
     ...base,
-    execute: async (toolCallId, params, signal) => {  // Changed _signal to signal
-      // Check for early abort
+    execute: async (toolCallId, params, signal, onUpdate) => {
       if (signal?.aborted) {
         throw new Error("Read operation aborted");
       }
 
       const normalized = normalizeToolParams(params);
-      const record =
-        normalized ??
-        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+      const record = normalized ?? (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
 
-      let rawPath = typeof record?.path === "string" ? record.path : ".";
-      rawPath = rawPath.match(/[\x20-\x7E]/g)?.join('') || '';
-
-      // P1 FIX #3: Get paging parameters for text files
+      const rawPath = typeof record?.path === "string" ? record.path : ".";
       const offset = typeof record?.offset === 'number' ? record.offset : 0;
       const limit = typeof record?.limit === 'number' ? record.limit : undefined;
 
       const rootDir = options?.root ? path.resolve(options.root) : process.cwd();
-
-      let inputPath: string;
-
-      if (path.isAbsolute(rawPath)) {
-        inputPath = rawPath;
-      } else {
-        inputPath = path.resolve(rootDir, rawPath);
-      }
-
-      // Check abort before access
-      if (signal?.aborted) {
-        throw new Error("Read operation aborted");
-      }
-
-      try {
-        await fs.access(inputPath);
-      } catch {
-        const workspacePattern = new RegExp(`${rootDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(.+)`);
-        const match = rawPath.match(workspacePattern);
-        if (match) {
-          const alternativePath = path.resolve(rootDir, match[1]);
-          try {
-            // Check abort before alternative access
-            if (signal?.aborted) {
-              throw new Error("Read operation aborted");
-            }
-            await fs.access(alternativePath);
-            inputPath = alternativePath;
-          } catch {
-            // Keep original inputPath
-          }
-        }
-      }
-
-      // Check abort before stat
-      if (signal?.aborted) {
-        throw new Error("Read operation aborted");
-      }
+      
+      const inputPath = resolveToolPathAgainstWorkspaceRoot({
+          filePath: rawPath,
+          root: rootDir,
+          containerWorkdir: options?.containerWorkdir,
+      });
 
       try {
         const stats = await fs.stat(inputPath);
 
         if (stats.isDirectory()) {
-          // Check abort before readdir
-          if (signal?.aborted) {
-            throw new Error("Read operation aborted");
-          }
+          if (signal?.aborted) throw new Error("Read operation aborted");
           
-          // P2 FIX: Add truncation for directory listings
           let files = await fs.readdir(inputPath);
           let truncated = false;
-          
           if (files.length > MAX_DIR_ENTRIES) {
             truncated = true;
             files = files.slice(0, MAX_DIR_ENTRIES);
@@ -456,19 +414,16 @@ export function createOpenClawReadTool(
 
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
-        const mediaUrl = `http://localhost:18791${inputPath}`;
+        
+        const encodedSource = encodeURIComponent(inputPath);
+        const mediaUrl = `http://localhost:18791/__openclaw__/assistant-media?source=${encodedSource}`;
 
-        // Handle images with sanitization
         if (IMAGE_EXTENSIONS.has(ext)) {
-          // Check abort before reading file
-          if (signal?.aborted) {
-            throw new Error("Read operation aborted");
-          }
+          if (signal?.aborted) throw new Error("Read operation aborted");
           
           let fileBuffer = await fs.readFile(inputPath);
           let mimeType = getImageMimeType(ext);
           
-          // Apply image sanitization if configured
           if (options?.imageSanitization) {
             try {
               const maxDimensionPx = options.imageSanitization.maxDimensionPx || 3840;
@@ -476,10 +431,7 @@ export function createOpenClawReadTool(
               
               const meta = await getImageMetadata(fileBuffer);
               if (meta?.width && meta?.height) {
-                const overDimension = meta.width > maxDimensionPx || meta.height > maxDimensionPx;
-                const overBytes = fileBuffer.length > maxBytes;
-                
-                if (overDimension || overBytes) {
+                if (meta.width > maxDimensionPx || meta.height > maxDimensionPx || fileBuffer.length > maxBytes) {
                   const resized = await resizeToJpeg({
                     buffer: fileBuffer,
                     maxSide: maxDimensionPx,
@@ -491,30 +443,8 @@ export function createOpenClawReadTool(
                 }
               }
             } catch (sanitizeError) {
-              // If sanitization fails, fall back to URL-only response
               console.warn(`Image sanitization failed for ${fileName}:`, sanitizeError);
-              return {
-                toolCallId,
-                content: [{
-                  type: "text",
-                  text: `🖼️ ${fileName} - Unable to process image. View at: ${mediaUrl}`
-                }],
-                details: { path: inputPath, size: fileBuffer.length, sanitizationFailed: true },
-              };
             }
-          }
-          
-          // Size cap for images after sanitization
-          const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
-          if (fileBuffer.length > MAX_IMAGE_BYTES) {
-            return {
-              toolCallId,
-              content: [{
-                type: "text",
-                text: `🖼️ ${fileName} - Image too large after processing (${formatBytes(fileBuffer.length)}). View at: ${mediaUrl}`
-              }],
-              details: { path: inputPath, size: fileBuffer.length, truncated: true },
-            };
           }
           
           return {
@@ -528,277 +458,132 @@ export function createOpenClawReadTool(
                   data: fileBuffer.toString("base64"),
                 },
               },
-              {
-                type: "text",
-                text: `📷 [${fileName}](${mediaUrl})`,
-              },
+              { type: "text", text: `📷 [${fileName}](${mediaUrl})` },
             ],
             details: { path: inputPath, size: fileBuffer.length },
           };
         }
 
-        // Handle audio files - use URL streaming, NOT base64
         if (AUDIO_EXTENSIONS.has(ext)) {
-          const MAX_AUDIO_SIZE = 10 * 1024 * 1024;
-          if (stats.size > MAX_AUDIO_SIZE) {
             return {
-              toolCallId,
-              content: [{
-                type: "text",
-                text: `🎵 ${fileName} (${formatBytes(stats.size)}) - ${mediaUrl}`
-              }],
-              details: { path: inputPath, size: stats.size, streamed: true },
+                toolCallId,
+                content: [{
+                    type: "audio",
+                    url: mediaUrl,
+                    filename: fileName,
+                } as any],
+                details: { path: inputPath, size: stats.size },
             };
-          }
-
-          let mimeType: string;
-          if (ext === "mp3") { mimeType = "audio/mpeg"; }
-          else if (ext === "wav") { mimeType = "audio/wav"; }
-          else if (ext === "ogg") { mimeType = "audio/ogg"; }
-          else if (ext === "m4a") { mimeType = "audio/mp4"; }
-          else if (ext === "flac") { mimeType = "audio/flac"; }
-          else if (ext === "aac") { mimeType = "audio/aac"; }
-          else { mimeType = "audio/ogg"; }
-
-          return {
-            toolCallId,
-            content: [
-              {
-                type: "audio",
-                url: mediaUrl,
-                mimeType: mimeType,
-                filename: fileName,
-              },
-            ],
-            details: { path: inputPath, size: stats.size },
-          };
         }
 
-        // Handle video files - use URL streaming, NOT base64
         if (VIDEO_EXTENSIONS.has(ext)) {
-          const MAX_VIDEO_SIZE = 10 * 1024 * 1024;
-          if (stats.size > MAX_VIDEO_SIZE) {
             return {
-              toolCallId,
-              content: [{
-                type: "text",
-                text: `🎬 ${fileName} (${formatBytes(stats.size)}) - ${mediaUrl}`
-              }],
-              details: { path: inputPath, size: stats.size, streamed: true },
+                toolCallId,
+                content: [{
+                    type: "video",
+                    url: mediaUrl,
+                    filename: fileName,
+                } as any],
+                details: { path: inputPath, size: stats.size },
             };
-          }
-
-          let mimeType: string;
-          if (ext === "mp4") { mimeType = "video/mp4"; }
-          else if (ext === "webm") { mimeType = "video/webm"; }
-          else if (ext === "mov") { mimeType = "video/quicktime"; }
-          else if (ext === "avi") { mimeType = "video/x-msvideo"; }
-          else if (ext === "mkv") { mimeType = "video/x-matroska"; }
-          else { mimeType = "video/mp4"; }
-
-          return {
-            toolCallId,
-            content: [
-              {
-                type: "video",
-                url: mediaUrl,
-                mimeType: mimeType,
-                filename: fileName,
-              },
-            ],
-            details: { path: inputPath, size: stats.size },
-          };
         }
 
-        // Check abort before reading text file
-        if (signal?.aborted) {
-          throw new Error("Read operation aborted");
-        }
-
-        // Handle text files with P1 FIX #3 (offset/limit paging)
-        const fileBuffer = await fs.readFile(inputPath, "utf-8");
-        const maxChars = (options?.modelContextWindowTokens || 100000) * 4;
-        let text = fileBuffer;
-        let truncated = false;
-
+        if (signal?.aborted) throw new Error("Read operation aborted");
+        let text = await fs.readFile(inputPath, "utf-8");
+        
         if (offset > 0 || limit !== undefined) {
           const lines = text.split('\n');
           const start = Math.max(0, Math.min(offset - 1, lines.length));
           const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
           text = lines.slice(start, end).join('\n');
-          truncated = true;
-        } else if (text.length > maxChars) {
-          text = text.slice(0, maxChars) + `\n\n[Truncated: File is ${formatBytes(fileBuffer.length)}]`;
-          truncated = true;
+        }
+
+        const maxChars = options?.modelContextWindowTokens ? options.modelContextWindowTokens * 3 : 32000;
+        if (text.length > maxChars) {
+            text = text.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
         }
 
         return {
           toolCallId,
           content: [{ type: "text", text }],
-          details: { path: inputPath, size: fileBuffer.length, truncated, offset, limit },
+          details: { path: inputPath, size: stats.size, offset, limit },
         };
 
-      } catch (err) {
-        // Check if error was due to abort
-        if (signal?.aborted) {
-          throw new Error("Read operation aborted", { cause: err });
-        }
-        const error = err as Error;
+      } catch (error) {
         return {
           toolCallId,
-          content: [{ type: "text", text: `Read failed: ${error.message}. File path attempted: ${inputPath}` }],
-          details: { isError: true, path: inputPath },
+          content: [{ type: "text", text: `Error reading path: ${(error as Error).message}` }],
+          details: { path: inputPath }
         };
       }
     },
-  } as AnyAgentTool;
+  };
 }
+
+// --- OPERATIONS HELPERS ---
 
 function createSandboxReadOperations(params: SandboxToolParams) {
   return {
-    readFile: (absolutePath: string) =>
-      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    access: async (absolutePath: string) => {
-      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
-      if (!stat) {
-        throw createFsAccessError("ENOENT", absolutePath);
-      }
-    },
-    detectImageMimeType: async (absolutePath: string) => {
-      const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
-      const mime = await detectMime({ buffer, filePath: absolutePath });
-      return mime && mime.startsWith("image/") ? mime : undefined;
-    },
-  } as const;
+    readFile: (filePath: string) => params.bridge.readFile({ filePath, cwd: params.root }),
+    stat: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }),
+    readdir: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(() => []),
+    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) throw new Error("ENOENT"); })
+  };
 }
 
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return {
-    mkdir: async (dir: string) => {
-      await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
-    },
-    writeFile: async (absolutePath: string, content: string) => {
-      await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
-    },
-  } as const;
+    writeFile: (filePath: string, data: string) =>
+      params.bridge.writeFile({ filePath, data, cwd: params.root, mkdir: true }),
+    mkdir: (filePath: string) => params.bridge.mkdirp({ filePath, cwd: params.root })
+  };
 }
 
 function createSandboxEditOperations(params: SandboxToolParams) {
   return {
-    readFile: (absolutePath: string) =>
-      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    writeFile: (absolutePath: string, content: string) =>
-      params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
-    access: async (absolutePath: string) => {
-      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
-      if (!stat) {
-        throw createFsAccessError("ENOENT", absolutePath);
-      }
-    },
-  } as const;
-}
-
-async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = path.resolve(absolutePath);
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
-  await fs.writeFile(resolved, content, "utf-8");
+    readFile: (filePath: string) =>
+      params.bridge.readFile({ filePath, cwd: params.root }), 
+    writeFile: (filePath: string, data: string) =>
+      params.bridge.writeFile({ filePath, data, cwd: params.root }),
+    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) throw new Error("ENOENT"); })
+  };
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly ?? false;
-
-  if (!workspaceOnly) {
-    return {
-      mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
-        await fs.mkdir(resolved, { recursive: true });
-      },
-      writeFile: writeHostFile,
-    } as const;
-  }
-
   return {
-    mkdir: async (dir: string) => {
-      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
-      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
-      await assertSandboxPath({ filePath: resolved, cwd: root, root });
-      await fs.mkdir(resolved, { recursive: true });
-    },
-    writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      await writeFileWithinRoot({
+    writeFile: (relativePath: string, data: string) =>
+      writeFileWithinRoot({
         rootDir: root,
-        relativePath: relative,
-        data: content,
+        relativePath,
+        data,
         mkdir: true,
-      });
-    },
-  } as const;
+      }),
+    mkdir: (relativePath: string) => fs.mkdir(path.join(root, relativePath), { recursive: true }).then(() => {})
+  };
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly ?? false;
-
-  if (!workspaceOnly) {
-    return {
-      readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
-        return await fs.readFile(resolved);
-      },
-      writeFile: writeHostFile,
-      access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
-        await fs.access(resolved);
-      },
-    } as const;
-  }
-
   return {
-    readFile: async (absolutePath: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      const safeRead = await readFileWithinRoot({
+    readFile: (relativePath: string) => 
+      readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
+    writeFile: (relativePath: string, data: string) =>
+      writeFileWithinRoot({
         rootDir: root,
-        relativePath: relative,
-      });
-      return safeRead.buffer;
-    },
-    writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
-        data: content,
-        mkdir: true,
-      });
-    },
-    access: async (absolutePath: string) => {
-      let relative: string;
-      try {
-        relative = toRelativeWorkspacePath(root, absolutePath);
-      } catch {
-        return;
-      }
-      try {
-        const opened = await openFileWithinRoot({
-          rootDir: root,
-          relativePath: relative,
-        });
-        await opened.handle.close().catch(() => {});
-      } catch (error) {
-        if (error instanceof SafeOpenError && error.code === "not-found") {
-          throw createFsAccessError("ENOENT", absolutePath);
-        }
-        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
-          return;
-        }
-        throw error;
-      }
-    },
-  } as const;
+        relativePath,
+        data,
+      }),
+    access: (relativePath: string) => fs.access(path.join(root, relativePath))
+  };
 }
 
-function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
-  const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
-  error.code = code;
-  return error;
+function createHostReadOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  return {
+    readFile: (relativePath: string) => readFileWithinRoot({ rootDir: root, relativePath }),
+    stat: async (relativePath: string) => {
+        const f = await openFileWithinRoot({ rootDir: root, relativePath });
+        return f.stat; // Corrected: Property name is 'stat', not 'stats'
+    },
+    readdir: (relativePath: string) => fs.readdir(path.join(root, relativePath)),
+    access: (relativePath: string) => fs.access(path.join(root, relativePath))
+  };
 }
