@@ -29,6 +29,7 @@ export type ChatHost = {
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
+  chatAttachmentReadPending?: number;
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
@@ -271,6 +272,10 @@ export async function handleSendChat(
   const attachments = host.chatAttachments ?? [];
   const attachmentsToSend = messageOverride == null ? attachments : [];
   const hasAttachments = attachmentsToSend.length > 0;
+
+  if ((host.chatAttachmentReadPending ?? 0) > 0) {
+    return;
+  }
 
   if (!message && !hasAttachments) {
     return;

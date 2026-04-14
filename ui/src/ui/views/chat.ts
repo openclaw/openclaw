@@ -87,6 +87,8 @@ export type ChatProps = {
   autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  attachmentReadPending?: number;
+  onAttachmentReadPendingChange?: (pending: number) => void;
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
   onRefresh: () => void;
@@ -595,6 +597,11 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function updateAttachmentReadPending(props: ChatProps, delta: number) {
+  const next = (props.attachmentReadPending ?? 0) + delta;
+  props.onAttachmentReadPendingChange?.(Math.max(0, next));
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
@@ -616,6 +623,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     if (!file) {
       continue;
     }
+    updateAttachmentReadPending(props, 1);
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
@@ -627,6 +635,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
     });
+    reader.addEventListener("loadend", () => updateAttachmentReadPending(props, -1));
     reader.readAsDataURL(file);
   }
 }
@@ -644,6 +653,7 @@ function handleFileSelect(e: Event, props: ChatProps) {
       continue;
     }
     pending++;
+    updateAttachmentReadPending(props, 1);
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       additions.push({
@@ -656,6 +666,7 @@ function handleFileSelect(e: Event, props: ChatProps) {
         props.onAttachmentsChange?.([...current, ...additions]);
       }
     });
+    reader.addEventListener("loadend", () => updateAttachmentReadPending(props, -1));
     reader.readAsDataURL(file);
   }
   input.value = "";
@@ -675,6 +686,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
       continue;
     }
     pending++;
+    updateAttachmentReadPending(props, 1);
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       additions.push({
@@ -687,6 +699,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
         props.onAttachmentsChange?.([...current, ...additions]);
       }
     });
+    reader.addEventListener("loadend", () => updateAttachmentReadPending(props, -1));
     reader.readAsDataURL(file);
   }
 }
@@ -1397,7 +1410,7 @@ export function renderChat(props: ChatProps) {
       if (e.isComposing || e.keyCode === 229) {
         return;
       }
-      if (!props.connected) {
+      if (!props.connected || (props.attachmentReadPending ?? 0) > 0) {
         return;
       }
       e.preventDefault();
@@ -1661,13 +1674,22 @@ export function renderChat(props: ChatProps) {
                   <button
                     class="chat-send-btn"
                     @click=${() => {
+                      if ((props.attachmentReadPending ?? 0) > 0) {
+                        return;
+                      }
                       if (props.draft.trim()) {
                         inputHistory.push(props.draft);
                       }
                       props.onSend();
                     }}
-                    ?disabled=${!props.connected || props.sending}
-                    title=${isBusy ? "Queue" : "Send"}
+                    ?disabled=${!props.connected ||
+                    props.sending ||
+                    (props.attachmentReadPending ?? 0) > 0}
+                    title=${(props.attachmentReadPending ?? 0) > 0
+                      ? "Processing attachment..."
+                      : isBusy
+                        ? "Queue"
+                        : "Send"}
                     aria-label=${isBusy ? "Queue message" : "Send message"}
                   >
                     ${icons.send}

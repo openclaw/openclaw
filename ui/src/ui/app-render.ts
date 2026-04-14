@@ -1879,6 +1879,8 @@ export function renderApp(state: AppViewState) {
               onRequestUpdate: requestHostUpdate,
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
+              attachmentReadPending: state.chatAttachmentReadPending,
+              onAttachmentReadPendingChange: (next) => (state.chatAttachmentReadPending = next),
               onSend: () => state.handleSendChat(),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),

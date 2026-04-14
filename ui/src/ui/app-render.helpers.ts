@@ -73,6 +73,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.sessionKey = sessionKey;
   state.chatMessage = "";
   state.chatAttachments = [];
+  state.chatAttachmentReadPending = 0;
   state.chatMessages = [];
   state.chatToolMessages = [];
   state.chatStreamSegments = [];

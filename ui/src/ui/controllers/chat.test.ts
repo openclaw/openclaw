@@ -12,6 +12,7 @@ import {
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
+    chatAttachmentReadPending: 0,
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],

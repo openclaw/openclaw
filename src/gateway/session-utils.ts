@@ -1000,10 +1000,15 @@ export async function resolveGatewayModelSupportsImages(params: {
 
   try {
     const catalog = await params.loadGatewayModelCatalog();
-    const modelEntry = catalog.find(
-      (entry) =>
-        entry.id === params.model && (!params.provider || entry.provider === params.provider),
-    );
+    const modelWithProviderId = params.provider ? `${params.provider}/${params.model}` : null;
+    const modelEntry = catalog.find((entry) => {
+      if (params.provider && entry.provider !== params.provider) {
+        return false;
+      }
+      return (
+        entry.id === params.model || (!!modelWithProviderId && entry.id === modelWithProviderId)
+      );
+    });
     const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
     const normalizedCandidates = [
       normalizeLowercaseStringOrEmpty(params.model),

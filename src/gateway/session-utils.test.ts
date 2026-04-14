@@ -1004,4 +1004,21 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("matches provider-qualified catalog ids for image-capable models", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.4",
+        provider: "clipro-codex",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "clipro-codex/gpt-5.4",
+            name: "gpt-5.4",
+            provider: "clipro-codex",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
 });
