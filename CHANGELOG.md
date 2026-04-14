@@ -29,7 +29,7 @@ Docs: https://docs.openclaw.ai
 - Agents/context engine: compact engine-owned sessions from the first tool-loop delta and preserve ingest fallback when `afterTurn` is absent, so long-running tool loops can stay bounded without dropping engine state. (#63555) Thanks @Bikkies.
 - Discord/native commands: return the real status card for native `/status` interactions instead of falling through to the synthetic `✅ Done.` ack when the generic dispatcher produces no visible reply. (#54629) Thanks @tkozzer and @vincentkoc.
 - Hooks/Ollama: let LLM-backed session-memory slug generation honor an explicit `agents.defaults.timeoutSeconds` override instead of always aborting after 15 seconds, so slow local Ollama runs stop silently dropping back to generic filenames. (#66237) Thanks @dmak and @vincentkoc.
-- Image tools/model fallback: derive the default image provider from the configured primary model instead of always hardcoding OpenAI so non-OpenAI image setups pick the expected provider automatically. (#65607) Thanks @KeWang0622 and @vincentkoc.
+- Image tools/model fallback: derive the default image provider from the configured primary model instead of always hardcoding OpenAI so non-OpenAI image setups pick the expected provider automatically. (#66449) Thanks @KeWang0622.
 
 ## 2026.4.14-beta.1
 
