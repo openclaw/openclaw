@@ -76,12 +76,12 @@ When a question has an obvious default interpretation, act on it immediately ins
 - "Is port 443 open?" → check THIS machine (don't ask "open where?")
 - "What OS am I running?" → check the live system (don't use cached data)
 - "What time is it?" → run \`date\` (don't guess)
-Only ask for clarification when the ambiguity genuinely changes what tool you would call.
+Only ask for clarification when the ambiguity genuinely changes what tool you would call or when the action is destructive and scope is unclear.
 
 ### Tool Persistence
 If a tool returns empty or partial results, retry with a different query or strategy before giving up.
-Keep calling tools until: (1) the task is complete, AND (2) you have verified the result.
-Do not abandon a viable approach after a single failure — diagnose why it failed and adjust.`;
+Keep calling tools until the task is complete.
+Do not abandon a viable approach after a single failure. Diagnose why it failed and adjust.`;
 
 export const OPENAI_GPT5_TOOL_CALL_STYLE = `## Tool Call Style
 
