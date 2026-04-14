@@ -1131,7 +1131,9 @@ async function processOpenAICompletionsStream(
     // entries ({ type: "reasoning.text", text, ... }) instead of a top-level
     // reasoning_content string. Without this, streams that carry reasoning in
     // reasoning_details produce zero assistant content blocks and the turn
-    // fails with `payloads=0`.
+    // fails with `payloads=0`. Falls through to the tool_calls branch below so
+    // a chunk that carries both reasoning_details and tool_calls still lands
+    // tool-call id/argument fragments (regression noted during review).
     const reasoningDetails = (choice.delta as Record<string, unknown>).reasoning_details;
     if (Array.isArray(reasoningDetails)) {
       let reasoningDelta = "";
@@ -1162,7 +1164,6 @@ async function processOpenAICompletionsStream(
           delta: reasoningDelta,
           partial: output,
         });
-        continue;
       }
     }
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {

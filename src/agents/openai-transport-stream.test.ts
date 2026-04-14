@@ -1935,4 +1935,104 @@ describe("openai transport stream", () => {
     expect(textBlock).toBeDefined();
     expect((textBlock as { text: string }).text).toBe("Hello.");
   });
+
+  it("still processes tool_calls when a chunk also carries reasoning_details", async () => {
+    const model = {
+      id: "qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [] as Array<Record<string, unknown>>,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-reasoning-and-tool",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: "assistant" as const,
+              reasoning_details: [
+                { type: "reasoning.text", text: "Planning call.", format: "unknown", index: 0 },
+              ],
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "get_weather", arguments: '{"city":"Paris"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-reasoning-and-tool",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: { tool_calls: [] as never[] },
+            logprobs: null,
+            finish_reason: "tool_calls" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output as never, model, stream);
+
+    const thinkingBlock = output.content.find(
+      (block) => (block as { type?: string }).type === "thinking",
+    );
+    const toolCallBlock = output.content.find(
+      (block) => (block as { type?: string }).type === "toolCall",
+    );
+    expect(thinkingBlock).toBeDefined();
+    expect((thinkingBlock as { thinking: string }).thinking).toBe("Planning call.");
+    expect(toolCallBlock).toBeDefined();
+    expect((toolCallBlock as { id: string; name: string }).id).toBe("call_1");
+    expect((toolCallBlock as { id: string; name: string }).name).toBe("get_weather");
+    expect((toolCallBlock as { arguments: { city?: string } }).arguments.city).toBe("Paris");
+  });
 });
