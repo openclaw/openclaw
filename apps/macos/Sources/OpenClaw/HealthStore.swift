@@ -200,8 +200,14 @@ final class HealthStore {
         }
         guard let snap = self.snapshot else { return .unknown }
         guard let link = self.resolveLinkChannel(snap) else {
-            // No channel has linking info — fall back to the top-level gateway health.
-            return snap.ok == true ? .ok : .unknown
+            // No channel has linking info — derive health from channel probes.
+            // snap.ok is hardcoded true when the endpoint responds, so check probes.
+            let configuredChannels = snap.channels.values.filter { $0.configured == true }
+            if configuredChannels.isEmpty {
+                return .unknown
+            }
+            let hasFailedProbe = configuredChannels.contains { $0.probe?.ok == false }
+            return hasFailedProbe ? .degraded("channel probe failed") : .ok
         }
         if link.summary.linked != true {
             // Linking is optional if any other channel is healthy; don't paint the whole app red.
@@ -220,8 +226,16 @@ final class HealthStore {
         if let error = self.lastError { return "Health check failed: \(error)" }
         guard let snap = self.snapshot else { return "Health check pending" }
         guard let link = self.resolveLinkChannel(snap) else {
-            // No channel has linking info — use top-level gateway health.
-            return snap.ok == true ? "Gateway healthy" : "Health check pending"
+            // No channel has linking info — derive from channel probes.
+            let configuredChannels = snap.channels.values.filter { $0.configured == true }
+            if configuredChannels.isEmpty {
+                return "Health check pending"
+            }
+            let failedChannel = configuredChannels.first { $0.probe?.ok == false }
+            if let failedChannel, let probe = failedChannel.probe {
+                return "Gateway degraded: \(Self.describeProbeFailure(probe))"
+            }
+            return "Gateway healthy"
         }
         if link.summary.linked != true {
             if let fallback = self.resolveFallbackChannel(snap, excluding: link.id) {
