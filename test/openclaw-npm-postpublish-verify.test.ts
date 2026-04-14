@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -12,6 +13,10 @@ import {
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+
+const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
+  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
+);
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -70,13 +75,21 @@ describe("collectInstalledPackageErrors", () => {
     );
     expect(errors).toEqual(
       expect.arrayContaining(
-        BUNDLED_RUNTIME_SIDECAR_PATHS.map(
+        PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.map(
           (relativePath) =>
             `installed package is missing required bundled runtime sidecar: ${relativePath}`,
         ),
       ),
     );
-    expect(errors.length).toBeGreaterThanOrEqual(1 + BUNDLED_RUNTIME_SIDECAR_PATHS.length);
+    expect(errors).not.toEqual(
+      expect.arrayContaining([
+        "installed package is missing required bundled runtime sidecar: dist/extensions/qa-channel/runtime-api.js",
+        "installed package is missing required bundled runtime sidecar: dist/extensions/qa-lab/runtime-api.js",
+      ]),
+    );
+    expect(errors.length).toBeGreaterThanOrEqual(
+      1 + PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.length,
+    );
   });
 });
 
@@ -301,7 +314,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("allows npm update compatibility sidecar directories without package.json", () => {
+  it("rejects private qa sidecar directories that are missing package.json", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -322,7 +335,10 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
+        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-channel/package.json")}.`,
+        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-lab/package.json")}.`,
+      ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

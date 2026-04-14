@@ -55,6 +55,47 @@ const BAILEYS_MEDIA_HOTFIX_REPLACEMENT = [
   "        await Promise.all([encFinishPromise, originalFinishPromise]);",
   "        logger?.debug('encrypted data successfully');",
 ].join("\n");
+const BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT = [
+  "        encFileWriteStream.write(mac);",
+  "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+  "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+  "        encFileWriteStream.end();",
+  "        originalFileStream?.end?.();",
+  "        stream.destroy();",
+  "        await encFinishPromise;",
+  "        await originalFinishPromise;",
+  "        logger?.debug('encrypted data successfully');",
+].join("\n");
+const BAILEYS_MEDIA_HOTFIX_FINISH_PROMISES_RE =
+  /const\s+encFinishPromise\s*=\s*once\(encFileWriteStream,\s*'finish'\);\s*\n[\s\S]*const\s+originalFinishPromise\s*=\s*originalFileStream\s*\?\s*once\(originalFileStream,\s*'finish'\)\s*:\s*Promise\.resolve\(\);/u;
+const BAILEYS_MEDIA_HOTFIX_PROMISE_ALL_RE =
+  /await\s+Promise\.all\(\[\s*encFinishPromise\s*,\s*originalFinishPromise\s*\]\);/u;
+const BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_AWAITS_RE =
+  /await\s+encFinishPromise;\s*(?:\/\/[^\n]*\n|\s)*await\s+originalFinishPromise;/u;
+const BAILEYS_MEDIA_DISPATCHER_NEEDLE = [
+  "                const response = await fetch(url, {",
+  "                    dispatcher: fetchAgent,",
+  "                    method: 'POST',",
+].join("\n");
+const BAILEYS_MEDIA_DISPATCHER_REPLACEMENT = [
+  "                const response = await fetch(url, {",
+  "                    method: 'POST',",
+].join("\n");
+const BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE = [
+  "                        'Content-Type': 'application/octet-stream',",
+  "                        Origin: DEFAULT_ORIGIN",
+  "                    },",
+].join("\n");
+const BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT = [
+  "                        'Content-Type': 'application/octet-stream',",
+  "                        Origin: DEFAULT_ORIGIN",
+  "                    },",
+  "                    // Baileys passes a generic agent here in some runtimes. Undici's",
+  "                    // `dispatcher` only works with Dispatcher-compatible implementations,",
+  "                    // so only wire it through when the object actually implements",
+  "                    // `dispatch`.",
+  "                    ...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
+].join("\n");
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
@@ -243,23 +284,59 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
     }
 
     const currentText = readFile(targetPath, "utf8");
-    if (currentText.includes(BAILEYS_MEDIA_HOTFIX_REPLACEMENT)) {
-      return { applied: false, reason: "already_patched" };
-    }
-    if (!currentText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE)) {
-      return { applied: false, reason: "unexpected_content" };
-    }
-    if (!BAILEYS_MEDIA_ONCE_IMPORT_RE.test(currentText)) {
-      return { applied: false, reason: "missing_once_import", targetPath };
-    }
-    if (!BAILEYS_MEDIA_ASYNC_CONTEXT_RE.test(currentText)) {
-      return { applied: false, reason: "not_async_context", targetPath };
+    let patchedText = currentText;
+    let applied = false;
+
+    const encryptedStreamAlreadyPatched =
+      patchedText.includes(BAILEYS_MEDIA_HOTFIX_REPLACEMENT) ||
+      patchedText.includes(BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT) ||
+      (BAILEYS_MEDIA_HOTFIX_FINISH_PROMISES_RE.test(patchedText) &&
+        (BAILEYS_MEDIA_HOTFIX_PROMISE_ALL_RE.test(patchedText) ||
+          BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_AWAITS_RE.test(patchedText)));
+    const encryptedStreamPatchable = patchedText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE);
+
+    let encryptedStreamResolved = encryptedStreamAlreadyPatched;
+    if (!encryptedStreamResolved && encryptedStreamPatchable) {
+      if (!BAILEYS_MEDIA_ONCE_IMPORT_RE.test(patchedText)) {
+        return { applied: false, reason: "missing_once_import", targetPath };
+      }
+      if (!BAILEYS_MEDIA_ASYNC_CONTEXT_RE.test(patchedText)) {
+        return { applied: false, reason: "not_async_context", targetPath };
+      }
+      patchedText = patchedText.replace(
+        BAILEYS_MEDIA_HOTFIX_NEEDLE,
+        BAILEYS_MEDIA_HOTFIX_REPLACEMENT,
+      );
+      applied = true;
+      encryptedStreamResolved = true;
     }
 
-    const patchedText = currentText.replace(
-      BAILEYS_MEDIA_HOTFIX_NEEDLE,
-      BAILEYS_MEDIA_HOTFIX_REPLACEMENT,
+    const dispatcherAlreadyPatched = patchedText.includes(
+      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
     );
+    const dispatcherPatchable =
+      patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE) &&
+      patchedText.includes(BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE);
+    let dispatcherResolved = dispatcherAlreadyPatched;
+
+    if (!dispatcherResolved && dispatcherPatchable) {
+      patchedText = patchedText
+        .replace(BAILEYS_MEDIA_DISPATCHER_NEEDLE, BAILEYS_MEDIA_DISPATCHER_REPLACEMENT)
+        .replace(
+          BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE,
+          BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT,
+        );
+      applied = true;
+      dispatcherResolved = true;
+    }
+
+    if (!dispatcherResolved) {
+      return { applied: false, reason: "unexpected_content", targetPath };
+    }
+
+    if (!applied) {
+      return { applied: false, reason: "already_patched" };
+    }
     const tempPath = createTempPath(targetPath);
     const tempFd = openFile(tempPath, "wx", initialTargetValidation.mode);
     let tempFdClosed = false;
@@ -298,12 +375,12 @@ function applyBundledPluginRuntimeHotfixes(params = {}) {
   const log = params.log ?? console;
   const baileysResult = applyBaileysEncryptedStreamFinishHotfix(params);
   if (baileysResult.applied) {
-    log.log("[postinstall] patched @whiskeysockets/baileys encryptedStream flush ordering");
+    log.log("[postinstall] patched @whiskeysockets/baileys runtime hotfixes");
     return;
   }
   if (baileysResult.reason !== "missing" && baileysResult.reason !== "already_patched") {
     log.warn(
-      `[postinstall] could not patch @whiskeysockets/baileys encryptedStream: ${baileysResult.reason}`,
+      `[postinstall] could not patch @whiskeysockets/baileys runtime hotfixes: ${baileysResult.reason}`,
     );
   }
 }

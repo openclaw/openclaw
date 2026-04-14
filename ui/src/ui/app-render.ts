@@ -1113,13 +1113,17 @@ export function renderApp(state: AppViewState) {
               onSessionKeyChange: (next) => {
                 state.sessionKey = next;
                 state.chatMessage = "";
+                state.chatMessages = [];
+                state.chatToolMessages = [];
+                state.chatStream = null;
+                state.chatRunId = null;
+                state.chatQueue = [];
                 state.resetToolStream();
                 state.applySettings({
                   ...state.settings,
                   sessionKey: next,
                   lastActiveSessionKey: next,
                 });
-                void state.loadAssistantIdentity();
               },
               onToggleGatewayTokenVisibility: () => {
                 state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
