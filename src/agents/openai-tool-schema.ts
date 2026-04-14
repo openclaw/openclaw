@@ -18,6 +18,37 @@ type ToolWithParameters = {
 
 const optionalString = readStringValue;
 
+function normalizeOpenAIObjectRequiredArraysRecursive(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    let changed = false;
+    const normalized = schema.map((entry) => {
+      const next = normalizeOpenAIObjectRequiredArraysRecursive(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? normalized : schema;
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  const record = schema as Record<string, unknown>;
+  let changed = false;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const next = normalizeOpenAIObjectRequiredArraysRecursive(value);
+    normalized[key] = next;
+    changed ||= next !== value;
+  }
+
+  if (normalized.type === "object" && !Array.isArray(normalized.required)) {
+    normalized.required = [];
+    changed = true;
+  }
+
+  return changed ? normalized : schema;
+}
+
 export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
   return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}));
 }
@@ -63,7 +94,9 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
 
 export function normalizeOpenAIStrictToolParameters<T>(schema: T, strict: boolean): T {
   if (!strict) {
-    return normalizeToolParameterSchema(schema ?? {}) as T;
+    return normalizeOpenAIObjectRequiredArraysRecursive(
+      normalizeToolParameterSchema(schema ?? {}),
+    ) as T;
   }
   return normalizeStrictOpenAIJsonSchema(schema) as T;
 }
