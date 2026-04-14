@@ -113,7 +113,7 @@ type RuntimePluginsModule = Pick<
   "ensureRuntimePluginsLoaded"
 >;
 
-const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./subagent-registry.runtime", ".js"] as const;
+const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./agents/subagent-registry.runtime", ".js"] as const;
 
 let contextEngineInitPromise: Promise<ContextEngineInitModule> | null = null;
 let contextEngineRegistryPromise: Promise<ContextEngineRegistryModule> | null = null;
