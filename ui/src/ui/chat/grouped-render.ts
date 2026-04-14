@@ -1512,15 +1512,14 @@ function renderGroupedMessage(
                     </details>`
                   : markdown
                     ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                        ${markdown.trim().startsWith("<audio")
-                          ? unsafeHTML(toSanitizedMarkdownHtml(markdown))
-                          : markdown.includes("youtube.com/watch") ||
-                              markdown.includes("youtube.com/embed") ||
-                              markdown.includes("youtu.be/") ||
-                              markdown.includes("player.vimeo.com")
-                            ? renderVideoEmbed(markdown)
-                            : unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                      </div>`
+                        ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                      </div>
+                      ${markdown.includes("youtube.com/watch") ||
+                        markdown.includes("youtube.com/embed") ||
+                        markdown.includes("youtu.be/") ||
+                        markdown.includes("player.vimeo.com")
+                          ? renderVideoEmbed(markdown)
+                          : nothing}`
                     : nothing}
                 ${hasToolCards
                   ? singleToolCard && !markdown && !hasImages && !hasMedia
@@ -1580,15 +1579,14 @@ function renderGroupedMessage(
                 </details>`
               : markdown
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                    ${markdown.trim().startsWith("<audio")
-                      ? unsafeHTML(toSanitizedMarkdownHtml(markdown))
-                      : markdown.includes("youtube.com/watch") ||
-                          markdown.includes("youtube.com/embed") ||
-                          markdown.includes("youtu.be/") ||
-                          markdown.includes("player.vimeo.com")
-                        ? renderVideoEmbed(markdown)
-                        : unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                  </div>`
+                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                  </div>
+                  ${markdown.includes("youtube.com/watch") ||
+                    markdown.includes("youtube.com/embed") ||
+                    markdown.includes("youtu.be/") ||
+                    markdown.includes("player.vimeo.com")
+                      ? renderVideoEmbed(markdown)
+                      : nothing}`
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
