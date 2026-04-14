@@ -3,7 +3,7 @@
   "enabledByDefault": true,
   "providers": ["yandex"],
   "providerAuthEnvVars": {
-    "yandex": ["YANDEX_API_KEY", "YANDEX_FOLDER_ID"]
+    "yandex": ["YANDEX_API_KEY"]
   },
   "providerAuthChoices": [
     {
