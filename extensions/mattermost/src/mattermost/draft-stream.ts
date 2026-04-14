@@ -1,5 +1,10 @@
-import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-lifecycle";
-import { createMattermostPost, updateMattermostPost, type MattermostClient } from "./client.js";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import {
+  createMattermostPost,
+  deleteMattermostPost,
+  updateMattermostPost,
+  type MattermostClient,
+} from "./client.js";
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -8,6 +13,7 @@ export type MattermostDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   postId: () => string | undefined;
+  clear: () => Promise<void>;
   stop: () => Promise<void>;
   forceNewMessage: () => void;
 };
@@ -89,10 +95,20 @@ export function createMattermostDraftStream(params: {
     }
   };
 
-  const { loop, update, stop } = createFinalizableDraftStreamControlsForState({
+  const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
+    readMessageId: () => streamPostId,
+    clearMessageId: () => {
+      streamPostId = undefined;
+    },
+    isValidMessageId: (value): value is string => typeof value === "string" && value.length > 0,
+    deleteMessage: async (postId) => {
+      await deleteMattermostPost(params.client, postId);
+    },
+    warn: params.warn,
+    warnPrefix: "mattermost stream preview cleanup failed",
   });
 
   const forceNewMessage = () => {
@@ -108,6 +124,7 @@ export function createMattermostDraftStream(params: {
     update,
     flush: loop.flush,
     postId: () => streamPostId,
+    clear,
     stop,
     forceNewMessage,
   };
