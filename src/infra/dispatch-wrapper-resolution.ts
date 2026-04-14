@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
@@ -128,7 +129,7 @@ function scanWrapperInvocation(
       idx += 1;
       break;
     }
-    const directive = params.onToken(token, token.toLowerCase());
+    const directive = params.onToken(token, normalizeLowercaseStringOrEmpty(token));
     if (directive === "stop") {
       break;
     }
@@ -151,28 +152,97 @@ function scanWrapperInvocation(
 }
 
 export function unwrapEnvInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--", "-"]),
-    onToken: (token, lower) => {
-      if (isEnvAssignment(token)) {
-        return "continue";
+  const parsed = parseEnvInvocationPrelude(argv);
+  return parsed ? argv.slice(parsed.commandIndex) : null;
+}
+
+type ParsedEnvInvocationPrelude = {
+  assignmentKeys: string[];
+  commandIndex: number;
+};
+
+function parseEnvInvocationPrelude(argv: string[]): ParsedEnvInvocationPrelude | null {
+  let idx = 1;
+  let expectsOptionValue = false;
+  const assignmentKeys: string[] = [];
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (expectsOptionValue) {
+      expectsOptionValue = false;
+      idx += 1;
+      continue;
+    }
+    if (token === "--" || token === "-") {
+      idx += 1;
+      break;
+    }
+    if (isEnvAssignment(token)) {
+      const delimiter = token.indexOf("=");
+      if (delimiter > 0) {
+        assignmentKeys.push(token.slice(0, delimiter));
       }
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      break;
+    }
+    const lower = normalizeLowercaseStringOrEmpty(token);
+    const [flag] = lower.split("=", 2);
+    if (ENV_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    if (ENV_OPTIONS_WITH_VALUE.has(flag)) {
+      if (lower.includes("=")) {
+        idx += 1;
+        continue;
       }
-      const [flag] = lower.split("=", 2);
-      if (ENV_FLAG_OPTIONS.has(flag)) {
-        return "continue";
+      expectsOptionValue = true;
+      idx += 1;
+      continue;
+    }
+    if (hasEnvInlineValuePrefix(lower)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+
+  if (expectsOptionValue || idx >= argv.length) {
+    return null;
+  }
+
+  return {
+    assignmentKeys,
+    commandIndex: idx,
+  };
+}
+
+export function extractEnvAssignmentKeysFromDispatchWrappers(
+  argv: string[],
+  maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
+): string[] {
+  let current = argv;
+  const assignmentKeys: string[] = [];
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    const unwrap = unwrapKnownDispatchWrapperInvocation(current);
+    if (unwrap.kind !== "unwrapped" || unwrap.argv.length === 0) {
+      break;
+    }
+    if (unwrap.wrapper === "env") {
+      const parsed = parseEnvInvocationPrelude(current);
+      if (parsed) {
+        assignmentKeys.push(...parsed.assignmentKeys);
       }
-      if (ENV_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
-      }
-      if (hasEnvInlineValuePrefix(lower)) {
-        return "continue";
-      }
-      return "invalid";
-    },
-  });
+    }
+    current = unwrap.argv;
+  }
+  return Array.from(new Set(assignmentKeys)).toSorted((a, b) => a.localeCompare(b));
 }
 
 function envInvocationUsesModifiers(argv: string[]): boolean {
@@ -197,7 +267,7 @@ function envInvocationUsesModifiers(argv: string[]): boolean {
     if (!token.startsWith("-") || token === "-") {
       break;
     }
-    const lower = token.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(token);
     const [flag] = lower.split("=", 2);
     if (ENV_FLAG_OPTIONS.has(flag)) {
       return true;

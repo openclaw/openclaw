@@ -1,4 +1,5 @@
 import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { sendMessageSlack } from "./send.js";
@@ -80,9 +81,7 @@ export function createSlackDraftStream(params: {
       params.onMessageSent?.();
     } catch (err) {
       stopped = true;
-      params.warn?.(
-        `slack stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      params.warn?.(`slack stream preview failed: ${formatErrorMessage(err)}`);
     }
   };
   const loop = createDraftStreamLoop({
@@ -113,9 +112,7 @@ export function createSlackDraftStream(params: {
         accountId: params.accountId,
       });
     } catch (err) {
-      params.warn?.(
-        `slack stream preview cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      params.warn?.(`slack stream preview cleanup failed: ${formatErrorMessage(err)}`);
     }
   };
 

@@ -28,6 +28,7 @@ export function applyLegacyCompatibilityStep(params: {
     return {
       state: {
         ...params.state,
+        pendingChanges: params.state.pendingChanges || params.snapshot.legacyIssues.length > 0,
         fixHints: params.shouldRepair
           ? params.state.fixHints
           : [
@@ -42,9 +43,14 @@ export function applyLegacyCompatibilityStep(params: {
 
   return {
     state: {
-      cfg: params.shouldRepair ? migrated : params.state.cfg,
+      // Doctor should keep using the best-effort migrated shape in memory even
+      // during preview mode; confirmation only controls whether we write it.
+      cfg: migrated,
       candidate: migrated,
-      pendingChanges: params.state.pendingChanges || changes.length > 0,
+      // The read path can normalize legacy config into the snapshot before
+      // migrateLegacyConfig emits concrete mutations. Legacy issues still mean
+      // the on-disk config needs a doctor --fix path.
+      pendingChanges: params.state.pendingChanges || params.snapshot.legacyIssues.length > 0,
       fixHints: params.shouldRepair
         ? params.state.fixHints
         : [

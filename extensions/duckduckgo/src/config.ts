@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export const DEFAULT_DDG_SAFE_SEARCH = "moderate";
 
@@ -33,7 +34,7 @@ export function resolveDdgRegion(config?: OpenClawConfig): string | undefined {
 
 export function resolveDdgSafeSearch(config?: OpenClawConfig): DdgSafeSearch {
   const safeSearch = resolveDdgWebSearchConfig(config)?.safeSearch;
-  const normalized = typeof safeSearch === "string" ? safeSearch.trim().toLowerCase() : "";
+  const normalized = normalizeLowercaseStringOrEmpty(safeSearch);
   if (normalized === "strict" || normalized === "off") {
     return normalized;
   }

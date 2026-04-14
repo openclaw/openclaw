@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 export type TargetIdResolution =
   | { ok: true; targetId: string }
   | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] };
@@ -16,8 +18,10 @@ export function resolveTargetIdFromTabs(
     return { ok: true, targetId: exact.targetId };
   }
 
-  const lower = needle.toLowerCase();
-  const matches = tabs.map((t) => t.targetId).filter((id) => id.toLowerCase().startsWith(lower));
+  const lower = normalizeLowercaseStringOrEmpty(needle);
+  const matches = tabs
+    .map((t) => t.targetId)
+    .filter((id) => normalizeLowercaseStringOrEmpty(id).startsWith(lower));
 
   const only = matches.length === 1 ? matches[0] : undefined;
   if (only) {

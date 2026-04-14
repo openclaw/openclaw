@@ -11,6 +11,7 @@ import {
   resolveMatrixStoragePaths,
   writeStorageMeta,
 } from "./client/storage.js";
+import type { MatrixAuth, MatrixStoragePaths } from "./client/types.js";
 import {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
@@ -45,6 +46,11 @@ describe("matrix thread bindings", () => {
   const idleTimeoutMs = 24 * 60 * 60 * 1000;
   const matrixClient = {} as never;
 
+  function resetThreadBindingAdapters() {
+    __testing.resetSessionBindingAdaptersForTests();
+    resetMatrixThreadBindingsForTests();
+  }
+
   function currentThreadConversation(params?: {
     conversationId?: string;
     parentConversationId?: string;
@@ -57,15 +63,30 @@ describe("matrix thread bindings", () => {
     };
   }
 
-  async function createStaticThreadBindingManager() {
+  function createBindingManager(
+    params: {
+      auth?: MatrixAuth;
+      stateDir?: string;
+      idleTimeoutMs?: number;
+      maxAgeMs?: number;
+      enableSweeper?: boolean;
+      logVerboseMessage?: (message: string) => void;
+    } = {},
+  ) {
     return createMatrixThreadBindingManager({
       accountId,
-      auth,
+      auth: params.auth ?? auth,
       client: matrixClient,
-      idleTimeoutMs,
-      maxAgeMs: 0,
-      enableSweeper: false,
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+      idleTimeoutMs: params.idleTimeoutMs ?? idleTimeoutMs,
+      maxAgeMs: params.maxAgeMs ?? 0,
+      enableSweeper: params.enableSweeper ?? false,
+      ...(params.logVerboseMessage ? { logVerboseMessage: params.logVerboseMessage } : {}),
     });
+  }
+
+  async function createStaticThreadBindingManager() {
+    return createBindingManager();
   }
 
   async function bindCurrentThread(params?: {
@@ -95,6 +116,16 @@ describe("matrix thread bindings", () => {
     });
   }
 
+  function writeAuthStorageMeta(authForMeta: MatrixAuth, storagePaths: MatrixStoragePaths) {
+    writeStorageMeta({
+      storagePaths,
+      homeserver: authForMeta.homeserver,
+      userId: authForMeta.userId,
+      accountId: authForMeta.accountId,
+      deviceId: authForMeta.deviceId ?? null,
+    });
+  }
+
   async function readPersistedLastActivityAt(bindingsPath: string) {
     const raw = await fs.readFile(bindingsPath, "utf-8");
     const parsed = JSON.parse(raw) as {
@@ -103,10 +134,32 @@ describe("matrix thread bindings", () => {
     return parsed.bindings?.[0]?.lastActivityAt;
   }
 
+  async function expectPersistedThreadBinding(
+    bindingsPath: string,
+    expected: {
+      conversationId: string;
+      targetSessionKey: string;
+      parentConversationId?: string;
+    },
+  ) {
+    await vi.waitFor(async () => {
+      const persistedRaw = await fs.readFile(bindingsPath, "utf-8");
+      expect(JSON.parse(persistedRaw)).toMatchObject({
+        version: 1,
+        bindings: [
+          expect.objectContaining({
+            conversationId: expected.conversationId,
+            parentConversationId: expected.parentConversationId ?? "!room:example",
+            targetSessionKey: expected.targetSessionKey,
+          }),
+        ],
+      });
+    });
+  }
+
   beforeEach(() => {
     stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
-    __testing.resetSessionBindingAdaptersForTests();
-    resetMatrixThreadBindingsForTests();
+    resetThreadBindingAdapters();
     sendMessageMatrixMock.mockClear();
     renameMock.mockReset();
     renameMock.mockImplementation(actualRename);
@@ -384,50 +437,19 @@ describe("matrix thread bindings", () => {
       accessToken: "token-new",
     };
 
-    const initialManager = await createMatrixThreadBindingManager({
-      accountId: "ops",
-      auth: initialAuth,
-      client: {} as never,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-      enableSweeper: false,
-    });
+    const initialManager = await createBindingManager({ auth: initialAuth });
 
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:ops:subagent:child",
-      targetKind: "subagent",
-      conversation: {
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      },
-      placement: "current",
-    });
+    await bindCurrentThread();
     const initialStoragePaths = resolveMatrixStoragePaths({
       ...initialAuth,
       env: process.env,
     });
-    writeStorageMeta({
-      storagePaths: initialStoragePaths,
-      homeserver: initialAuth.homeserver,
-      userId: initialAuth.userId,
-      accountId: initialAuth.accountId,
-      deviceId: null,
-    });
+    writeAuthStorageMeta(initialAuth, initialStoragePaths);
 
     initialManager.stop();
-    resetMatrixThreadBindingsForTests();
-    __testing.resetSessionBindingAdaptersForTests();
+    resetThreadBindingAdapters();
 
-    await createMatrixThreadBindingManager({
-      accountId: "ops",
-      auth: rotatedAuth,
-      client: {} as never,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-      enableSweeper: false,
-    });
+    await createBindingManager({ auth: rotatedAuth });
 
     expect(
       getSessionBindingService().resolveByConversation({
@@ -461,64 +483,24 @@ describe("matrix thread bindings", () => {
       deviceId: "DEVICE123",
     };
 
-    const initialManager = await createMatrixThreadBindingManager({
-      accountId: "ops",
-      auth: initialAuth,
-      client: {} as never,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-      enableSweeper: false,
-    });
+    const initialManager = await createBindingManager({ auth: initialAuth });
 
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:ops:subagent:child",
-      targetKind: "subagent",
-      conversation: {
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      },
-      placement: "current",
-    });
+    await bindCurrentThread();
     const initialStoragePaths = resolveMatrixStoragePaths({
       ...initialAuth,
       env: process.env,
     });
-    writeStorageMeta({
-      storagePaths: initialStoragePaths,
-      homeserver: initialAuth.homeserver,
-      userId: initialAuth.userId,
-      accountId: initialAuth.accountId,
-      deviceId: initialAuth.deviceId,
-    });
+    writeAuthStorageMeta(initialAuth, initialStoragePaths);
     const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
-    await vi.waitFor(async () => {
-      const persistedRaw = await fs.readFile(initialBindingsPath, "utf-8");
-      expect(JSON.parse(persistedRaw)).toMatchObject({
-        version: 1,
-        bindings: [
-          expect.objectContaining({
-            conversationId: "$thread",
-            parentConversationId: "!room:example",
-            targetSessionKey: "agent:ops:subagent:child",
-          }),
-        ],
-      });
+    await expectPersistedThreadBinding(initialBindingsPath, {
+      conversationId: "$thread",
+      targetSessionKey: "agent:ops:subagent:child",
     });
 
     initialManager.stop();
-    resetMatrixThreadBindingsForTests();
-    __testing.resetSessionBindingAdaptersForTests();
+    resetThreadBindingAdapters();
 
-    await createMatrixThreadBindingManager({
-      accountId: "ops",
-      auth: rotatedAuth,
-      client: {} as never,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-      enableSweeper: false,
-    });
+    await createBindingManager({ auth: rotatedAuth });
 
     expect(
       getSessionBindingService().resolveByConversation({
@@ -547,36 +529,14 @@ describe("matrix thread bindings", () => {
       path.join(os.tmpdir(), "matrix-thread-bindings-replacement-"),
     );
 
-    const initialManager = await createMatrixThreadBindingManager({
-      accountId: "ops",
-      auth,
-      client: {} as never,
+    const initialManager = await createBindingManager({
       stateDir: initialStateDir,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-      enableSweeper: false,
     });
 
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:ops:subagent:child",
-      targetKind: "subagent",
-      conversation: {
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      },
-      placement: "current",
-    });
+    await bindCurrentThread();
 
-    const replacementManager = await createMatrixThreadBindingManager({
-      accountId: "ops",
-      auth,
-      client: {} as never,
+    const replacementManager = await createBindingManager({
       stateDir: replacementStateDir,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-      enableSweeper: false,
     });
 
     expect(replacementManager).not.toBe(initialManager);
@@ -590,46 +550,18 @@ describe("matrix thread bindings", () => {
       }),
     ).toBeNull();
 
-    await getSessionBindingService().bind({
+    await bindCurrentThread({
       targetSessionKey: "agent:ops:subagent:replacement",
-      targetKind: "subagent",
-      conversation: {
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread-2",
-        parentConversationId: "!room:example",
-      },
-      placement: "current",
+      conversationId: "$thread-2",
     });
 
-    await vi.waitFor(async () => {
-      const replacementRaw = await fs.readFile(
-        resolveBindingsFilePath(replacementStateDir),
-        "utf-8",
-      );
-      expect(JSON.parse(replacementRaw)).toMatchObject({
-        version: 1,
-        bindings: [
-          expect.objectContaining({
-            conversationId: "$thread-2",
-            parentConversationId: "!room:example",
-            targetSessionKey: "agent:ops:subagent:replacement",
-          }),
-        ],
-      });
+    await expectPersistedThreadBinding(resolveBindingsFilePath(replacementStateDir), {
+      conversationId: "$thread-2",
+      targetSessionKey: "agent:ops:subagent:replacement",
     });
-    await vi.waitFor(async () => {
-      const initialRaw = await fs.readFile(resolveBindingsFilePath(initialStateDir), "utf-8");
-      expect(JSON.parse(initialRaw)).toMatchObject({
-        version: 1,
-        bindings: [
-          expect.objectContaining({
-            conversationId: "$thread",
-            parentConversationId: "!room:example",
-            targetSessionKey: "agent:ops:subagent:child",
-          }),
-        ],
-      });
+    await expectPersistedThreadBinding(resolveBindingsFilePath(initialStateDir), {
+      conversationId: "$thread",
+      targetSessionKey: "agent:ops:subagent:child",
     });
   });
 

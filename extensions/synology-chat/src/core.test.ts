@@ -7,7 +7,6 @@ import {
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { synologyChatPlugin } from "./channel.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   authorizeUserForDm,
@@ -17,8 +16,21 @@ import {
   validateToken,
 } from "./security.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
+import { synologyChatSetupWizard } from "./setup-surface.js";
 
-const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatPlugin);
+const synologyChatSetupPlugin = {
+  id: "synology-chat",
+  meta: { label: "Synology Chat" },
+  setupWizard: synologyChatSetupWizard,
+  config: {
+    listAccountIds,
+    defaultAccountId: () => "default",
+    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
+      resolveAccount(cfg, accountId).allowedUserIds,
+  },
+};
+
+const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatSetupPlugin);
 const originalEnv = { ...process.env };
 
 describe("synology-chat core", () => {

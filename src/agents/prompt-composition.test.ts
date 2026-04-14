@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createPromptCompositionScenarios,
   type PromptScenario,
-} from "./prompt-composition-scenarios.js";
+} from "../../test/helpers/agents/prompt-composition-scenarios.js";
 
 type ScenarioFixture = Awaited<ReturnType<typeof createPromptCompositionScenarios>>;
 

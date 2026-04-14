@@ -2,7 +2,7 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 
 export type VoyageEmbeddingClient = {
   baseUrl: string;

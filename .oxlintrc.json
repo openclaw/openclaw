@@ -8,25 +8,29 @@
   },
   "rules": {
     "curly": "error",
-    "eslint-plugin-unicorn/prefer-array-find": "off",
+    "eslint-plugin-unicorn/prefer-array-find": "error",
     "eslint/no-await-in-loop": "off",
-    "eslint/no-new": "off",
+    "eslint/no-new": "error",
     "eslint/no-shadow": "off",
-    "eslint/no-unmodified-loop-condition": "off",
-    "oxc/no-accumulating-spread": "off",
+    "eslint/no-unmodified-loop-condition": "error",
+    "eslint-plugin-unicorn/prefer-set-size": "error",
+    "oxc/no-accumulating-spread": "error",
     "oxc/no-async-endpoint-handlers": "off",
     "oxc/no-map-spread": "off",
+    "typescript/consistent-return": "error",
     "typescript/no-explicit-any": "error",
-    "typescript/no-extraneous-class": "off",
+    "typescript/no-extraneous-class": "error",
+    "typescript/no-unnecessary-type-conversion": "error",
     "typescript/no-unsafe-type-assertion": "off",
     "unicorn/consistent-function-scoping": "off",
-    "unicorn/require-post-message-target-origin": "off"
+    "unicorn/prefer-set-size": "error",
+    "unicorn/require-post-message-target-origin": "error"
   },
   "ignorePatterns": [
     "assets/",
     "dist/",
+    "dist-runtime/",
     "docs/_layouts/",
-    "extensions/",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",
@@ -34,6 +38,30 @@
     "src/auto-reply/reply/export-html/template.js",
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "Swabble/",
-    "vendor/"
+    "vendor/",
+    "**/.cache/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/dist/**",
+    "**/dist-runtime/**",
+    "**/node_modules/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.e2e.test.ts",
+        "**/*.live.test.ts",
+        "**/*test-harness.ts",
+        "**/*test-helpers.ts",
+        "**/*test-support.ts"
+      ],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        "typescript/unbound-method": "off",
+        "eslint/no-unsafe-optional-chaining": "off"
+      }
+    }
   ]
 }

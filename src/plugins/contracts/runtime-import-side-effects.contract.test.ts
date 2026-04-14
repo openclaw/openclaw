@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertNoImportTimeSideEffects } from "./testkit.js";
+import { assertNoImportTimeSideEffects } from "../../../test/helpers/plugins/contracts-testkit.js";
 
 const listChannelPlugins = vi.hoisted(() =>
   vi.fn(() => [
@@ -90,6 +90,20 @@ describe("runtime import side-effect contracts", () => {
     await import("../runtime/runtime-channel.js");
 
     expectNoChannelRegistryDuringImport("src/plugins/runtime/runtime-channel.ts");
+  });
+
+  it("keeps plugin-sdk/approval-handler-adapter-runtime cold on import", async () => {
+    mockChannelRegistry();
+    await import("../../plugin-sdk/approval-handler-adapter-runtime.js");
+
+    expectNoChannelRegistryDuringImport("src/plugin-sdk/approval-handler-adapter-runtime.ts");
+  });
+
+  it("keeps plugin-sdk/approval-gateway-runtime cold on import", async () => {
+    mockChannelRegistry();
+    await import("../../plugin-sdk/approval-gateway-runtime.js");
+
+    expectNoChannelRegistryDuringImport("src/plugin-sdk/approval-gateway-runtime.ts");
   });
 
   it("keeps plugins/runtime/runtime-system cold on import", async () => {

@@ -1,46 +1,51 @@
+import * as fs from "node:fs";
 import * as path from "path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   getAccessToken,
+  sendC2CFileMessage,
+  sendC2CImageMessage,
   sendC2CMessage,
+  sendC2CVideoMessage,
+  sendC2CVoiceMessage,
   sendChannelMessage,
   sendDmMessage,
+  sendGroupFileMessage,
+  sendGroupImageMessage,
   sendGroupMessage,
+  sendGroupVideoMessage,
+  sendGroupVoiceMessage,
   sendProactiveC2CMessage,
   sendProactiveGroupMessage,
-  sendC2CImageMessage,
-  sendGroupImageMessage,
-  sendC2CVoiceMessage,
-  sendGroupVoiceMessage,
-  sendC2CVideoMessage,
-  sendGroupVideoMessage,
-  sendC2CFileMessage,
-  sendGroupFileMessage,
 } from "./api.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 import {
-  isAudioFile,
   audioFileToSilkBase64,
-  waitForFile,
+  isAudioFile,
   shouldTranscodeVoice,
+  waitForFile,
 } from "./utils/audio-convert.js";
-import { debugLog, debugError, debugWarn } from "./utils/debug-log.js";
-import { downloadFile } from "./utils/file-utils.js";
+import { debugError, debugLog, debugWarn } from "./utils/debug-log.js";
 import {
   checkFileSize,
-  readFileAsync,
+  downloadFile,
   fileExistsAsync,
-  isLargeFile,
   formatFileSize,
+  readFileAsync,
 } from "./utils/file-utils.js";
 import { normalizeMediaTags } from "./utils/media-tags.js";
 import { decodeCronPayload } from "./utils/payload.js";
 import {
-  isLocalPath as isLocalFilePath,
-  normalizePath,
-  resolveQQBotLocalMediaPath,
-  sanitizeFileName,
   getQQBotDataDir,
   getQQBotMediaDir,
+  isLocalPath as isLocalFilePath,
+  normalizePath,
+  resolveQQBotPayloadLocalFilePath,
+  sanitizeFileName,
 } from "./utils/platform.js";
 
 // Limit passive replies per message_id within the QQ Bot reply window.
@@ -52,7 +57,17 @@ interface MessageReplyRecord {
   firstReplyAt: number;
 }
 
+type QQMessageResult = {
+  ext_info?: {
+    ref_idx?: string;
+  };
+};
+
 const messageReplyTracker = new Map<string, MessageReplyRecord>();
+
+function getRefIdx(result: QQMessageResult): string | undefined {
+  return result.ext_info?.ref_idx;
+}
 
 /** Result of the passive-reply limit check. */
 export interface ReplyLimitResult {
@@ -260,6 +275,148 @@ function shouldDirectUploadUrl(account: ResolvedQQBotAccount): boolean {
   return account.config?.urlDirectUpload !== false;
 }
 
+type QQBotMediaKind = "image" | "voice" | "video" | "file" | "media";
+
+const qqBotMediaKindLabel: Record<QQBotMediaKind, string> = {
+  image: "Image",
+  voice: "Voice",
+  video: "Video",
+  file: "File",
+  media: "Media",
+};
+
+type ResolvedOutboundMediaPath = { ok: true; mediaPath: string } | { ok: false; error: string };
+type ResolveOutboundMediaPathOptions = {
+  allowMissingLocalPath?: boolean;
+  extraLocalRoots?: string[];
+};
+type SendDocumentOptions = {
+  allowQQBotDataDownloads?: boolean;
+};
+
+function isHttpOrDataSource(pathValue: string): boolean {
+  return (
+    pathValue.startsWith("http://") ||
+    pathValue.startsWith("https://") ||
+    pathValue.startsWith("data:")
+  );
+}
+
+function isPathWithinRoot(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveMissingPathWithinMediaRoot(normalizedPath: string): string | null {
+  const resolvedCandidate = path.resolve(normalizedPath);
+  if (fs.existsSync(resolvedCandidate)) {
+    return null;
+  }
+
+  const allowedRoot = path.resolve(getQQBotMediaDir());
+  let canonicalAllowedRoot: string;
+  try {
+    canonicalAllowedRoot = fs.realpathSync(allowedRoot);
+  } catch {
+    return null;
+  }
+
+  const missingSegments: string[] = [];
+  let cursor = resolvedCandidate;
+  while (!fs.existsSync(cursor)) {
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    missingSegments.unshift(path.basename(cursor));
+    cursor = parent;
+  }
+
+  if (!fs.existsSync(cursor)) {
+    return null;
+  }
+
+  let canonicalCursor: string;
+  try {
+    canonicalCursor = fs.realpathSync(cursor);
+  } catch {
+    return null;
+  }
+  const canonicalCandidate =
+    missingSegments.length > 0 ? path.join(canonicalCursor, ...missingSegments) : canonicalCursor;
+
+  return isPathWithinRoot(canonicalCandidate, canonicalAllowedRoot) ? canonicalCandidate : null;
+}
+
+function resolveExistingPathWithinRoots(
+  normalizedPath: string,
+  allowedRoots: readonly string[],
+): string | null {
+  const resolvedCandidate = path.resolve(normalizedPath);
+  if (!fs.existsSync(resolvedCandidate)) {
+    return null;
+  }
+
+  let canonicalCandidate: string;
+  try {
+    canonicalCandidate = fs.realpathSync(resolvedCandidate);
+  } catch {
+    return null;
+  }
+
+  for (const root of allowedRoots) {
+    const resolvedRoot = path.resolve(root);
+    const canonicalRoot = fs.existsSync(resolvedRoot)
+      ? fs.realpathSync(resolvedRoot)
+      : resolvedRoot;
+    if (isPathWithinRoot(canonicalCandidate, canonicalRoot)) {
+      return canonicalCandidate;
+    }
+  }
+
+  return null;
+}
+
+function resolveOutboundMediaPath(
+  rawPath: string,
+  prefix: string,
+  mediaKind: QQBotMediaKind,
+  options: ResolveOutboundMediaPathOptions = {},
+): ResolvedOutboundMediaPath {
+  const normalizedPath = normalizePath(rawPath);
+  if (isHttpOrDataSource(normalizedPath)) {
+    return { ok: true, mediaPath: normalizedPath };
+  }
+
+  const allowedPath = resolveQQBotPayloadLocalFilePath(normalizedPath);
+  if (allowedPath) {
+    return { ok: true, mediaPath: allowedPath };
+  }
+
+  if (options.extraLocalRoots && options.extraLocalRoots.length > 0) {
+    const extraAllowedPath = resolveExistingPathWithinRoots(
+      normalizedPath,
+      options.extraLocalRoots,
+    );
+    if (extraAllowedPath) {
+      return { ok: true, mediaPath: extraAllowedPath };
+    }
+  }
+
+  if (options.allowMissingLocalPath) {
+    const allowedMissingPath = resolveMissingPathWithinMediaRoot(normalizedPath);
+    if (allowedMissingPath) {
+      return { ok: true, mediaPath: allowedMissingPath };
+    }
+  }
+
+  debugWarn(`${prefix} blocked local ${mediaKind} path outside QQ Bot media storage`);
+  return {
+    ok: false,
+    error: `${qqBotMediaKindLabel[mediaKind]} path must be inside QQ Bot media storage`,
+  };
+}
+
 /**
  * Send a photo from a local file, public URL, or Base64 data URL.
  */
@@ -268,7 +425,11 @@ export async function sendPhoto(
   imagePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(imagePath));
+  const resolvedMediaPath = resolveOutboundMediaPath(imagePath, prefix, "image");
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaPath = resolvedMediaPath.mediaPath;
   const isLocal = isLocalFilePath(mediaPath);
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const isData = mediaPath.startsWith("data:");
@@ -294,7 +455,7 @@ export async function sendPhoto(
       return { channel: "qqbot", error: sizeCheck.error! };
     }
     const fileBuffer = await readFileAsync(mediaPath);
-    const ext = path.extname(mediaPath).toLowerCase();
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(mediaPath));
     const mimeTypes: Record<string, string> = {
       ".jpg": "image/jpeg",
       ".jpeg": "image/jpeg",
@@ -347,7 +508,7 @@ export async function sendPhoto(
       return { channel: "qqbot", error: "Channel does not support local/Base64 images" };
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatErrorMessage(err);
 
     // Fall back to plugin-managed download + Base64 when QQ fails to fetch the URL directly.
     if (isHttp && !isData) {
@@ -355,7 +516,9 @@ export async function sendPhoto(
         `${prefix} sendPhoto: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
       const retryResult = await downloadAndRetrySendPhoto(ctx, mediaPath, prefix);
-      if (retryResult) return retryResult;
+      if (retryResult) {
+        return retryResult;
+      }
     }
 
     debugError(`${prefix} sendPhoto failed: ${msg}`);
@@ -397,7 +560,13 @@ export async function sendVoice(
   transcodeEnabled: boolean = true,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(voicePath));
+  const resolvedMediaPath = resolveOutboundMediaPath(voicePath, prefix, "voice", {
+    allowMissingLocalPath: true,
+  });
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaPath = resolvedMediaPath.mediaPath;
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   if (isHttp) {
@@ -429,7 +598,7 @@ export async function sendVoice(
           return { channel: "qqbot", error: "Voice not supported in channel" };
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = formatErrorMessage(err);
         debugWarn(
           `${prefix} sendVoice: URL direct upload failed (${msg}), downloading locally and retrying...`,
         );
@@ -468,10 +637,17 @@ async function sendVoiceFromLocal(
     return { channel: "qqbot", error: "Voice generate failed" };
   }
 
-  const needsTranscode = shouldTranscodeVoice(mediaPath);
+  // Re-check containment after the file appears to prevent symlink-race escapes.
+  const safeMediaPath = resolveQQBotPayloadLocalFilePath(mediaPath);
+  if (!safeMediaPath) {
+    debugWarn(`${prefix} sendVoice: blocked local voice path outside QQ Bot media storage`);
+    return { channel: "qqbot", error: "Voice path must be inside QQ Bot media storage" };
+  }
+
+  const needsTranscode = shouldTranscodeVoice(safeMediaPath);
 
   if (needsTranscode && !transcodeEnabled) {
-    const ext = path.extname(mediaPath).toLowerCase();
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(safeMediaPath));
     debugLog(
       `${prefix} sendVoice: transcode disabled, format ${ext} needs transcode, returning error for fallback`,
     );
@@ -482,11 +658,11 @@ async function sendVoiceFromLocal(
   }
 
   try {
-    const silkBase64 = await audioFileToSilkBase64(mediaPath, directUploadFormats);
+    const silkBase64 = await audioFileToSilkBase64(safeMediaPath, directUploadFormats);
     let uploadBase64 = silkBase64;
 
     if (!uploadBase64) {
-      const buf = await readFileAsync(mediaPath);
+      const buf = await readFileAsync(safeMediaPath);
       uploadBase64 = buf.toString("base64");
       debugLog(
         `${prefix} sendVoice: SILK conversion failed, uploading raw (${formatFileSize(buf.length)})`,
@@ -506,7 +682,7 @@ async function sendVoiceFromLocal(
         undefined,
         ctx.replyToId,
         undefined,
-        mediaPath,
+        safeMediaPath,
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else if (ctx.targetType === "group") {
@@ -524,7 +700,7 @@ async function sendVoiceFromLocal(
       return { channel: "qqbot", error: "Voice not supported in channel" };
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatErrorMessage(err);
     debugError(`${prefix} sendVoice (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
@@ -536,7 +712,11 @@ export async function sendVideoMsg(
   videoPath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(videoPath));
+  const resolvedMediaPath = resolveOutboundMediaPath(videoPath, prefix, "video");
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaPath = resolvedMediaPath.mediaPath;
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
@@ -580,7 +760,7 @@ export async function sendVideoMsg(
 
     return await sendVideoFromLocal(ctx, mediaPath, prefix);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatErrorMessage(err);
 
     // If direct URL upload fails, retry through a local download path.
     if (isHttp) {
@@ -645,7 +825,7 @@ async function sendVideoFromLocal(
       return { channel: "qqbot", error: "Video not supported in channel" };
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatErrorMessage(err);
     debugError(`${prefix} sendVideoMsg (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
@@ -655,9 +835,19 @@ async function sendVideoFromLocal(
 export async function sendDocument(
   ctx: MediaTargetContext,
   filePath: string,
+  options: SendDocumentOptions = {},
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(filePath));
+  const extraLocalRoots = options.allowQQBotDataDownloads
+    ? [getQQBotDataDir("downloads")]
+    : undefined;
+  const resolvedMediaPath = resolveOutboundMediaPath(filePath, prefix, "file", {
+    extraLocalRoots,
+  });
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaPath = resolvedMediaPath.mediaPath;
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const fileName = sanitizeFileName(path.basename(mediaPath));
 
@@ -704,7 +894,7 @@ export async function sendDocument(
 
     return await sendDocumentFromLocal(ctx, mediaPath, prefix);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatErrorMessage(err);
 
     // If direct URL upload fails, retry through a local download path.
     if (isHttp) {
@@ -774,7 +964,7 @@ async function sendDocumentFromLocal(
       return { channel: "qqbot", error: "File not supported in channel" };
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatErrorMessage(err);
     debugError(`${prefix} sendDocument (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
@@ -875,9 +1065,9 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         sendQueue.push({ type: "text", content: textBefore });
       }
 
-      const tagName = match[1]!.toLowerCase();
+      const tagName = normalizeLowercaseStringOrEmpty(match[1]);
 
-      let mediaPath = match[2]?.trim() ?? "";
+      let mediaPath = normalizeOptionalString(match[2]) ?? "";
       if (mediaPath.startsWith("MEDIA:")) {
         mediaPath = mediaPath.slice("MEDIA:".length);
       }
@@ -921,7 +1111,11 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           }
         }
       } catch (decodeErr) {
-        debugError(`[qqbot] sendText: Path decode error: ${decodeErr}`);
+        debugError(
+          `[qqbot] sendText: Path decode error: ${
+            decodeErr instanceof Error ? decodeErr.message : JSON.stringify(decodeErr)
+          }`,
+        );
       }
 
       if (mediaPath) {
@@ -1008,7 +1202,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: getRefIdx(result),
               };
             }
           } else {
@@ -1025,7 +1219,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: getRefIdx(result),
               };
             } else if (target.type === "group") {
               const result = await sendProactiveGroupMessage(
@@ -1038,7 +1232,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: getRefIdx(result),
               };
             } else {
               const result = await sendChannelMessage(accessToken, target.id, item.content);
@@ -1046,7 +1240,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: getRefIdx(result),
               };
             }
           }
@@ -1076,7 +1270,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           });
         }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = formatErrorMessage(err);
         debugError(`[qqbot] sendText: Failed to send ${item.type}: ${errMsg}`);
         lastResult = { channel: "qqbot", error: errMsg };
       }
@@ -1119,7 +1313,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: getRefIdx(result),
         };
       } else if (target.type === "group") {
         const result = await sendProactiveGroupMessage(account.appId, accessToken, target.id, text);
@@ -1127,7 +1321,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: getRefIdx(result),
         };
       } else {
         const result = await sendChannelMessage(accessToken, target.id, text);
@@ -1135,7 +1329,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: getRefIdx(result),
         };
       }
       return outResult;
@@ -1166,11 +1360,11 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: getRefIdx(result),
       };
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return { channel: "qqbot", error: message };
   }
 }
@@ -1218,7 +1412,7 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: getRefIdx(result),
       };
     } else if (target.type === "group") {
       debugLog(
@@ -1232,7 +1426,7 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: getRefIdx(result),
       };
     } else {
       debugLog(
@@ -1246,12 +1440,12 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: getRefIdx(result),
       };
     }
     return outResult;
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = formatErrorMessage(err);
     debugError(`[${timestamp}] [qqbot] sendProactiveMessage: error: ${errorMessage}`);
     debugError(
       `[${timestamp}] [qqbot] sendProactiveMessage: error stack: ${err instanceof Error ? err.stack : "No stack trace"}`,
@@ -1263,14 +1457,20 @@ export async function sendProactiveMessage(
 /** Send rich media, auto-routing by media type and source. */
 export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResult> {
   const { to, text, replyToId, account, mimeType } = ctx;
-  const mediaUrl = resolveQQBotLocalMediaPath(normalizePath(ctx.mediaUrl));
 
   if (!account.appId || !account.clientSecret) {
     return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
   }
-  if (!mediaUrl) {
+  if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
   }
+  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "[qqbot:sendMedia]", "media", {
+    allowMissingLocalPath: true,
+  });
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaUrl = resolvedMediaPath.mediaPath;
 
   const target = buildMediaTarget({ to, account, replyToId }, "[qqbot:sendMedia]");
 
@@ -1283,7 +1483,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
     const result = await sendVoice(target, mediaUrl, formats, transcodeEnabled);
     if (!result.error) {
-      if (text?.trim()) await sendTextAfterMedia(target, text);
+      if (text?.trim()) {
+        await sendTextAfterMedia(target, text);
+      }
       return result;
     }
     // Preserve the voice error and fall back to file send.
@@ -1291,7 +1493,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     debugWarn(`[qqbot] sendMedia: sendVoice failed (${voiceError}), falling back to sendDocument`);
     const fallback = await sendDocument(target, mediaUrl);
     if (!fallback.error) {
-      if (text?.trim()) await sendTextAfterMedia(target, text);
+      if (text?.trim()) {
+        await sendTextAfterMedia(target, text);
+      }
       return fallback;
     }
     return { channel: "qqbot", error: `voice: ${voiceError} | fallback file: ${fallback.error}` };
@@ -1299,7 +1503,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
 
   if (isVideoFile(mediaUrl, mimeType)) {
     const result = await sendVideoMsg(target, mediaUrl);
-    if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+    if (!result.error && text?.trim()) {
+      await sendTextAfterMedia(target, text);
+    }
     return result;
   }
 
@@ -1310,13 +1516,17 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     !isVideoFile(mediaUrl, mimeType)
   ) {
     const result = await sendDocument(target, mediaUrl);
-    if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+    if (!result.error && text?.trim()) {
+      await sendTextAfterMedia(target, text);
+    }
     return result;
   }
 
   // Default to image handling. sendPhoto already contains URL fallback logic.
   const result = await sendPhoto(target, mediaUrl);
-  if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+  if (!result.error && text?.trim()) {
+    await sendTextAfterMedia(target, text);
+  }
   return result;
 }
 
@@ -1334,20 +1544,24 @@ async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promis
       await sendDmMessage(token, ctx.targetId, text, ctx.replyToId);
     }
   } catch (err) {
-    debugError(`[qqbot] sendTextAfterMedia failed: ${err}`);
+    debugError(
+      `[qqbot] sendTextAfterMedia failed: ${err instanceof Error ? err.message : JSON.stringify(err)}`,
+    );
   }
 }
 
 /** Extract a lowercase extension from a path or URL, ignoring query and hash segments. */
 function getCleanExt(filePath: string): string {
-  const cleanPath = filePath.split("?")[0]!.split("#")[0]!;
-  return path.extname(cleanPath).toLowerCase();
+  const cleanPath = filePath.split("?")[0].split("#")[0];
+  return normalizeLowercaseStringOrEmpty(path.extname(cleanPath));
 }
 
 /** Check whether a file is an image using MIME first and extension as fallback. */
 function isImageFile(filePath: string, mimeType?: string): boolean {
   if (mimeType) {
-    if (mimeType.startsWith("image/")) return true;
+    if (mimeType.startsWith("image/")) {
+      return true;
+    }
   }
   const ext = getCleanExt(filePath);
   return [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"].includes(ext);
@@ -1356,7 +1570,9 @@ function isImageFile(filePath: string, mimeType?: string): boolean {
 /** Check whether a file or URL is a video using MIME first and extension as fallback. */
 function isVideoFile(filePath: string, mimeType?: string): boolean {
   if (mimeType) {
-    if (mimeType.startsWith("video/")) return true;
+    if (mimeType.startsWith("video/")) {
+      return true;
+    }
   }
   const ext = getCleanExt(filePath);
   return [".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"].includes(ext);

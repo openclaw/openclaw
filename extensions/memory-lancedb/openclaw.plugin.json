@@ -38,6 +38,10 @@
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context"
     },
+    "dreaming": {
+      "label": "Dreaming",
+      "help": "Optional dreaming config consumed when this plugin owns the memory slot"
+    },
     "captureMaxChars": {
       "label": "Capture Max Chars",
       "help": "Maximum message length eligible for auto-capture",
@@ -76,6 +80,9 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "dreaming": {
+        "type": "object"
       },
       "captureMaxChars": {
         "type": "number",

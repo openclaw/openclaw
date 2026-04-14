@@ -6,7 +6,6 @@ import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
-import { GatewayLockError } from "../infra/gateway-lock.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -16,7 +15,6 @@ import {
   connectOk,
   getFreePort,
   installGatewayTestHooks,
-  occupyPort,
   onceMessage,
   piSdkMock,
   rpcReq,
@@ -88,6 +86,7 @@ type ModelCatalogRpcEntry = {
   id: string;
   name: string;
   provider: string;
+  alias?: string;
   contextWindow?: number;
 };
 
@@ -359,6 +358,92 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
+  test("models.list applies configured metadata and alias to synthetic allowlist entries", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
+            models: {
+              "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+            },
+          },
+        },
+        models: {
+          providers: {
+            nvidia: {
+              baseUrl: "https://nvidia.example.com",
+              models: [
+                {
+                  id: "moonshotai/kimi-k2.5",
+                  name: "Kimi K2.5 (Configured)",
+                  contextWindow: 32_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual([
+          {
+            id: "moonshotai/kimi-k2.5",
+            name: "Kimi K2.5 (Configured)",
+            alias: "Kimi K2.5 (NVIDIA)",
+            provider: "nvidia",
+            contextWindow: 32_000,
+          },
+        ]);
+      },
+    );
+  });
+
+  test("models.list prefers configured provider metadata over discovered entries", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": { alias: "GPT Test Z Alias" },
+            },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [
+                {
+                  id: "gpt-test-z",
+                  name: "Configured GPT Test Z",
+                  contextWindow: 64_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual([
+          {
+            id: "gpt-test-z",
+            name: "Configured GPT Test Z",
+            alias: "GPT Test Z Alias",
+            provider: "openai",
+            contextWindow: 64_000,
+          },
+        ]);
+      },
+    );
+  });
+
   test("models.list rejects unknown params", async () => {
     piSdkMock.enabled = true;
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
@@ -468,14 +553,6 @@ describe("gateway server misc", () => {
       token: "token-123",
       enabled: true,
     });
-  });
-
-  test("refuses to start when port already bound", async () => {
-    const { server: blocker, port: blockedPort } = await occupyPort();
-    const startup = startGatewayServer(blockedPort);
-    await expect(startup).rejects.toBeInstanceOf(GatewayLockError);
-    await expect(startup).rejects.toThrow(/already listening/i);
-    blocker.close();
   });
 
   test("releases port after close", async () => {

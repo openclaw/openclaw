@@ -235,15 +235,21 @@ internal fun gatewayEndpointValidationMessage(
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE -> "Setup code has invalid gateway URL."
         GatewayEndpointInputSource.QR_SCAN -> "QR code did not contain a valid setup code."
-        GatewayEndpointInputSource.MANUAL -> "Enter a valid manual host and port to connect."
+        GatewayEndpointInputSource.MANUAL -> "Enter a valid manual endpoint to connect."
       }
   }
 }
 
 internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: Boolean): String? {
   val host = hostInput.trim()
-  val port = portInput.trim().toIntOrNull() ?: return null
-  if (host.isEmpty() || port !in 1..65535) return null
+  if (host.isEmpty()) return null
+  val portTrimmed = portInput.trim()
+  val port = if (portTrimmed.isEmpty()) {
+    if (tls) 443 else return null
+  } else {
+    portTrimmed.toIntOrNull() ?: return null
+  }
+  if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://$host:$port"
 }

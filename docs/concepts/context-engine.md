@@ -115,6 +115,8 @@ engine is used automatically.
 A plugin can register a context engine using the plugin API:
 
 ```ts
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
 export default function register(api) {
   api.registerContextEngine("my-engine", () => ({
     info: {
@@ -128,12 +130,15 @@ export default function register(api) {
       return { ingested: true };
     },
 
-    async assemble({ sessionId, messages, tokenBudget }) {
+    async assemble({ sessionId, messages, tokenBudget, availableTools, citationsMode }) {
       // Return messages that fit the budget
       return {
         messages: buildContext(messages, tokenBudget),
         estimatedTokens: countTokens(messages),
-        systemPromptAddition: "Use lcm_grep to search history...",
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
       };
     },
 
@@ -248,7 +253,13 @@ OpenClaw resolves when it needs a context engine.
 - **Memory plugins** (`plugins.slots.memory`) are separate from context engines.
   Memory plugins provide search/retrieval; context engines control what the
   model sees. They can work together — a context engine might use memory
-  plugin data during assembly.
+  plugin data during assembly. Plugin engines that want the active memory
+  prompt path should prefer `buildMemorySystemPromptAddition(...)` from
+  `openclaw/plugin-sdk/core`, which converts the active memory prompt sections
+  into a ready-to-prepend `systemPromptAddition`. If an engine needs lower-level
+  control, it can still pull raw lines from
+  `openclaw/plugin-sdk/memory-host-core` via
+  `buildActiveMemoryPromptSection(...)`.
 - **Session pruning** (trimming old tool results in-memory) still runs
   regardless of which context engine is active.
 

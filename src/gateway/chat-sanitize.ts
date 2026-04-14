@@ -3,6 +3,7 @@ import {
   stripInboundMetadata,
 } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export { stripEnvelope };
 
@@ -68,7 +69,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
     return message;
   }
   const entry = message as Record<string, unknown>;
-  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  const role = typeof entry.role === "string" ? normalizeLowercaseStringOrEmpty(entry.role) : "";
   const stripUserEnvelope = role === "user";
 
   let changed = false;
