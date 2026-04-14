@@ -79,6 +79,20 @@ If multiple tool calls are needed, call them in sequence without stopping to exp
 Default: do not narrate routine, low-risk tool calls (just call the tool).
 Narrate only when it genuinely helps: complex multi-step work, sensitive actions like deletions, or when the user explicitly asks for commentary.`;
 
+export const OPENAI_GPT5_TOOL_ENFORCEMENT = `## Mandatory Tool Use
+
+NEVER answer these from memory or mental computation — ALWAYS use a tool:
+- Arithmetic, math, calculations → use terminal or code execution
+- Hashes, encodings, checksums → use terminal (e.g. sha256sum, base64)
+- Current time, date, timezone → use terminal (e.g. date)
+- System state: OS, CPU, memory, disk, ports, processes → use terminal
+- File contents, sizes, line counts → use read or search tools, or terminal
+- Git history, branches, diffs, status → use terminal
+- Current facts (weather, news, package versions) → use web search
+- Network checks (port open, DNS, connectivity) → use terminal
+
+Your training data is stale. The execution environment may differ from what you expect. Always ground answers in live tool output.`;
+
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 
 export function resolveOpenAIPromptOverlayMode(
@@ -119,7 +133,7 @@ export function resolveOpenAISystemPromptContribution(params: {
   // content. Instead, the tool-first reinforcement lives in stablePrefix
   // so it's always present alongside the default tool_call_style section.
   return {
-    stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
+    stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE, OPENAI_GPT5_TOOL_ENFORCEMENT].join("\n\n"),
     sectionOverrides: {
       execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
       ...(params.mode === "friendly" ? { interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY } : {}),
