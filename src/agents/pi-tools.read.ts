@@ -550,6 +550,20 @@ function createSandboxEditOperations(params: SandboxToolParams) {
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow writes anywhere on the host
+    return {
+      mkdir: async (dir: string) => {
+        const resolved = path.resolve(dir);
+        await fs.mkdir(resolved, { recursive: true });
+      },
+      writeFile: writeHostFile, // Function that writes to absolute paths
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary
   return {
     writeFile: (relativePath: string, data: string) =>
       writeFileWithinRoot({
@@ -558,7 +572,8 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         data,
         mkdir: true,
       }),
-    mkdir: (relativePath: string) => fs.mkdir(path.join(root, relativePath), { recursive: true }).then(() => {})
+    mkdir: (relativePath: string) => 
+      fs.mkdir(path.join(root, relativePath), { recursive: true }).then(() => {})
   };
 }
 
