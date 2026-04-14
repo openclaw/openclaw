@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
+import { isModelNotFoundErrorMessage } from "../src/agents/live-model-errors.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
+import {
+  isAuthErrorMessage,
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+  isServerErrorMessage,
+  isTimeoutErrorMessage,
+} from "../src/agents/pi-embedded-helpers/failover-matches.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import { isTruthyEnvValue } from "../src/infra/env.js";
 import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../src/infra/shell-env.js";
@@ -149,6 +157,29 @@ function maybeLoadShellEnvForVideoProviders(providerIds: string[]): void {
   });
 }
 
+function resolveLiveVideoSkipReason(message: string): string | null {
+  if (isAuthErrorMessage(message)) {
+    return "auth drift";
+  }
+  if (isModelNotFoundErrorMessage(message)) {
+    return "model drift";
+  }
+  if (isBillingErrorMessage(message)) {
+    return "billing drift";
+  }
+  if (
+    isTimeoutErrorMessage(message) ||
+    /did not finish in time/i.test(message) ||
+    /last status:\s*in_progress/i.test(message)
+  ) {
+    return "provider timeout";
+  }
+  if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
+    return "provider outage";
+  }
+  return null;
+}
+
 function expectBufferedVideo(
   video: { buffer?: Buffer; mimeType: string; fileName?: string } | undefined,
 ): { buffer: Buffer; mimeType: string; fileName?: string } {
@@ -162,225 +193,241 @@ function expectBufferedVideo(
   return { buffer, mimeType, fileName };
 }
 
-describeLive("video generation provider live", () => {
-  it(
-    "covers declared video-generation modes with shell/profile auth",
-    async () => {
-      const cfg = withPluginsEnabled(loadConfig());
-      const configuredModels = resolveConfiguredLiveVideoModels(cfg);
-      const agentDir = resolveOpenClawAgentDir();
-      const attempted: string[] = [];
-      const skipped: string[] = [];
-      const failures: string[] = [];
+async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<void> {
+  const cfg = withPluginsEnabled(loadConfig());
+  const configuredModels = resolveConfiguredLiveVideoModels(cfg);
+  const agentDir = resolveOpenClawAgentDir();
+  const attempted: string[] = [];
+  const skipped: string[] = [];
+  const failures: string[] = [];
 
-      maybeLoadShellEnvForVideoProviders(CASES.map((entry) => entry.providerId));
+  maybeLoadShellEnvForVideoProviders([testCase.providerId]);
 
-      for (const testCase of CASES) {
-        const modelRef =
-          envModelMap.get(testCase.providerId) ??
-          configuredModels.get(testCase.providerId) ??
-          DEFAULT_LIVE_VIDEO_MODELS[testCase.providerId];
-        if (!modelRef) {
-          skipped.push(`${testCase.providerId}: no model configured`);
-          continue;
-        }
+  const modelRef =
+    envModelMap.get(testCase.providerId) ??
+    configuredModels.get(testCase.providerId) ??
+    DEFAULT_LIVE_VIDEO_MODELS[testCase.providerId];
+  if (!modelRef) {
+    skipped.push(`${testCase.providerId}: no model configured`);
+    console.log(
+      `[live:video-generation] provider=${testCase.providerId} attempted=none skipped=${skipped.join(", ")} failures=none shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
+    );
+    return;
+  }
 
-        const hasLiveKeys = collectProviderApiKeys(testCase.providerId).length > 0;
-        const authStore = resolveLiveVideoAuthStore({
-          requireProfileKeys: REQUIRE_PROFILE_KEYS,
-          hasLiveKeys,
+  const hasLiveKeys = collectProviderApiKeys(testCase.providerId).length > 0;
+  const authStore = resolveLiveVideoAuthStore({
+    requireProfileKeys: REQUIRE_PROFILE_KEYS,
+    hasLiveKeys,
+  });
+  let authLabel = "unresolved";
+  try {
+    const auth = await resolveApiKeyForProvider({
+      provider: testCase.providerId,
+      cfg,
+      agentDir,
+      store: authStore,
+    });
+    authLabel = `${auth.source} ${redactLiveApiKey(auth.apiKey)}`;
+  } catch {
+    skipped.push(`${testCase.providerId}: no usable auth`);
+    console.log(
+      `[live:video-generation] provider=${testCase.providerId} attempted=none skipped=${skipped.join(", ")} failures=none shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
+    );
+    return;
+  }
+
+  const { videoProviders } = await registerProviderPlugin({
+    plugin: testCase.plugin,
+    id: testCase.pluginId,
+    name: testCase.pluginName,
+  });
+  const provider = requireRegisteredProvider(videoProviders, testCase.providerId, "video provider");
+  const providerModel = resolveProviderModelForLiveTest(testCase.providerId, modelRef);
+  const generateCaps = provider.capabilities.generate;
+  const imageToVideoCaps = provider.capabilities.imageToVideo;
+  const videoToVideoCaps = provider.capabilities.videoToVideo;
+  const durationSeconds = Math.min(generateCaps?.maxDurationSeconds ?? 3, 3);
+  const liveResolution = resolveLiveVideoResolution({
+    providerId: testCase.providerId,
+    modelRef,
+  });
+  const liveSize = testCase.providerId === "openai" ? "1280x720" : undefined;
+  const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
+  let generatedVideo = null as {
+    buffer: Buffer;
+    mimeType: string;
+    fileName?: string;
+  } | null;
+
+  try {
+    const startedAt = Date.now();
+    console.error(`${logPrefix} mode=generate start auth=${authLabel}`);
+    const result = await provider.generateVideo({
+      provider: testCase.providerId,
+      model: providerModel,
+      prompt: "A tiny paper diorama city at sunrise with slow cinematic camera motion and no text.",
+      cfg,
+      agentDir,
+      authStore,
+      durationSeconds,
+      ...(generateCaps?.supportsSize && liveSize ? { size: liveSize } : {}),
+      ...(generateCaps?.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
+      ...(generateCaps?.supportsResolution ? { resolution: liveResolution } : {}),
+      ...(generateCaps?.supportsAudio ? { audio: false } : {}),
+      ...(generateCaps?.supportsWatermark ? { watermark: false } : {}),
+    });
+
+    expect(result.videos.length).toBeGreaterThan(0);
+    generatedVideo = expectBufferedVideo(result.videos[0]);
+    attempted.push(`${testCase.providerId}:generate:${providerModel} (${authLabel})`);
+    console.error(
+      `${logPrefix} mode=generate done ms=${Date.now() - startedAt} videos=${result.videos.length}`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const skipReason = resolveLiveVideoSkipReason(message);
+    if (skipReason) {
+      skipped.push(`${testCase.providerId}:generate (${authLabel}): ${skipReason}`);
+      console.error(`${logPrefix} mode=generate skip (${skipReason}) error=${message}`);
+    } else {
+      failures.push(`${testCase.providerId}:generate (${authLabel}): ${message}`);
+      console.error(`${logPrefix} mode=generate failed error=${message}`);
+    }
+    console.log(
+      `[live:video-generation] provider=${testCase.providerId} attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
+    );
+    expect(failures).toEqual([]);
+    return;
+  }
+
+  if (imageToVideoCaps?.enabled) {
+    if (
+      !canRunBufferBackedImageToVideoLiveLane({
+        providerId: testCase.providerId,
+        modelRef,
+      })
+    ) {
+      skipped.push(
+        `${testCase.providerId}:imageToVideo requires remote URL or model-specific input`,
+      );
+    } else {
+      try {
+        const startedAt = Date.now();
+        console.error(`${logPrefix} mode=imageToVideo start auth=${authLabel}`);
+        const referenceImage =
+          testCase.providerId === "openai"
+            ? createEditReferencePng({ width: 1280, height: 720 })
+            : createEditReferencePng();
+        const result = await provider.generateVideo({
+          provider: testCase.providerId,
+          model: providerModel,
+          prompt:
+            "Animate the reference art with subtle parallax motion and drifting camera movement.",
+          cfg,
+          agentDir,
+          authStore,
+          durationSeconds,
+          ...(imageToVideoCaps.supportsSize && liveSize ? { size: liveSize } : {}),
+          inputImages: [
+            {
+              buffer: referenceImage,
+              mimeType: "image/png",
+              fileName: "reference.png",
+            },
+          ],
+          ...(imageToVideoCaps.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
+          ...(imageToVideoCaps.supportsResolution ? { resolution: liveResolution } : {}),
+          ...(imageToVideoCaps.supportsAudio ? { audio: false } : {}),
+          ...(imageToVideoCaps.supportsWatermark ? { watermark: false } : {}),
         });
-        let authLabel = "unresolved";
-        try {
-          const auth = await resolveApiKeyForProvider({
-            provider: testCase.providerId,
-            cfg,
-            agentDir,
-            store: authStore,
-          });
-          authLabel = `${auth.source} ${redactLiveApiKey(auth.apiKey)}`;
-        } catch {
-          skipped.push(`${testCase.providerId}: no usable auth`);
-          continue;
-        }
 
-        const { videoProviders } = await registerProviderPlugin({
-          plugin: testCase.plugin,
-          id: testCase.pluginId,
-          name: testCase.pluginName,
-        });
-        const provider = requireRegisteredProvider(
-          videoProviders,
-          testCase.providerId,
-          "video provider",
+        expect(result.videos.length).toBeGreaterThan(0);
+        expectBufferedVideo(result.videos[0]);
+        attempted.push(`${testCase.providerId}:imageToVideo:${providerModel} (${authLabel})`);
+        console.error(
+          `${logPrefix} mode=imageToVideo done ms=${Date.now() - startedAt} videos=${result.videos.length}`,
         );
-        const providerModel = resolveProviderModelForLiveTest(testCase.providerId, modelRef);
-        const generateCaps = provider.capabilities.generate;
-        const imageToVideoCaps = provider.capabilities.imageToVideo;
-        const videoToVideoCaps = provider.capabilities.videoToVideo;
-        const durationSeconds = Math.min(generateCaps?.maxDurationSeconds ?? 3, 3);
-        const liveResolution = resolveLiveVideoResolution({
-          providerId: testCase.providerId,
-          modelRef,
-        });
-        const liveSize = testCase.providerId === "openai" ? "1280x720" : undefined;
-        const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
-        let generatedVideo = null as {
-          buffer: Buffer;
-          mimeType: string;
-          fileName?: string;
-        } | null;
-
-        try {
-          const startedAt = Date.now();
-          console.error(`${logPrefix} mode=generate start auth=${authLabel}`);
-          const result = await provider.generateVideo({
-            provider: testCase.providerId,
-            model: providerModel,
-            prompt:
-              "A tiny paper diorama city at sunrise with slow cinematic camera motion and no text.",
-            cfg,
-            agentDir,
-            authStore,
-            durationSeconds,
-            ...(generateCaps?.supportsSize && liveSize ? { size: liveSize } : {}),
-            ...(generateCaps?.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
-            ...(generateCaps?.supportsResolution ? { resolution: liveResolution } : {}),
-            ...(generateCaps?.supportsAudio ? { audio: false } : {}),
-            ...(generateCaps?.supportsWatermark ? { watermark: false } : {}),
-          });
-
-          expect(result.videos.length).toBeGreaterThan(0);
-          generatedVideo = expectBufferedVideo(result.videos[0]);
-          attempted.push(`${testCase.providerId}:generate:${providerModel} (${authLabel})`);
-          console.error(
-            `${logPrefix} mode=generate done ms=${Date.now() - startedAt} videos=${result.videos.length}`,
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          failures.push(`${testCase.providerId}:generate (${authLabel}): ${message}`);
-          console.error(`${logPrefix} mode=generate failed error=${message}`);
-          continue;
-        }
-
-        if (!imageToVideoCaps?.enabled) {
-          continue;
-        }
-        if (
-          !canRunBufferBackedImageToVideoLiveLane({
-            providerId: testCase.providerId,
-            modelRef,
-          })
-        ) {
-          skipped.push(
-            `${testCase.providerId}:imageToVideo requires remote URL or model-specific input`,
-          );
-          continue;
-        }
-
-        try {
-          const startedAt = Date.now();
-          console.error(`${logPrefix} mode=imageToVideo start auth=${authLabel}`);
-          const referenceImage =
-            testCase.providerId === "openai"
-              ? createEditReferencePng({ width: 1280, height: 720 })
-              : createEditReferencePng();
-          const result = await provider.generateVideo({
-            provider: testCase.providerId,
-            model: providerModel,
-            prompt:
-              "Animate the reference art with subtle parallax motion and drifting camera movement.",
-            cfg,
-            agentDir,
-            authStore,
-            durationSeconds,
-            ...(imageToVideoCaps.supportsSize && liveSize ? { size: liveSize } : {}),
-            inputImages: [
-              {
-                buffer: referenceImage,
-                mimeType: "image/png",
-                fileName: "reference.png",
-              },
-            ],
-            ...(imageToVideoCaps.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
-            ...(imageToVideoCaps.supportsResolution ? { resolution: liveResolution } : {}),
-            ...(imageToVideoCaps.supportsAudio ? { audio: false } : {}),
-            ...(imageToVideoCaps.supportsWatermark ? { watermark: false } : {}),
-          });
-
-          expect(result.videos.length).toBeGreaterThan(0);
-          expectBufferedVideo(result.videos[0]);
-          attempted.push(`${testCase.providerId}:imageToVideo:${providerModel} (${authLabel})`);
-          console.error(
-            `${logPrefix} mode=imageToVideo done ms=${Date.now() - startedAt} videos=${result.videos.length}`,
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const skipReason = resolveLiveVideoSkipReason(message);
+        if (skipReason) {
+          skipped.push(`${testCase.providerId}:imageToVideo (${authLabel}): ${skipReason}`);
+          console.error(`${logPrefix} mode=imageToVideo skip (${skipReason}) error=${message}`);
+        } else {
           failures.push(`${testCase.providerId}:imageToVideo (${authLabel}): ${message}`);
           console.error(`${logPrefix} mode=imageToVideo failed error=${message}`);
         }
+      }
+    }
+  }
 
-        if (!videoToVideoCaps?.enabled) {
-          continue;
-        }
-        if (
-          !canRunBufferBackedVideoToVideoLiveLane({
-            providerId: testCase.providerId,
-            modelRef,
-          })
-        ) {
-          skipped.push(
-            `${testCase.providerId}:videoToVideo requires remote URL or model-specific input`,
-          );
-          continue;
-        }
-        if (!generatedVideo?.buffer) {
-          skipped.push(`${testCase.providerId}:videoToVideo missing generated seed video`);
-          continue;
-        }
+  if (videoToVideoCaps?.enabled) {
+    if (
+      !canRunBufferBackedVideoToVideoLiveLane({
+        providerId: testCase.providerId,
+        modelRef,
+      })
+    ) {
+      skipped.push(
+        `${testCase.providerId}:videoToVideo requires remote URL or model-specific input`,
+      );
+    } else if (!generatedVideo?.buffer) {
+      skipped.push(`${testCase.providerId}:videoToVideo missing generated seed video`);
+    } else {
+      try {
+        const startedAt = Date.now();
+        console.error(`${logPrefix} mode=videoToVideo start auth=${authLabel}`);
+        const result = await provider.generateVideo({
+          provider: testCase.providerId,
+          model: providerModel,
+          prompt: "Rework the reference clip into a brighter, steadier cinematic continuation.",
+          cfg,
+          agentDir,
+          authStore,
+          durationSeconds: Math.min(videoToVideoCaps.maxDurationSeconds ?? durationSeconds, 3),
+          inputVideos: [generatedVideo],
+          ...(videoToVideoCaps.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
+          ...(videoToVideoCaps.supportsResolution ? { resolution: liveResolution } : {}),
+          ...(videoToVideoCaps.supportsAudio ? { audio: false } : {}),
+          ...(videoToVideoCaps.supportsWatermark ? { watermark: false } : {}),
+        });
 
-        try {
-          const startedAt = Date.now();
-          console.error(`${logPrefix} mode=videoToVideo start auth=${authLabel}`);
-          const result = await provider.generateVideo({
-            provider: testCase.providerId,
-            model: providerModel,
-            prompt: "Rework the reference clip into a brighter, steadier cinematic continuation.",
-            cfg,
-            agentDir,
-            authStore,
-            durationSeconds: Math.min(videoToVideoCaps.maxDurationSeconds ?? durationSeconds, 3),
-            inputVideos: [generatedVideo],
-            ...(videoToVideoCaps.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
-            ...(videoToVideoCaps.supportsResolution ? { resolution: liveResolution } : {}),
-            ...(videoToVideoCaps.supportsAudio ? { audio: false } : {}),
-            ...(videoToVideoCaps.supportsWatermark ? { watermark: false } : {}),
-          });
-
-          expect(result.videos.length).toBeGreaterThan(0);
-          expectBufferedVideo(result.videos[0]);
-          attempted.push(`${testCase.providerId}:videoToVideo:${providerModel} (${authLabel})`);
-          console.error(
-            `${logPrefix} mode=videoToVideo done ms=${Date.now() - startedAt} videos=${result.videos.length}`,
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+        expect(result.videos.length).toBeGreaterThan(0);
+        expectBufferedVideo(result.videos[0]);
+        attempted.push(`${testCase.providerId}:videoToVideo:${providerModel} (${authLabel})`);
+        console.error(
+          `${logPrefix} mode=videoToVideo done ms=${Date.now() - startedAt} videos=${result.videos.length}`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const skipReason = resolveLiveVideoSkipReason(message);
+        if (skipReason) {
+          skipped.push(`${testCase.providerId}:videoToVideo (${authLabel}): ${skipReason}`);
+          console.error(`${logPrefix} mode=videoToVideo skip (${skipReason}) error=${message}`);
+        } else {
           failures.push(`${testCase.providerId}:videoToVideo (${authLabel}): ${message}`);
           console.error(`${logPrefix} mode=videoToVideo failed error=${message}`);
         }
       }
+    }
+  }
 
-      console.log(
-        `[live:video-generation] attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
-      );
-
-      if (attempted.length === 0) {
-        expect(failures).toEqual([]);
-        console.warn("[live:video-generation] no provider had usable auth; skipping assertions");
-        return;
-      }
-      expect(failures).toEqual([]);
-    },
-    15 * 60_000,
+  console.log(
+    `[live:video-generation] provider=${testCase.providerId} attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
   );
+  expect(failures).toEqual([]);
+}
+
+describeLive("video generation provider live", () => {
+  for (const testCase of CASES) {
+    // One provider per test keeps cumulative suite runtime from tripping a single timeout cap.
+    it(
+      `covers declared video-generation modes with shell/profile auth (${testCase.providerId})`,
+      async () => {
+        await runLiveVideoProviderCase(testCase);
+      },
+      15 * 60_000,
+    );
+  }
 });
