@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./lifecycle.test-support.js";
+import type { RuntimeEnv } from "../runtime-api.js";
 import { resetProcessedFeishuCardActionTokensForTests } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
@@ -32,7 +33,7 @@ const {
 } = getFeishuLifecycleTestMocks();
 
 let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
-let lastRuntime: { error: ReturnType<typeof vi.fn> } | null = null;
+let lastRuntime: RuntimeEnv | null = null;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
   accountId: "acct-card",
