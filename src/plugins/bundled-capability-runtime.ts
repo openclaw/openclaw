@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -10,6 +9,7 @@ import {
 import { resolveBundledPluginRepoEntryPath } from "./bundled-plugin-metadata.js";
 import { createCapturedPluginRegistration } from "./captured-registration.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -17,7 +17,6 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
   shouldPreferNativeJiti,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
@@ -189,7 +188,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   const env = params.env ?? process.env;
   const pluginIds = new Set(params.pluginIds);
   const registry = createEmptyPluginRegistry();
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+  const jitiLoaders: PluginJitiLoaderCache = new Map();
 
   const getJiti = (modulePath: string) => {
     const tryNative =
@@ -204,20 +203,14 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       pluginSdkResolution: params.pluginSdkResolution,
       env,
     });
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-    });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
+    return getCachedPluginJitiLoader({
+      cache: jitiLoaders,
+      modulePath,
+      importerUrl: import.meta.url,
+      jitiFilename: import.meta.url,
+      aliasMap,
       tryNative,
     });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
   };
 
   const discovery = discoverOpenClawPlugins({
