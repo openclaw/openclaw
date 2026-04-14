@@ -12,6 +12,7 @@ import type {
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
+import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/image-ops.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
@@ -176,14 +177,6 @@ function normalizeReferenceImages(args: Record<string, unknown>): string[] {
     maxCount: MAX_INPUT_IMAGES,
     label: "reference images",
   });
-}
-
-function pickConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | undefined {
-  const configured = cfg?.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return undefined;
 }
 
 function resolveSelectedImageGenerationProvider(params: {
@@ -469,7 +462,7 @@ export function createImageGenerateTool(options?: {
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
-        maxBytes: pickConfiguredMediaMaxBytes(effectiveCfg),
+        maxBytes: resolveConfiguredMediaMaxBytes(effectiveCfg),
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
@@ -542,7 +535,7 @@ export function createImageGenerateTool(options?: {
             image.buffer,
             image.mimeType,
             "tool-image-generation",
-            undefined,
+            resolveConfiguredMediaMaxBytes(effectiveCfg),
             filename || image.fileName,
           ),
         ),

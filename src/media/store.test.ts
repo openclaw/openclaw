@@ -259,6 +259,24 @@ describe("media store", () => {
       },
     },
     {
+      name: "allows callers to override the default source size limit",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const sourcePath = path.join(home, "large-source.bin");
+          await fs.writeFile(sourcePath, Buffer.alloc(6 * 1024 * 1024, 0x41));
+
+          const saved = await store.saveMediaSource(
+            sourcePath,
+            undefined,
+            "outbound",
+            8 * 1024 * 1024,
+          );
+
+          expect(saved.size).toBe(6 * 1024 * 1024);
+        });
+      },
+    },
+    {
       name: "retries buffer writes when cleanup prunes the target directory",
       run: async () => {
         await expectRetryAfterPrunedWriteCase({
