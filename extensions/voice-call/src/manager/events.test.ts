@@ -416,4 +416,45 @@ describe("processEvent (functional)", () => {
     expect(call.transcript).toHaveLength(1);
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
   });
+
+  it("keeps retryable call.error events replayable", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-retryable-error", {
+      callId: "call-retryable-error",
+      providerCallId: "provider-retryable-error",
+      provider: "plivo",
+      direction: "outbound",
+      state: "active",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-retryable-error", "call-retryable-error");
+
+    const event: NormalizedEvent = {
+      id: "evt-retryable-error",
+      dedupeKey: "stable-retryable-error",
+      type: "call.error",
+      callId: "call-retryable-error",
+      providerCallId: "provider-retryable-error",
+      timestamp: now + 1,
+      error: "temporary upstream failure",
+      retryable: true,
+    };
+
+    processEvent(ctx, event);
+    processEvent(ctx, event);
+
+    const call = ctx.activeCalls.get("call-retryable-error");
+    if (!call) {
+      throw new Error("expected retryable error call to remain active");
+    }
+    expect(call.state).toBe("active");
+    expect(Array.from(ctx.processedEventIds)).toEqual([]);
+    expect(call.processedEventIds).toEqual([]);
+  });
 });

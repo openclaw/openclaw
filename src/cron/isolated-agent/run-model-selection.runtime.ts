@@ -6,4 +6,4 @@ export {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-} from "../../agents/model-selection.js";
+} from "../../agents/model-selection-resolve.js";

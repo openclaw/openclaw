@@ -208,6 +208,10 @@ export type ShellEnvFallbackOptions = {
   exec?: typeof execFileSync;
 };
 
+function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(env, key);
+}
+
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
   const logger = opts.logger ?? console;
 
@@ -216,7 +220,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: true, applied: [], skippedReason: "disabled" };
   }
 
-  const hasAnyKey = opts.expectedKeys.some((key) => Boolean(opts.env[key]?.trim()));
+  const hasAnyKey = opts.expectedKeys.some((key) => hasExplicitEnvBinding(opts.env, key));
   if (hasAnyKey) {
     lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
@@ -235,7 +239,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
 
   const applied: string[] = [];
   for (const key of opts.expectedKeys) {
-    if (opts.env[key]?.trim()) {
+    if (hasExplicitEnvBinding(opts.env, key)) {
       continue;
     }
     const value = probe.shellEnv.get(key);

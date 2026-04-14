@@ -154,6 +154,24 @@ describe("shell env fallback", () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
+  it("treats explicitly empty env vars as intentional overrides", () => {
+    const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "" };
+    const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0"));
+
+    const res = runShellEnvFallback({
+      enabled: true,
+      env,
+      expectedKeys: ["OPENAI_API_KEY"],
+      exec,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.applied).toEqual([]);
+    expect(res.ok && res.skippedReason).toBe("already-has-keys");
+    expect(env.OPENAI_API_KEY).toBe("");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
   it("imports expected keys without overriding existing env", () => {
     const env: NodeJS.ProcessEnv = {};
     const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0DISCORD_BOT_TOKEN=discord\0"));

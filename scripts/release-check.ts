@@ -17,7 +17,12 @@ import {
   collectBundledPluginRuntimeDependencySpecs,
   collectRootDistBundledRuntimeMirrors,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
+import {
+  runInstalledWorkspaceBootstrapSmoke,
+  WORKSPACE_TEMPLATE_PACK_PATHS,
+} from "./lib/workspace-bootstrap-smoke.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
@@ -38,6 +43,7 @@ const requiredPathGroups = [
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs(),
+  ...WORKSPACE_TEMPLATE_PACK_PATHS,
   ...listRequiredQaScenarioPackPaths(),
   "scripts/npm-runner.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
@@ -53,12 +59,6 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
 ];
-// 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
-// startup/doctor OOM reports. 2026.4.12 intentionally stages Matrix runtime
-// dependencies, including crypto wasm, so packaged installs do not miss Docker
-// and gateway runtime dependencies. Keep the budget below the 2026.3.12 bloat
-// level while allowing that mirrored runtime surface.
-const npmPackUnpackedSizeBudgetBytes = 202 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -240,6 +240,8 @@ function runPackedBundledChannelEntrySmoke(): void {
     if (completionFiles.length === 0) {
       throw new Error("release-check: packed completion smoke produced no completion files.");
     }
+
+    runInstalledWorkspaceBootstrapSmoke({ packageRoot });
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -269,49 +271,7 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function formatMiB(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-function resolvePackResultLabel(entry: PackResult, index: number): string {
-  return entry.filename?.trim() || `pack result #${index + 1}`;
-}
-
-function formatPackUnpackedSizeBudgetError(params: {
-  label: string;
-  unpackedSize: number;
-}): string {
-  return [
-    `${params.label} unpackedSize ${params.unpackedSize} bytes (${formatMiB(params.unpackedSize)}) exceeds budget ${npmPackUnpackedSizeBudgetBytes} bytes (${formatMiB(npmPackUnpackedSizeBudgetBytes)}).`,
-    "Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
-  ].join(" ");
-}
-
-export function collectPackUnpackedSizeErrors(results: Iterable<PackResult>): string[] {
-  const entries = Array.from(results);
-  const errors: string[] = [];
-  let checkedCount = 0;
-
-  for (const [index, entry] of entries.entries()) {
-    if (typeof entry.unpackedSize !== "number" || !Number.isFinite(entry.unpackedSize)) {
-      continue;
-    }
-    checkedCount += 1;
-    if (entry.unpackedSize <= npmPackUnpackedSizeBudgetBytes) {
-      continue;
-    }
-    const label = resolvePackResultLabel(entry, index);
-    errors.push(formatPackUnpackedSizeBudgetError({ label, unpackedSize: entry.unpackedSize }));
-  }
-
-  if (entries.length > 0 && checkedCount === 0) {
-    errors.push(
-      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
-    );
-  }
-
-  return errors;
-}
+export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -486,7 +446,7 @@ async function main() {
     })
     .toSorted((left, right) => left.localeCompare(right));
   const forbidden = collectForbiddenPackPaths(paths);
-  const sizeErrors = collectPackUnpackedSizeErrors(results);
+  const sizeErrors = collectNpmPackUnpackedSizeErrors(results);
 
   if (missing.length > 0 || forbidden.length > 0 || sizeErrors.length > 0) {
     if (missing.length > 0) {

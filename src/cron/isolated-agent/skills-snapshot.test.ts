@@ -19,9 +19,6 @@ vi.mock("./skills-snapshot.runtime.js", () => ({
   canExecRequestNode: canExecRequestNodeMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
-}));
-
-vi.mock("./run.runtime.js", () => ({
   resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
 }));
 
