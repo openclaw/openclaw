@@ -88,6 +88,7 @@ describe("run-execution", () => {
 
     const completed = await executeQueuedRun(record, {
       now: nowMock,
+      notify: vi.fn(async () => ({ delivered: true as const, text: "sent" })),
       runBridge: vi.fn(async () => ({
         payload: {
           sense_job_id: "job_abc123def456",
@@ -137,6 +138,7 @@ describe("run-execution", () => {
         .fn<() => Date>()
         .mockReturnValueOnce(new Date("2026-04-14T14:30:24.000Z"))
         .mockReturnValueOnce(new Date("2026-04-14T14:31:05.000Z")),
+      notify: vi.fn(async () => ({ delivered: true as const, text: "sent" })),
       runBridge: vi.fn(async () => ({
         payload: {
           sense_job_id: "job_failed_case",
@@ -177,6 +179,7 @@ describe("run-execution", () => {
         .fn<() => Date>()
         .mockReturnValueOnce(new Date("2026-04-14T14:30:24.000Z"))
         .mockReturnValueOnce(new Date("2026-04-14T14:31:05.000Z")),
+      notify: vi.fn(async () => ({ delivered: true as const, text: "sent" })),
       runBridge: vi.fn(async () => {
         throw new Error("request failed: Connection refused");
       }),
@@ -188,6 +191,77 @@ describe("run-execution", () => {
       done_at: "2026-04-14T14:31:05.000Z",
       error: {
         message: "request failed: Connection refused",
+      },
+    });
+  });
+
+  it("notifies after writing the completed run", async () => {
+    const writeEvents: string[] = [];
+    const notify = vi.fn(async () => ({ delivered: true as const, text: "sent" }));
+    await executeQueuedRun(sampleQueuedRun({ slack_ts: "1712345678.123456" }), {
+      now: vi
+        .fn<() => Date>()
+        .mockReturnValueOnce(new Date("2026-04-14T14:30:24.000Z"))
+        .mockReturnValueOnce(new Date("2026-04-14T14:31:05.000Z")),
+      writeRecord: vi.fn(async (run) => {
+        writeEvents.push(run.status);
+        return { path: "/tmp/run.json" };
+      }),
+      notify,
+      runBridge: vi.fn(async () => ({
+        payload: {
+          sense_job_id: "job_abc123def456",
+          summary: "ok",
+          key_points: [],
+          suggested_next_action: null,
+          exit_code: 0,
+          raw_output: "ok",
+        },
+        stdout: '{"summary":"ok"}',
+        stderr: "",
+        exitCode: 0,
+      })),
+    });
+
+    expect(writeEvents).toEqual(["running", "done"]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]?.[0]).toMatchObject({
+      record: {
+        status: "done",
+        slack_ts: "1712345678.123456",
+      },
+    });
+  });
+
+  it("keeps failed status when notification throws", async () => {
+    const completed = await executeQueuedRun(sampleQueuedRun({ slack_ts: "1712345678.123456" }), {
+      now: vi
+        .fn<() => Date>()
+        .mockReturnValueOnce(new Date("2026-04-14T14:30:24.000Z"))
+        .mockReturnValueOnce(new Date("2026-04-14T14:31:05.000Z")),
+      notify: vi.fn(async () => {
+        throw new Error("slack unavailable");
+      }),
+      runBridge: vi.fn(async () => ({
+        payload: {
+          sense_job_id: "job_failed_case",
+          summary: "Bridge failed",
+          key_points: [],
+          suggested_next_action: null,
+          exit_code: 1,
+          raw_output: "trace",
+          error: "Sense worker 接続タイムアウト",
+        },
+        stdout: '{"summary":"Bridge failed"}',
+        stderr: "timeout",
+        exitCode: 1,
+      })),
+    });
+
+    expect(completed).toMatchObject({
+      status: "failed",
+      error: {
+        message: "Sense worker 接続タイムアウト",
       },
     });
   });

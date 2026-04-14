@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { notifyRunCompletion } from "./run-notify.js";
 import { writeRunRecord } from "./run-store.js";
 import type { RunKind, RunRecord, RunResult } from "./run-types.js";
 
@@ -223,10 +224,12 @@ export async function executeQueuedRun(
     now?: () => Date;
     writeRecord?: typeof writeRunRecord;
     runBridge?: typeof invokeSenseManagerTask;
+    notify?: typeof notifyRunCompletion;
   } = {},
 ): Promise<RunRecord> {
   const writeRecord = params.writeRecord ?? writeRunRecord;
   const runBridge = params.runBridge ?? invokeSenseManagerTask;
+  const notify = params.notify ?? notifyRunCompletion;
   const now = params.now ?? (() => new Date());
 
   const runningRecord: RunRecord = {
@@ -268,6 +271,9 @@ export async function executeQueuedRun(
         : null,
     };
     await writeRecord(completedRecord);
+    try {
+      await notify({ record: completedRecord, config: params.config });
+    } catch {}
     return completedRecord;
   } catch (error) {
     const failedRecord: RunRecord = {
@@ -279,6 +285,9 @@ export async function executeQueuedRun(
       }),
     };
     await writeRecord(failedRecord);
+    try {
+      await notify({ record: failedRecord, config: params.config });
+    } catch {}
     return failedRecord;
   }
 }

@@ -92,7 +92,7 @@ function classifyRunCommand(args: string | undefined): RunCommandParseResult {
 
 export function buildQueuedRunRecord(params: {
   args: string | undefined;
-  ctx: Pick<PluginCommandContext, "senderId" | "from" | "to">;
+  ctx: Pick<PluginCommandContext, "senderId" | "from" | "to" | "messageThreadId">;
   now?: Date;
   runId?: string;
 }): BuildQueuedRunRecordResult {
@@ -130,7 +130,10 @@ export function buildQueuedRunRecord(params: {
       error: null,
       retry_of: null,
       retry_count: 0,
-      slack_ts: null,
+      slack_ts:
+        params.ctx.messageThreadId == null
+          ? null
+          : String(params.ctx.messageThreadId).trim() || null,
     },
   };
 }

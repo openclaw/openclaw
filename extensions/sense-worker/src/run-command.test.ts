@@ -20,6 +20,7 @@ function makeContext(args?: string): PluginCommandContext {
     commandBody: args ? `run ${args}` : "run",
     config: {},
     from: "taro",
+    messageThreadId: undefined,
     to: "C0123456789",
     accountId: "default",
     requestConversationBinding: vi.fn(async () => ({ status: "error", message: "unused" })),
@@ -134,6 +135,7 @@ describe("run-command", () => {
       ctx: {
         senderId: "U123456789",
         from: "taro",
+        messageThreadId: undefined,
         to: "   ",
       },
       now: new Date("2026-04-14T14:30:22.000Z"),
@@ -143,6 +145,26 @@ describe("run-command", () => {
       kind: "queued",
       record: {
         channel_id: null,
+      },
+    });
+  });
+
+  it("stores slack_ts from messageThreadId when available", () => {
+    const built = buildQueuedRunRecord({
+      args: "health",
+      ctx: {
+        senderId: "U123456789",
+        from: "taro",
+        to: "C0123456789",
+        messageThreadId: "1712345678.123456",
+      },
+      now: new Date("2026-04-14T14:30:22.000Z"),
+      runId: "run_20260414_143022_a3f",
+    });
+    expect(built).toMatchObject({
+      kind: "queued",
+      record: {
+        slack_ts: "1712345678.123456",
       },
     });
   });
