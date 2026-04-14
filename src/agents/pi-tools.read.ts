@@ -127,11 +127,6 @@ type MemoryFlushAppendOnlyWriteOptions = {
   };
 };
 
-async function writeHostFile(absolutePath: string, data: string): Promise<void> {
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fs.writeFile(absolutePath, data, "utf-8");
-}
-
 async function readOptionalUtf8File(params: {
   absolutePath: string;
   relativePath: string;
@@ -300,7 +295,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   };
 }
 
-const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 const MAX_DIR_ENTRIES = 200;
@@ -419,9 +414,13 @@ export function createOpenClawReadTool(
 
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
-        
         const encodedSource = encodeURIComponent(inputPath);
-        const mediaUrl = `http://localhost:18791/__openclaw__/assistant-media?source=${encodedSource}`;
+        let mediaUrl = `http://localhost:18791${inputPath}`;
+        // For audio and video, use direct path instead of the assistant-media endpoint
+        if (AUDIO_EXTENSIONS.has(ext) || VIDEO_EXTENSIONS.has(ext)) {
+            const relativePath = path.relative(rootDir, inputPath);
+            mediaUrl = `http://localhost:18791/${encodeURIComponent(relativePath)}`;
+        }
 
         if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) throw new Error("Read operation aborted");
@@ -564,7 +563,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         const resolved = path.resolve(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: writeHostFile, // Function that writes to absolute paths
+      writeFile: (filePath: string, data: string) => fs.writeFile(path.resolve(filePath), data, "utf-8"),
     } as const;
   }
 
@@ -577,43 +576,12 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         data,
         mkdir: true,
       }),
-    mkdir: async (relativePath: string) => {
-      // Use writeFileWithinRoot with empty data to safely create directory
-      await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: path.join(relativePath, '.placeholder'),
-        data: '',
-        mkdir: true,
-      });
-      // Remove the placeholder file if it was created
-      try {
-        await fs.unlink(path.join(root, relativePath, '.placeholder'));
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
+    mkdir: (relativePath: string) => 
+      fs.mkdir(path.join(root, relativePath), { recursive: true }).then(() => {})
   };
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly ?? false;
-
-  if (!workspaceOnly) {
-    // When workspaceOnly is false, allow edits anywhere on the host
-    return {
-      readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
-        return await fs.readFile(resolved);
-      },
-      writeFile: writeHostFile,
-      access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
-        await fs.access(resolved);
-      },
-    } as const;
-  }
-
-  // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: (relativePath: string) => 
       readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
@@ -623,16 +591,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         relativePath,
         data,
       }),
-    access: (relativePath: string) => 
-      writeFileWithinRoot({
-        rootDir: root,
-        relativePath,
-        data: '',
-        mkdir: false,
-      }).then(() => {}).catch(() => {
-        // If writeFileWithinRoot fails, try access check
-        return fs.access(path.join(root, relativePath));
-      })
+    access: (relativePath: string) => fs.access(path.join(root, relativePath))
   };
 }
 

@@ -123,25 +123,46 @@ function extractImages(message: unknown): ImageBlock[] {
           const filename = typeof b.filename === "string" ? b.filename : undefined;
           images.push({ url, filename, httpUrl: undefined });
         } else if (typeof b.url === "string") {
-          const u = b.url;
-          const isMediaServerUrl = u.startsWith("http://localhost:18791/") || 
-                                 u.startsWith("http://127.0.0.1:18791/");
-          const httpUrl = isMediaServerUrl ? u : undefined;
-          const filename = typeof b.filename === "string" ? b.filename : u.split("/").pop();
-          images.push({ url: u, filename, httpUrl });
+          const urlValue = b.url;
+          // Handle absolute Unix paths - serve from media server
+          if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
+            const mediaServerUrl = `http://localhost:18791${urlValue}`;
+            const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
+            images.push({ 
+              url: mediaServerUrl, 
+              filename, 
+              httpUrl: mediaServerUrl 
+            });
+          } else {
+            const isMediaServerUrl = urlValue.startsWith("http://localhost:18791/") || 
+                                     urlValue.startsWith("http://127.0.0.1:18791/");
+            const httpUrl = isMediaServerUrl ? urlValue : undefined;
+            const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
+            images.push({ url: urlValue, filename, httpUrl });
+          }
         }
       } else if (b.type === "image_url") {
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          const u = imageUrl.url;
-          const isMediaServerUrl = u.startsWith("http://localhost:18791/") || 
-                                 u.startsWith("http://127.0.0.1:18791/");
-          const httpUrl = isMediaServerUrl ? u : undefined;
-          images.push({
-            url: u,
-            filename: u.split("/").pop(),
-            httpUrl,
-          });
+          const urlValue = imageUrl.url;
+          // Handle absolute Unix paths - serve from media server
+          if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
+            const mediaServerUrl = `http://localhost:18791${urlValue}`;
+            images.push({
+              url: mediaServerUrl,
+              filename: urlValue.split("/").pop(),
+              httpUrl: mediaServerUrl,
+            });
+          } else {
+            const isMediaServerUrl = urlValue.startsWith("http://localhost:18791/") || 
+                                     urlValue.startsWith("http://127.0.0.1:18791/");
+            const httpUrl = isMediaServerUrl ? urlValue : undefined;
+            images.push({
+              url: urlValue,
+              filename: urlValue.split("/").pop(),
+              httpUrl,
+            });
+          }
         }
       }
     }
@@ -920,10 +941,13 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
   if (/^\/(?:__openclaw__|media)\//.test(trimmed)) {
     return false;
   }
+  // Absolute Unix paths are served directly, not through assistant-media
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+    return false;
+  }
   return (
     trimmed.startsWith("file://") ||
     trimmed.startsWith("~") ||
-    trimmed.startsWith("/") ||
     /^[a-zA-Z]:[\\/]/.test(trimmed)
   );
 }
@@ -1011,9 +1035,17 @@ function buildAssistantAttachmentUrl(
   basePath?: string,
   authToken?: string | null,
 ): string {
+  const decoded = source.startsWith('%2F') ? decodeURIComponent(source) : source;
+  if (decoded.startsWith('/') && !decoded.startsWith('//')) {
+    return `http://localhost:18791${decoded}`;
+  }
+  
+  // For other sources that aren't local files, return as-is
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
+  
+  // Only use assistant-media for file://, ~, and Windows paths
   const normalizedBasePath =
     basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
   const params = new URLSearchParams({ source });
@@ -1411,7 +1443,7 @@ function renderGroupedMessage(
     if (el.hasAttribute('data-resize-initialized')) {return;}
     el.setAttribute('data-resize-initialized', 'true');
     setTimeout(() => {
-      setupResizeHandles(el, 'bottom-right', messageId);
+      setupResizeHandles(el as HTMLElement, 'bottom-right', messageId);
     }, 100);
   };
 
@@ -1470,7 +1502,7 @@ function renderGroupedMessage(
                       ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                     </div>`
                   : nothing}
-                ${!hasMedia && jsonResult
+                ${jsonResult
                   ? html`<details class="chat-json-collapse">
                       <summary class="chat-json-summary">
                         <span class="chat-json-badge">JSON</span>
@@ -1478,7 +1510,7 @@ function renderGroupedMessage(
                       </summary>
                       <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                     </details>`
-                  : !hasMedia && markdown
+                  : markdown
                     ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                         ${markdown.trim().startsWith("<audio")
                           ? unsafeHTML(toSanitizedMarkdownHtml(markdown))
@@ -1538,7 +1570,7 @@ function renderGroupedMessage(
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
                 )}`
               : nothing}
-            ${!hasMedia && jsonResult
+            ${jsonResult
               ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
                     <span class="chat-json-badge">JSON</span>
@@ -1546,7 +1578,7 @@ function renderGroupedMessage(
                   </summary>
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
-              : !hasMedia && markdown
+              : markdown
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                     ${markdown.trim().startsWith("<audio")
                       ? unsafeHTML(toSanitizedMarkdownHtml(markdown))
