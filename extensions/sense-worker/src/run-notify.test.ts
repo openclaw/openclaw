@@ -94,12 +94,20 @@ describe("run notify", () => {
     expect(sendMessageSlackMock).not.toHaveBeenCalled();
   });
 
-  it("skips notification when slack_ts is missing", async () => {
+  it("posts to the channel when slack_ts is missing", async () => {
+    sendMessageSlackMock.mockResolvedValue({
+      messageId: "1712345678.123457",
+      channelId: "C0123456789",
+    });
     const { notifyRunCompletion } = await import("./run-notify.js");
     const result = await notifyRunCompletion({
       record: sampleRun({ slack_ts: null }),
     });
-    expect(result).toEqual({ delivered: false, skipped: "missing_slack_ts" });
-    expect(sendMessageSlackMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ delivered: true });
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C0123456789",
+      expect.any(String),
+      expect.not.objectContaining({ threadTs: expect.anything() }),
+    );
   });
 });

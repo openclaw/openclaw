@@ -38,8 +38,11 @@ type BuildQueuedRunRecordResult =
       record: RunRecord;
     };
 
-function deriveChannelId(ctx: Pick<PluginCommandContext, "to">): string | null {
-  const candidate = typeof ctx.to === "string" ? ctx.to.trim() : "";
+function deriveChannelId(ctx: Pick<PluginCommandContext, "channelId">): string | null {
+  const candidate =
+    typeof ctx.channelId === "string" || typeof ctx.channelId === "number"
+      ? String(ctx.channelId).trim()
+      : "";
   return candidate || null;
 }
 
@@ -92,7 +95,7 @@ function classifyRunCommand(args: string | undefined): RunCommandParseResult {
 
 export function buildQueuedRunRecord(params: {
   args: string | undefined;
-  ctx: Pick<PluginCommandContext, "senderId" | "from" | "to" | "messageThreadId">;
+  ctx: Pick<PluginCommandContext, "senderId" | "from" | "to" | "channelId" | "messageThreadId">;
   now?: Date;
   runId?: string;
 }): BuildQueuedRunRecordResult {

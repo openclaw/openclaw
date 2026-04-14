@@ -4,7 +4,7 @@ import type { RunRecord } from "./run-types.js";
 
 type RunNotifyResult =
   | { delivered: true; text: string }
-  | { delivered: false; skipped: "missing_channel_id" | "missing_slack_ts" };
+  | { delivered: false; skipped: "missing_channel_id" };
 
 function formatDurationSeconds(record: RunRecord): string | null {
   const startedAt = record.started_at ?? record.queued_at;
@@ -73,13 +73,10 @@ export async function notifyRunCompletion(params: {
   if (!params.record.channel_id) {
     return { delivered: false, skipped: "missing_channel_id" };
   }
-  if (!params.record.slack_ts) {
-    return { delivered: false, skipped: "missing_slack_ts" };
-  }
   const text = buildRunNotificationText(params.record);
   await sendMessageSlack(params.record.channel_id, text, {
     cfg: params.config,
-    threadTs: params.record.slack_ts,
+    ...(params.record.slack_ts ? { threadTs: params.record.slack_ts } : {}),
   });
   return { delivered: true, text };
 }

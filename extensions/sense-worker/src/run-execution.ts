@@ -273,7 +273,9 @@ export async function executeQueuedRun(
     await writeRecord(completedRecord);
     try {
       await notify({ record: completedRecord, config: params.config });
-    } catch {}
+    } catch (error) {
+      console.error("[sense-worker] run notification failed", error);
+    }
     return completedRecord;
   } catch (error) {
     const failedRecord: RunRecord = {
@@ -287,7 +289,9 @@ export async function executeQueuedRun(
     await writeRecord(failedRecord);
     try {
       await notify({ record: failedRecord, config: params.config });
-    } catch {}
+    } catch (notifyError) {
+      console.error("[sense-worker] run notification failed", notifyError);
+    }
     return failedRecord;
   }
 }

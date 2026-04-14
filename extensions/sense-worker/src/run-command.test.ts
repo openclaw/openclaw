@@ -14,7 +14,7 @@ function makeContext(args?: string): PluginCommandContext {
   return {
     senderId: "U123456789",
     channel: "slack",
-    channelId: "slack",
+    channelId: "C0123456789",
     isAuthorizedSender: true,
     args,
     commandBody: args ? `run ${args}` : "run",
@@ -134,6 +134,7 @@ describe("run-command", () => {
       args: "health",
       ctx: {
         senderId: "U123456789",
+        channelId: undefined,
         from: "taro",
         messageThreadId: undefined,
         to: "   ",
@@ -149,11 +150,33 @@ describe("run-command", () => {
     });
   });
 
+  it("prefers plugin command channelId over ctx.to for channel_id", () => {
+    const built = buildQueuedRunRecord({
+      args: "health",
+      ctx: {
+        senderId: "U123456789",
+        channelId: "C9999999999",
+        from: "taro",
+        messageThreadId: undefined,
+        to: "slash:U123456789",
+      },
+      now: new Date("2026-04-14T14:30:22.000Z"),
+      runId: "run_20260414_143022_a3f",
+    });
+    expect(built).toMatchObject({
+      kind: "queued",
+      record: {
+        channel_id: "C9999999999",
+      },
+    });
+  });
+
   it("stores slack_ts from messageThreadId when available", () => {
     const built = buildQueuedRunRecord({
       args: "health",
       ctx: {
         senderId: "U123456789",
+        channelId: "C0123456789",
         from: "taro",
         to: "C0123456789",
         messageThreadId: "1712345678.123456",

@@ -234,6 +234,7 @@ describe("run-execution", () => {
   });
 
   it("keeps failed status when notification throws", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const completed = await executeQueuedRun(sampleQueuedRun({ slack_ts: "1712345678.123456" }), {
       now: vi
         .fn<() => Date>()
@@ -264,5 +265,9 @@ describe("run-execution", () => {
         message: "Sense worker 接続タイムアウト",
       },
     });
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[sense-worker] run notification failed",
+      expect.any(Error),
+    );
   });
 });
