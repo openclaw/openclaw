@@ -53,8 +53,10 @@ export function resolvePluginModuleCandidates(rootDir: string, specifier: string
   return [
     resolvedPath,
     `${resolvedPath}.ts`,
+    `${resolvedPath}.mts`,
     `${resolvedPath}.js`,
     `${resolvedPath}.mjs`,
+    `${resolvedPath}.cts`,
     `${resolvedPath}.cjs`,
   ];
 }
