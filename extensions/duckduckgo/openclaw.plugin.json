@@ -1,5 +1,6 @@
 {
   "id": "duckduckgo",
+  "enabledByDefault": true,
   "uiHints": {
     "webSearch.region": {
       "label": "DuckDuckGo Region",

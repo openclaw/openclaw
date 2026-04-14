@@ -28,6 +28,41 @@ describe("web tools defaults", () => {
     expect(tool).toBeNull();
   });
 
+  it("returns web_search when a keyless provider is in the active registry (enabledByDefault)", () => {
+    // Simulates enabledByDefault: true loading DuckDuckGo into the active registry at startup.
+    // When no config is passed, createWebSearchTool uses the active registry directly.
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "duckduckgo",
+      pluginName: "DuckDuckGo",
+      source: "bundled",
+      provider: {
+        id: "duckduckgo",
+        label: "DuckDuckGo Search (experimental)",
+        hint: "Free web search fallback with no API key required",
+        requiresCredential: false,
+        envVars: [],
+        placeholder: "(no key needed)",
+        signupUrl: "https://duckduckgo.com/",
+        autoDetectOrder: 100,
+        credentialPath: "",
+        inactiveSecretPaths: [],
+        getCredentialValue: () => "",
+        setCredentialValue: () => {},
+        createTool: () => ({
+          description: "Search the web using DuckDuckGo.",
+          parameters: {},
+          execute: async () => ({}),
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool();
+
+    expect(tool?.name).toBe("web_search");
+  });
+
   it("uses runtime-only web_search providers when runtime metadata is present", async () => {
     const registry = createEmptyPluginRegistry();
     registry.webSearchProviders.push({
