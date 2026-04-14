@@ -52,12 +52,14 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   capability: "image" | "audio" | "video";
   transport: "http" | "media-understanding";
 }) {
+  const allowPrivateNetwork =
+    (params.request as { allowPrivateNetwork?: boolean } | undefined)?.allowPrivateNetwork === true;
   return resolveProviderHttpRequestConfig({
     baseUrl:
       normalizeGoogleGenerativeAiBaseUrl(params.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL) ??
       DEFAULT_GOOGLE_API_BASE_URL,
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-    allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
+    allowPrivateNetwork,
     headers: params.headers,
     request: params.request,
     defaultHeaders: parseGeminiAuth(params.apiKey).headers,

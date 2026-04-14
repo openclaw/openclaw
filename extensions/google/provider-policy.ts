@@ -29,12 +29,18 @@ function isGoogleGenerativeAiUrl(url: URL): boolean {
   );
 }
 
+function stripUrlUserInfo(url: URL): void {
+  url.username = "";
+  url.password = "";
+}
+
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
   const raw = trimTrailingSlashes(normalizeOptionalString(baseUrl) || DEFAULT_GOOGLE_API_BASE_URL);
   try {
     const url = new URL(raw);
     url.hash = "";
     url.search = "";
+    stripUrlUserInfo(url);
     if (isGoogleGenerativeAiUrl(url)) {
       const normalizedPath = trimTrailingSlashes(url.pathname || "");
       url.pathname = normalizedPath || "/v1beta";
@@ -60,6 +66,7 @@ export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | u
   const normalized = normalizeGoogleApiBaseUrl(baseUrl);
   try {
     const url = new URL(normalized);
+    stripUrlUserInfo(url);
     if (isGoogleGenerativeAiUrl(url)) {
       url.pathname = trimTrailingSlashes(url.pathname || "").replace(/\/openai$/i, "") || "/v1beta";
       return trimTrailingSlashes(url.toString());
@@ -93,13 +100,19 @@ export function shouldNormalizeGoogleGenerativeAiProviderConfig(
   providerKey: string,
   provider: GoogleProviderConfigLike,
 ): boolean {
-  if (providerKey === "google" || providerKey === "google-vertex") {
-    return true;
-  }
   if (isGoogleGenerativeAiApi(provider.api)) {
     return true;
   }
-  return provider.models?.some((model) => isGoogleGenerativeAiApi(model?.api)) ?? false;
+  const hasGoogleGenerativeAiModelApi =
+    provider.models?.some((model) => isGoogleGenerativeAiApi(model?.api)) ?? false;
+  if (hasGoogleGenerativeAiModelApi) {
+    return true;
+  }
+  if (providerKey !== "google" && providerKey !== "google-vertex") {
+    return false;
+  }
+  const hasExplicitNonGoogleApi = normalizeOptionalString(provider.api) !== undefined;
+  return !hasExplicitNonGoogleApi;
 }
 
 export function shouldNormalizeGoogleProviderConfig(

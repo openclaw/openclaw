@@ -76,6 +76,12 @@ describe("google generative ai helpers", () => {
         models: [{ api: "openai-completions" }],
       }),
     ).toBe(false);
+    expect(
+      shouldNormalizeGoogleGenerativeAiProviderConfig("google", {
+        api: "openai-completions",
+        models: [{ api: "openai-completions" }],
+      }),
+    ).toBe(false);
   });
 
   it("normalizes transport baseUrls only for Google Generative AI", () => {
@@ -138,7 +144,7 @@ describe("google generative ai helpers", () => {
     });
     expect(oauthConfig).toMatchObject({
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      allowPrivateNetwork: true,
+      allowPrivateNetwork: false,
     });
     expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toEqual({
       authorization: "Bearer oauth-token",
@@ -158,5 +164,33 @@ describe("google generative ai helpers", () => {
       "content-type": "application/json",
       "x-goog-api-key": "api-key-123",
     });
+  });
+
+  it("preserves explicit OpenAI-compatible Google endpoints during provider normalization", () => {
+    expect(
+      resolveGoogleGenerativeAiTransport({
+        api: "openai-completions",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      }),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    });
+  });
+
+  it("strips URL credentials and only allows private-network access via explicit request opt-in", () => {
+    const normalized = normalizeGoogleApiBaseUrl(
+      "https://user:secret@generativelanguage.googleapis.com/v1beta/openai?x=1#frag",
+    );
+    expect(normalized).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+
+    const privateNetworkConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: "api-key-123",
+      baseUrl: "https://proxy.example.com/v1beta",
+      capability: "image",
+      transport: "http",
+      request: { allowPrivateNetwork: true },
+    });
+    expect(privateNetworkConfig.allowPrivateNetwork).toBe(true);
   });
 });
