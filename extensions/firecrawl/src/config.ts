@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  detectUnresolvedSecretReference,
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
 } from "openclaw/plugin-sdk/secret-input";
@@ -104,13 +105,28 @@ export function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetc
   return firecrawl as FirecrawlFetchConfig;
 }
 
+/**
+ * Normalize a configured secret value, detecting unresolved secret references.
+ * Throws an error if the value looks like an unresolved secret reference (e.g., op://).
+ */
 function normalizeConfiguredSecret(value: unknown, path: string): string | undefined {
-  return normalizeSecretInput(
+  const normalized = normalizeSecretInput(
     normalizeResolvedSecretInputString({
       value,
       path,
     }),
   );
+  if (normalized) {
+    const unresolvedType = detectUnresolvedSecretReference(normalized);
+    if (unresolvedType) {
+      throw new Error(
+        `${path}: unresolved ${unresolvedType} detected. ` +
+          `Configure a secret provider in config.secrets.providers to resolve this reference, ` +
+          `or use a plaintext API key. See https://openclaw.ai/docs/secrets for setup instructions.`,
+      );
+    }
+  }
+  return normalized;
 }
 
 export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {

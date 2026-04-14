@@ -1,4 +1,32 @@
 /**
+ * Patterns that indicate an unresolved secret reference.
+ * These should never be sent as actual credentials.
+ */
+const UNRESOLVED_SECRET_PATTERNS = [
+  /^op:\/\//i, // 1Password CLI reference (op://vault/item/field)
+  /^secret:\/\//i, // Generic secret:// URI scheme
+  /^\$\{[A-Z_][A-Z0-9_]*\}$/, // Environment variable template ${VAR_NAME}
+];
+
+/**
+ * Check if a value looks like an unresolved secret reference.
+ * Returns the pattern name if it matches, undefined otherwise.
+ */
+export function detectUnresolvedSecretReference(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (UNRESOLVED_SECRET_PATTERNS[0].test(trimmed)) {
+    return "1Password reference (op://)";
+  }
+  if (UNRESOLVED_SECRET_PATTERNS[1].test(trimmed)) {
+    return "secret:// URI";
+  }
+  if (UNRESOLVED_SECRET_PATTERNS[2].test(trimmed)) {
+    return "environment variable template";
+  }
+  return undefined;
+}
+
+/**
  * Secret normalization for copy/pasted credentials.
  *
  * Common footgun: line breaks (especially `\r`) embedded in API keys/tokens.
