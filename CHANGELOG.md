@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Ollama/OpenAI-compat: send `stream_options.include_usage` for Ollama streaming completions so local Ollama runs report real usage instead of falling back to bogus prompt-token counts that trigger premature compaction. (#64568) Thanks @xchunzhao and @vincentkoc.
 - Doctor/plugins: cache external `preferOver` catalog lookups within each plugin auto-enable pass so large `agents.list` configs no longer peg CPU and repeatedly reread plugin catalogs during doctor/plugins resolution. (#66246) Thanks @yfge.
 - GitHub Copilot/thinking: allow `github-copilot/gpt-5.4` to use `xhigh` reasoning so Copilot GPT-5.4 matches the rest of the GPT-5.4 family. (#50168) Thanks @jakepresent and @vincentkoc.
+- Memory/embeddings: preserve non-OpenAI provider prefixes when normalizing OpenAI-compatible embedding model refs so proxy-backed memory providers stop failing with `Unknown memory embedding provider`. (#66452) Thanks @jlapenna.
 - Agents/local models: clarify low-context preflight hints for self-hosted models, point config-backed caps at the relevant OpenClaw setting, and stop suggesting larger models when `agents.defaults.contextTokens` is the real limit. (#66236) Thanks @ImLukeF.
 - Browser/SSRF: restore hostname navigation under the default browser SSRF policy while keeping explicit strict mode reachable from config, and keep managed loopback CDP `/json/new` fallback requests on the local CDP control policy so browser follow-up fixes stop regressing normal navigation or self-blocking local CDP control. (#66386) Thanks @obviyus.
 - Models/Codex: canonicalize the legacy `openai-codex/gpt-5.4-codex` runtime alias to `openai-codex/gpt-5.4` while still honoring alias-specific and canonical per-model overrides. (#43060) Thanks @Sapientropic and @vincentkoc.
@@ -29,7 +30,6 @@ Docs: https://docs.openclaw.ai
 - Agents/context engine: compact engine-owned sessions from the first tool-loop delta and preserve ingest fallback when `afterTurn` is absent, so long-running tool loops can stay bounded without dropping engine state. (#63555) Thanks @Bikkies.
 - Discord/native commands: return the real status card for native `/status` interactions instead of falling through to the synthetic `✅ Done.` ack when the generic dispatcher produces no visible reply. (#54629) Thanks @tkozzer and @vincentkoc.
 - Hooks/Ollama: let LLM-backed session-memory slug generation honor an explicit `agents.defaults.timeoutSeconds` override instead of always aborting after 15 seconds, so slow local Ollama runs stop silently dropping back to generic filenames. (#66237) Thanks @dmak and @vincentkoc.
-- Memory/embeddings: preserve non-OpenAI provider prefixes when normalizing OpenAI-compatible embedding model refs so proxy-backed memory providers stop failing with `Unknown memory embedding provider`. (#66452) Thanks @jlapenna.
 
 ## 2026.4.14-beta.1
 
