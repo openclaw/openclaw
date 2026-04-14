@@ -252,7 +252,7 @@ export function resolvePluginSdkAliasFile(params: {
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
-const EXTENSION_API_SOURCE_CANDIDATE_EXTENSIONS = [
+const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
   ".mts",
   ".js",
@@ -321,16 +321,28 @@ export function resolvePluginSdkScopedAliasMap(
     moduleUrl: params.moduleUrl,
     pluginSdkResolution: params.pluginSdkResolution,
   })) {
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
-      dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
-    } as const;
     for (const kind of orderedKinds) {
-      const candidate = candidateMap[kind];
-      if (fs.existsSync(candidate)) {
+      if (kind === "dist") {
+        const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+        if (fs.existsSync(candidate)) {
+          for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+            aliasMap[`${packageName}/${subpath}`] = candidate;
+          }
+          break;
+        }
+        continue;
+      }
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
+        if (!fs.existsSync(candidate)) {
+          continue;
+        }
         for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
           aliasMap[`${packageName}/${subpath}`] = candidate;
         }
+        break;
+      }
+      if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         break;
       }
     }
@@ -360,7 +372,7 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
         }
         continue;
       }
-      for (const ext of EXTENSION_API_SOURCE_CANDIDATE_EXTENSIONS) {
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
         if (fs.existsSync(candidate)) {
           return candidate;
