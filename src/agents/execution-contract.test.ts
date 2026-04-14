@@ -171,7 +171,7 @@ describe("resolveEffectiveExecutionContract", () => {
       ).toBe("default");
     });
 
-    it("collapses explicit strict-agentic to default on an unsupported lane", () => {
+    it("honors explicit strict-agentic on any provider (including unsupported)", () => {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
@@ -186,6 +186,16 @@ describe("resolveEffectiveExecutionContract", () => {
           config,
           provider: unsupportedProvider,
           modelId: "claude-opus-4-6",
+        }),
+      ).toBe("strict-agentic");
+    });
+
+    it("does not auto-activate on unsupported provider without explicit config", () => {
+      expect(
+        resolveEffectiveExecutionContract({
+          config: emptyConfig,
+          provider: "lmstudio",
+          modelId: "qwen/qwen3.5-35b-a3b",
         }),
       ).toBe("default");
     });

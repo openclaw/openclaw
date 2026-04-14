@@ -278,7 +278,6 @@ function isEmptyResponseAssistantTurn(params: {
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
-  executionContract?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
@@ -299,7 +298,6 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
-      executionContract: params.executionContract,
     })
   ) {
     return null;
@@ -322,7 +320,6 @@ export function resolveReasoningOnlyRetryInstruction(params: {
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
-  executionContract?: string;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
@@ -344,7 +341,6 @@ export function resolveEmptyResponseRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
-      executionContract: params.executionContract,
     })
   ) {
     return null;
