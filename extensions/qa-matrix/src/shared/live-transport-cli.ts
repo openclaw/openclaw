@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { collectString } from "../../cli-options.js";
-import type { QaProviderModeInput } from "../../run-config.js";
+import { collectString } from "../cli-options.js";
+import type { QaProviderModeInput } from "../run-config.js";
 
 export type LiveTransportQaCommandOptions = {
   repoRoot?: string;

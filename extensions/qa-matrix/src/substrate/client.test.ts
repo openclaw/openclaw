@@ -4,7 +4,7 @@ import {
   createMatrixQaClient,
   provisionMatrixQaRoom,
   type MatrixQaObservedEvent,
-} from "./matrix-driver-client.js";
+} from "./client.js";
 
 function resolveRequestUrl(input: RequestInfo | URL) {
   if (typeof input === "string") {

@@ -3,8 +3,8 @@ import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
-} from "../shared/live-transport-scenarios.js";
-import { createMatrixQaClient, type MatrixQaObservedEvent } from "./matrix-driver-client.js";
+} from "../../shared/live-transport-scenarios.js";
+import { createMatrixQaClient, type MatrixQaObservedEvent } from "../../substrate/client.js";
 
 export type MatrixQaScenarioId =
   | "matrix-thread-follow-up"

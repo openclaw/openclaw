@@ -3,19 +3,19 @@ const { createMatrixQaClient } = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
 }));
 
-vi.mock("./matrix-driver-client.js", () => ({
+vi.mock("../../substrate/client.js", () => ({
   createMatrixQaClient,
 }));
 
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
-} from "../shared/live-transport-scenarios.js";
+} from "../../shared/live-transport-scenarios.js";
 import {
   __testing as scenarioTesting,
   MATRIX_QA_SCENARIOS,
   runMatrixQaScenario,
-} from "./matrix-live-scenarios.js";
+} from "./scenarios.js";
 
 describe("matrix live qa scenarios", () => {
   beforeEach(() => {

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing as liveTesting } from "./matrix-live.runtime.js";
+import { __testing as liveTesting } from "./runtime.js";
 
 afterEach(() => {
   vi.useRealTimers();

@@ -1,9 +1,9 @@
-import type { LiveTransportQaCommandOptions } from "../shared/live-transport-cli.js";
+import { runMatrixQaLive } from "./runners/contract/runtime.js";
+import type { LiveTransportQaCommandOptions } from "./shared/live-transport-cli.js";
 import {
   printLiveTransportQaArtifacts,
   resolveLiveTransportQaRunOptions,
-} from "../shared/live-transport-cli.runtime.js";
-import { runMatrixQaLive } from "./matrix-live.runtime.js";
+} from "./shared/live-transport-cli.runtime.js";
 
 export async function runQaMatrixCommand(opts: LiveTransportQaCommandOptions) {
   const runOptions = resolveLiveTransportQaRunOptions(opts);

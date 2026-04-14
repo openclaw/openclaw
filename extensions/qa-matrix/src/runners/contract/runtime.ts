@@ -4,22 +4,20 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { startQaGatewayChild } from "../../gateway-child.js";
+import { loadQaLabRuntimeModule } from "openclaw/plugin-sdk/qa-lab-runtime";
 import type { QaReportCheck } from "../../report.js";
 import { renderQaMarkdownReport } from "../../report.js";
+import { type QaProviderModeInput } from "../../run-config.js";
 import {
-  defaultQaModelForMode,
-  normalizeQaProviderMode,
-  type QaProviderModeInput,
-} from "../../run-config.js";
-import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
-import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
+  appendLiveLaneIssue,
+  buildLiveLaneArtifactsError,
+} from "../../shared/live-lane-helpers.js";
 import {
   provisionMatrixQaRoom,
   type MatrixQaObservedEvent,
   type MatrixQaProvisionResult,
-} from "./matrix-driver-client.js";
-import { startMatrixQaHarness } from "./matrix-harness.runtime.js";
+} from "../../substrate/client.js";
+import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
 import {
   MATRIX_QA_SCENARIOS,
   buildMatrixReplyDetails,
@@ -28,7 +26,22 @@ import {
   runMatrixQaScenario,
   type MatrixQaCanaryArtifact,
   type MatrixQaScenarioArtifacts,
-} from "./matrix-live-scenarios.js";
+} from "./scenarios.js";
+import { resolveMatrixQaModels } from "./model-selection.js";
+
+type MatrixQaGatewayChild = {
+  call(
+    method: string,
+    params: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<unknown>;
+  restart(): Promise<void>;
+};
+
+type MatrixQaLiveLaneGatewayHarness = {
+  gateway: MatrixQaGatewayChild;
+  stop(): Promise<void>;
+};
 
 type MatrixQaScenarioResult = {
   artifacts?: MatrixQaScenarioArtifacts;
@@ -214,7 +227,7 @@ function isMatrixAccountReady(entry?: {
 }
 
 async function waitForMatrixChannelReady(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: MatrixQaGatewayChild,
   accountId: string,
   opts?: {
     pollMs?: number;
@@ -255,6 +268,27 @@ async function waitForMatrixChannelReady(
   throw new Error(`matrix account "${accountId}" did not become ready`);
 }
 
+async function startMatrixQaLiveLaneGateway(params: {
+  repoRoot: string;
+  transport: {
+    requiredPluginIds: readonly string[];
+    createGatewayConfig: (params: {
+      baseUrl: string;
+    }) => Pick<OpenClawConfig, "channels" | "messages">;
+  };
+  transportBaseUrl: string;
+  providerMode: "mock-openai" | "live-frontier";
+  primaryModel: string;
+  alternateModel: string;
+  fastMode?: boolean;
+  controlUiEnabled?: boolean;
+  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
+}): Promise<MatrixQaLiveLaneGatewayHarness> {
+  return (await loadQaLabRuntimeModule().startQaLiveLaneGateway(
+    params,
+  )) as MatrixQaLiveLaneGatewayHarness;
+}
+
 export async function runMatrixQaLive(params: {
   fastMode?: boolean;
   outputDir?: string;
@@ -271,9 +305,11 @@ export async function runMatrixQaLive(params: {
     path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
 
-  const providerMode = normalizeQaProviderMode(params.providerMode ?? "live-frontier");
-  const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
-  const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
+  const { providerMode, primaryModel, alternateModel } = resolveMatrixQaModels({
+    providerMode: params.providerMode,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+  });
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findMatrixQaScenarios(params.scenarioIds);
   const observedEvents: MatrixQaObservedEvent[] = [];
@@ -317,12 +353,12 @@ export async function runMatrixQaLive(params: {
   const scenarioResults: MatrixQaScenarioResult[] = [];
   const cleanupErrors: string[] = [];
   let canaryArtifact: MatrixQaCanaryArtifact | undefined;
-  let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | null = null;
+  let gatewayHarness: MatrixQaLiveLaneGatewayHarness | null = null;
   let canaryFailed = false;
   const syncState: { driver?: string; observer?: string } = {};
 
   try {
-    gatewayHarness = await startQaLiveLaneGateway({
+    gatewayHarness = await startMatrixQaLiveLaneGateway({
       repoRoot,
       transport: {
         requiredPluginIds: [],
@@ -555,5 +591,6 @@ export const __testing = {
   buildMatrixQaConfig,
   buildObservedEventsArtifact,
   isMatrixAccountReady,
+  resolveMatrixQaModels,
   waitForMatrixChannelReady,
 };

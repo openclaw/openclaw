@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const runMatrixQaLive = vi.hoisted(() => vi.fn());
 
-vi.mock("./matrix-live.runtime.js", () => ({
+vi.mock("./runners/contract/runtime.js", () => ({
   runMatrixQaLive,
 }));
 

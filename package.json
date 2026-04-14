@@ -30,9 +30,8 @@
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
     "!dist/extensions/qa-channel/**",
-    "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
-    "dist/extensions/qa-lab/runtime-api.js",
+    "!dist/extensions/qa-matrix/**",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
@@ -766,6 +765,14 @@
       "types": "./dist/plugin-sdk/matrix-thread-bindings.d.ts",
       "default": "./dist/plugin-sdk/matrix-thread-bindings.js"
     },
+    "./plugin-sdk/qa-lab-runtime": {
+      "types": "./dist/plugin-sdk/qa-lab-runtime.d.ts",
+      "default": "./dist/plugin-sdk/qa-lab-runtime.js"
+    },
+    "./plugin-sdk/qa-runner-runtime": {
+      "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
+      "default": "./dist/plugin-sdk/qa-runner-runtime.js"
+    },
     "./plugin-sdk/mattermost": {
       "types": "./dist/plugin-sdk/mattermost.d.ts",
       "default": "./dist/plugin-sdk/mattermost.js"
@@ -1236,6 +1243,8 @@
     "proxy:install-ca": "node --import tsx scripts/proxy-install-ca.mjs",
     "proxy:run": "node scripts/run-node.mjs proxy run",
     "proxy:start": "node scripts/run-node.mjs proxy start",
+    "qa-runners:check": "node --import tsx scripts/generate-qa-runner-catalog.ts --check",
+    "qa-runners:gen": "node --import tsx scripts/generate-qa-runner-catalog.ts --write",
     "qa:e2e": "node --import tsx scripts/qa-e2e.ts",
     "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
     "qa:lab:ui": "pnpm openclaw qa ui",
