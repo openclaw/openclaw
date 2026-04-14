@@ -50,7 +50,7 @@ TIMEOUT_INSTALL_REGISTRY_S=480
 TIMEOUT_UPDATE_DEV_S=1500
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
-TIMEOUT_GATEWAY_S=60
+TIMEOUT_GATEWAY_S=120
 TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
 TIMEOUT_DASHBOARD_S=60
@@ -1280,6 +1280,7 @@ start_manual_gateway_if_needed() {
   guest_home="$(parallels_macos_resolve_desktop_home "$VM_NAME" "$GUEST_CURRENT_USER")"
   gateway_log="$RUN_DIR/macos-gateway-prlctl.log"
   guest_gateway_log="/tmp/openclaw-parallels-macos-gateway.log"
+  printf 'manual gateway launch transport=%s user=%s\n' "$GUEST_CURRENT_USER_TRANSPORT" "$GUEST_CURRENT_USER"
   guest_current_user_exec /usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
   guest_current_user_exec /usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
   guest_current_user_exec /usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
