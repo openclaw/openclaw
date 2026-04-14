@@ -3243,6 +3243,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Max total characters across all injected workspace bootstrap files (default: 150000).",
               },
+              localModelMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "default",
+                  },
+                  {
+                    type: "string",
+                    const: "lean",
+                  },
+                ],
+                title: "Local Model Mode",
+                description:
+                  'Local-model prompt profile: "default" keeps the standard tool surface, while "lean" drops heavyweight non-essential tools for smaller or weaker models.',
+              },
               bootstrapPromptTruncationWarning: {
                 anyOf: [
                   {
@@ -7050,6 +7065,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           maximum: 9007199254740991,
                         },
                         warningThreshold: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        unknownToolThreshold: {
                           type: "integer",
                           exclusiveMinimum: 0,
                           maximum: 9007199254740991,
@@ -16945,6 +16965,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
               },
+              unknownToolThreshold: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Unknown-tool Loop Threshold",
+                description:
+                  "Block repeated calls to the same unavailable tool after this many misses (default: 10).",
+              },
               criticalThreshold: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -23726,6 +23754,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
       tags: ["tools"],
     },
+    "tools.loopDetection.unknownToolThreshold": {
+      label: "Unknown-tool Loop Threshold",
+      help: "Block repeated calls to the same unavailable tool after this many misses (default: 10).",
+      tags: ["tools"],
+    },
     "tools.loopDetection.criticalThreshold": {
       label: "Tool-loop Critical Threshold",
       help: "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
@@ -24494,6 +24527,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Bootstrap Total Max Chars",
       help: "Max total characters across all injected workspace bootstrap files (default: 150000).",
       tags: ["performance"],
+    },
+    "agents.defaults.localModelMode": {
+      label: "Local Model Mode",
+      help: 'Local-model prompt profile: "default" keeps the standard tool surface, while "lean" drops heavyweight non-essential tools for smaller or weaker models.',
+      tags: ["advanced"],
     },
     "agents.defaults.bootstrapPromptTruncationWarning": {
       label: "Bootstrap Prompt Truncation Warning",
@@ -27259,6 +27297,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.12",
+  version: "2026.4.14",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };
