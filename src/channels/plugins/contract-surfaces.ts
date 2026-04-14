@@ -108,6 +108,13 @@ export function getBundledChannelContractSurfaces(): unknown[] {
   if (cachedSurfaces) {
     return cachedSurfaces;
   }
+  if (contractSurfacesLoading) {
+    // Re-entrant call during initial load; return empty without caching so
+    // the result is not permanently poisoned. Once the outer load completes
+    // and contractSurfacesLoading is false, the next real call will cache
+    // the fully populated surface list.
+    return [];
+  }
   cachedSurfaces = getBundledChannelContractSurfaceEntries().map((entry) => entry.surface);
   return cachedSurfaces;
 }
