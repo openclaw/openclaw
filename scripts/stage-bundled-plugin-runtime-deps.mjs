@@ -49,15 +49,43 @@ function replaceDir(targetPath, sourcePath) {
   removePathIfExists(sourcePath);
 }
 
+function dependencyPathSegments(depName) {
+  if (typeof depName !== "string" || depName.length === 0) {
+    return null;
+  }
+  const segments = depName.split("/");
+  if (depName.startsWith("@")) {
+    if (segments.length !== 2) {
+      return null;
+    }
+    const [scope, name] = segments;
+    if (
+      !/^@[A-Za-z0-9._-]+$/.test(scope) ||
+      !/^[A-Za-z0-9._-]+$/.test(name) ||
+      scope === "@." ||
+      scope === "@.."
+    ) {
+      return null;
+    }
+    return [scope, name];
+  }
+  if (segments.length !== 1 || !/^[A-Za-z0-9._-]+$/.test(segments[0])) {
+    return null;
+  }
+  return segments;
+}
+
 function dependencyNodeModulesPath(nodeModulesDir, depName) {
-  return path.join(nodeModulesDir, ...depName.split("/"));
+  const segments = dependencyPathSegments(depName);
+  return segments ? path.join(nodeModulesDir, ...segments) : null;
 }
 
 function readInstalledDependencyVersion(nodeModulesDir, depName) {
-  const packageJsonPath = path.join(
-    dependencyNodeModulesPath(nodeModulesDir, depName),
-    "package.json",
-  );
+  const depRoot = dependencyNodeModulesPath(nodeModulesDir, depName);
+  if (depRoot === null) {
+    return null;
+  }
+  const packageJsonPath = path.join(depRoot, "package.json");
   if (!fs.existsSync(packageJsonPath)) {
     return null;
   }
@@ -119,7 +147,7 @@ const defaultStagedRuntimeDepPruneRules = new Map([
   ["@jimp/plugin-quantize", { paths: ["src/__image_snapshots__"] }],
   ["@jimp/plugin-threshold", { paths: ["src/__image_snapshots__"] }],
 ]);
-const runtimeDepsStagingVersion = 2;
+const runtimeDepsStagingVersion = 3;
 
 function resolveRuntimeDepPruneConfig(params = {}) {
   return {
@@ -132,11 +160,18 @@ function resolveRuntimeDepPruneConfig(params = {}) {
 function resolveInstalledDependencyRoot(params) {
   const candidates = [];
   if (params.parentPackageRoot) {
-    candidates.push(
-      path.join(params.parentPackageRoot, "node_modules", ...params.depName.split("/")),
+    const nestedDepRoot = dependencyNodeModulesPath(
+      path.join(params.parentPackageRoot, "node_modules"),
+      params.depName,
     );
+    if (nestedDepRoot !== null) {
+      candidates.push(nestedDepRoot);
+    }
   }
-  candidates.push(dependencyNodeModulesPath(params.rootNodeModulesDir, params.depName));
+  const rootDepRoot = dependencyNodeModulesPath(params.rootNodeModulesDir, params.depName);
+  if (rootDepRoot !== null) {
+    candidates.push(rootDepRoot);
+  }
 
   for (const depRoot of candidates) {
     const installedVersion = readInstalledDependencyVersionFromRoot(depRoot);
@@ -179,7 +214,7 @@ function collectInstalledRuntimeDependencyRoots(rootNodeModulesDir, dependencySp
     }
     seen.add(seenKey);
 
-    const record = { name: current.depName, root: depRoot };
+    const record = { name: current.depName, root: depRoot, realRoot: canonicalDepRoot };
     allRoots.push(record);
     if (current.direct) {
       directRoots.push(record);
@@ -213,6 +248,69 @@ function pathIsInsideCopiedRoot(candidateRoot, copiedRoot) {
   return candidateRoot === copiedRoot || candidateRoot.startsWith(`${copiedRoot}${path.sep}`);
 }
 
+function findContainingRealRoot(candidatePath, allowedRealRoots) {
+  return (
+    allowedRealRoots.find((rootPath) => pathIsInsideCopiedRoot(candidatePath, rootPath)) ?? null
+  );
+}
+
+function copyMaterializedDependencyTree(params) {
+  const { activeRoots, allowedRealRoots, sourcePath, targetPath } = params;
+  const sourceStats = fs.lstatSync(sourcePath);
+
+  if (sourceStats.isSymbolicLink()) {
+    let resolvedPath;
+    try {
+      resolvedPath = fs.realpathSync(sourcePath);
+    } catch {
+      return false;
+    }
+    const containingRoot = findContainingRealRoot(resolvedPath, allowedRealRoots);
+    if (containingRoot === null) {
+      return false;
+    }
+    if (activeRoots.has(containingRoot)) {
+      return true;
+    }
+    const nextActiveRoots = new Set(activeRoots);
+    nextActiveRoots.add(containingRoot);
+    return copyMaterializedDependencyTree({
+      activeRoots: nextActiveRoots,
+      allowedRealRoots,
+      sourcePath: resolvedPath,
+      targetPath,
+    });
+  }
+
+  if (sourceStats.isDirectory()) {
+    fs.mkdirSync(targetPath, { recursive: true });
+    for (const entry of fs
+      .readdirSync(sourcePath, { withFileTypes: true })
+      .toSorted((left, right) => left.name.localeCompare(right.name))) {
+      if (
+        !copyMaterializedDependencyTree({
+          activeRoots,
+          allowedRealRoots,
+          sourcePath: path.join(sourcePath, entry.name),
+          targetPath: path.join(targetPath, entry.name),
+        })
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (sourceStats.isFile()) {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(sourcePath, targetPath);
+    fs.chmodSync(targetPath, sourceStats.mode);
+    return true;
+  }
+
+  return true;
+}
+
 function selectRuntimeDependencyRootsToCopy(resolution) {
   const rootsToCopy = [];
 
@@ -221,7 +319,7 @@ function selectRuntimeDependencyRootsToCopy(resolution) {
   }
 
   for (const record of resolution.allRoots) {
-    if (rootsToCopy.some((entry) => pathIsInsideCopiedRoot(record.root, entry.root))) {
+    if (rootsToCopy.some((entry) => pathIsInsideCopiedRoot(record.realRoot, entry.realRoot))) {
       continue;
     }
     rootsToCopy.push(record);
@@ -272,7 +370,7 @@ function createInstalledRuntimeClosureFingerprint(rootNodeModulesDir, dependency
   const hash = createHash("sha256");
   for (const depName of [...dependencyNames].toSorted((left, right) => left.localeCompare(right))) {
     const depRoot = dependencyNodeModulesPath(rootNodeModulesDir, depName);
-    if (!fs.existsSync(depRoot)) {
+    if (depRoot === null || !fs.existsSync(depRoot)) {
       return null;
     }
     hash.update(`package:${depName}\n`);
@@ -335,6 +433,9 @@ function pruneDependencyFilesBySuffixes(depRoot, suffixes) {
 
 function pruneStagedInstalledDependencyCargo(nodeModulesDir, depName, pruneConfig) {
   const depRoot = dependencyNodeModulesPath(nodeModulesDir, depName);
+  if (depRoot === null) {
+    return;
+  }
   const pruneRule = pruneConfig.pruneRules.get(depName);
   for (const relativePath of pruneRule?.paths ?? []) {
     removePathIfExists(path.join(depRoot, relativePath));
@@ -482,6 +583,7 @@ function stageInstalledRootRuntimeDeps(params) {
     return false;
   }
   const rootsToCopy = selectRuntimeDependencyRootsToCopy(resolution);
+  const allowedRealRoots = rootsToCopy.map((record) => record.realRoot);
 
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   const stampPath = resolveRuntimeDepsStampPath(pluginDir);
@@ -497,10 +599,24 @@ function stageInstalledRootRuntimeDeps(params) {
     for (const record of rootsToCopy.toSorted((left, right) =>
       left.name.localeCompare(right.name),
     )) {
-      const sourcePath = record.root;
+      const sourcePath = record.realRoot;
       const targetPath = dependencyNodeModulesPath(stagedNodeModulesDir, record.name);
+      if (targetPath === null) {
+        return false;
+      }
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.cpSync(sourcePath, targetPath, { recursive: true, force: true, dereference: true });
+      const sourceRootReal = findContainingRealRoot(sourcePath, allowedRealRoots);
+      if (
+        sourceRootReal === null ||
+        !copyMaterializedDependencyTree({
+          activeRoots: new Set([sourceRootReal]),
+          allowedRealRoots,
+          sourcePath,
+          targetPath,
+        })
+      ) {
+        return false;
+      }
     }
     pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
 

@@ -432,6 +432,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(result).toEqual({
       applied: false,
       reason: "unexpected_content",
+      targetPath,
     });
     expect(fs.readFileSync(targetPath, "utf8")).toBe(originalText);
   });

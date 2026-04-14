@@ -331,7 +331,7 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
     }
 
     if (!dispatcherResolved) {
-      return { applied: false, reason: "unexpected_content" };
+      return { applied: false, reason: "unexpected_content", targetPath };
     }
 
     if (!applied) {

@@ -298,7 +298,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'nested';\n");
   });
 
-  it("does not change the runtime-deps stamp when only a symlinked directory target changes", () => {
+  it("falls back to install when a dependency tree contains an unowned symlinked directory", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
         name: "@openclaw/fixture-plugin",
@@ -321,14 +321,29 @@ describe("stageBundledPluginRuntimeDeps", () => {
     fs.writeFileSync(path.join(linkedTargetDir, "marker.txt"), "first\n", "utf8");
     fs.symlinkSync(linkedTargetDir, linkedPath);
 
-    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
-    const stampPath = path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
-    const firstStamp = fs.readFileSync(stampPath, "utf8");
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "installed\n", "utf8");
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
 
-    fs.writeFileSync(path.join(linkedTargetDir, "marker.txt"), "second\n", "utf8");
-    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
-
-    expect(fs.readFileSync(stampPath, "utf8")).toBe(firstStamp);
+    expect(installCount).toBe(1);
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "direct", "node_modules", "linked")),
+    ).toBe(false);
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "installed\n",
+    );
   });
 
   it("dedupes cyclic dependency aliases by canonical root", () => {
@@ -375,6 +390,88 @@ describe("stageBundledPluginRuntimeDeps", () => {
         "utf8",
       ),
     ).toBe("module.exports = 'b';\n");
+  });
+
+  it("falls back to install when a dependency name escapes node_modules", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "../escape": "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "installed\n", "utf8");
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+    expect(fs.existsSync(path.join(pluginDir, "escape"))).toBe(false);
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "installed\n",
+    );
+  });
+
+  it("falls back to install when a staged dependency tree contains a symlink outside copied roots", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const escapedDir = path.join(repoRoot, "outside-root");
+    fs.mkdirSync(path.join(directDir, "node_modules"), { recursive: true });
+    fs.mkdirSync(escapedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(path.join(escapedDir, "secret.txt"), "host secret\n", "utf8");
+    fs.symlinkSync(escapedDir, path.join(directDir, "node_modules", "escaped"));
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "installed\n", "utf8");
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+    expect(
+      fs.existsSync(
+        path.join(pluginDir, "node_modules", "direct", "node_modules", "escaped", "secret.txt"),
+      ),
+    ).toBe(false);
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "installed\n",
+    );
   });
 
   it("falls back to install when the root transitive closure is incomplete", () => {
