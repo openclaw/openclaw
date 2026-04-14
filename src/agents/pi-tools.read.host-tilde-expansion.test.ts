@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type CapturedEditOperations = {
   readFile: (absolutePath: string) => Promise<Buffer>;
@@ -120,5 +120,80 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     await mocks.writeOps!.mkdir(homeRelative);
     const stat = await fs.stat(newDir);
     expect(stat.isDirectory()).toBe(true);
+  });
+});
+
+// These tests set OPENCLAW_HOME to a dir that is explicitly NOT under $HOME
+// and verify tilde expansion resolves to OPENCLAW_HOME. Without the
+// expandHomePrefix fix, the production code would use os.homedir() / $HOME
+// and the target files would land in the wrong location. Follows the
+// snapshot/restore pattern from test/helpers/temp-home.ts.
+describe("host tool tilde expansion honors OPENCLAW_HOME override", () => {
+  let openclawHome = "";
+  const originalOpenclawHome = process.env.OPENCLAW_HOME;
+
+  beforeEach(async () => {
+    openclawHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-override-"));
+    process.env.OPENCLAW_HOME = openclawHome;
+  });
+
+  afterEach(async () => {
+    if (originalOpenclawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = originalOpenclawHome;
+    }
+    mocks.editOps = undefined;
+    mocks.writeOps = undefined;
+    if (openclawHome) {
+      await fs.rm(openclawHome, { recursive: true, force: true });
+      openclawHome = "";
+    }
+  });
+
+  it("write writeFile resolves ~ to OPENCLAW_HOME when it differs from $HOME", async () => {
+    createHostWorkspaceWriteTool(openclawHome, { workspaceOnly: false });
+    expect(mocks.writeOps).toBeDefined();
+
+    await mocks.writeOps!.writeFile("~/openclaw-home-write.txt", "content via OPENCLAW_HOME");
+
+    // File must land under OPENCLAW_HOME (proving expandHomePrefix honored
+    // the override), not under $HOME / os.homedir().
+    const expectedPath = path.join(openclawHome, "openclaw-home-write.txt");
+    const content = await fs.readFile(expectedPath, "utf8");
+    expect(content).toBe("content via OPENCLAW_HOME");
+  });
+
+  it("write mkdir resolves ~ to OPENCLAW_HOME when it differs from $HOME", async () => {
+    createHostWorkspaceWriteTool(openclawHome, { workspaceOnly: false });
+    expect(mocks.writeOps).toBeDefined();
+
+    await mocks.writeOps!.mkdir("~/openclaw-home-mkdir");
+
+    const stat = await fs.stat(path.join(openclawHome, "openclaw-home-mkdir"));
+    expect(stat.isDirectory()).toBe(true);
+  });
+
+  it("edit readFile resolves ~ to OPENCLAW_HOME when it differs from $HOME", async () => {
+    await fs.writeFile(
+      path.join(openclawHome, "openclaw-home-read.txt"),
+      "OPENCLAW_HOME content",
+      "utf8",
+    );
+
+    createHostWorkspaceEditTool(openclawHome, { workspaceOnly: false });
+    expect(mocks.editOps).toBeDefined();
+
+    const content = await mocks.editOps!.readFile("~/openclaw-home-read.txt");
+    expect(content.toString("utf8")).toBe("OPENCLAW_HOME content");
+  });
+
+  it("edit access resolves ~ to OPENCLAW_HOME when it differs from $HOME", async () => {
+    await fs.writeFile(path.join(openclawHome, "openclaw-home-access.txt"), "exists", "utf8");
+
+    createHostWorkspaceEditTool(openclawHome, { workspaceOnly: false });
+    expect(mocks.editOps).toBeDefined();
+
+    await expect(mocks.editOps!.access("~/openclaw-home-access.txt")).resolves.toBeUndefined();
   });
 });
