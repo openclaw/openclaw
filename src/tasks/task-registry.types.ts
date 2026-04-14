@@ -77,6 +77,14 @@ export type TaskRecord = {
   progressSummary?: string;
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
+  /** Judge verdict for this task (ACCEPT/REVISE/ESCALATE). */
+  judgeVerdict?: string;
+  /** Number of REVISE loops completed. */
+  reviseCount?: number;
+  /** Whether deterministic preflight gate passed. */
+  deterministicGateResult?: boolean;
+  /** Routing lane used for this task. */
+  routingLane?: string;
 };
 
 export type TaskRegistrySnapshot = {

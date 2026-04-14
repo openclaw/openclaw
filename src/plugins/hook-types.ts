@@ -185,6 +185,16 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+  /** Route metadata for observability — which lane, why this model, failover vs escalation. */
+  route?: {
+    lane?: string;
+    routeReason?: string;
+    requestedModel?: string;
+    selectedModel?: string;
+    failoverReason?: string;
+    escalationReason?: string;
+    challengerInvoked?: boolean;
+  };
 };
 
 export type PluginHookAgentEndEvent = {
