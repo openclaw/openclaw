@@ -32,9 +32,11 @@ function dependencySentinelPath(depName: string): string {
 }
 
 function collectRuntimeDeps(packageJson: Record<string, unknown>): Record<string, unknown> {
+  // Only include required dependencies. Optional dependencies (optionalDependencies)
+  // are excluded because they may legitimately fail to install on certain platforms
+  // (e.g. @discordjs/opus on ARM64) and should not be reported as missing.
   return {
     ...(packageJson.dependencies as Record<string, unknown> | undefined),
-    ...(packageJson.optionalDependencies as Record<string, unknown> | undefined),
   };
 }
 

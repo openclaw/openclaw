@@ -26,6 +26,26 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(result.conflicts).toEqual([]);
   });
 
+  it("excludes optionalDependencies from missing report", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+
+    writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
+      dependencies: {
+        opusscript: "^0.1.1",
+      },
+      optionalDependencies: {
+        "@discordjs/opus": "^0.10.0",
+      },
+    });
+
+    // Neither dep is installed, but only the required dep should be reported.
+    const result = scanBundledPluginRuntimeDeps({ packageRoot: root });
+    const missing = result.missing.map((dep) => `${dep.name}@${dep.version}`);
+    expect(missing).toEqual(["opusscript@^0.1.1"]);
+    expect(missing).not.toContainEqual(expect.stringContaining("@discordjs/opus"));
+  });
+
   it("reports missing deps and conflicts", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
@@ -59,7 +79,10 @@ describe("doctor bundled plugin runtime deps", () => {
     const result = scanBundledPluginRuntimeDeps({ packageRoot: root });
     const missing = result.missing.map((dep) => `${dep.name}@${dep.version}`);
 
-    expect(missing).toEqual(["@scope/dep-two@2.0.0", "dep-opt@3.0.0"]);
+    // dep-opt is declared as an optionalDependency and should NOT be reported
+    // as missing — optional deps may legitimately fail to install on some
+    // platforms (e.g. @discordjs/opus on ARM64).
+    expect(missing).toEqual(["@scope/dep-two@2.0.0"]);
     expect(result.conflicts).toHaveLength(1);
     expect(result.conflicts[0]?.name).toBe("dep-conflict");
     expect(result.conflicts[0]?.versions).toEqual(["1.0.0", "2.0.0"]);
