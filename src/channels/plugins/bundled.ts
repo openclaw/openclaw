@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import { createJiti } from "jiti";
+
+Error.stackTraceLimit = 200;
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
@@ -113,7 +115,15 @@ function loadBundledModule(modulePath: string, rootDir: string): unknown {
   }
   const safePath = opened.path;
   fs.closeSync(opened.fd);
-  return loadModule(safePath)(safePath);
+  try {
+    return loadModule(safePath)(safePath);
+  } catch (err) {
+    console.error(
+      "BUNDLED_LOAD_STACK",
+      (err as { stack?: string } | null)?.stack ?? err,
+    );
+    throw err;
+  }
 }
 
 function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelEntry[] {
