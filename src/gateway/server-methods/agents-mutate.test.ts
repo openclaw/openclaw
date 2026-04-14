@@ -1081,14 +1081,14 @@ describe("agents.files.list", () => {
       throw createErrnoError("EACCES");
     });
     agentsTesting.setDepsForTests({ openFileWithinRoot });
-    mocks.fsLstat.mockImplementation(async (filePath: string) => {
-      if (filePath === "/workspace/main/AGENTS.md") {
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === "/workspace/main/AGENTS.md") {
         return makeFileStat({ size: 17, mtimeMs: 4567 });
       }
       throw createEnoentError();
     });
-    mocks.fsStat.mockImplementation(async (filePath: string) => {
-      if (filePath === "/workspace/main/AGENTS.md") {
+    mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === "/workspace/main/AGENTS.md") {
         return makeFileStat({ size: 17, mtimeMs: 4567 });
       }
       throw createEnoentError();
