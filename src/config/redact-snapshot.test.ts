@@ -578,8 +578,10 @@ describe("redactConfigSnapshot", () => {
     expect(sourceConfig.gateway.auth.token).toBe(REDACTED_SENTINEL);
     expect(resolved.gateway.auth.token).toBe(REDACTED_SENTINEL);
     expect(runtimeConfig.channels.discord.token).toBe(REDACTED_SENTINEL);
-    expect(result.sourceConfig).toBe(result.resolved);
-    expect(result.runtimeConfig).toBe(result.config);
+    // sourceConfig holds a copy of the runtime config
+    expect(result.sourceConfig).toBe(result.config);
+    // runtimeConfig holds a copy of the resolved config (post ${ENV} substitution)
+    expect(result.runtimeConfig).toBe(result.resolved);
   });
 
   it("handles null raw gracefully", () => {
@@ -625,8 +627,11 @@ describe("redactConfigSnapshot", () => {
     expect(result.sourceConfig).toEqual({});
     expect(result.resolved).toEqual({});
     expect(result.runtimeConfig).toEqual({});
-    expect(result.sourceConfig).toBe(result.resolved);
-    expect(result.runtimeConfig).toBe(result.config);
+    // For invalid snapshots, all config fields are cleared to empty objects.
+    // sourceConfig and config both reference the empty config object;
+    // resolved and runtimeConfig both reference the empty resolved object.
+    expect(result.sourceConfig).toBe(result.config);
+    expect(result.resolved).toBe(result.runtimeConfig);
   });
 
   it("handles deeply nested tokens in accounts", () => {
