@@ -101,19 +101,29 @@ async function ensureFfmpeg(): Promise<void> {
 async function findWorkspaceFolder(): Promise<string> {
   let currentPath = path.resolve(process.cwd());
   const root = path.parse(currentPath).root;
+  
+  // First, check if we're already in a workspace subdirectory
   while (currentPath !== root) {
-    if (path.basename(currentPath) === 'workspace') {
-      return currentPath;
+    const parent = path.dirname(currentPath);
+    
+    // Check if parent is a workspace directory
+    if (path.basename(parent) === 'workspace') {
+      return currentPath; // Return the actual working directory under workspace
     }
-    const sub = path.join(currentPath, 'workspace');
-    try { 
-      if ((await fs.stat(sub)).isDirectory()) {
-        return sub;
+    
+    // Check for workspace directory in current path
+    const workspaceDir = path.join(currentPath, 'workspace');
+    try {
+      if ((await fs.stat(workspaceDir)).isDirectory()) {
+        return workspaceDir;
       }
     } catch {}
-    currentPath = path.dirname(currentPath);
+    
+    currentPath = parent;
   }
-  const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
+  
+  // Fallback to a workspace-relative path
+  const fallback = path.join(os.homedir(), '.openclaw', 'workspace', 'default');
   await fs.mkdir(fallback, { recursive: true });
   return fallback;
 }
