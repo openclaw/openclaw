@@ -195,7 +195,7 @@ export type RunBlueBubblesCatchupDeps = {
  * Fetch and replay BlueBubbles messages delivered since the persisted
  * catchup cursor, feeding each through the same `processMessage` pipeline
  * live webhooks use. Safe to call on every gateway startup: replays that
- * collide with #66810's inbound dedupe cache are dropped there, so a
+ * collide with #66816's inbound dedupe cache are dropped there, so a
  * message already processed via live webhook will not be processed twice.
  *
  * Returns the run summary, or `null` when disabled, rate-limited, or
@@ -229,7 +229,7 @@ export async function runBlueBubblesCatchup(
   // gap (e.g. <30s) between two startups can still have lost messages in
   // the middle, and skipping the second startup's catchup would lose
   // them permanently. The bounded query (perRunLimit, maxAge) and the
-  // inbound-dedupe cache from #66810 cap the cost of running the query
+  // inbound-dedupe cache from #66816 cap the cost of running the query
   // every startup.
 
   const earliestAllowed = nowMs - maxAgeMs;
@@ -239,7 +239,7 @@ export async function runBlueBubblesCatchup(
   // permanently skip any real messages missed in the
   // [earliestAllowed, nowMs] window. Treat it as if no cursor exists and
   // fall through to the firstRun lookback path; the inbound-dedupe cache
-  // from #66810 handles any overlap with already-processed messages, and
+  // from #66816 handles any overlap with already-processed messages, and
   // saving cursor = nowMs at the end of the run repairs the cursor.
   const cursorIsUsable = existing !== null && existing.lastSeenMs <= nowMs;
   // First-run (and recovered-future-cursor) lookback is also clamped to
@@ -353,7 +353,7 @@ export async function runBlueBubblesCatchup(
   //   gateway host).
   // - On retryable failure (any `processMessage` throw): hold the cursor
   //   just before the earliest failed timestamp so the next run retries
-  //   from there. The inbound-dedupe cache from #66810 keeps successfully
+  //   from there. The inbound-dedupe cache from #66816 keeps successfully
   //   replayed messages from being re-processed.
   // - On truncation (fetched === perRunLimit): advance only to the latest
   //   fetched timestamp so the next run picks up from the page boundary.
