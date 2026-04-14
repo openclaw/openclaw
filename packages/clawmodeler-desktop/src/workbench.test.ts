@@ -1,0 +1,70 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildFullWorkflowArgs,
+  countJsonLines,
+  manifestOutputCategories,
+  normalizePathList,
+  normalizeScenarios,
+  summarizeQa,
+} from "./workbench.js";
+
+describe("clawmodeler workbench helpers", () => {
+  it("normalizes paths from newlines and commas", () => {
+    expect(normalizePathList("zones.geojson, socio.csv\nprojects.csv\n")).toEqual([
+      "zones.geojson",
+      "socio.csv",
+      "projects.csv",
+    ]);
+  });
+
+  it("defaults scenarios to baseline", () => {
+    expect(normalizeScenarios("")).toEqual(["baseline"]);
+    expect(normalizeScenarios("baseline, build")).toEqual(["baseline", "build"]);
+  });
+
+  it("builds the full workflow sidecar args", () => {
+    expect(
+      buildFullWorkflowArgs({
+        workspace: "/tmp/demo",
+        inputs: ["zones.geojson", "socio.csv"],
+        question: "question.json",
+        runId: "demo",
+        scenarios: ["baseline"],
+        skipBridges: true,
+      }),
+    ).toEqual([
+      "workflow",
+      "full",
+      "--workspace",
+      "/tmp/demo",
+      "--inputs",
+      "zones.geojson",
+      "socio.csv",
+      "--question",
+      "question.json",
+      "--run-id",
+      "demo",
+      "--scenarios",
+      "baseline",
+      "--skip-bridges",
+    ]);
+  });
+
+  it("summarizes QA reports", () => {
+    expect(summarizeQa({ export_ready: true, blockers: [] }).tone).toBe("ready");
+    expect(summarizeQa({ export_ready: false, blockers: ["manifest_missing"] })).toEqual({
+      label: "Export blocked",
+      tone: "blocked",
+      blockers: ["manifest_missing"],
+    });
+  });
+
+  it("counts JSONL rows and manifest output categories", () => {
+    expect(countJsonLines('{"a":1}\n\n{"b":2}\n')).toBe(2);
+    expect(manifestOutputCategories({ outputs: { tables: [], maps: [], bridges: [] } })).toEqual([
+      "bridges",
+      "maps",
+      "tables",
+    ]);
+  });
+});

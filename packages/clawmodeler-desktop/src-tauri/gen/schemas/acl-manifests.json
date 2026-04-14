@@ -1,0 +1,1801 @@
+{
+  "core": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default core plugins set.",
+      "permissions": [
+        "core:path:default",
+        "core:event:default",
+        "core:window:default",
+        "core:webview:default",
+        "core:app:default",
+        "core:image:default",
+        "core:resources:default",
+        "core:menu:default",
+        "core:tray:default"
+      ]
+    },
+    "permissions": {},
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:app": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin.",
+      "permissions": [
+        "allow-version",
+        "allow-name",
+        "allow-tauri-version",
+        "allow-identifier",
+        "allow-bundle-type",
+        "allow-register-listener",
+        "allow-remove-listener"
+      ]
+    },
+    "permissions": {
+      "allow-app-hide": {
+        "identifier": "allow-app-hide",
+        "description": "Enables the app_hide command without any pre-configured scope.",
+        "commands": { "allow": ["app_hide"], "deny": [] }
+      },
+      "allow-app-show": {
+        "identifier": "allow-app-show",
+        "description": "Enables the app_show command without any pre-configured scope.",
+        "commands": { "allow": ["app_show"], "deny": [] }
+      },
+      "allow-bundle-type": {
+        "identifier": "allow-bundle-type",
+        "description": "Enables the bundle_type command without any pre-configured scope.",
+        "commands": { "allow": ["bundle_type"], "deny": [] }
+      },
+      "allow-default-window-icon": {
+        "identifier": "allow-default-window-icon",
+        "description": "Enables the default_window_icon command without any pre-configured scope.",
+        "commands": { "allow": ["default_window_icon"], "deny": [] }
+      },
+      "allow-fetch-data-store-identifiers": {
+        "identifier": "allow-fetch-data-store-identifiers",
+        "description": "Enables the fetch_data_store_identifiers command without any pre-configured scope.",
+        "commands": { "allow": ["fetch_data_store_identifiers"], "deny": [] }
+      },
+      "allow-identifier": {
+        "identifier": "allow-identifier",
+        "description": "Enables the identifier command without any pre-configured scope.",
+        "commands": { "allow": ["identifier"], "deny": [] }
+      },
+      "allow-name": {
+        "identifier": "allow-name",
+        "description": "Enables the name command without any pre-configured scope.",
+        "commands": { "allow": ["name"], "deny": [] }
+      },
+      "allow-register-listener": {
+        "identifier": "allow-register-listener",
+        "description": "Enables the register_listener command without any pre-configured scope.",
+        "commands": { "allow": ["register_listener"], "deny": [] }
+      },
+      "allow-remove-data-store": {
+        "identifier": "allow-remove-data-store",
+        "description": "Enables the remove_data_store command without any pre-configured scope.",
+        "commands": { "allow": ["remove_data_store"], "deny": [] }
+      },
+      "allow-remove-listener": {
+        "identifier": "allow-remove-listener",
+        "description": "Enables the remove_listener command without any pre-configured scope.",
+        "commands": { "allow": ["remove_listener"], "deny": [] }
+      },
+      "allow-set-app-theme": {
+        "identifier": "allow-set-app-theme",
+        "description": "Enables the set_app_theme command without any pre-configured scope.",
+        "commands": { "allow": ["set_app_theme"], "deny": [] }
+      },
+      "allow-set-dock-visibility": {
+        "identifier": "allow-set-dock-visibility",
+        "description": "Enables the set_dock_visibility command without any pre-configured scope.",
+        "commands": { "allow": ["set_dock_visibility"], "deny": [] }
+      },
+      "allow-tauri-version": {
+        "identifier": "allow-tauri-version",
+        "description": "Enables the tauri_version command without any pre-configured scope.",
+        "commands": { "allow": ["tauri_version"], "deny": [] }
+      },
+      "allow-version": {
+        "identifier": "allow-version",
+        "description": "Enables the version command without any pre-configured scope.",
+        "commands": { "allow": ["version"], "deny": [] }
+      },
+      "deny-app-hide": {
+        "identifier": "deny-app-hide",
+        "description": "Denies the app_hide command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["app_hide"] }
+      },
+      "deny-app-show": {
+        "identifier": "deny-app-show",
+        "description": "Denies the app_show command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["app_show"] }
+      },
+      "deny-bundle-type": {
+        "identifier": "deny-bundle-type",
+        "description": "Denies the bundle_type command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["bundle_type"] }
+      },
+      "deny-default-window-icon": {
+        "identifier": "deny-default-window-icon",
+        "description": "Denies the default_window_icon command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["default_window_icon"] }
+      },
+      "deny-fetch-data-store-identifiers": {
+        "identifier": "deny-fetch-data-store-identifiers",
+        "description": "Denies the fetch_data_store_identifiers command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["fetch_data_store_identifiers"] }
+      },
+      "deny-identifier": {
+        "identifier": "deny-identifier",
+        "description": "Denies the identifier command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["identifier"] }
+      },
+      "deny-name": {
+        "identifier": "deny-name",
+        "description": "Denies the name command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["name"] }
+      },
+      "deny-register-listener": {
+        "identifier": "deny-register-listener",
+        "description": "Denies the register_listener command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["register_listener"] }
+      },
+      "deny-remove-data-store": {
+        "identifier": "deny-remove-data-store",
+        "description": "Denies the remove_data_store command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["remove_data_store"] }
+      },
+      "deny-remove-listener": {
+        "identifier": "deny-remove-listener",
+        "description": "Denies the remove_listener command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["remove_listener"] }
+      },
+      "deny-set-app-theme": {
+        "identifier": "deny-set-app-theme",
+        "description": "Denies the set_app_theme command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_app_theme"] }
+      },
+      "deny-set-dock-visibility": {
+        "identifier": "deny-set-dock-visibility",
+        "description": "Denies the set_dock_visibility command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_dock_visibility"] }
+      },
+      "deny-tauri-version": {
+        "identifier": "deny-tauri-version",
+        "description": "Denies the tauri_version command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["tauri_version"] }
+      },
+      "deny-version": {
+        "identifier": "deny-version",
+        "description": "Denies the version command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["version"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:event": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin, which enables all commands.",
+      "permissions": ["allow-listen", "allow-unlisten", "allow-emit", "allow-emit-to"]
+    },
+    "permissions": {
+      "allow-emit": {
+        "identifier": "allow-emit",
+        "description": "Enables the emit command without any pre-configured scope.",
+        "commands": { "allow": ["emit"], "deny": [] }
+      },
+      "allow-emit-to": {
+        "identifier": "allow-emit-to",
+        "description": "Enables the emit_to command without any pre-configured scope.",
+        "commands": { "allow": ["emit_to"], "deny": [] }
+      },
+      "allow-listen": {
+        "identifier": "allow-listen",
+        "description": "Enables the listen command without any pre-configured scope.",
+        "commands": { "allow": ["listen"], "deny": [] }
+      },
+      "allow-unlisten": {
+        "identifier": "allow-unlisten",
+        "description": "Enables the unlisten command without any pre-configured scope.",
+        "commands": { "allow": ["unlisten"], "deny": [] }
+      },
+      "deny-emit": {
+        "identifier": "deny-emit",
+        "description": "Denies the emit command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["emit"] }
+      },
+      "deny-emit-to": {
+        "identifier": "deny-emit-to",
+        "description": "Denies the emit_to command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["emit_to"] }
+      },
+      "deny-listen": {
+        "identifier": "deny-listen",
+        "description": "Denies the listen command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["listen"] }
+      },
+      "deny-unlisten": {
+        "identifier": "deny-unlisten",
+        "description": "Denies the unlisten command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["unlisten"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:image": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin, which enables all commands.",
+      "permissions": [
+        "allow-new",
+        "allow-from-bytes",
+        "allow-from-path",
+        "allow-rgba",
+        "allow-size"
+      ]
+    },
+    "permissions": {
+      "allow-from-bytes": {
+        "identifier": "allow-from-bytes",
+        "description": "Enables the from_bytes command without any pre-configured scope.",
+        "commands": { "allow": ["from_bytes"], "deny": [] }
+      },
+      "allow-from-path": {
+        "identifier": "allow-from-path",
+        "description": "Enables the from_path command without any pre-configured scope.",
+        "commands": { "allow": ["from_path"], "deny": [] }
+      },
+      "allow-new": {
+        "identifier": "allow-new",
+        "description": "Enables the new command without any pre-configured scope.",
+        "commands": { "allow": ["new"], "deny": [] }
+      },
+      "allow-rgba": {
+        "identifier": "allow-rgba",
+        "description": "Enables the rgba command without any pre-configured scope.",
+        "commands": { "allow": ["rgba"], "deny": [] }
+      },
+      "allow-size": {
+        "identifier": "allow-size",
+        "description": "Enables the size command without any pre-configured scope.",
+        "commands": { "allow": ["size"], "deny": [] }
+      },
+      "deny-from-bytes": {
+        "identifier": "deny-from-bytes",
+        "description": "Denies the from_bytes command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["from_bytes"] }
+      },
+      "deny-from-path": {
+        "identifier": "deny-from-path",
+        "description": "Denies the from_path command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["from_path"] }
+      },
+      "deny-new": {
+        "identifier": "deny-new",
+        "description": "Denies the new command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["new"] }
+      },
+      "deny-rgba": {
+        "identifier": "deny-rgba",
+        "description": "Denies the rgba command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["rgba"] }
+      },
+      "deny-size": {
+        "identifier": "deny-size",
+        "description": "Denies the size command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["size"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:menu": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin, which enables all commands.",
+      "permissions": [
+        "allow-new",
+        "allow-append",
+        "allow-prepend",
+        "allow-insert",
+        "allow-remove",
+        "allow-remove-at",
+        "allow-items",
+        "allow-get",
+        "allow-popup",
+        "allow-create-default",
+        "allow-set-as-app-menu",
+        "allow-set-as-window-menu",
+        "allow-text",
+        "allow-set-text",
+        "allow-is-enabled",
+        "allow-set-enabled",
+        "allow-set-accelerator",
+        "allow-set-as-windows-menu-for-nsapp",
+        "allow-set-as-help-menu-for-nsapp",
+        "allow-is-checked",
+        "allow-set-checked",
+        "allow-set-icon"
+      ]
+    },
+    "permissions": {
+      "allow-append": {
+        "identifier": "allow-append",
+        "description": "Enables the append command without any pre-configured scope.",
+        "commands": { "allow": ["append"], "deny": [] }
+      },
+      "allow-create-default": {
+        "identifier": "allow-create-default",
+        "description": "Enables the create_default command without any pre-configured scope.",
+        "commands": { "allow": ["create_default"], "deny": [] }
+      },
+      "allow-get": {
+        "identifier": "allow-get",
+        "description": "Enables the get command without any pre-configured scope.",
+        "commands": { "allow": ["get"], "deny": [] }
+      },
+      "allow-insert": {
+        "identifier": "allow-insert",
+        "description": "Enables the insert command without any pre-configured scope.",
+        "commands": { "allow": ["insert"], "deny": [] }
+      },
+      "allow-is-checked": {
+        "identifier": "allow-is-checked",
+        "description": "Enables the is_checked command without any pre-configured scope.",
+        "commands": { "allow": ["is_checked"], "deny": [] }
+      },
+      "allow-is-enabled": {
+        "identifier": "allow-is-enabled",
+        "description": "Enables the is_enabled command without any pre-configured scope.",
+        "commands": { "allow": ["is_enabled"], "deny": [] }
+      },
+      "allow-items": {
+        "identifier": "allow-items",
+        "description": "Enables the items command without any pre-configured scope.",
+        "commands": { "allow": ["items"], "deny": [] }
+      },
+      "allow-new": {
+        "identifier": "allow-new",
+        "description": "Enables the new command without any pre-configured scope.",
+        "commands": { "allow": ["new"], "deny": [] }
+      },
+      "allow-popup": {
+        "identifier": "allow-popup",
+        "description": "Enables the popup command without any pre-configured scope.",
+        "commands": { "allow": ["popup"], "deny": [] }
+      },
+      "allow-prepend": {
+        "identifier": "allow-prepend",
+        "description": "Enables the prepend command without any pre-configured scope.",
+        "commands": { "allow": ["prepend"], "deny": [] }
+      },
+      "allow-remove": {
+        "identifier": "allow-remove",
+        "description": "Enables the remove command without any pre-configured scope.",
+        "commands": { "allow": ["remove"], "deny": [] }
+      },
+      "allow-remove-at": {
+        "identifier": "allow-remove-at",
+        "description": "Enables the remove_at command without any pre-configured scope.",
+        "commands": { "allow": ["remove_at"], "deny": [] }
+      },
+      "allow-set-accelerator": {
+        "identifier": "allow-set-accelerator",
+        "description": "Enables the set_accelerator command without any pre-configured scope.",
+        "commands": { "allow": ["set_accelerator"], "deny": [] }
+      },
+      "allow-set-as-app-menu": {
+        "identifier": "allow-set-as-app-menu",
+        "description": "Enables the set_as_app_menu command without any pre-configured scope.",
+        "commands": { "allow": ["set_as_app_menu"], "deny": [] }
+      },
+      "allow-set-as-help-menu-for-nsapp": {
+        "identifier": "allow-set-as-help-menu-for-nsapp",
+        "description": "Enables the set_as_help_menu_for_nsapp command without any pre-configured scope.",
+        "commands": { "allow": ["set_as_help_menu_for_nsapp"], "deny": [] }
+      },
+      "allow-set-as-window-menu": {
+        "identifier": "allow-set-as-window-menu",
+        "description": "Enables the set_as_window_menu command without any pre-configured scope.",
+        "commands": { "allow": ["set_as_window_menu"], "deny": [] }
+      },
+      "allow-set-as-windows-menu-for-nsapp": {
+        "identifier": "allow-set-as-windows-menu-for-nsapp",
+        "description": "Enables the set_as_windows_menu_for_nsapp command without any pre-configured scope.",
+        "commands": { "allow": ["set_as_windows_menu_for_nsapp"], "deny": [] }
+      },
+      "allow-set-checked": {
+        "identifier": "allow-set-checked",
+        "description": "Enables the set_checked command without any pre-configured scope.",
+        "commands": { "allow": ["set_checked"], "deny": [] }
+      },
+      "allow-set-enabled": {
+        "identifier": "allow-set-enabled",
+        "description": "Enables the set_enabled command without any pre-configured scope.",
+        "commands": { "allow": ["set_enabled"], "deny": [] }
+      },
+      "allow-set-icon": {
+        "identifier": "allow-set-icon",
+        "description": "Enables the set_icon command without any pre-configured scope.",
+        "commands": { "allow": ["set_icon"], "deny": [] }
+      },
+      "allow-set-text": {
+        "identifier": "allow-set-text",
+        "description": "Enables the set_text command without any pre-configured scope.",
+        "commands": { "allow": ["set_text"], "deny": [] }
+      },
+      "allow-text": {
+        "identifier": "allow-text",
+        "description": "Enables the text command without any pre-configured scope.",
+        "commands": { "allow": ["text"], "deny": [] }
+      },
+      "deny-append": {
+        "identifier": "deny-append",
+        "description": "Denies the append command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["append"] }
+      },
+      "deny-create-default": {
+        "identifier": "deny-create-default",
+        "description": "Denies the create_default command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["create_default"] }
+      },
+      "deny-get": {
+        "identifier": "deny-get",
+        "description": "Denies the get command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["get"] }
+      },
+      "deny-insert": {
+        "identifier": "deny-insert",
+        "description": "Denies the insert command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["insert"] }
+      },
+      "deny-is-checked": {
+        "identifier": "deny-is-checked",
+        "description": "Denies the is_checked command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_checked"] }
+      },
+      "deny-is-enabled": {
+        "identifier": "deny-is-enabled",
+        "description": "Denies the is_enabled command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_enabled"] }
+      },
+      "deny-items": {
+        "identifier": "deny-items",
+        "description": "Denies the items command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["items"] }
+      },
+      "deny-new": {
+        "identifier": "deny-new",
+        "description": "Denies the new command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["new"] }
+      },
+      "deny-popup": {
+        "identifier": "deny-popup",
+        "description": "Denies the popup command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["popup"] }
+      },
+      "deny-prepend": {
+        "identifier": "deny-prepend",
+        "description": "Denies the prepend command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["prepend"] }
+      },
+      "deny-remove": {
+        "identifier": "deny-remove",
+        "description": "Denies the remove command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["remove"] }
+      },
+      "deny-remove-at": {
+        "identifier": "deny-remove-at",
+        "description": "Denies the remove_at command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["remove_at"] }
+      },
+      "deny-set-accelerator": {
+        "identifier": "deny-set-accelerator",
+        "description": "Denies the set_accelerator command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_accelerator"] }
+      },
+      "deny-set-as-app-menu": {
+        "identifier": "deny-set-as-app-menu",
+        "description": "Denies the set_as_app_menu command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_as_app_menu"] }
+      },
+      "deny-set-as-help-menu-for-nsapp": {
+        "identifier": "deny-set-as-help-menu-for-nsapp",
+        "description": "Denies the set_as_help_menu_for_nsapp command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_as_help_menu_for_nsapp"] }
+      },
+      "deny-set-as-window-menu": {
+        "identifier": "deny-set-as-window-menu",
+        "description": "Denies the set_as_window_menu command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_as_window_menu"] }
+      },
+      "deny-set-as-windows-menu-for-nsapp": {
+        "identifier": "deny-set-as-windows-menu-for-nsapp",
+        "description": "Denies the set_as_windows_menu_for_nsapp command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_as_windows_menu_for_nsapp"] }
+      },
+      "deny-set-checked": {
+        "identifier": "deny-set-checked",
+        "description": "Denies the set_checked command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_checked"] }
+      },
+      "deny-set-enabled": {
+        "identifier": "deny-set-enabled",
+        "description": "Denies the set_enabled command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_enabled"] }
+      },
+      "deny-set-icon": {
+        "identifier": "deny-set-icon",
+        "description": "Denies the set_icon command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_icon"] }
+      },
+      "deny-set-text": {
+        "identifier": "deny-set-text",
+        "description": "Denies the set_text command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_text"] }
+      },
+      "deny-text": {
+        "identifier": "deny-text",
+        "description": "Denies the text command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["text"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:path": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin, which enables all commands.",
+      "permissions": [
+        "allow-resolve-directory",
+        "allow-resolve",
+        "allow-normalize",
+        "allow-join",
+        "allow-dirname",
+        "allow-extname",
+        "allow-basename",
+        "allow-is-absolute"
+      ]
+    },
+    "permissions": {
+      "allow-basename": {
+        "identifier": "allow-basename",
+        "description": "Enables the basename command without any pre-configured scope.",
+        "commands": { "allow": ["basename"], "deny": [] }
+      },
+      "allow-dirname": {
+        "identifier": "allow-dirname",
+        "description": "Enables the dirname command without any pre-configured scope.",
+        "commands": { "allow": ["dirname"], "deny": [] }
+      },
+      "allow-extname": {
+        "identifier": "allow-extname",
+        "description": "Enables the extname command without any pre-configured scope.",
+        "commands": { "allow": ["extname"], "deny": [] }
+      },
+      "allow-is-absolute": {
+        "identifier": "allow-is-absolute",
+        "description": "Enables the is_absolute command without any pre-configured scope.",
+        "commands": { "allow": ["is_absolute"], "deny": [] }
+      },
+      "allow-join": {
+        "identifier": "allow-join",
+        "description": "Enables the join command without any pre-configured scope.",
+        "commands": { "allow": ["join"], "deny": [] }
+      },
+      "allow-normalize": {
+        "identifier": "allow-normalize",
+        "description": "Enables the normalize command without any pre-configured scope.",
+        "commands": { "allow": ["normalize"], "deny": [] }
+      },
+      "allow-resolve": {
+        "identifier": "allow-resolve",
+        "description": "Enables the resolve command without any pre-configured scope.",
+        "commands": { "allow": ["resolve"], "deny": [] }
+      },
+      "allow-resolve-directory": {
+        "identifier": "allow-resolve-directory",
+        "description": "Enables the resolve_directory command without any pre-configured scope.",
+        "commands": { "allow": ["resolve_directory"], "deny": [] }
+      },
+      "deny-basename": {
+        "identifier": "deny-basename",
+        "description": "Denies the basename command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["basename"] }
+      },
+      "deny-dirname": {
+        "identifier": "deny-dirname",
+        "description": "Denies the dirname command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["dirname"] }
+      },
+      "deny-extname": {
+        "identifier": "deny-extname",
+        "description": "Denies the extname command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["extname"] }
+      },
+      "deny-is-absolute": {
+        "identifier": "deny-is-absolute",
+        "description": "Denies the is_absolute command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_absolute"] }
+      },
+      "deny-join": {
+        "identifier": "deny-join",
+        "description": "Denies the join command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["join"] }
+      },
+      "deny-normalize": {
+        "identifier": "deny-normalize",
+        "description": "Denies the normalize command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["normalize"] }
+      },
+      "deny-resolve": {
+        "identifier": "deny-resolve",
+        "description": "Denies the resolve command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["resolve"] }
+      },
+      "deny-resolve-directory": {
+        "identifier": "deny-resolve-directory",
+        "description": "Denies the resolve_directory command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["resolve_directory"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:resources": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin, which enables all commands.",
+      "permissions": ["allow-close"]
+    },
+    "permissions": {
+      "allow-close": {
+        "identifier": "allow-close",
+        "description": "Enables the close command without any pre-configured scope.",
+        "commands": { "allow": ["close"], "deny": [] }
+      },
+      "deny-close": {
+        "identifier": "deny-close",
+        "description": "Denies the close command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["close"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:tray": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin, which enables all commands.",
+      "permissions": [
+        "allow-new",
+        "allow-get-by-id",
+        "allow-remove-by-id",
+        "allow-set-icon",
+        "allow-set-menu",
+        "allow-set-tooltip",
+        "allow-set-title",
+        "allow-set-visible",
+        "allow-set-temp-dir-path",
+        "allow-set-icon-as-template",
+        "allow-set-show-menu-on-left-click"
+      ]
+    },
+    "permissions": {
+      "allow-get-by-id": {
+        "identifier": "allow-get-by-id",
+        "description": "Enables the get_by_id command without any pre-configured scope.",
+        "commands": { "allow": ["get_by_id"], "deny": [] }
+      },
+      "allow-new": {
+        "identifier": "allow-new",
+        "description": "Enables the new command without any pre-configured scope.",
+        "commands": { "allow": ["new"], "deny": [] }
+      },
+      "allow-remove-by-id": {
+        "identifier": "allow-remove-by-id",
+        "description": "Enables the remove_by_id command without any pre-configured scope.",
+        "commands": { "allow": ["remove_by_id"], "deny": [] }
+      },
+      "allow-set-icon": {
+        "identifier": "allow-set-icon",
+        "description": "Enables the set_icon command without any pre-configured scope.",
+        "commands": { "allow": ["set_icon"], "deny": [] }
+      },
+      "allow-set-icon-as-template": {
+        "identifier": "allow-set-icon-as-template",
+        "description": "Enables the set_icon_as_template command without any pre-configured scope.",
+        "commands": { "allow": ["set_icon_as_template"], "deny": [] }
+      },
+      "allow-set-menu": {
+        "identifier": "allow-set-menu",
+        "description": "Enables the set_menu command without any pre-configured scope.",
+        "commands": { "allow": ["set_menu"], "deny": [] }
+      },
+      "allow-set-show-menu-on-left-click": {
+        "identifier": "allow-set-show-menu-on-left-click",
+        "description": "Enables the set_show_menu_on_left_click command without any pre-configured scope.",
+        "commands": { "allow": ["set_show_menu_on_left_click"], "deny": [] }
+      },
+      "allow-set-temp-dir-path": {
+        "identifier": "allow-set-temp-dir-path",
+        "description": "Enables the set_temp_dir_path command without any pre-configured scope.",
+        "commands": { "allow": ["set_temp_dir_path"], "deny": [] }
+      },
+      "allow-set-title": {
+        "identifier": "allow-set-title",
+        "description": "Enables the set_title command without any pre-configured scope.",
+        "commands": { "allow": ["set_title"], "deny": [] }
+      },
+      "allow-set-tooltip": {
+        "identifier": "allow-set-tooltip",
+        "description": "Enables the set_tooltip command without any pre-configured scope.",
+        "commands": { "allow": ["set_tooltip"], "deny": [] }
+      },
+      "allow-set-visible": {
+        "identifier": "allow-set-visible",
+        "description": "Enables the set_visible command without any pre-configured scope.",
+        "commands": { "allow": ["set_visible"], "deny": [] }
+      },
+      "deny-get-by-id": {
+        "identifier": "deny-get-by-id",
+        "description": "Denies the get_by_id command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["get_by_id"] }
+      },
+      "deny-new": {
+        "identifier": "deny-new",
+        "description": "Denies the new command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["new"] }
+      },
+      "deny-remove-by-id": {
+        "identifier": "deny-remove-by-id",
+        "description": "Denies the remove_by_id command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["remove_by_id"] }
+      },
+      "deny-set-icon": {
+        "identifier": "deny-set-icon",
+        "description": "Denies the set_icon command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_icon"] }
+      },
+      "deny-set-icon-as-template": {
+        "identifier": "deny-set-icon-as-template",
+        "description": "Denies the set_icon_as_template command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_icon_as_template"] }
+      },
+      "deny-set-menu": {
+        "identifier": "deny-set-menu",
+        "description": "Denies the set_menu command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_menu"] }
+      },
+      "deny-set-show-menu-on-left-click": {
+        "identifier": "deny-set-show-menu-on-left-click",
+        "description": "Denies the set_show_menu_on_left_click command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_show_menu_on_left_click"] }
+      },
+      "deny-set-temp-dir-path": {
+        "identifier": "deny-set-temp-dir-path",
+        "description": "Denies the set_temp_dir_path command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_temp_dir_path"] }
+      },
+      "deny-set-title": {
+        "identifier": "deny-set-title",
+        "description": "Denies the set_title command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_title"] }
+      },
+      "deny-set-tooltip": {
+        "identifier": "deny-set-tooltip",
+        "description": "Denies the set_tooltip command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_tooltip"] }
+      },
+      "deny-set-visible": {
+        "identifier": "deny-set-visible",
+        "description": "Denies the set_visible command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_visible"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:webview": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin.",
+      "permissions": [
+        "allow-get-all-webviews",
+        "allow-webview-position",
+        "allow-webview-size",
+        "allow-internal-toggle-devtools"
+      ]
+    },
+    "permissions": {
+      "allow-clear-all-browsing-data": {
+        "identifier": "allow-clear-all-browsing-data",
+        "description": "Enables the clear_all_browsing_data command without any pre-configured scope.",
+        "commands": { "allow": ["clear_all_browsing_data"], "deny": [] }
+      },
+      "allow-create-webview": {
+        "identifier": "allow-create-webview",
+        "description": "Enables the create_webview command without any pre-configured scope.",
+        "commands": { "allow": ["create_webview"], "deny": [] }
+      },
+      "allow-create-webview-window": {
+        "identifier": "allow-create-webview-window",
+        "description": "Enables the create_webview_window command without any pre-configured scope.",
+        "commands": { "allow": ["create_webview_window"], "deny": [] }
+      },
+      "allow-get-all-webviews": {
+        "identifier": "allow-get-all-webviews",
+        "description": "Enables the get_all_webviews command without any pre-configured scope.",
+        "commands": { "allow": ["get_all_webviews"], "deny": [] }
+      },
+      "allow-internal-toggle-devtools": {
+        "identifier": "allow-internal-toggle-devtools",
+        "description": "Enables the internal_toggle_devtools command without any pre-configured scope.",
+        "commands": { "allow": ["internal_toggle_devtools"], "deny": [] }
+      },
+      "allow-print": {
+        "identifier": "allow-print",
+        "description": "Enables the print command without any pre-configured scope.",
+        "commands": { "allow": ["print"], "deny": [] }
+      },
+      "allow-reparent": {
+        "identifier": "allow-reparent",
+        "description": "Enables the reparent command without any pre-configured scope.",
+        "commands": { "allow": ["reparent"], "deny": [] }
+      },
+      "allow-set-webview-auto-resize": {
+        "identifier": "allow-set-webview-auto-resize",
+        "description": "Enables the set_webview_auto_resize command without any pre-configured scope.",
+        "commands": { "allow": ["set_webview_auto_resize"], "deny": [] }
+      },
+      "allow-set-webview-background-color": {
+        "identifier": "allow-set-webview-background-color",
+        "description": "Enables the set_webview_background_color command without any pre-configured scope.",
+        "commands": { "allow": ["set_webview_background_color"], "deny": [] }
+      },
+      "allow-set-webview-focus": {
+        "identifier": "allow-set-webview-focus",
+        "description": "Enables the set_webview_focus command without any pre-configured scope.",
+        "commands": { "allow": ["set_webview_focus"], "deny": [] }
+      },
+      "allow-set-webview-position": {
+        "identifier": "allow-set-webview-position",
+        "description": "Enables the set_webview_position command without any pre-configured scope.",
+        "commands": { "allow": ["set_webview_position"], "deny": [] }
+      },
+      "allow-set-webview-size": {
+        "identifier": "allow-set-webview-size",
+        "description": "Enables the set_webview_size command without any pre-configured scope.",
+        "commands": { "allow": ["set_webview_size"], "deny": [] }
+      },
+      "allow-set-webview-zoom": {
+        "identifier": "allow-set-webview-zoom",
+        "description": "Enables the set_webview_zoom command without any pre-configured scope.",
+        "commands": { "allow": ["set_webview_zoom"], "deny": [] }
+      },
+      "allow-webview-close": {
+        "identifier": "allow-webview-close",
+        "description": "Enables the webview_close command without any pre-configured scope.",
+        "commands": { "allow": ["webview_close"], "deny": [] }
+      },
+      "allow-webview-hide": {
+        "identifier": "allow-webview-hide",
+        "description": "Enables the webview_hide command without any pre-configured scope.",
+        "commands": { "allow": ["webview_hide"], "deny": [] }
+      },
+      "allow-webview-position": {
+        "identifier": "allow-webview-position",
+        "description": "Enables the webview_position command without any pre-configured scope.",
+        "commands": { "allow": ["webview_position"], "deny": [] }
+      },
+      "allow-webview-show": {
+        "identifier": "allow-webview-show",
+        "description": "Enables the webview_show command without any pre-configured scope.",
+        "commands": { "allow": ["webview_show"], "deny": [] }
+      },
+      "allow-webview-size": {
+        "identifier": "allow-webview-size",
+        "description": "Enables the webview_size command without any pre-configured scope.",
+        "commands": { "allow": ["webview_size"], "deny": [] }
+      },
+      "deny-clear-all-browsing-data": {
+        "identifier": "deny-clear-all-browsing-data",
+        "description": "Denies the clear_all_browsing_data command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["clear_all_browsing_data"] }
+      },
+      "deny-create-webview": {
+        "identifier": "deny-create-webview",
+        "description": "Denies the create_webview command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["create_webview"] }
+      },
+      "deny-create-webview-window": {
+        "identifier": "deny-create-webview-window",
+        "description": "Denies the create_webview_window command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["create_webview_window"] }
+      },
+      "deny-get-all-webviews": {
+        "identifier": "deny-get-all-webviews",
+        "description": "Denies the get_all_webviews command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["get_all_webviews"] }
+      },
+      "deny-internal-toggle-devtools": {
+        "identifier": "deny-internal-toggle-devtools",
+        "description": "Denies the internal_toggle_devtools command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["internal_toggle_devtools"] }
+      },
+      "deny-print": {
+        "identifier": "deny-print",
+        "description": "Denies the print command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["print"] }
+      },
+      "deny-reparent": {
+        "identifier": "deny-reparent",
+        "description": "Denies the reparent command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["reparent"] }
+      },
+      "deny-set-webview-auto-resize": {
+        "identifier": "deny-set-webview-auto-resize",
+        "description": "Denies the set_webview_auto_resize command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_webview_auto_resize"] }
+      },
+      "deny-set-webview-background-color": {
+        "identifier": "deny-set-webview-background-color",
+        "description": "Denies the set_webview_background_color command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_webview_background_color"] }
+      },
+      "deny-set-webview-focus": {
+        "identifier": "deny-set-webview-focus",
+        "description": "Denies the set_webview_focus command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_webview_focus"] }
+      },
+      "deny-set-webview-position": {
+        "identifier": "deny-set-webview-position",
+        "description": "Denies the set_webview_position command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_webview_position"] }
+      },
+      "deny-set-webview-size": {
+        "identifier": "deny-set-webview-size",
+        "description": "Denies the set_webview_size command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_webview_size"] }
+      },
+      "deny-set-webview-zoom": {
+        "identifier": "deny-set-webview-zoom",
+        "description": "Denies the set_webview_zoom command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_webview_zoom"] }
+      },
+      "deny-webview-close": {
+        "identifier": "deny-webview-close",
+        "description": "Denies the webview_close command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["webview_close"] }
+      },
+      "deny-webview-hide": {
+        "identifier": "deny-webview-hide",
+        "description": "Denies the webview_hide command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["webview_hide"] }
+      },
+      "deny-webview-position": {
+        "identifier": "deny-webview-position",
+        "description": "Denies the webview_position command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["webview_position"] }
+      },
+      "deny-webview-show": {
+        "identifier": "deny-webview-show",
+        "description": "Denies the webview_show command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["webview_show"] }
+      },
+      "deny-webview-size": {
+        "identifier": "deny-webview-size",
+        "description": "Denies the webview_size command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["webview_size"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  },
+  "core:window": {
+    "default_permission": {
+      "identifier": "default",
+      "description": "Default permissions for the plugin.",
+      "permissions": [
+        "allow-get-all-windows",
+        "allow-scale-factor",
+        "allow-inner-position",
+        "allow-outer-position",
+        "allow-inner-size",
+        "allow-outer-size",
+        "allow-is-fullscreen",
+        "allow-is-minimized",
+        "allow-is-maximized",
+        "allow-is-focused",
+        "allow-is-decorated",
+        "allow-is-resizable",
+        "allow-is-maximizable",
+        "allow-is-minimizable",
+        "allow-is-closable",
+        "allow-is-visible",
+        "allow-is-enabled",
+        "allow-title",
+        "allow-current-monitor",
+        "allow-primary-monitor",
+        "allow-monitor-from-point",
+        "allow-available-monitors",
+        "allow-cursor-position",
+        "allow-theme",
+        "allow-is-always-on-top",
+        "allow-internal-toggle-maximize"
+      ]
+    },
+    "permissions": {
+      "allow-available-monitors": {
+        "identifier": "allow-available-monitors",
+        "description": "Enables the available_monitors command without any pre-configured scope.",
+        "commands": { "allow": ["available_monitors"], "deny": [] }
+      },
+      "allow-center": {
+        "identifier": "allow-center",
+        "description": "Enables the center command without any pre-configured scope.",
+        "commands": { "allow": ["center"], "deny": [] }
+      },
+      "allow-close": {
+        "identifier": "allow-close",
+        "description": "Enables the close command without any pre-configured scope.",
+        "commands": { "allow": ["close"], "deny": [] }
+      },
+      "allow-create": {
+        "identifier": "allow-create",
+        "description": "Enables the create command without any pre-configured scope.",
+        "commands": { "allow": ["create"], "deny": [] }
+      },
+      "allow-current-monitor": {
+        "identifier": "allow-current-monitor",
+        "description": "Enables the current_monitor command without any pre-configured scope.",
+        "commands": { "allow": ["current_monitor"], "deny": [] }
+      },
+      "allow-cursor-position": {
+        "identifier": "allow-cursor-position",
+        "description": "Enables the cursor_position command without any pre-configured scope.",
+        "commands": { "allow": ["cursor_position"], "deny": [] }
+      },
+      "allow-destroy": {
+        "identifier": "allow-destroy",
+        "description": "Enables the destroy command without any pre-configured scope.",
+        "commands": { "allow": ["destroy"], "deny": [] }
+      },
+      "allow-get-all-windows": {
+        "identifier": "allow-get-all-windows",
+        "description": "Enables the get_all_windows command without any pre-configured scope.",
+        "commands": { "allow": ["get_all_windows"], "deny": [] }
+      },
+      "allow-hide": {
+        "identifier": "allow-hide",
+        "description": "Enables the hide command without any pre-configured scope.",
+        "commands": { "allow": ["hide"], "deny": [] }
+      },
+      "allow-inner-position": {
+        "identifier": "allow-inner-position",
+        "description": "Enables the inner_position command without any pre-configured scope.",
+        "commands": { "allow": ["inner_position"], "deny": [] }
+      },
+      "allow-inner-size": {
+        "identifier": "allow-inner-size",
+        "description": "Enables the inner_size command without any pre-configured scope.",
+        "commands": { "allow": ["inner_size"], "deny": [] }
+      },
+      "allow-internal-toggle-maximize": {
+        "identifier": "allow-internal-toggle-maximize",
+        "description": "Enables the internal_toggle_maximize command without any pre-configured scope.",
+        "commands": { "allow": ["internal_toggle_maximize"], "deny": [] }
+      },
+      "allow-is-always-on-top": {
+        "identifier": "allow-is-always-on-top",
+        "description": "Enables the is_always_on_top command without any pre-configured scope.",
+        "commands": { "allow": ["is_always_on_top"], "deny": [] }
+      },
+      "allow-is-closable": {
+        "identifier": "allow-is-closable",
+        "description": "Enables the is_closable command without any pre-configured scope.",
+        "commands": { "allow": ["is_closable"], "deny": [] }
+      },
+      "allow-is-decorated": {
+        "identifier": "allow-is-decorated",
+        "description": "Enables the is_decorated command without any pre-configured scope.",
+        "commands": { "allow": ["is_decorated"], "deny": [] }
+      },
+      "allow-is-enabled": {
+        "identifier": "allow-is-enabled",
+        "description": "Enables the is_enabled command without any pre-configured scope.",
+        "commands": { "allow": ["is_enabled"], "deny": [] }
+      },
+      "allow-is-focused": {
+        "identifier": "allow-is-focused",
+        "description": "Enables the is_focused command without any pre-configured scope.",
+        "commands": { "allow": ["is_focused"], "deny": [] }
+      },
+      "allow-is-fullscreen": {
+        "identifier": "allow-is-fullscreen",
+        "description": "Enables the is_fullscreen command without any pre-configured scope.",
+        "commands": { "allow": ["is_fullscreen"], "deny": [] }
+      },
+      "allow-is-maximizable": {
+        "identifier": "allow-is-maximizable",
+        "description": "Enables the is_maximizable command without any pre-configured scope.",
+        "commands": { "allow": ["is_maximizable"], "deny": [] }
+      },
+      "allow-is-maximized": {
+        "identifier": "allow-is-maximized",
+        "description": "Enables the is_maximized command without any pre-configured scope.",
+        "commands": { "allow": ["is_maximized"], "deny": [] }
+      },
+      "allow-is-minimizable": {
+        "identifier": "allow-is-minimizable",
+        "description": "Enables the is_minimizable command without any pre-configured scope.",
+        "commands": { "allow": ["is_minimizable"], "deny": [] }
+      },
+      "allow-is-minimized": {
+        "identifier": "allow-is-minimized",
+        "description": "Enables the is_minimized command without any pre-configured scope.",
+        "commands": { "allow": ["is_minimized"], "deny": [] }
+      },
+      "allow-is-resizable": {
+        "identifier": "allow-is-resizable",
+        "description": "Enables the is_resizable command without any pre-configured scope.",
+        "commands": { "allow": ["is_resizable"], "deny": [] }
+      },
+      "allow-is-visible": {
+        "identifier": "allow-is-visible",
+        "description": "Enables the is_visible command without any pre-configured scope.",
+        "commands": { "allow": ["is_visible"], "deny": [] }
+      },
+      "allow-maximize": {
+        "identifier": "allow-maximize",
+        "description": "Enables the maximize command without any pre-configured scope.",
+        "commands": { "allow": ["maximize"], "deny": [] }
+      },
+      "allow-minimize": {
+        "identifier": "allow-minimize",
+        "description": "Enables the minimize command without any pre-configured scope.",
+        "commands": { "allow": ["minimize"], "deny": [] }
+      },
+      "allow-monitor-from-point": {
+        "identifier": "allow-monitor-from-point",
+        "description": "Enables the monitor_from_point command without any pre-configured scope.",
+        "commands": { "allow": ["monitor_from_point"], "deny": [] }
+      },
+      "allow-outer-position": {
+        "identifier": "allow-outer-position",
+        "description": "Enables the outer_position command without any pre-configured scope.",
+        "commands": { "allow": ["outer_position"], "deny": [] }
+      },
+      "allow-outer-size": {
+        "identifier": "allow-outer-size",
+        "description": "Enables the outer_size command without any pre-configured scope.",
+        "commands": { "allow": ["outer_size"], "deny": [] }
+      },
+      "allow-primary-monitor": {
+        "identifier": "allow-primary-monitor",
+        "description": "Enables the primary_monitor command without any pre-configured scope.",
+        "commands": { "allow": ["primary_monitor"], "deny": [] }
+      },
+      "allow-request-user-attention": {
+        "identifier": "allow-request-user-attention",
+        "description": "Enables the request_user_attention command without any pre-configured scope.",
+        "commands": { "allow": ["request_user_attention"], "deny": [] }
+      },
+      "allow-scale-factor": {
+        "identifier": "allow-scale-factor",
+        "description": "Enables the scale_factor command without any pre-configured scope.",
+        "commands": { "allow": ["scale_factor"], "deny": [] }
+      },
+      "allow-set-always-on-bottom": {
+        "identifier": "allow-set-always-on-bottom",
+        "description": "Enables the set_always_on_bottom command without any pre-configured scope.",
+        "commands": { "allow": ["set_always_on_bottom"], "deny": [] }
+      },
+      "allow-set-always-on-top": {
+        "identifier": "allow-set-always-on-top",
+        "description": "Enables the set_always_on_top command without any pre-configured scope.",
+        "commands": { "allow": ["set_always_on_top"], "deny": [] }
+      },
+      "allow-set-background-color": {
+        "identifier": "allow-set-background-color",
+        "description": "Enables the set_background_color command without any pre-configured scope.",
+        "commands": { "allow": ["set_background_color"], "deny": [] }
+      },
+      "allow-set-badge-count": {
+        "identifier": "allow-set-badge-count",
+        "description": "Enables the set_badge_count command without any pre-configured scope.",
+        "commands": { "allow": ["set_badge_count"], "deny": [] }
+      },
+      "allow-set-badge-label": {
+        "identifier": "allow-set-badge-label",
+        "description": "Enables the set_badge_label command without any pre-configured scope.",
+        "commands": { "allow": ["set_badge_label"], "deny": [] }
+      },
+      "allow-set-closable": {
+        "identifier": "allow-set-closable",
+        "description": "Enables the set_closable command without any pre-configured scope.",
+        "commands": { "allow": ["set_closable"], "deny": [] }
+      },
+      "allow-set-content-protected": {
+        "identifier": "allow-set-content-protected",
+        "description": "Enables the set_content_protected command without any pre-configured scope.",
+        "commands": { "allow": ["set_content_protected"], "deny": [] }
+      },
+      "allow-set-cursor-grab": {
+        "identifier": "allow-set-cursor-grab",
+        "description": "Enables the set_cursor_grab command without any pre-configured scope.",
+        "commands": { "allow": ["set_cursor_grab"], "deny": [] }
+      },
+      "allow-set-cursor-icon": {
+        "identifier": "allow-set-cursor-icon",
+        "description": "Enables the set_cursor_icon command without any pre-configured scope.",
+        "commands": { "allow": ["set_cursor_icon"], "deny": [] }
+      },
+      "allow-set-cursor-position": {
+        "identifier": "allow-set-cursor-position",
+        "description": "Enables the set_cursor_position command without any pre-configured scope.",
+        "commands": { "allow": ["set_cursor_position"], "deny": [] }
+      },
+      "allow-set-cursor-visible": {
+        "identifier": "allow-set-cursor-visible",
+        "description": "Enables the set_cursor_visible command without any pre-configured scope.",
+        "commands": { "allow": ["set_cursor_visible"], "deny": [] }
+      },
+      "allow-set-decorations": {
+        "identifier": "allow-set-decorations",
+        "description": "Enables the set_decorations command without any pre-configured scope.",
+        "commands": { "allow": ["set_decorations"], "deny": [] }
+      },
+      "allow-set-effects": {
+        "identifier": "allow-set-effects",
+        "description": "Enables the set_effects command without any pre-configured scope.",
+        "commands": { "allow": ["set_effects"], "deny": [] }
+      },
+      "allow-set-enabled": {
+        "identifier": "allow-set-enabled",
+        "description": "Enables the set_enabled command without any pre-configured scope.",
+        "commands": { "allow": ["set_enabled"], "deny": [] }
+      },
+      "allow-set-focus": {
+        "identifier": "allow-set-focus",
+        "description": "Enables the set_focus command without any pre-configured scope.",
+        "commands": { "allow": ["set_focus"], "deny": [] }
+      },
+      "allow-set-focusable": {
+        "identifier": "allow-set-focusable",
+        "description": "Enables the set_focusable command without any pre-configured scope.",
+        "commands": { "allow": ["set_focusable"], "deny": [] }
+      },
+      "allow-set-fullscreen": {
+        "identifier": "allow-set-fullscreen",
+        "description": "Enables the set_fullscreen command without any pre-configured scope.",
+        "commands": { "allow": ["set_fullscreen"], "deny": [] }
+      },
+      "allow-set-icon": {
+        "identifier": "allow-set-icon",
+        "description": "Enables the set_icon command without any pre-configured scope.",
+        "commands": { "allow": ["set_icon"], "deny": [] }
+      },
+      "allow-set-ignore-cursor-events": {
+        "identifier": "allow-set-ignore-cursor-events",
+        "description": "Enables the set_ignore_cursor_events command without any pre-configured scope.",
+        "commands": { "allow": ["set_ignore_cursor_events"], "deny": [] }
+      },
+      "allow-set-max-size": {
+        "identifier": "allow-set-max-size",
+        "description": "Enables the set_max_size command without any pre-configured scope.",
+        "commands": { "allow": ["set_max_size"], "deny": [] }
+      },
+      "allow-set-maximizable": {
+        "identifier": "allow-set-maximizable",
+        "description": "Enables the set_maximizable command without any pre-configured scope.",
+        "commands": { "allow": ["set_maximizable"], "deny": [] }
+      },
+      "allow-set-min-size": {
+        "identifier": "allow-set-min-size",
+        "description": "Enables the set_min_size command without any pre-configured scope.",
+        "commands": { "allow": ["set_min_size"], "deny": [] }
+      },
+      "allow-set-minimizable": {
+        "identifier": "allow-set-minimizable",
+        "description": "Enables the set_minimizable command without any pre-configured scope.",
+        "commands": { "allow": ["set_minimizable"], "deny": [] }
+      },
+      "allow-set-overlay-icon": {
+        "identifier": "allow-set-overlay-icon",
+        "description": "Enables the set_overlay_icon command without any pre-configured scope.",
+        "commands": { "allow": ["set_overlay_icon"], "deny": [] }
+      },
+      "allow-set-position": {
+        "identifier": "allow-set-position",
+        "description": "Enables the set_position command without any pre-configured scope.",
+        "commands": { "allow": ["set_position"], "deny": [] }
+      },
+      "allow-set-progress-bar": {
+        "identifier": "allow-set-progress-bar",
+        "description": "Enables the set_progress_bar command without any pre-configured scope.",
+        "commands": { "allow": ["set_progress_bar"], "deny": [] }
+      },
+      "allow-set-resizable": {
+        "identifier": "allow-set-resizable",
+        "description": "Enables the set_resizable command without any pre-configured scope.",
+        "commands": { "allow": ["set_resizable"], "deny": [] }
+      },
+      "allow-set-shadow": {
+        "identifier": "allow-set-shadow",
+        "description": "Enables the set_shadow command without any pre-configured scope.",
+        "commands": { "allow": ["set_shadow"], "deny": [] }
+      },
+      "allow-set-simple-fullscreen": {
+        "identifier": "allow-set-simple-fullscreen",
+        "description": "Enables the set_simple_fullscreen command without any pre-configured scope.",
+        "commands": { "allow": ["set_simple_fullscreen"], "deny": [] }
+      },
+      "allow-set-size": {
+        "identifier": "allow-set-size",
+        "description": "Enables the set_size command without any pre-configured scope.",
+        "commands": { "allow": ["set_size"], "deny": [] }
+      },
+      "allow-set-size-constraints": {
+        "identifier": "allow-set-size-constraints",
+        "description": "Enables the set_size_constraints command without any pre-configured scope.",
+        "commands": { "allow": ["set_size_constraints"], "deny": [] }
+      },
+      "allow-set-skip-taskbar": {
+        "identifier": "allow-set-skip-taskbar",
+        "description": "Enables the set_skip_taskbar command without any pre-configured scope.",
+        "commands": { "allow": ["set_skip_taskbar"], "deny": [] }
+      },
+      "allow-set-theme": {
+        "identifier": "allow-set-theme",
+        "description": "Enables the set_theme command without any pre-configured scope.",
+        "commands": { "allow": ["set_theme"], "deny": [] }
+      },
+      "allow-set-title": {
+        "identifier": "allow-set-title",
+        "description": "Enables the set_title command without any pre-configured scope.",
+        "commands": { "allow": ["set_title"], "deny": [] }
+      },
+      "allow-set-title-bar-style": {
+        "identifier": "allow-set-title-bar-style",
+        "description": "Enables the set_title_bar_style command without any pre-configured scope.",
+        "commands": { "allow": ["set_title_bar_style"], "deny": [] }
+      },
+      "allow-set-visible-on-all-workspaces": {
+        "identifier": "allow-set-visible-on-all-workspaces",
+        "description": "Enables the set_visible_on_all_workspaces command without any pre-configured scope.",
+        "commands": { "allow": ["set_visible_on_all_workspaces"], "deny": [] }
+      },
+      "allow-show": {
+        "identifier": "allow-show",
+        "description": "Enables the show command without any pre-configured scope.",
+        "commands": { "allow": ["show"], "deny": [] }
+      },
+      "allow-start-dragging": {
+        "identifier": "allow-start-dragging",
+        "description": "Enables the start_dragging command without any pre-configured scope.",
+        "commands": { "allow": ["start_dragging"], "deny": [] }
+      },
+      "allow-start-resize-dragging": {
+        "identifier": "allow-start-resize-dragging",
+        "description": "Enables the start_resize_dragging command without any pre-configured scope.",
+        "commands": { "allow": ["start_resize_dragging"], "deny": [] }
+      },
+      "allow-theme": {
+        "identifier": "allow-theme",
+        "description": "Enables the theme command without any pre-configured scope.",
+        "commands": { "allow": ["theme"], "deny": [] }
+      },
+      "allow-title": {
+        "identifier": "allow-title",
+        "description": "Enables the title command without any pre-configured scope.",
+        "commands": { "allow": ["title"], "deny": [] }
+      },
+      "allow-toggle-maximize": {
+        "identifier": "allow-toggle-maximize",
+        "description": "Enables the toggle_maximize command without any pre-configured scope.",
+        "commands": { "allow": ["toggle_maximize"], "deny": [] }
+      },
+      "allow-unmaximize": {
+        "identifier": "allow-unmaximize",
+        "description": "Enables the unmaximize command without any pre-configured scope.",
+        "commands": { "allow": ["unmaximize"], "deny": [] }
+      },
+      "allow-unminimize": {
+        "identifier": "allow-unminimize",
+        "description": "Enables the unminimize command without any pre-configured scope.",
+        "commands": { "allow": ["unminimize"], "deny": [] }
+      },
+      "deny-available-monitors": {
+        "identifier": "deny-available-monitors",
+        "description": "Denies the available_monitors command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["available_monitors"] }
+      },
+      "deny-center": {
+        "identifier": "deny-center",
+        "description": "Denies the center command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["center"] }
+      },
+      "deny-close": {
+        "identifier": "deny-close",
+        "description": "Denies the close command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["close"] }
+      },
+      "deny-create": {
+        "identifier": "deny-create",
+        "description": "Denies the create command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["create"] }
+      },
+      "deny-current-monitor": {
+        "identifier": "deny-current-monitor",
+        "description": "Denies the current_monitor command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["current_monitor"] }
+      },
+      "deny-cursor-position": {
+        "identifier": "deny-cursor-position",
+        "description": "Denies the cursor_position command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["cursor_position"] }
+      },
+      "deny-destroy": {
+        "identifier": "deny-destroy",
+        "description": "Denies the destroy command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["destroy"] }
+      },
+      "deny-get-all-windows": {
+        "identifier": "deny-get-all-windows",
+        "description": "Denies the get_all_windows command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["get_all_windows"] }
+      },
+      "deny-hide": {
+        "identifier": "deny-hide",
+        "description": "Denies the hide command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["hide"] }
+      },
+      "deny-inner-position": {
+        "identifier": "deny-inner-position",
+        "description": "Denies the inner_position command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["inner_position"] }
+      },
+      "deny-inner-size": {
+        "identifier": "deny-inner-size",
+        "description": "Denies the inner_size command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["inner_size"] }
+      },
+      "deny-internal-toggle-maximize": {
+        "identifier": "deny-internal-toggle-maximize",
+        "description": "Denies the internal_toggle_maximize command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["internal_toggle_maximize"] }
+      },
+      "deny-is-always-on-top": {
+        "identifier": "deny-is-always-on-top",
+        "description": "Denies the is_always_on_top command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_always_on_top"] }
+      },
+      "deny-is-closable": {
+        "identifier": "deny-is-closable",
+        "description": "Denies the is_closable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_closable"] }
+      },
+      "deny-is-decorated": {
+        "identifier": "deny-is-decorated",
+        "description": "Denies the is_decorated command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_decorated"] }
+      },
+      "deny-is-enabled": {
+        "identifier": "deny-is-enabled",
+        "description": "Denies the is_enabled command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_enabled"] }
+      },
+      "deny-is-focused": {
+        "identifier": "deny-is-focused",
+        "description": "Denies the is_focused command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_focused"] }
+      },
+      "deny-is-fullscreen": {
+        "identifier": "deny-is-fullscreen",
+        "description": "Denies the is_fullscreen command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_fullscreen"] }
+      },
+      "deny-is-maximizable": {
+        "identifier": "deny-is-maximizable",
+        "description": "Denies the is_maximizable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_maximizable"] }
+      },
+      "deny-is-maximized": {
+        "identifier": "deny-is-maximized",
+        "description": "Denies the is_maximized command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_maximized"] }
+      },
+      "deny-is-minimizable": {
+        "identifier": "deny-is-minimizable",
+        "description": "Denies the is_minimizable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_minimizable"] }
+      },
+      "deny-is-minimized": {
+        "identifier": "deny-is-minimized",
+        "description": "Denies the is_minimized command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_minimized"] }
+      },
+      "deny-is-resizable": {
+        "identifier": "deny-is-resizable",
+        "description": "Denies the is_resizable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_resizable"] }
+      },
+      "deny-is-visible": {
+        "identifier": "deny-is-visible",
+        "description": "Denies the is_visible command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["is_visible"] }
+      },
+      "deny-maximize": {
+        "identifier": "deny-maximize",
+        "description": "Denies the maximize command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["maximize"] }
+      },
+      "deny-minimize": {
+        "identifier": "deny-minimize",
+        "description": "Denies the minimize command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["minimize"] }
+      },
+      "deny-monitor-from-point": {
+        "identifier": "deny-monitor-from-point",
+        "description": "Denies the monitor_from_point command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["monitor_from_point"] }
+      },
+      "deny-outer-position": {
+        "identifier": "deny-outer-position",
+        "description": "Denies the outer_position command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["outer_position"] }
+      },
+      "deny-outer-size": {
+        "identifier": "deny-outer-size",
+        "description": "Denies the outer_size command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["outer_size"] }
+      },
+      "deny-primary-monitor": {
+        "identifier": "deny-primary-monitor",
+        "description": "Denies the primary_monitor command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["primary_monitor"] }
+      },
+      "deny-request-user-attention": {
+        "identifier": "deny-request-user-attention",
+        "description": "Denies the request_user_attention command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["request_user_attention"] }
+      },
+      "deny-scale-factor": {
+        "identifier": "deny-scale-factor",
+        "description": "Denies the scale_factor command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["scale_factor"] }
+      },
+      "deny-set-always-on-bottom": {
+        "identifier": "deny-set-always-on-bottom",
+        "description": "Denies the set_always_on_bottom command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_always_on_bottom"] }
+      },
+      "deny-set-always-on-top": {
+        "identifier": "deny-set-always-on-top",
+        "description": "Denies the set_always_on_top command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_always_on_top"] }
+      },
+      "deny-set-background-color": {
+        "identifier": "deny-set-background-color",
+        "description": "Denies the set_background_color command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_background_color"] }
+      },
+      "deny-set-badge-count": {
+        "identifier": "deny-set-badge-count",
+        "description": "Denies the set_badge_count command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_badge_count"] }
+      },
+      "deny-set-badge-label": {
+        "identifier": "deny-set-badge-label",
+        "description": "Denies the set_badge_label command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_badge_label"] }
+      },
+      "deny-set-closable": {
+        "identifier": "deny-set-closable",
+        "description": "Denies the set_closable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_closable"] }
+      },
+      "deny-set-content-protected": {
+        "identifier": "deny-set-content-protected",
+        "description": "Denies the set_content_protected command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_content_protected"] }
+      },
+      "deny-set-cursor-grab": {
+        "identifier": "deny-set-cursor-grab",
+        "description": "Denies the set_cursor_grab command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_cursor_grab"] }
+      },
+      "deny-set-cursor-icon": {
+        "identifier": "deny-set-cursor-icon",
+        "description": "Denies the set_cursor_icon command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_cursor_icon"] }
+      },
+      "deny-set-cursor-position": {
+        "identifier": "deny-set-cursor-position",
+        "description": "Denies the set_cursor_position command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_cursor_position"] }
+      },
+      "deny-set-cursor-visible": {
+        "identifier": "deny-set-cursor-visible",
+        "description": "Denies the set_cursor_visible command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_cursor_visible"] }
+      },
+      "deny-set-decorations": {
+        "identifier": "deny-set-decorations",
+        "description": "Denies the set_decorations command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_decorations"] }
+      },
+      "deny-set-effects": {
+        "identifier": "deny-set-effects",
+        "description": "Denies the set_effects command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_effects"] }
+      },
+      "deny-set-enabled": {
+        "identifier": "deny-set-enabled",
+        "description": "Denies the set_enabled command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_enabled"] }
+      },
+      "deny-set-focus": {
+        "identifier": "deny-set-focus",
+        "description": "Denies the set_focus command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_focus"] }
+      },
+      "deny-set-focusable": {
+        "identifier": "deny-set-focusable",
+        "description": "Denies the set_focusable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_focusable"] }
+      },
+      "deny-set-fullscreen": {
+        "identifier": "deny-set-fullscreen",
+        "description": "Denies the set_fullscreen command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_fullscreen"] }
+      },
+      "deny-set-icon": {
+        "identifier": "deny-set-icon",
+        "description": "Denies the set_icon command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_icon"] }
+      },
+      "deny-set-ignore-cursor-events": {
+        "identifier": "deny-set-ignore-cursor-events",
+        "description": "Denies the set_ignore_cursor_events command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_ignore_cursor_events"] }
+      },
+      "deny-set-max-size": {
+        "identifier": "deny-set-max-size",
+        "description": "Denies the set_max_size command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_max_size"] }
+      },
+      "deny-set-maximizable": {
+        "identifier": "deny-set-maximizable",
+        "description": "Denies the set_maximizable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_maximizable"] }
+      },
+      "deny-set-min-size": {
+        "identifier": "deny-set-min-size",
+        "description": "Denies the set_min_size command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_min_size"] }
+      },
+      "deny-set-minimizable": {
+        "identifier": "deny-set-minimizable",
+        "description": "Denies the set_minimizable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_minimizable"] }
+      },
+      "deny-set-overlay-icon": {
+        "identifier": "deny-set-overlay-icon",
+        "description": "Denies the set_overlay_icon command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_overlay_icon"] }
+      },
+      "deny-set-position": {
+        "identifier": "deny-set-position",
+        "description": "Denies the set_position command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_position"] }
+      },
+      "deny-set-progress-bar": {
+        "identifier": "deny-set-progress-bar",
+        "description": "Denies the set_progress_bar command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_progress_bar"] }
+      },
+      "deny-set-resizable": {
+        "identifier": "deny-set-resizable",
+        "description": "Denies the set_resizable command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_resizable"] }
+      },
+      "deny-set-shadow": {
+        "identifier": "deny-set-shadow",
+        "description": "Denies the set_shadow command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_shadow"] }
+      },
+      "deny-set-simple-fullscreen": {
+        "identifier": "deny-set-simple-fullscreen",
+        "description": "Denies the set_simple_fullscreen command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_simple_fullscreen"] }
+      },
+      "deny-set-size": {
+        "identifier": "deny-set-size",
+        "description": "Denies the set_size command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_size"] }
+      },
+      "deny-set-size-constraints": {
+        "identifier": "deny-set-size-constraints",
+        "description": "Denies the set_size_constraints command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_size_constraints"] }
+      },
+      "deny-set-skip-taskbar": {
+        "identifier": "deny-set-skip-taskbar",
+        "description": "Denies the set_skip_taskbar command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_skip_taskbar"] }
+      },
+      "deny-set-theme": {
+        "identifier": "deny-set-theme",
+        "description": "Denies the set_theme command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_theme"] }
+      },
+      "deny-set-title": {
+        "identifier": "deny-set-title",
+        "description": "Denies the set_title command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_title"] }
+      },
+      "deny-set-title-bar-style": {
+        "identifier": "deny-set-title-bar-style",
+        "description": "Denies the set_title_bar_style command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_title_bar_style"] }
+      },
+      "deny-set-visible-on-all-workspaces": {
+        "identifier": "deny-set-visible-on-all-workspaces",
+        "description": "Denies the set_visible_on_all_workspaces command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["set_visible_on_all_workspaces"] }
+      },
+      "deny-show": {
+        "identifier": "deny-show",
+        "description": "Denies the show command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["show"] }
+      },
+      "deny-start-dragging": {
+        "identifier": "deny-start-dragging",
+        "description": "Denies the start_dragging command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["start_dragging"] }
+      },
+      "deny-start-resize-dragging": {
+        "identifier": "deny-start-resize-dragging",
+        "description": "Denies the start_resize_dragging command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["start_resize_dragging"] }
+      },
+      "deny-theme": {
+        "identifier": "deny-theme",
+        "description": "Denies the theme command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["theme"] }
+      },
+      "deny-title": {
+        "identifier": "deny-title",
+        "description": "Denies the title command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["title"] }
+      },
+      "deny-toggle-maximize": {
+        "identifier": "deny-toggle-maximize",
+        "description": "Denies the toggle_maximize command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["toggle_maximize"] }
+      },
+      "deny-unmaximize": {
+        "identifier": "deny-unmaximize",
+        "description": "Denies the unmaximize command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["unmaximize"] }
+      },
+      "deny-unminimize": {
+        "identifier": "deny-unminimize",
+        "description": "Denies the unminimize command without any pre-configured scope.",
+        "commands": { "allow": [], "deny": ["unminimize"] }
+      }
+    },
+    "permission_sets": {},
+    "global_scope_schema": null
+  }
+}

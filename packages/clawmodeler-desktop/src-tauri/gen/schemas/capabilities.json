@@ -1,0 +1,9 @@
+{
+  "default": {
+    "identifier": "default",
+    "description": "Default ClawModeler desktop capability.",
+    "local": true,
+    "windows": ["main"],
+    "permissions": ["core:default"]
+  }
+}

@@ -1,0 +1,14 @@
+[package]
+name = "clawmodeler-desktop"
+version = "0.1.0"
+description = "ClawModeler local-first transportation sketch-planning desktop app"
+authors = ["ClawModeler contributors"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "=2.10.3", features = [] }
