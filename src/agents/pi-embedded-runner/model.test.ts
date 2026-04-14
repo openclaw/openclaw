@@ -43,6 +43,7 @@ import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
   mockDiscoveredModel,
+  OPENAI_CODEX_TEMPLATE_MODEL,
   mockOpenAICodexTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
@@ -825,6 +826,71 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+  });
+
+  it("upgrades stale exact openai-codex gpt-5.4 registry metadata via forward-compat", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex") {
+          return null;
+        }
+        if (modelId === "gpt-5.4") {
+          return {
+            ...OPENAI_CODEX_TEMPLATE_MODEL,
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            contextWindow: 272000,
+          };
+        }
+        if (modelId === "gpt-5.3-codex") {
+          return {
+            ...OPENAI_CODEX_TEMPLATE_MODEL,
+            id: "gpt-5.3-codex",
+            name: "GPT-5.3 Codex",
+          };
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      maxTokens: 128000,
+    });
+  });
+
+  it("does not downgrade exact openai-codex gpt-5.3-codex registry metadata", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex") {
+          return null;
+        }
+        if (modelId === "gpt-5.3-codex") {
+          return {
+            ...OPENAI_CODEX_TEMPLATE_MODEL,
+            id: "gpt-5.3-codex",
+            name: "GPT-5.3 Codex",
+            contextWindow: 272000,
+          };
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+      contextWindow: 272000,
+      maxTokens: 128000,
+    });
   });
 
   it("canonicalizes the legacy openai-codex gpt-5.4-codex alias at runtime", () => {
