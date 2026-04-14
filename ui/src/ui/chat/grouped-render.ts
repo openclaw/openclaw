@@ -758,7 +758,7 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
     // Add error handler to hide the "Unavailable" message
     const handleError = (e: Event) => {
       const audioEl = e.target as HTMLAudioElement;
-      const wrapper = audioEl.closest('.chat-media-wrapper');
+      const wrapper = audioEl.closest('.chat-media-wrapper') as HTMLElement;
       if (wrapper) {
         // Hide the entire audio player on error
         wrapper.style.display = 'none';
