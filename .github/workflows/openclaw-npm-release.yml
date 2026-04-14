@@ -502,9 +502,11 @@ jobs:
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           set -euo pipefail
-          printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > "${HOME}/.npmrc"
-          npm whoami >/dev/null
-          npm dist-tag add "openclaw@${RELEASE_VERSION}" latest
+          npm_userconfig="$(mktemp)"
+          trap 'rm -f "${npm_userconfig}"' EXIT
+          chmod 0600 "${npm_userconfig}"
+          printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > "${npm_userconfig}"
+          NPM_CONFIG_USERCONFIG="${npm_userconfig}" npm dist-tag add "openclaw@${RELEASE_VERSION}" latest
           promoted_latest="$(npm view openclaw dist-tags.latest)"
           if [[ "${promoted_latest}" != "${RELEASE_VERSION}" ]]; then
             echo "npm latest points at ${promoted_latest}, expected ${RELEASE_VERSION} after promotion." >&2
@@ -593,10 +595,12 @@ jobs:
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           set -euo pipefail
-          printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > "${HOME}/.npmrc"
-          npm whoami >/dev/null
-          npm dist-tag add "openclaw@${RELEASE_VERSION}" latest
-          npm dist-tag add "openclaw@${RELEASE_VERSION}" beta
+          npm_userconfig="$(mktemp)"
+          trap 'rm -f "${npm_userconfig}"' EXIT
+          chmod 0600 "${npm_userconfig}"
+          printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > "${npm_userconfig}"
+          NPM_CONFIG_USERCONFIG="${npm_userconfig}" npm dist-tag add "openclaw@${RELEASE_VERSION}" latest
+          NPM_CONFIG_USERCONFIG="${npm_userconfig}" npm dist-tag add "openclaw@${RELEASE_VERSION}" beta
 
           synced_latest="$(npm view openclaw dist-tags.latest)"
           synced_beta="$(npm view openclaw dist-tags.beta)"
