@@ -47,7 +47,7 @@ export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }
     "img-src 'self' data: https:",
     "font-src 'self' https://fonts.gstatic.com",
     "connect-src 'self' ws: wss:",
-    "media-src 'self' http://localhost:18791 data: blob:",
+    "media-src 'self' http://localhost:18791 http://127.0.0.1:18791 data: blob:",
     "frame-src 'self' https://www.youtube.com https://player.vimeo.com https://youtube-nocookie.com",
   ].join("; ");
 }
