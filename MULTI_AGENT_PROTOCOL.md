@@ -23,30 +23,35 @@ Ownership is tracked in the repo-root `STATUS.md` under "Active Branches / PRs".
 
 ## 2. STATUS.md — Shared State File
 
-**Location**: `/root/projects/openclaw/STATUS.md`
+**Source of truth**: repo-root `STATUS.md`
+
+- On DevAgents: `/root/projects/openclaw/STATUS.md`
+- In the local mirror: `/Users/liranperetz/clawdbot-worker/STATUS.md`
+- Do **not** use the older copy at `/Users/liranperetz/Claw_01_on_Hetzner_server/STATUS.md` unless the user explicitly asks for it.
 
 Rules:
 
-- Read it at session start
-- Re-check it before creating a branch
-- Update it at session end
-- Treat it as the only live source of truth for gateway coordination
-- Do not use the legacy copy at `/Users/liranperetz/Claw_01_on_Hetzner_server/STATUS.md` unless explicitly asked
+- **READ** at session start (know what the other agent did)
+- **CLAIM** your branch in `STATUS.md` before editing code
+- **UPDATE** at session end (record what you did)
+- **CHECK** before creating a branch (avoid conflicts)
 
 ### What to record
 
 ```markdown
-| Branch                   | PR  | Status      | Owner   | Notes                              |
-| ------------------------ | --- | ----------- | ------- | ---------------------------------- |
-| feat/example-scope       | #42 | in_progress | Codex   | Investigating Venice startup issue |
-| chore/staging-deploy-gcp | #1  | open, stale | unknown | Verify ownership before touching   |
+| Repo               | Branch               | PR  | Status      | Owner  | Files / Areas Touched     | Validation   | Next Concrete Step                       | Notes                            |
+| ------------------ | -------------------- | --- | ----------- | ------ | ------------------------- | ------------ | ---------------------------------------- | -------------------------------- |
+| openclaw           | feat/healthcheck     | #2  | in_progress | Codex  | Dockerfile, src/health.ts | build passed | open PR and verify container health      | Adding HEALTHCHECK to Dockerfile |
+| openclaw-dashboard | fix/deletion-cleanup | #26 | review      | Claude | app/agents/\*             | tests passed | address review feedback on deletion flow | Agent deletion fix               |
 ```
 
 ### Conflict check (mandatory before starting work)
 
 1. Read `STATUS.md`
-2. If the file area you want to modify is owned by the other agent, stop
-3. Ask for clarification before proceeding in that area
+2. Confirm repo, branch ownership, and the files/areas you plan to touch
+3. If the file/area you're about to modify is touched by the other agent's active branch → STOP
+4. Tell the user: "The other agent has an active branch touching this area. Want me to wait or proceed on a separate file?"
+5. If there is no overlap, claim your branch in `STATUS.md` before writing code
 
 ---
 
@@ -91,21 +96,22 @@ docs/{description}
 hotfix/{description}
 ```
 
-### Commit format
+### Commit format (Conventional Commits)
 
 ```
-feat(gateway): improve venice model discovery startup handling
-fix(dashboard): correct signup verification redirect
-chore(ci): clean up stale deploy workflow references
+feat(gateway): add health check endpoint
+fix(agents): stop all services on deletion
+chore(ci): add dashboard auto-deploy to Cloud Run
 ```
 
 ### PR process
 
-1. Start from fresh `main` on DevAgents
-2. Run the relevant validation commands
-3. Push branch and open a PR
-4. Squash-merge to `main`
-5. Delete the branch after merge
+1. Branch from fresh `main` (`git fetch origin && git checkout -b feat/... origin/main`)
+2. Claim the branch in `STATUS.md` before editing
+3. All tests/typechecks pass locally, or record exactly what did not run
+4. Push + open PR with summary and test plan
+5. Squash-merge to `main` (no merge commits)
+6. Delete branch after merge
 
 No direct pushes to `main`.
 
@@ -113,10 +119,13 @@ No direct pushes to `main`.
 
 ## 6. Repository Map
 
-| Repo           | DevAgents Path                      | Local Mirror Path                       | Purpose                        |
-| -------------- | ----------------------------------- | --------------------------------------- | ------------------------------ |
-| Gateway (core) | `/root/projects/openclaw`           | `/Users/liranperetz/clawdbot-worker`    | OpenClaw gateway, CLI, runtime |
-| Dashboard      | `/root/projects/openclaw-dashboard` | `/Users/liranperetz/openclaw-dashboard` | Next.js admin dashboard        |
+| Repo              | DevAgents Path                      | Local Mirror                            | Remote                         | Purpose                            |
+| ----------------- | ----------------------------------- | --------------------------------------- | ------------------------------ | ---------------------------------- |
+| Gateway (core)    | `/root/projects/openclaw`           | `/Users/liranperetz/clawdbot-worker`    | `cryptolir/openclaw`           | OpenClaw gateway, CLI, runtime     |
+| Dashboard         | `/root/projects/openclaw-dashboard` | `/Users/liranperetz/openclaw-dashboard` | `cryptolir/openclaw-dashboard` | Next.js admin dashboard            |
+| Coordination docs | `/root/projects/openclaw`           | `/Users/liranperetz/clawdbot-worker`    | —                              | `STATUS.md`, protocols, task brief |
+
+Routine development, builds, git operations, and deployments happen on **DevAgents** unless the user explicitly asks to work from the local Mac.
 
 ---
 
@@ -146,14 +155,25 @@ No direct pushes to `main`.
 
 ---
 
-## 8. Current Coordination Notes
+## 8. Handoff Procedure
 
-- Treat `STATUS.md` as live state, even if older docs or chat notes disagree
-- Current next-up item in `STATUS.md`: take control of the AgentGlob repo
-- Current gateway blocker in `STATUS.md`: Venice model discovery times out at startup and falls back to the static catalog
-- `chore/staging-deploy-gcp` is still listed as open and stale; verify ownership before touching it
-- Always resolve agent server from Firestore before SSH or RPC; never hardcode EU
-- Always use `getAllDashboardOrigins()` rather than `getDashboardOrigin()` for allowed origins
+When one agent finishes a task the other agent should continue:
+
+1. **Commit and push** all work to a named branch
+2. **Update STATUS.md** with repo, branch name, owner transfer, files touched, validation result, blockers, and exact next step
+3. **Leave a clear note** in the PR description or STATUS.md:
+
+```
+## Handoff to Claude
+- Repo: openclaw
+- Branch: feat/healthcheck
+- Owner: Codex -> Claude
+- Done: Dockerfile updated, health endpoint added
+- Files / Areas Touched: Dockerfile, src/health.ts
+- Validation: pnpm build passed; pnpm test not run
+- Blockers: need runtime verification on DevAgents
+- Next Concrete Step: deploy to EU and verify with docker logs
+```
 
 ---
 
@@ -176,7 +196,8 @@ No direct pushes to `main`.
 [ ] cd /root/projects/openclaw
 [ ] Read STATUS.md, MULTI_AGENT_PROTOCOL.md, AGENTS.md, CODEX_TASK_BRIEF.md
 [ ] Check git status and current branch
-[ ] Confirm no overlap with Claude before editing
+[ ] Confirm no overlap with the other agent before editing
+[ ] Claim your branch in STATUS.md before writing code
 ```
 
 ## 11. Session End Checklist
@@ -185,4 +206,5 @@ No direct pushes to `main`.
 [ ] Relevant validation passes
 [ ] Branch/PR state recorded if work started
 [ ] STATUS.md updated with what changed, owner, branch, and blockers
+[ ] Next concrete step recorded clearly
 ```

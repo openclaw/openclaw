@@ -1,7 +1,7 @@
 # OpenClaw — Codex Task Brief
 
 > **Use this when starting a Codex session for OpenClaw.**
-> Last updated: 2026-04-13
+> Last updated: 2026-04-14
 
 ---
 
@@ -26,10 +26,10 @@ Repo-root `STATUS.md` is the live source of truth. Do not use the older legacy c
 
 ## 2. Repositories
 
-| Repo      | DevAgents Path                      | Local Mirror Path                       | Purpose                    |
-| --------- | ----------------------------------- | --------------------------------------- | -------------------------- |
-| Gateway   | `/root/projects/openclaw`           | `/Users/liranperetz/clawdbot-worker`    | Core runtime, CLI, gateway |
-| Dashboard | `/root/projects/openclaw-dashboard` | `/Users/liranperetz/openclaw-dashboard` | Next.js admin UI           |
+| Repo      | DevAgents Path                      | Local Mirror Path                       | Remote                                            | Purpose                      |
+| --------- | ----------------------------------- | --------------------------------------- | ------------------------------------------------- | ---------------------------- |
+| Gateway   | `/root/projects/openclaw`           | `/Users/liranperetz/clawdbot-worker`    | `git@github.com:cryptolir/openclaw.git`           | Core runtime, CLI, gateway   |
+| Dashboard | `/root/projects/openclaw-dashboard` | `/Users/liranperetz/openclaw-dashboard` | `git@github.com:cryptolir/openclaw-dashboard.git` | Next.js admin UI (Cloud Run) |
 
 Routine development, builds, git operations, and deploy orchestration should happen on DevAgents.
 
@@ -58,7 +58,7 @@ If ownership is unclear, stop and ask before editing that area.
 
 Use `STATUS.md` as canonical, but the current known state is:
 
-- Current next-up item: take control of the AgentGlob repo
+- Current next-up item: take control of the AgentGlob repo (see ROADMAP.md for full list)
 - Gateway blocker: Venice model discovery times out at startup and falls back to the static catalog
 - `chore/staging-deploy-gcp` is still listed as open and stale; treat it as active until ownership is verified
 - Dashboard CI/CD is live: merging `openclaw-dashboard` `main` auto-deploys to Cloud Run and auto-tags releases

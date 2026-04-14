@@ -20,34 +20,32 @@
 
 ## Currently In Progress
 
-- Fresh-session coordination reset on DevAgents
-- No new Codex branch claimed yet in the gateway repo
+Fresh-session coordination reset on DevAgents. No new Codex branch claimed yet in the gateway repo.
 
 ---
 
-## Next Up (priority order)
+## Next Up
 
 1. Take control of the AgentGlob repo
-2. Clean signup/signin flow with email verification
-3. Subscription plan selection and enforcement
-4. Billing UI/reporting on top of stored monthly usage
-5. Group behavior policies (see `GROUP_BEHAVIOR_POLICY_PLAN.md` when working in dashboard)
+
+> Full roadmap → [ROADMAP.md](ROADMAP.md)
 
 ---
 
 ## Blockers / Open Questions
 
 - Gateway: Venice model discovery still times out during startup and falls back to the static catalog
-- Coordination: confirm ownership before touching any branch or file area Claude is actively editing
-- Branch hygiene: `chore/staging-deploy-gcp` is still listed as open and appears stale; verify before reuse or cleanup
+- Coordination: confirm ownership before touching any branch or file area the other agent is actively editing
+- Branch hygiene: `chore/staging-deploy-gcp` is still listed as open and stale; verify before reuse or cleanup
 
 ---
 
 ## Active Branches / PRs
 
-| Branch                   | PR  | Status      | Owner   | Notes                                    |
-| ------------------------ | --- | ----------- | ------- | ---------------------------------------- |
-| chore/staging-deploy-gcp | #1  | open, stale | unknown | Treat as active until verified otherwise |
+| Repo               | Branch                   | PR  | Status      | Owner   | Files / Areas Touched              | Validation | Next Concrete Step                       | Notes                          |
+| ------------------ | ------------------------ | --- | ----------- | ------- | ---------------------------------- | ---------- | ---------------------------------------- | ------------------------------ |
+| unknown            | chore/staging-deploy-gcp | #1  | open, stale | unknown | GCP deploy workflow                | unknown    | Verify ownership before reuse or cleanup | Treat as active until verified |
+| openclaw-dashboard | feat/ci-cd-pipeline      | #51 | merged      | Claude  | GitHub Actions, Cloud Run pipeline | merged     | None                                     | CI/CD auto-deploy live         |
 
 ---
 
@@ -67,9 +65,12 @@
 
 ## Quick Reminders
 
+- **DevAgents**: `204.168.223.245` — dev server (repos, builds, deploy orchestration)
+- EU prod (1stClaw): `89.167.70.46` — 12 agents
+- US standby (2ndClaw): `5.161.84.219` — 4 agents
 - Gateway repo on DevAgents: `/root/projects/openclaw`
 - Dashboard repo on DevAgents: `/root/projects/openclaw-dashboard`
 - Dashboard prod URL: `https://app.agentglob.com`
-- Always resolve the agent server from Firestore before SSH/RPC; never hardcode EU
-- Always use `getAllDashboardOrigins()` rather than `getDashboardOrigin()` for allowed origins
+- Always resolve agent server from Firestore before SSH/RPC — never hardcode EU
+- Always use `getAllDashboardOrigins()` not `getDashboardOrigin()` for allowedOrigins
 - Canonical terms: Agent = full deployment, Bot = channel inside Agent, Org = dashboard unit, Workspace = per-Agent local dir on Hetzner
