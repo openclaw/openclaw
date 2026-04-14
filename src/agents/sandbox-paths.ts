@@ -2,7 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
+import {
+  assertNoWindowsNetworkPath,
+  hasEncodedFileUrlSeparator,
+  safeFileURLToPath,
+} from "../infra/local-file-access.js";
 import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -163,6 +167,9 @@ function mapContainerWorkspaceFileUrl(params: {
   }
   const host = parsed.hostname.trim().toLowerCase();
   if (host && host !== "localhost") {
+    return undefined;
+  }
+  if (hasEncodedFileUrlSeparator(parsed.pathname)) {
     return undefined;
   }
   // Sandbox paths are Linux-style (/workspace/*). Parse the URL path directly so

@@ -11,7 +11,7 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
-import { trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -391,6 +391,9 @@ function mapContainerPathToWorkspaceRoot(params: {
       }
       const host = parsed.hostname.trim().toLowerCase();
       if (host && host !== "localhost") {
+        return params.filePath;
+      }
+      if (hasEncodedFileUrlSeparator(parsed.pathname)) {
         return params.filePath;
       }
       let normalizedPathname: string;

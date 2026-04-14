@@ -182,6 +182,11 @@ describe("resolveSandboxedMediaSource", () => {
       media: "file:///workspace/%E0%A4%A",
       expected: /Invalid file:\/\/ URL/,
     },
+    {
+      name: "file:// URLs with encoded separators in the pathname",
+      media: "file:///workspace/%2FREADME.md",
+      expected: /cannot encode path separators/i,
+    },
   ])("rejects $name", async ({ media, expected }) => {
     await withSandboxRoot(async (sandboxDir) => {
       await expectSandboxRejection(media, sandboxDir, expected);
