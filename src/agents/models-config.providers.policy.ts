@@ -1,6 +1,7 @@
 import {
   applyProviderNativeStreamingUsagePolicy,
   normalizeProviderConfigPolicy,
+  normalizeProviderModelIdPolicy,
   resolveProviderConfigApiKeyPolicy,
 } from "./models-config.providers.policy.runtime.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -29,6 +30,10 @@ export function normalizeProviderSpecificConfig(
     return normalized;
   }
   return provider;
+}
+
+export function normalizeProviderConfigModelId(providerKey: string, modelId: string): string {
+  return normalizeProviderModelIdPolicy(providerKey, modelId) ?? modelId;
 }
 
 export function resolveProviderConfigApiKeyResolver(
