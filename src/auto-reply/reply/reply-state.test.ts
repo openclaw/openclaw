@@ -356,12 +356,12 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
     ).toBe(false);
   });
 
-  it("returns false when compactionCount is undefined even if memoryFlushCompactionCount is 0 (zero-initialization edge case)", () => {
+  it("treats missing compactionCount as 0 for backward compat", () => {
     expect(
       hasAlreadyFlushedForCurrentCompaction({
         memoryFlushCompactionCount: 0,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("returns true when both compactionCount and memoryFlushCompactionCount are explicitly 0", () => {
@@ -373,26 +373,8 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
     ).toBe(true);
   });
 
-  it("returns false when both compactionCount and memoryFlushCompactionCount are undefined (fresh session)", () => {
+  it("returns false when both fields are undefined (fresh session)", () => {
     expect(hasAlreadyFlushedForCurrentCompaction({})).toBe(false);
-  });
-
-  it("returns false when compactionCount is undefined and memoryFlushCompactionCount is undefined", () => {
-    expect(
-      hasAlreadyFlushedForCurrentCompaction({
-        compactionCount: undefined,
-        memoryFlushCompactionCount: undefined,
-      }),
-    ).toBe(false);
-  });
-
-  it("correctly detects flush at cycle 0 when compactionCount is explicit", () => {
-    expect(
-      hasAlreadyFlushedForCurrentCompaction({
-        compactionCount: 0,
-        memoryFlushCompactionCount: 0,
-      }),
-    ).toBe(true);
   });
 
   it("returns false after compaction advances past last flush", () => {
