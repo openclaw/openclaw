@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { IS_WINDOWS } from "./config.backup-rotation.test-helpers.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
@@ -268,13 +269,13 @@ describe("config observe recovery", () => {
       });
     });
 
-    it("tolerates a missing primary config file when scanning backups", async () => {
+    it("creates the primary config file when it was missing and a valid backup exists", async () => {
       await withSuiteHome(async (home) => {
         const { deps, configPath, warn } = makeDeps(home);
 
         await fsp.mkdir(path.dirname(configPath), { recursive: true });
         await seedConfig(`${configPath}.bak`, { gateway: { mode: "local" } });
-        // No primary config file
+        // No primary config file — copyFile to a new path should succeed
 
         const result = maybeRecoverFromSchemaInvalidConfigSync({
           deps,
@@ -282,12 +283,119 @@ describe("config observe recovery", () => {
           validate: validateHasGatewayMode,
         });
 
-        // Backup is valid but copyFile target doesn't exist; copy should still succeed
-        // (or at minimum return false gracefully without throwing)
-        expect(typeof result).toBe("boolean");
-        if (result) {
-          expect(warn).toHaveBeenCalledWith(expect.stringContaining("schema-invalid"));
-        }
+        expect(result).toBe(true);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("schema-invalid"));
+        const restoredRaw = await fsp.readFile(configPath, "utf-8");
+        const restoredParsed = JSON.parse(restoredRaw) as Record<string, unknown>;
+        expect((restoredParsed.gateway as { mode?: string } | undefined)?.mode).toBe("local");
+      });
+    });
+
+    it.skipIf(IS_WINDOWS)(
+      "skips a backup candidate that is a symlink (CWE-59 / TOCTOU guard)",
+      async () => {
+        await withSuiteHome(async (home) => {
+          const { deps, configPath, warn } = makeDeps(home);
+
+          await fsp.mkdir(path.dirname(configPath), { recursive: true });
+
+          // Plant a symlink at .bak pointing to an unrelated file
+          const innocentTarget = path.join(path.dirname(configPath), "innocent.txt");
+          await fsp.writeFile(innocentTarget, "should not be read", "utf-8");
+          await fsp.symlink(innocentTarget, `${configPath}.bak`);
+
+          // .bak.1 is a real valid backup
+          await seedConfig(`${configPath}.bak.1`, { gateway: { mode: "local" } });
+          await seedConfig(configPath, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+
+          const result = maybeRecoverFromSchemaInvalidConfigSync({
+            deps,
+            configPath,
+            validate: validateHasGatewayMode,
+          });
+
+          // Should have fallen through to .bak.1, skipping the symlink at .bak
+          expect(result).toBe(true);
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining(".bak.1"));
+          // The symlink target must not have been overwritten
+          await expect(fsp.readFile(innocentTarget, "utf-8")).resolves.toBe("should not be read");
+        });
+      },
+    );
+
+    it.skipIf(IS_WINDOWS)(
+      "aborts recovery when the primary config path is a symlink (CWE-59 / TOCTOU guard)",
+      async () => {
+        await withSuiteHome(async (home) => {
+          const { deps, configPath, warn } = makeDeps(home);
+
+          await fsp.mkdir(path.dirname(configPath), { recursive: true });
+
+          // configPath is a symlink to an unrelated file
+          const sensitiveTarget = path.join(path.dirname(configPath), "sensitive.txt");
+          await fsp.writeFile(sensitiveTarget, "do not overwrite", "utf-8");
+          await fsp.symlink(sensitiveTarget, configPath);
+
+          await seedConfig(`${configPath}.bak`, { gateway: { mode: "local" } });
+
+          const result = maybeRecoverFromSchemaInvalidConfigSync({
+            deps,
+            configPath,
+            validate: validateHasGatewayMode,
+          });
+
+          expect(result).toBe(false);
+          expect(warn).not.toHaveBeenCalled();
+          // The symlink target must be intact
+          await expect(fsp.readFile(sensitiveTarget, "utf-8")).resolves.toBe("do not overwrite");
+        });
+      },
+    );
+
+    it("skips backup candidates that exceed the size limit (CWE-400 guard)", async () => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath, warn } = makeDeps(home);
+
+        // Oversize .bak (exceeds RECOVERY_MAX_BYTES = 10 MB)
+        const oversizeContent = `{"x":"${"a".repeat(11 * 1024 * 1024)}"}`;
+        await fsp.mkdir(path.dirname(configPath), { recursive: true });
+        await fsp.writeFile(`${configPath}.bak`, oversizeContent, "utf-8");
+
+        // .bak.1 is normal and valid
+        await seedConfig(`${configPath}.bak.1`, { gateway: { mode: "local" } });
+        await seedConfig(configPath, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+
+        const result = maybeRecoverFromSchemaInvalidConfigSync({
+          deps,
+          configPath,
+          validate: validateHasGatewayMode,
+        });
+
+        expect(result).toBe(true);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(".bak.1"));
+      });
+    });
+
+    it("archives the corrupted config exactly once across multiple candidate attempts", async () => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath } = makeDeps(home);
+
+        // .bak invalid, .bak.1 valid — two loop iterations before success
+        await seedConfig(`${configPath}.bak`, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+        await seedConfig(`${configPath}.bak.1`, { gateway: { mode: "local" } });
+        await seedConfig(configPath, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+
+        const result = maybeRecoverFromSchemaInvalidConfigSync({
+          deps,
+          configPath,
+          validate: validateHasGatewayMode,
+        });
+
+        expect(result).toBe(true);
+        const dir = path.dirname(configPath);
+        const entries = await fsp.readdir(dir);
+        const clobbered = entries.filter((e) => e.includes(".clobbered."));
+        expect(clobbered).toHaveLength(1);
       });
     });
   });

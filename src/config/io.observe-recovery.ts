@@ -49,6 +49,12 @@ export type ObserveRecoveryDeps = {
       uid?: number;
       gid?: number;
     } | null;
+    lstatSync(
+      path: string,
+      options?: { throwIfNoEntry?: boolean },
+    ): {
+      mode?: number;
+    } | null;
     readFileSync(path: string, encoding: BufferEncoding): string;
     writeFileSync(
       path: string,
@@ -692,6 +698,23 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
 export type SchemaValidateFn = (parsed: unknown) => boolean;
 
 /**
+ * Maximum byte length accepted when reading a backup candidate during schema
+ * recovery. Files larger than this are skipped rather than parsed. 10 MB is
+ * well above any realistic OpenClaw config file and caps memory/CPU exposure
+ * from attacker-controlled file content (CWE-400).
+ */
+const RECOVERY_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Bitmask for the file-type portion of a POSIX mode word. */
+const S_IFMT = 0o170000;
+/** File-type value for a symbolic link. */
+const S_IFLNK = 0o120000;
+
+function isSymlink(mode: number | undefined): boolean {
+  return mode !== undefined && (mode & S_IFMT) === S_IFLNK;
+}
+
+/**
  * Attempts to recover from a schema-invalid config file by scanning the backup
  * rotation ring for the most-recent schema-valid snapshot and restoring it.
  *
@@ -705,6 +728,12 @@ export type SchemaValidateFn = (parsed: unknown) => boolean;
  * Returns `true` if a valid backup was found and restored; `false` otherwise.
  * The corrupted config file is archived as a `.clobbered.*` snapshot before
  * being overwritten, so it is available for forensic analysis.
+ *
+ * Validation note: backups are validated with `validateConfigObjectRawWithPlugins`
+ * (raw, without applying defaults or include-expansion). This is intentional:
+ * all backups are produced by `writeConfigFile` which already expands includes
+ * before writing, so persisted backups never contain raw `$include` directives.
+ * Using the raw validator avoids re-running include I/O during recovery.
  */
 export function maybeRecoverFromSchemaInvalidConfigSync(params: {
   deps: ObserveRecoveryDeps;
@@ -713,12 +742,27 @@ export function maybeRecoverFromSchemaInvalidConfigSync(params: {
 }): boolean {
   const { deps, configPath, validate } = params;
 
-  // Archive the corrupted file for forensics before overwriting it.
+  // Safety: refuse to overwrite through a symlink at the primary config path.
+  // If configPath is a symlink, copyFileSync would follow it and write to an
+  // attacker-controlled target (CWE-59 / TOCTOU). Abort recovery entirely.
+  try {
+    const configLstat = deps.fs.lstatSync(configPath, { throwIfNoEntry: false });
+    if (configLstat !== null && isSymlink(configLstat.mode)) {
+      return false;
+    }
+  } catch {
+    // lstat unavailable or unexpected error — abort recovery to stay safe.
+    return false;
+  }
+
+  // Read the corrupted file once for the forensic archive. We do this before
+  // the candidate loop so we only archive it once regardless of how many
+  // candidates we try (CWE-400 / duplicate archive fix).
   let invalidRaw: string | null = null;
   try {
     invalidRaw = deps.fs.readFileSync(configPath, "utf-8");
   } catch {
-    // If we can't read the invalid file that's fine — proceed to backup scan.
+    // Primary file unreadable — proceed to backup scan without archiving.
   }
 
   // Scan the backup rotation ring: .bak, .bak.1, .bak.2, …, .bak.{N-1}
@@ -728,11 +772,36 @@ export function maybeRecoverFromSchemaInvalidConfigSync(params: {
     candidatePaths.push(`${backupBase}.${i}`);
   }
 
+  // Track whether the corrupted file has already been archived so we write the
+  // .clobbered snapshot exactly once even if we loop through multiple candidates.
+  let invalidArchived = false;
+
   for (const candidatePath of candidatePaths) {
+    // Safety: refuse to read through a symlink in the backup ring.
+    // An attacker could plant a symlink at a .bak path to exfiltrate or poison
+    // data from elsewhere on the filesystem (CWE-59).
+    try {
+      const candidateLstat = deps.fs.lstatSync(candidatePath, { throwIfNoEntry: false });
+      if (candidateLstat === null) {
+        continue; // file does not exist — try next slot
+      }
+      if (isSymlink(candidateLstat.mode)) {
+        continue; // symlink — skip this slot
+      }
+    } catch {
+      continue;
+    }
+
     let raw: string;
     try {
       raw = deps.fs.readFileSync(candidatePath, "utf-8");
     } catch {
+      continue;
+    }
+
+    // Guard against attacker-inflated backup files causing memory/CPU exhaustion
+    // during JSON5 parsing (CWE-400).
+    if (Buffer.byteLength(raw, "utf-8") > RECOVERY_MAX_BYTES) {
       continue;
     }
 
@@ -747,8 +816,10 @@ export function maybeRecoverFromSchemaInvalidConfigSync(params: {
       continue;
     }
 
-    // Found a schema-valid backup. Archive the corrupted config before restoring.
-    if (invalidRaw !== null) {
+    // Found a schema-valid backup. Archive the corrupted config exactly once
+    // before the first restore attempt.
+    if (invalidRaw !== null && !invalidArchived) {
+      invalidArchived = true;
       persistClobberedConfigSnapshotSync({
         deps,
         configPath,
@@ -757,19 +828,17 @@ export function maybeRecoverFromSchemaInvalidConfigSync(params: {
       });
     }
 
-    let restored = false;
     try {
       deps.fs.copyFileSync(candidatePath, configPath);
-      restored = true;
     } catch {
-      // Copy failed — we cannot restore, skip to next candidate.
+      // Copy failed — skip to next candidate without marking as restored.
       continue;
     }
 
     deps.logger.warn(
       `Config schema-invalid; auto-restored from backup: ${configPath} <- ${candidatePath}`,
     );
-    return restored;
+    return true;
   }
 
   return false;
