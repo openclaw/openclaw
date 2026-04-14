@@ -486,14 +486,6 @@ export function buildPluginMessageAcceptedHookCall(params: {
     }
   }
 
-  const inboundRootId = parsed.rootId?.trim() || parsed.threadId?.trim();
-  if (inboundRootId) {
-    const boundSessionKey = params.resolveBoundSession(`${parsed.chatId}:${inboundRootId}`);
-    if (boundSessionKey) {
-      return null;
-    }
-  }
-
   const shouldForwardControlCommands =
     params.accountConfig.pluginMode?.forwardControlCommands ?? true;
   if (!shouldForwardControlCommands && params.isControlCommandMessage(parsed.content)) {

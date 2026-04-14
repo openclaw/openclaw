@@ -90,7 +90,42 @@ describe("buildPluginMessageAcceptedHookCall", () => {
     });
   });
 
-  it("returns null for bound thread conversations and blocked control commands", () => {
+  it("builds a hook payload for bound thread conversations", () => {
+    const commandCheck = vi.fn(() => false);
+    const result = buildPluginMessageAcceptedHookCall({
+      cfg: createConfig(),
+      accountId: "default",
+      event: createEvent({ rootId: "om_root", text: "@Bot continue" }),
+      botOpenId: "ou_bot",
+      botName: "Bot",
+      allBotOpenIds: ["ou_bot"],
+      accountConfig: {
+        enabled: true,
+        dispatchMode: "plugin",
+        connectionMode: "websocket",
+      } as ResolvedFeishuAccount["config"],
+      isControlCommandMessage: commandCheck,
+      resolveBoundSession: () => "agent:bound:session",
+      accountBotOpenId: "ou_bot",
+      botOpenIdsByAccount: { default: "ou_bot" },
+    });
+
+    expect(result).toMatchObject({
+      event: {
+        content: "@Bot continue",
+        metadata: {
+          threadId: "om_root",
+          channelData: {
+            rootId: "om_root",
+            parentId: "om_root",
+          },
+        },
+      },
+    });
+    expect(commandCheck).not.toHaveBeenCalled();
+  });
+
+  it("returns null for blocked control commands", () => {
     const commandCheck = vi.fn(() => true);
     const result = buildPluginMessageAcceptedHookCall({
       cfg: createConfig(),
@@ -108,13 +143,13 @@ describe("buildPluginMessageAcceptedHookCall", () => {
         },
       } as ResolvedFeishuAccount["config"],
       isControlCommandMessage: commandCheck,
-      resolveBoundSession: () => "agent:bound:session",
+      resolveBoundSession: () => undefined,
       accountBotOpenId: "ou_bot",
       botOpenIdsByAccount: { default: "ou_bot" },
     });
 
     expect(result).toBeNull();
-    expect(commandCheck).not.toHaveBeenCalled();
+    expect(commandCheck).toHaveBeenCalledWith("/stop");
   });
 
   it("returns null when plugin dispatch mode is disabled", () => {
