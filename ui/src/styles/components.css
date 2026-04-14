@@ -2986,6 +2986,7 @@ td.data-table-key-col {
   justify-content: center;
   padding: 24px;
   z-index: 200;
+  overflow: auto;
 }
 
 .exec-approval-card {
@@ -2995,6 +2996,8 @@ td.data-table-key-col {
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
 }
 
 .exec-approval-header {
@@ -3066,6 +3069,10 @@ td.data-table-key-col {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  position: sticky;
+  bottom: 0;
+  background: var(--card);
+  padding-top: 12px;
 }
 
 /* ===========================================
