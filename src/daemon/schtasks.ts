@@ -6,7 +6,10 @@ import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-proc
 import { inspectPortUsage } from "../infra/ports.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
@@ -26,6 +29,11 @@ import type {
   GatewayServiceRenderArgs,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(value);
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
 
 function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -806,7 +814,19 @@ export async function restartScheduledTask({
       }
     }
   }
-  await runScheduledTaskOrThrow(taskName);
+  // Windows: avoid a second schtasks /Run here. The gateway run-loop triggers
+  // relaunchGatewayScheduledTask on supervised shutdown; CLI /Run races that path
+  // and can spawn duplicate task instances (#52044). When OPENCLAW_NO_RESPAWN is
+  // set in the staged task script, full-process supervised relaunch is skipped, so
+  // we must still kick the task immediately from the CLI.
+  let shouldRunTaskImmediately = process.platform !== "win32";
+  if (process.platform === "win32") {
+    const staged = await readScheduledTaskCommand(effectiveEnv).catch(() => null);
+    shouldRunTaskImmediately = isTruthyEnvFlag(staged?.environment?.OPENCLAW_NO_RESPAWN);
+  }
+  if (shouldRunTaskImmediately) {
+    await runScheduledTaskOrThrow(taskName);
+  }
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }

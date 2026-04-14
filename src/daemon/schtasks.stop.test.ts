@@ -9,6 +9,7 @@ import {
   schtasksResponses,
   withWindowsEnv,
   writeGatewayScript,
+  writeGatewayScriptWithNoRespawn,
 } from "./test-helpers/schtasks-fixtures.js";
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
@@ -170,7 +171,8 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
-      pushSuccessfulSchtasksResponses(4);
+      const schtasksOkCount = process.platform === "win32" ? 3 : 4;
+      pushSuccessfulSchtasksResponses(schtasksOkCount);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
       inspectPortUsage
         .mockResolvedValueOnce(busyPortUsage(5151))
@@ -183,11 +185,35 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
-      expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      const expectedLast =
+        process.platform === "win32"
+          ? (["/End", "/TN", "OpenClaw Gateway"] as const)
+          : (["/Run", "/TN", "OpenClaw Gateway"] as const);
+      expect(schtasksCalls.at(-1)).toEqual(expectedLast);
     });
   });
 
-  it("throws when /Run fails during restart", async () => {
+  it.skipIf(process.platform !== "win32")(
+    "runs schtasks /Run on win32 when staged script sets OPENCLAW_NO_RESPAWN",
+    async () => {
+      await withWindowsEnv("openclaw-win-stop-norespawn-", async ({ env }) => {
+        await writeGatewayScriptWithNoRespawn(env, GATEWAY_PORT);
+        const stdout = new PassThrough();
+        pushSuccessfulSchtasksResponses(4);
+        findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
+        inspectPortUsage
+          .mockResolvedValueOnce(busyPortUsage(5151))
+          .mockResolvedValueOnce(freePortUsage());
+
+        await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+          outcome: "completed",
+        });
+        expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("throws when /Run fails during restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       schtasksResponses.push(
         { ...SUCCESS_RESPONSE },

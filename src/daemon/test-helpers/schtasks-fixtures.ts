@@ -55,3 +55,23 @@ export async function writeGatewayScript(
     "utf8",
   );
 }
+
+/** Staged script with OPENCLAW_NO_RESPAWN so CLI restart must schtasks /Run (#52044). */
+export async function writeGatewayScriptWithNoRespawn(
+  env: Record<string, string>,
+  port = Number(env.OPENCLAW_GATEWAY_PORT || "18789"),
+) {
+  const scriptPath = resolveTaskScriptPath(env);
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(
+    scriptPath,
+    [
+      "@echo off",
+      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
+      'set "OPENCLAW_NO_RESPAWN=1"',
+      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+}
