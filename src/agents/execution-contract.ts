@@ -59,27 +59,15 @@ export function isStrictAgenticSupportedProviderModel(params: {
 /**
  * Returns the effective execution contract for an embedded Pi run.
  *
- * strict-agentic is a GPT-5-family openai/openai-codex-only runtime contract,
- * so an unsupported provider/model pair always collapses to `"default"`
- * regardless of what the caller passed or what config says — the contract
- * is inert off-provider. Within the supported lane, the behavior matrix is:
+ * Resolution order:
  *
- * - Supported provider/model + explicit `"strict-agentic"` in config
- *   (defaults or per-agent override) ⇒ `"strict-agentic"`.
- * - Supported provider/model + explicit `"default"` in config ⇒ `"default"`
- *   (opt-out honored).
- * - Supported provider/model + unspecified ⇒ `"strict-agentic"` so the
- *   no-stall completion-gate criterion applies to out-of-the-box GPT-5 runs
- *   without requiring every user to set the flag.
- * - Unsupported provider/model (anything that is not openai or openai-codex
- *   with a gpt-5-family model id) ⇒ `"default"`, even when the config
- *   explicitly sets `"strict-agentic"`. The retry guard and blocked-exit
- *   helpers all check this lane again, so an explicit `"strict-agentic"`
- *   on an unsupported lane is a no-op rather than a hard failure.
- *
- * This means explicit opt-out still works, but the gate criterion
- * "GPT-5.4 no longer stalls after planning" now covers unconfigured
- * installations, not only users who opted in manually.
+ * 1. Explicit `"strict-agentic"` in config ⇒ `"strict-agentic"` regardless
+ *    of provider/model. This allows non-OpenAI providers (e.g. Qwen via
+ *    LM Studio) to opt into planning-only retry guards.
+ * 2. Explicit `"default"` in config ⇒ `"default"` (opt-out honored).
+ * 3. Unspecified + supported GPT-5-family provider/model ⇒ `"strict-agentic"`
+ *    (auto-activation for out-of-the-box GPT-5 runs).
+ * 4. Unspecified + unsupported provider/model ⇒ `"default"`.
  */
 export function resolveEffectiveExecutionContract(params: {
   config?: OpenClawConfig;
@@ -94,22 +82,22 @@ export function resolveEffectiveExecutionContract(params: {
     agentId: params.agentId ?? undefined,
   });
   const explicit = resolveAgentExecutionContract(params.config, sessionAgentId);
-  // strict-agentic is a GPT-5-family openai/openai-codex runtime contract
-  // regardless of whether it was set explicitly or auto-activated. On an
-  // unsupported provider/model pair the contract is inert either way, so
-  // the effective value collapses to "default".
-  const supported = isStrictAgenticSupportedProviderModel({
-    provider: params.provider,
-    modelId: params.modelId,
-  });
-  if (!supported) {
-    return "default";
+  // Honor explicit opt-in regardless of provider — allows non-OpenAI models
+  // (e.g. Qwen via LM Studio) to use planning-only retry guards when the
+  // operator has deliberately configured strict-agentic.
+  if (explicit === "strict-agentic") {
+    return "strict-agentic";
   }
   if (explicit === "default") {
     return "default";
   }
-  // Explicit strict-agentic OR unspecified-but-supported → strict-agentic.
-  return "strict-agentic";
+  // Auto-activate for supported GPT-5-family provider/model pairs when
+  // the config is unspecified.
+  const supported = isStrictAgenticSupportedProviderModel({
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  return supported ? "strict-agentic" : "default";
 }
 
 export function isStrictAgenticExecutionContractActive(params: {

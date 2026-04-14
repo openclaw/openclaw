@@ -477,6 +477,7 @@ export async function runEmbeddedPiAgent(
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
         modelId,
+        executionContract,
         prompt: params.prompt,
       });
       let rateLimitProfileRotations = 0;
@@ -1676,6 +1677,7 @@ export async function runEmbeddedPiAgent(
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
+            executionContract,
             prompt: params.prompt,
             aborted,
             timedOut,

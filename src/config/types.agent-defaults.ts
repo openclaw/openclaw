@@ -245,7 +245,8 @@ export type AgentDefaultsConfig = {
     /**
      * Embedded Pi execution contract:
      * - default: keep the standard runner behavior
-     * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
+     * - strict-agentic: keep acting until hitting a real blocker (auto-activates for GPT-5-family
+     *   on OpenAI/OpenAI Codex; honored for any provider when explicitly set)
      */
     executionContract?: EmbeddedPiExecutionContract;
   };
