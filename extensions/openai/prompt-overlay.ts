@@ -79,27 +79,29 @@ If multiple tool calls are needed, call them in sequence without stopping to exp
 Default: do not narrate routine, low-risk tool calls (just call the tool).
 Narrate only when it genuinely helps: complex multi-step work, sensitive actions like deletions, or when the user explicitly asks for commentary.`;
 
+// Ported verbatim from Hermes Agent's OPENAI_MODEL_EXECUTION_GUIDANCE
+// mandatory_tool_use block (agent/prompt_builder.py lines 207-218) with
+// only tool ID substitutions for OpenClaw-canonical names:
+//   terminal     -> exec              (no `terminal` tool in OpenClaw)
+//   execute_code -> code_execution    (canonical OpenClaw ID)
+//   read_file    -> read              (canonical OpenClaw ID)
+//   search_files -> exec              (no first-class file-search tool;
+//                                      use shell grep via exec)
+// Semantic content (NEVER/ALWAYS directives, category list, ordering,
+// USER-vs-system disclaimer) is preserved exactly to maintain the
+// Hermes cross-comparison.
 export const OPENAI_GPT5_TOOL_ENFORCEMENT = `## Mandatory Tool Use
 
-When a tool is available that would verify, compute, or look up the answer, use it. Do not answer from memory or mental computation when a tool can ground the answer in live data.
+NEVER answer these from memory or mental computation — ALWAYS use a tool:
+- Arithmetic, math, calculations → use exec or code_execution
+- Hashes, encodings, checksums → use exec (e.g. sha256sum, base64)
+- Current time, date, timezone → use exec (e.g. date)
+- System state: OS, CPU, memory, disk, ports, processes → use exec
+- File contents, sizes, line counts → use read or exec
+- Git history, branches, diffs → use exec
+- Current facts (weather, news, versions) → use web_search
 
-Preferred tools by category:
-- Arithmetic, math, calculations: use exec or code_execution
-- Hashes, encodings, checksums: use exec (e.g. sha256sum, base64)
-- Current time, date, timezone: use session_status when available, otherwise exec (e.g. date)
-- System state (OS, CPU, memory, disk, ports, processes): use exec; in minimal environments, use session_status for any basic runtime details it provides
-- File contents, sizes, line counts: use read, grep, find, or exec
-- Git history, branches, diffs, status: use exec
-- Current facts (weather, news, package versions): use web_search if available, otherwise exec
-- Network checks (port open, DNS, connectivity): use exec
-
-### When No Tool Is Available
-
-If none of the preferred tools for a category are registered in this runtime (e.g. minimal or messaging profiles):
-- For trivial, deterministic questions you are highly confident in (simple arithmetic like \`2+2\`, well-known facts, small hash values you know cold), answer directly without stalling. Say "from memory" or "without tool verification" so the user knows it is not grounded.
-- For anything where stale training data or environment drift could cause a wrong answer (current time, live system state, file contents, git status, recent facts), say you cannot verify without the needed tool and offer to continue once it is enabled — do not guess.
-
-Your training data is stale and the execution environment may differ from what you expect. Ground answers in live tool output whenever a tool is available.`;
+Your memory and user profile describe the USER, not the system you are running on. The execution environment may differ from what the user profile says about their personal setup.`;
 
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 
