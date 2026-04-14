@@ -92,7 +92,6 @@ describe("qa-lab server", () => {
       port: 0,
       outputPath,
       controlUiUrl: "http://127.0.0.1:18789/",
-      controlUiToken: "qa-token",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -113,7 +112,6 @@ describe("qa-lab server", () => {
     expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/");
     expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
     expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
-    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("qa-token");
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
@@ -154,7 +152,6 @@ describe("qa-lab server", () => {
       host: "127.0.0.1",
       port: 0,
       controlUiUrl: "http://127.0.0.1:18789/#token=from-url-fragment",
-      controlUiToken: "qa-token",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -267,7 +264,6 @@ describe("qa-lab server", () => {
       advertiseHost: "127.0.0.1",
       advertisePort: 43124,
       controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
-      controlUiToken: "proxy-token",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -662,7 +658,6 @@ describe("qa-lab server", () => {
     });
     lab.setControlUi({
       controlUiUrl: "http://127.0.0.1:18789/",
-      controlUiToken: "late-token",
     });
 
     const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {

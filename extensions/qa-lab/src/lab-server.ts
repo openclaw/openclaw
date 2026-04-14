@@ -1010,11 +1010,7 @@ export async function startQaLabServer(
     baseUrl: publicBaseUrl,
     listenUrl,
     state,
-    setControlUi(next: {
-      controlUiUrl?: string | null;
-      controlUiToken?: string | null;
-      controlUiProxyTarget?: string | null;
-    }) {
+    setControlUi(next: { controlUiUrl?: string | null; controlUiProxyTarget?: string | null }) {
       controlUiUrl = next.controlUiUrl?.trim() || null;
       controlUiProxyTarget = next.controlUiProxyTarget?.trim()
         ? new URL(next.controlUiProxyTarget)

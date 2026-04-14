@@ -56,6 +56,13 @@ describe("qa cli registration", () => {
     );
   });
 
+  it("does not expose a no-op control-ui token flag on qa ui", () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    const ui = qa?.commands.find((command) => command.name() === "ui");
+    expect(ui).toBeDefined();
+    expect(ui?.options.some((option) => option.long === "--control-ui-token")).toBe(false);
+  });
+
   it("routes matrix CLI flags into the lane runtime", async () => {
     await program.parseAsync([
       "node",

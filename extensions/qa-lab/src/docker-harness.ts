@@ -36,7 +36,6 @@ function renderCompose(params: {
   bindUiDist: boolean;
   gatewayPort: number;
   qaLabPort: number;
-  gatewayToken: string;
   includeQaLabUi: boolean;
 }) {
   const imageBlock = renderImageBlock(params);
@@ -286,7 +285,6 @@ export async function writeQaDockerHarnessFiles(params: {
         bindUiDist,
         gatewayPort,
         qaLabPort,
-        gatewayToken,
         includeQaLabUi,
       }),
       "utf8",
