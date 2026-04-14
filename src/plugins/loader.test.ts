@@ -3256,6 +3256,75 @@ module.exports = {
     expect(registry.channels).toHaveLength(expectedChannels);
   });
 
+  it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+
+    // Plugin whose setup-entry uses the bundled contract but loadSetupPlugin() throws
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-entry-throws-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-entry-throws-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["setup-entry-throws-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    // index.cjs: full entry (should NOT be reached if setup-entry is used)
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = { id: "setup-entry-throws-test", register() {} };`,
+      "utf-8",
+    );
+    // setup-entry.cjs: bundled contract whose loadSetupPlugin throws
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin: () => { throw new Error("boom: setup plugin missing"); },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["setup-entry-throws-test"],
+        },
+      },
+    });
+
+    // The registry load should NOT crash; the error should be recorded as a
+    // per-plugin diagnostic rather than aborting the whole load.
+    expect(registry.diagnostics.length).toBeGreaterThanOrEqual(1);
+    const diagnostic = registry.diagnostics.find(
+      (d) => d.pluginId === "setup-entry-throws-test" && d.level === "error",
+    );
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic!.message).toContain("failed to load setup entry");
+  });
+
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {
     expect(
       __testing.shouldLoadChannelPluginInSetupRuntime({

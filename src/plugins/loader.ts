@@ -646,6 +646,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
 
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
+  loadError?: unknown;
 } {
   const resolved = unwrapDefaultModuleExport(moduleExport);
   if (!resolved || typeof resolved !== "object") {
@@ -659,11 +660,15 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
     setupEntryRecord.kind === "bundled-channel-setup-entry" &&
     typeof setupEntryRecord.loadSetupPlugin === "function"
   ) {
-    const loadedPlugin = setupEntryRecord.loadSetupPlugin();
-    if (loadedPlugin && typeof loadedPlugin === "object") {
-      return {
-        plugin: loadedPlugin as ChannelPlugin,
-      };
+    try {
+      const loadedPlugin = setupEntryRecord.loadSetupPlugin();
+      if (loadedPlugin && typeof loadedPlugin === "object") {
+        return {
+          plugin: loadedPlugin as ChannelPlugin,
+        };
+      }
+    } catch (err) {
+      return { loadError: err };
     }
   }
   const setup = resolved as {
@@ -1650,6 +1655,21 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         manifestRecord.setupSource
       ) {
         const setupRegistration = resolveSetupChannelRegistration(mod);
+        if (setupRegistration.loadError) {
+          recordPluginError({
+            logger,
+            registry,
+            record,
+            seenIds,
+            pluginId,
+            origin: candidate.origin,
+            phase: "load",
+            error: setupRegistration.loadError,
+            logPrefix: `[plugins] ${record.id} failed to load setup entry from ${record.source}: `,
+            diagnosticMessagePrefix: "failed to load setup entry: ",
+          });
+          continue;
+        }
         if (setupRegistration.plugin) {
           if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
             pushPluginLoadError(
