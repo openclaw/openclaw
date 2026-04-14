@@ -69,6 +69,7 @@ import type {
 } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { resolveToolDeliveryPayload as resolveDefaultToolDeliveryPayload } from "./reply-payloads.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -267,7 +268,8 @@ export async function dispatchReplyFromConfig(
     });
   };
 
-  if (shouldSkipDuplicateInbound(ctx)) {
+  const inboundDedupeClaim = claimInboundDedupe(ctx);
+  if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
@@ -1126,6 +1128,9 @@ export async function dispatchReplyFromConfig(
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    if (inboundDedupeClaim.status === "claimed") {
+      commitInboundDedupe(inboundDedupeClaim.key);
+    }
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
@@ -1133,6 +1138,9 @@ export async function dispatchReplyFromConfig(
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
+    if (inboundDedupeClaim.status === "claimed") {
+      releaseInboundDedupe(inboundDedupeClaim.key);
+    }
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;
