@@ -14,7 +14,7 @@ export type SlackResolvedMessageContent = {
   effectiveDirectMedia: SlackMediaResult[] | null;
 };
 
-const SLACK_USER_MENTION_TOKEN_RE = /<@([A-Z0-9]+)(?:\|([^>]+))?>/gi;
+const SLACK_USER_MENTION_TOKEN_RE = /<@([A-Z0-9]+)(?:\|([^>]+))?>/g;
 
 async function normalizeSlackInboundMentions(
   text: string,

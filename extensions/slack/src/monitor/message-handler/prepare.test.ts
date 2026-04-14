@@ -258,6 +258,55 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.BodyForAgent).toBe("hi @Bek and @Ava and <@U4>");
   });
 
+  it("skips mention resolution when the message contains no Slack mentions", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    const resolveUserName = vi.fn(async () => ({ name: "Bek" }) as any);
+    slackCtx.resolveUserName = resolveUserName;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        text: "hi there",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toBe("hi there");
+    expect(prepared!.ctxPayload.BodyForAgent).toBe("hi there");
+    expect(resolveUserName).not.toHaveBeenCalled();
+  });
+
+  it("keeps other mentions resolvable when one user lookup fails", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    slackCtx.resolveUserName = async (userId) => {
+      if (userId === "U2") {
+        throw new Error("lookup failed");
+      }
+      return ({ name: userId === "U3" ? "Ava" : undefined }) as any;
+    };
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        text: "hi <@U2|bek-fallback> and <@U3> and <@U4>",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toBe("hi @bek-fallback and @Ava and <@U4>");
+    expect(prepared!.ctxPayload.BodyForAgent).toBe("hi @bek-fallback and @Ava and <@U4>");
+  });
+
   it("keeps bot mentions unchanged while normalizing user mentions", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
