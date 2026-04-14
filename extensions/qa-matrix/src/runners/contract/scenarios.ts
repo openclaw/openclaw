@@ -5,17 +5,33 @@ import {
   type LiveTransportScenarioDefinition,
 } from "../../shared/live-transport-scenarios.js";
 import { createMatrixQaClient, type MatrixQaObservedEvent } from "../../substrate/client.js";
+import { type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import {
+  buildDefaultMatrixQaTopologySpec,
+  findMatrixQaProvisionedRoom,
+  mergeMatrixQaTopologySpecs,
+  type MatrixQaProvisionedTopology,
+  type MatrixQaTopologySpec,
+} from "../../substrate/topology.js";
 
 export type MatrixQaScenarioId =
   | "matrix-thread-follow-up"
   | "matrix-thread-isolation"
   | "matrix-top-level-reply-shape"
+  | "matrix-dm-reply-shape"
+  | "matrix-secondary-room-reply"
+  | "matrix-secondary-room-open-trigger"
   | "matrix-reaction-notification"
   | "matrix-restart-resume"
+  | "matrix-room-membership-loss"
+  | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
   | "matrix-allowlist-block";
 
-export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId>;
+export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId> & {
+  configOverrides?: MatrixQaConfigOverrides;
+  topology?: MatrixQaTopologySpec;
+};
 
 export type MatrixQaReplyArtifact = {
   bodyPreview?: string;
@@ -40,6 +56,9 @@ export type MatrixQaScenarioArtifacts = {
   reactionEventId?: string;
   reactionTargetEventId?: string;
   reply?: MatrixQaReplyArtifact;
+  recoveredDriverEventId?: string;
+  recoveredReply?: MatrixQaReplyArtifact;
+  roomKey?: string;
   restartSignal?: string;
   rootEventId?: string;
   threadDriverEventId?: string;
@@ -51,6 +70,9 @@ export type MatrixQaScenarioArtifacts = {
   topLevelReply?: MatrixQaReplyArtifact;
   topLevelToken?: string;
   triggerBody?: string;
+  membershipJoinEventId?: string;
+  membershipLeaveEventId?: string;
+  transportInterruption?: string;
 };
 
 export type MatrixQaScenarioExecution = {
@@ -72,12 +94,18 @@ type MatrixQaScenarioContext = {
   observerUserId: string;
   restartGateway?: () => Promise<void>;
   roomId: string;
+  interruptTransport?: () => Promise<void>;
+  sutAccessToken: string;
   syncState: MatrixQaSyncState;
   sutUserId: string;
   timeoutMs: number;
+  topology: MatrixQaProvisionedTopology;
 };
 
 const NO_REPLY_WINDOW_MS = 8_000;
+const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
+const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
+const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
 
 export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   {
@@ -99,6 +127,63 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     title: "Matrix top-level reply keeps replyToMode off",
   },
   {
+    id: "matrix-dm-reply-shape",
+    timeoutMs: 45_000,
+    title: "Matrix DM reply stays top-level without a mention",
+    topology: {
+      defaultRoomKey: "main",
+      rooms: [
+        {
+          key: MATRIX_QA_DRIVER_DM_ROOM_KEY,
+          kind: "dm",
+          members: ["driver", "sut"],
+          name: "Matrix QA Driver/SUT DM",
+        },
+      ],
+    },
+  },
+  {
+    id: "matrix-secondary-room-reply",
+    timeoutMs: 45_000,
+    title: "Matrix secondary room reply stays scoped to that room",
+    topology: {
+      defaultRoomKey: "main",
+      rooms: [
+        {
+          key: MATRIX_QA_SECONDARY_ROOM_KEY,
+          kind: "group",
+          members: ["driver", "observer", "sut"],
+          name: "Matrix QA Secondary Room",
+          requireMention: true,
+        },
+      ],
+    },
+  },
+  {
+    id: "matrix-secondary-room-open-trigger",
+    timeoutMs: 45_000,
+    title: "Matrix secondary room can opt out of mention gating",
+    topology: {
+      defaultRoomKey: "main",
+      rooms: [
+        {
+          key: MATRIX_QA_SECONDARY_ROOM_KEY,
+          kind: "group",
+          members: ["driver", "observer", "sut"],
+          name: "Matrix QA Secondary Room",
+          requireMention: true,
+        },
+      ],
+    },
+    configOverrides: {
+      groupsByKey: {
+        [MATRIX_QA_SECONDARY_ROOM_KEY]: {
+          requireMention: false,
+        },
+      },
+    },
+  },
+  {
     id: "matrix-reaction-notification",
     standardId: "reaction-observation",
     timeoutMs: 45_000,
@@ -109,6 +194,28 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "restart-resume",
     timeoutMs: 60_000,
     title: "Matrix lane resumes cleanly after gateway restart",
+  },
+  {
+    id: "matrix-room-membership-loss",
+    timeoutMs: 75_000,
+    title: "Matrix room membership loss recovers after re-invite",
+    topology: {
+      defaultRoomKey: "main",
+      rooms: [
+        {
+          key: MATRIX_QA_MEMBERSHIP_ROOM_KEY,
+          kind: "group",
+          members: ["driver", "observer", "sut"],
+          name: "Matrix QA Membership Room",
+          requireMention: true,
+        },
+      ],
+    },
+  },
+  {
+    id: "matrix-homeserver-restart-resume",
+    timeoutMs: 75_000,
+    title: "Matrix lane resumes after homeserver restart",
   },
   {
     id: "matrix-mention-gating",
@@ -135,6 +242,28 @@ export function findMatrixQaScenarios(ids?: string[]) {
     laneLabel: "Matrix",
     scenarios: MATRIX_QA_SCENARIOS,
   });
+}
+
+export function buildMatrixQaTopologyForScenarios(params: {
+  defaultRoomName: string;
+  scenarios: MatrixQaScenarioDefinition[];
+}): MatrixQaTopologySpec {
+  return mergeMatrixQaTopologySpecs([
+    buildDefaultMatrixQaTopologySpec({
+      defaultRoomName: params.defaultRoomName,
+    }),
+    ...params.scenarios.flatMap((scenario) => (scenario.topology ? [scenario.topology] : [])),
+  ]);
+}
+
+export function resolveMatrixQaScenarioRoomId(
+  context: Pick<MatrixQaScenarioContext, "roomId" | "topology">,
+  roomKey?: string,
+) {
+  if (!roomKey) {
+    return context.roomId;
+  }
+  return findMatrixQaProvisionedRoom(context.topology, roomKey).roomId;
 }
 
 export function buildMentionPrompt(sutUserId: string, token: string) {
@@ -251,6 +380,13 @@ function advanceMatrixQaActorCursor(params: {
   writeMatrixQaSyncCursor(params.syncState, params.actorId, params.nextSince ?? params.startSince);
 }
 
+function createMatrixQaScenarioClient(params: { accessToken: string; baseUrl: string }) {
+  return createMatrixQaClient({
+    accessToken: params.accessToken,
+    baseUrl: params.baseUrl,
+  });
+}
+
 async function runTopLevelMentionScenario(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
@@ -304,6 +440,85 @@ async function runTopLevelMentionScenario(params: {
     since: matched.since,
     token,
   };
+}
+
+async function waitForMembershipEvent(params: {
+  accessToken: string;
+  actorId: MatrixQaActorId;
+  baseUrl: string;
+  membership: "invite" | "join" | "leave";
+  observedEvents: MatrixQaObservedEvent[];
+  roomId: string;
+  stateKey: string;
+  syncState: MatrixQaSyncState;
+  timeoutMs: number;
+}) {
+  const { client, startSince } = await primeMatrixQaActorCursor({
+    accessToken: params.accessToken,
+    actorId: params.actorId,
+    baseUrl: params.baseUrl,
+    syncState: params.syncState,
+  });
+  const matched = await client.waitForRoomEvent({
+    observedEvents: params.observedEvents,
+    predicate: (event) =>
+      event.roomId === params.roomId &&
+      event.type === "m.room.member" &&
+      event.stateKey === params.stateKey &&
+      event.membership === params.membership,
+    roomId: params.roomId,
+    since: startSince,
+    timeoutMs: params.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: params.actorId,
+    syncState: params.syncState,
+    nextSince: matched.since,
+    startSince,
+  });
+  return matched.event;
+}
+
+async function runTopologyScopedTopLevelScenario(params: {
+  accessToken: string;
+  actorId: MatrixQaActorId;
+  actorUserId: string;
+  context: MatrixQaScenarioContext;
+  roomKey: string;
+  tokenPrefix: string;
+  withMention?: boolean;
+}) {
+  const roomId = resolveMatrixQaScenarioRoomId(params.context, params.roomKey);
+  const result = await runTopLevelMentionScenario({
+    accessToken: params.accessToken,
+    actorId: params.actorId,
+    baseUrl: params.context.baseUrl,
+    observedEvents: params.context.observedEvents,
+    roomId,
+    syncState: params.context.syncState,
+    sutUserId: params.context.sutUserId,
+    timeoutMs: params.context.timeoutMs,
+    tokenPrefix: params.tokenPrefix,
+    withMention: params.withMention,
+  });
+  assertTopLevelReplyArtifact(`reply in ${params.roomKey}`, result.reply);
+  return {
+    artifacts: {
+      actorUserId: params.actorUserId,
+      driverEventId: result.driverEventId,
+      reply: result.reply,
+      roomKey: params.roomKey,
+      token: result.token,
+      triggerBody: result.body,
+    },
+    details: [
+      `room key: ${params.roomKey}`,
+      `room id: ${roomId}`,
+      `driver event: ${result.driverEventId}`,
+      `trigger sender: ${params.actorUserId}`,
+      ...buildMatrixReplyDetails("reply", result.reply),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
 }
 
 async function runThreadScenario(params: MatrixQaScenarioContext) {
@@ -421,6 +636,105 @@ async function runNoReplyExpectedScenario(params: {
   } satisfies MatrixQaScenarioExecution;
 }
 
+async function runMembershipLossScenario(context: MatrixQaScenarioContext) {
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEMBERSHIP_ROOM_KEY);
+  const driverClient = createMatrixQaScenarioClient({
+    accessToken: context.driverAccessToken,
+    baseUrl: context.baseUrl,
+  });
+  const sutClient = createMatrixQaScenarioClient({
+    accessToken: context.sutAccessToken,
+    baseUrl: context.baseUrl,
+  });
+
+  await driverClient.kickUserFromRoom({
+    reason: "matrix qa membership loss",
+    roomId,
+    userId: context.sutUserId,
+  });
+  const leaveEvent = await waitForMembershipEvent({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: context.baseUrl,
+    membership: "leave",
+    observedEvents: context.observedEvents,
+    roomId,
+    stateKey: context.sutUserId,
+    syncState: context.syncState,
+    timeoutMs: context.timeoutMs,
+  });
+
+  const noReplyToken = `MATRIX_QA_MEMBERSHIP_LOSS_${randomUUID().slice(0, 8).toUpperCase()}`;
+  await runNoReplyExpectedScenario({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    actorUserId: context.driverUserId,
+    baseUrl: context.baseUrl,
+    body: buildMentionPrompt(context.sutUserId, noReplyToken),
+    mentionUserIds: [context.sutUserId],
+    observedEvents: context.observedEvents,
+    roomId,
+    syncState: context.syncState,
+    sutUserId: context.sutUserId,
+    timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+    token: noReplyToken,
+  });
+
+  await driverClient.inviteUserToRoom({
+    roomId,
+    userId: context.sutUserId,
+  });
+  await waitForMembershipEvent({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: context.baseUrl,
+    membership: "invite",
+    observedEvents: context.observedEvents,
+    roomId,
+    stateKey: context.sutUserId,
+    syncState: context.syncState,
+    timeoutMs: context.timeoutMs,
+  });
+  await sutClient.joinRoom(roomId);
+  const joinEvent = await waitForMembershipEvent({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: context.baseUrl,
+    membership: "join",
+    observedEvents: context.observedEvents,
+    roomId,
+    stateKey: context.sutUserId,
+    syncState: context.syncState,
+    timeoutMs: context.timeoutMs,
+  });
+
+  const recovered = await runTopologyScopedTopLevelScenario({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    actorUserId: context.driverUserId,
+    context,
+    roomKey: MATRIX_QA_MEMBERSHIP_ROOM_KEY,
+    tokenPrefix: "MATRIX_QA_MEMBERSHIP_RETURN",
+  });
+
+  return {
+    artifacts: {
+      ...recovered.artifacts,
+      membershipJoinEventId: joinEvent.eventId,
+      membershipLeaveEventId: leaveEvent.eventId,
+      recoveredDriverEventId: recovered.artifacts?.driverEventId,
+      recoveredReply: recovered.artifacts?.reply,
+    },
+    details: [
+      `room key: ${MATRIX_QA_MEMBERSHIP_ROOM_KEY}`,
+      `room id: ${roomId}`,
+      `leave event: ${leaveEvent.eventId}`,
+      `join event: ${joinEvent.eventId}`,
+      recovered.details,
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
 async function runReactionNotificationScenario(context: MatrixQaScenarioContext) {
   const reactionTargetEventId = context.canary?.reply.eventId?.trim();
   if (!reactionTargetEventId) {
@@ -468,6 +782,38 @@ async function runReactionNotificationScenario(context: MatrixQaScenarioContext)
       `reaction target: ${reactionTargetEventId}`,
       `reaction emoji: ${reactionEmoji}`,
       `observed reaction key: ${matched.event.reaction?.key ?? "<none>"}`,
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+async function runHomeserverRestartResumeScenario(context: MatrixQaScenarioContext) {
+  if (!context.interruptTransport) {
+    throw new Error("Matrix homeserver restart scenario requires a transport interruption hook");
+  }
+  await context.interruptTransport();
+  const resumed = await runTopLevelMentionScenario({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    roomId: context.roomId,
+    syncState: context.syncState,
+    sutUserId: context.sutUserId,
+    timeoutMs: context.timeoutMs,
+    tokenPrefix: "MATRIX_QA_HOMESERVER",
+  });
+  assertTopLevelReplyArtifact("post-homeserver-restart reply", resumed.reply);
+  return {
+    artifacts: {
+      driverEventId: resumed.driverEventId,
+      reply: resumed.reply,
+      token: resumed.token,
+      transportInterruption: "homeserver-restart",
+    },
+    details: [
+      "transport interruption: homeserver-restart",
+      `driver event: ${resumed.driverEventId}`,
+      ...buildMatrixReplyDetails("reply", resumed.reply),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
@@ -615,10 +961,43 @@ export async function runMatrixQaScenario(
         ].join("\n"),
       };
     }
+    case "matrix-dm-reply-shape":
+      return await runTopologyScopedTopLevelScenario({
+        accessToken: context.driverAccessToken,
+        actorId: "driver",
+        actorUserId: context.driverUserId,
+        context,
+        roomKey: MATRIX_QA_DRIVER_DM_ROOM_KEY,
+        tokenPrefix: "MATRIX_QA_DM",
+        withMention: false,
+      });
+    case "matrix-secondary-room-reply":
+      return await runTopologyScopedTopLevelScenario({
+        accessToken: context.driverAccessToken,
+        actorId: "driver",
+        actorUserId: context.driverUserId,
+        context,
+        roomKey: MATRIX_QA_SECONDARY_ROOM_KEY,
+        tokenPrefix: "MATRIX_QA_SECONDARY",
+      });
+    case "matrix-secondary-room-open-trigger":
+      return await runTopologyScopedTopLevelScenario({
+        accessToken: context.driverAccessToken,
+        actorId: "driver",
+        actorUserId: context.driverUserId,
+        context,
+        roomKey: MATRIX_QA_SECONDARY_ROOM_KEY,
+        tokenPrefix: "MATRIX_QA_SECONDARY_OPEN",
+        withMention: false,
+      });
     case "matrix-reaction-notification":
       return await runReactionNotificationScenario(context);
     case "matrix-restart-resume":
       return await runRestartResumeScenario(context);
+    case "matrix-room-membership-loss":
+      return await runMembershipLossScenario(context);
+    case "matrix-homeserver-restart-resume":
+      return await runHomeserverRestartResumeScenario(context);
     case "matrix-mention-gating": {
       const token = `MATRIX_QA_NOMENTION_${randomUUID().slice(0, 8).toUpperCase()}`;
       return await runNoReplyExpectedScenario({
@@ -660,11 +1039,16 @@ export async function runMatrixQaScenario(
 }
 
 export const __testing = {
+  MATRIX_QA_DRIVER_DM_ROOM_KEY,
+  MATRIX_QA_MEMBERSHIP_ROOM_KEY,
+  MATRIX_QA_SECONDARY_ROOM_KEY,
   MATRIX_QA_STANDARD_SCENARIO_IDS,
+  buildMatrixQaTopologyForScenarios,
   buildMatrixReplyDetails,
   buildMatrixReplyArtifact,
   buildMentionPrompt,
   findMatrixQaScenarios,
   readMatrixQaSyncCursor,
+  resolveMatrixQaScenarioRoomId,
   writeMatrixQaSyncCursor,
 };

@@ -21,11 +21,29 @@ describe("matrix live qa runtime", () => {
     const next = liveTesting.buildMatrixQaConfig(baseCfg, {
       driverUserId: "@driver:matrix-qa.test",
       homeserver: "http://127.0.0.1:28008/",
-      roomId: "!room:matrix-qa.test",
       sutAccessToken: "syt_sut",
       sutAccountId: "sut",
       sutDeviceId: "DEVICE123",
       sutUserId: "@sut:matrix-qa.test",
+      topology: {
+        defaultRoomId: "!room:matrix-qa.test",
+        defaultRoomKey: "main",
+        rooms: [
+          {
+            key: "main",
+            kind: "group",
+            memberRoles: ["driver", "observer", "sut"],
+            memberUserIds: [
+              "@driver:matrix-qa.test",
+              "@observer:matrix-qa.test",
+              "@sut:matrix-qa.test",
+            ],
+            name: "Matrix QA",
+            requireMention: true,
+            roomId: "!room:matrix-qa.test",
+          },
+        ],
+      },
     });
 
     expect(next.plugins?.allow).toContain("matrix");
@@ -56,6 +74,72 @@ describe("matrix live qa runtime", () => {
           threadReplies: "inbound",
           userId: "@sut:matrix-qa.test",
         },
+      },
+    });
+  });
+
+  it("derives Matrix DM + multi-room config from provisioned topology", () => {
+    const next = liveTesting.buildMatrixQaConfig(
+      {},
+      {
+        driverUserId: "@driver:matrix-qa.test",
+        homeserver: "http://127.0.0.1:28008/",
+        sutAccessToken: "syt_sut",
+        sutAccountId: "sut",
+        sutUserId: "@sut:matrix-qa.test",
+        topology: {
+          defaultRoomId: "!room-a:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: "main",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Matrix QA A",
+              requireMention: true,
+              roomId: "!room-a:matrix-qa.test",
+            },
+            {
+              key: "secondary",
+              kind: "group",
+              memberRoles: ["driver", "sut"],
+              memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+              name: "Matrix QA B",
+              requireMention: false,
+              roomId: "!room-b:matrix-qa.test",
+            },
+            {
+              key: "sut-dm",
+              kind: "dm",
+              memberRoles: ["driver", "sut"],
+              memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+              name: "Matrix QA DM",
+              requireMention: false,
+              roomId: "!dm:matrix-qa.test",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(next.channels?.matrix?.accounts?.sut?.dm).toEqual({
+      allowFrom: ["@driver:matrix-qa.test"],
+      enabled: true,
+      policy: "allowlist",
+    });
+    expect(next.channels?.matrix?.accounts?.sut?.groups).toEqual({
+      "!room-a:matrix-qa.test": {
+        enabled: true,
+        requireMention: true,
+      },
+      "!room-b:matrix-qa.test": {
+        enabled: true,
+        requireMention: false,
       },
     });
   });
@@ -157,8 +241,10 @@ describe("matrix live qa runtime", () => {
         harness: {
           baseUrl: "http://127.0.0.1:28008/",
           composeFile: "/tmp/docker-compose.yml",
+          dmRoomIds: [],
           image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
           roomId: "!room:matrix-qa.test",
+          roomIds: ["!room:matrix-qa.test"],
           serverName: "matrix-qa.test",
         },
         observedEventCount: 4,
