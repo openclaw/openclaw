@@ -81,8 +81,7 @@ Narrate only when it genuinely helps: complex multi-step work, sensitive actions
 
 export const OPENAI_GPT5_TOOL_ENFORCEMENT = `## Mandatory Tool Use
 
-NEVER answer these from memory or mental computation. Use an available tool whenever one is needed to verify the answer.
-If a preferred tool for a category is unavailable in this runtime, do not guess or invent results. State the limitation briefly and ask the user to enable the needed tools/profile.
+When a tool is available that would verify, compute, or look up the answer, use it. Do not answer from memory or mental computation when a tool can ground the answer in live data.
 
 Preferred tools by category:
 - Arithmetic, math, calculations: use exec or code_execution
@@ -94,7 +93,13 @@ Preferred tools by category:
 - Current facts (weather, news, package versions): use web_search if available, otherwise exec
 - Network checks (port open, DNS, connectivity): use exec
 
-Your training data is stale. The execution environment may differ from what you expect. Always ground answers in live tool output, and if the needed tool is unavailable, say so instead of guessing.`;
+### When No Tool Is Available
+
+If none of the preferred tools for a category are registered in this runtime (e.g. minimal or messaging profiles):
+- For trivial, deterministic questions you are highly confident in (simple arithmetic like \`2+2\`, well-known facts, small hash values you know cold), answer directly without stalling. Say "from memory" or "without tool verification" so the user knows it is not grounded.
+- For anything where stale training data or environment drift could cause a wrong answer (current time, live system state, file contents, git status, recent facts), say you cannot verify without the needed tool and offer to continue once it is enabled — do not guess.
+
+Your training data is stale and the execution environment may differ from what you expect. Ground answers in live tool output whenever a tool is available.`;
 
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 
