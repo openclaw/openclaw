@@ -60,7 +60,55 @@ vi.mock("../config/validation.js", () => ({
 }));
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: vi.fn(() => undefined),
+  getBootstrapChannelPlugin: vi.fn((channelId: string) => {
+    if (channelId !== "discord") {
+      return undefined;
+    }
+    return {
+      doctor: {
+        normalizeCompatibilityConfig: ({
+          cfg,
+        }: {
+          cfg: { channels?: { discord?: Record<string, unknown> } };
+        }) => {
+          const discord = cfg.channels?.discord;
+          if (!discord) {
+            return { config: cfg, changes: [] };
+          }
+          if (
+            !("streamMode" in discord) &&
+            typeof discord.streaming !== "boolean" &&
+            typeof discord.streaming !== "string"
+          ) {
+            return { config: cfg, changes: [] };
+          }
+          const next = structuredClone(cfg);
+          const nextDiscord = next.channels?.discord;
+          if (!nextDiscord) {
+            return { config: cfg, changes: [] };
+          }
+          const nextStreaming =
+            nextDiscord.streaming && typeof nextDiscord.streaming === "object"
+              ? { ...(nextDiscord.streaming as Record<string, unknown>) }
+              : {};
+          if (!("mode" in nextStreaming)) {
+            nextStreaming.mode =
+              nextDiscord.streamMode === "block"
+                ? "partial"
+                : nextDiscord.streaming === false
+                  ? "off"
+                  : "partial";
+          }
+          delete nextDiscord.streamMode;
+          nextDiscord.streaming = nextStreaming;
+          return {
+            config: next,
+            changes: ["Discord allowlist ids normalized to strings."],
+          };
+        },
+      },
+    };
+  }),
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => {
@@ -535,6 +583,43 @@ vi.mock("./doctor-config-preflight.js", async () => {
     return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
   }
 
+  function normalizeDiscordStreamingCompat(cfg: Record<string, unknown>): Record<string, unknown> {
+    const channels =
+      cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
+        ? (cfg.channels as Record<string, unknown>)
+        : null;
+    const discord =
+      channels?.discord && typeof channels.discord === "object" && !Array.isArray(channels.discord)
+        ? (channels.discord as Record<string, unknown>)
+        : null;
+    if (
+      !discord ||
+      (!("streamMode" in discord) &&
+        typeof discord.streaming !== "boolean" &&
+        typeof discord.streaming !== "string")
+    ) {
+      return cfg;
+    }
+    const next = structuredClone(cfg);
+    const nextDiscord = ((next.channels as Record<string, unknown> | undefined)?.discord ??
+      {}) as Record<string, unknown>;
+    const nextStreaming =
+      nextDiscord.streaming && typeof nextDiscord.streaming === "object"
+        ? { ...(nextDiscord.streaming as Record<string, unknown>) }
+        : {};
+    if (!("mode" in nextStreaming)) {
+      nextStreaming.mode =
+        nextDiscord.streamMode === "block"
+          ? "partial"
+          : nextDiscord.streaming === false
+            ? "off"
+            : "partial";
+    }
+    delete nextDiscord.streamMode;
+    nextDiscord.streaming = nextStreaming;
+    return next;
+  }
+
   return {
     runDoctorConfigPreflight: vi.fn(async () => {
       const injected = getDoctorConfigInputForTest();
@@ -596,7 +681,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
         }),
       );
       const compat = applyRuntimeLegacyConfigMigrations(parsed);
-      const effectiveConfig = compat.next ?? parsed;
+      const effectiveConfig = normalizeDiscordStreamingCompat(compat.next ?? parsed);
       return {
         snapshot: {
           exists,
