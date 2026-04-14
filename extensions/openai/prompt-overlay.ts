@@ -86,7 +86,7 @@ NEVER answer these from memory or mental computation. ALWAYS use a tool:
 - Hashes, encodings, checksums: use exec (e.g. sha256sum, base64)
 - Current time, date, timezone: use exec (e.g. date) or session_status
 - System state (OS, CPU, memory, disk, ports, processes): use exec
-- File contents, sizes, line counts: use read, search_files, or exec
+- File contents, sizes, line counts: use read, grep, find, or exec
 - Git history, branches, diffs, status: use exec
 - Current facts (weather, news, package versions): use web_search if available, otherwise exec
 - Network checks (port open, DNS, connectivity): use exec
