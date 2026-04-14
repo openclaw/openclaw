@@ -50,6 +50,150 @@ type OpenClawReadToolOptions = {
   containerWorkdir?: string;
 };
 
+// --- OPERATIONS HELPERS ---
+
+function createSandboxReadOperations(params: SandboxToolParams) {
+  return {
+    readFile: (filePath: string) => params.bridge.readFile({ filePath, cwd: params.root }),
+    stat: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }),
+    readdir: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(() => []),
+    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) throw new Error("ENOENT"); })
+  };
+}
+
+function createSandboxWriteOperations(params: SandboxToolParams) {
+  return {
+    writeFile: (filePath: string, data: string) =>
+      params.bridge.writeFile({ filePath, data, cwd: params.root, mkdir: true }),
+    mkdir: (filePath: string) => params.bridge.mkdirp({ filePath, cwd: params.root })
+  };
+}
+
+function createSandboxEditOperations(params: SandboxToolParams) {
+  return {
+    readFile: (filePath: string) =>
+      params.bridge.readFile({ filePath, cwd: params.root }), 
+    writeFile: (filePath: string, data: string) =>
+      params.bridge.writeFile({ filePath, data, cwd: params.root }),
+    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) throw new Error("ENOENT"); })
+  };
+}
+
+function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow writes anywhere on the host
+    return {
+      mkdir: async (dir: string) => {
+        const resolved = path.resolve(dir);
+        await fs.mkdir(resolved, { recursive: true });
+      },
+      writeFile: (filePath: string, data: string) => fs.writeFile(path.resolve(filePath), data, "utf-8"),
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary
+  return {
+    writeFile: (relativePath: string, data: string) =>
+      writeFileWithinRoot({
+        rootDir: root,
+        relativePath,
+        data,
+        mkdir: true,
+      }),
+    mkdir: (relativePath: string) => 
+      fs.mkdir(path.join(root, relativePath), { recursive: true }).then(() => {})
+  };
+}
+
+function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  return {
+    readFile: (relativePath: string) => 
+      readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
+    writeFile: (relativePath: string, data: string) =>
+      writeFileWithinRoot({
+        rootDir: root,
+        relativePath,
+        data,
+      }),
+    access: (relativePath: string) => fs.access(path.join(root, relativePath))
+  };
+}
+
+function createHostReadOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  return {
+    readFile: (relativePath: string) => readFileWithinRoot({ rootDir: root, relativePath }),
+    stat: async (relativePath: string) => {
+        const f = await openFileWithinRoot({ rootDir: root, relativePath });
+        return f.stat;
+    },
+    readdir: (relativePath: string) => fs.readdir(path.join(root, relativePath)),
+    access: (relativePath: string) => fs.access(path.join(root, relativePath))
+  };
+}
+
+function getImageMimeType(ext: string): string {
+  if (ext === "svg") {return "image/svg+xml";}
+  if (ext === "jpg") {return "image/jpeg";}
+  return `image/${ext}`;
+}
+
+type SandboxToolParams = {
+  root: string;
+  bridge: SandboxFsBridge;
+  modelContextWindowTokens?: number;
+  imageSanitization?: import("./image-sanitization.js").ImageSanitizationLimits;
+};
+
+export function createSandboxedReadTool(params: SandboxToolParams) {
+  const base = createReadTool(params.root, {
+    operations: createSandboxReadOperations(params),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, {
+    root: params.root,
+    modelContextWindowTokens: params.modelContextWindowTokens,
+    imageSanitization: params.imageSanitization,
+  });
+}
+
+export function createSandboxedWriteTool(params: SandboxToolParams) {
+  const base = createWriteTool(params.root, {
+    operations: createSandboxWriteOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+}
+
+export function createSandboxedEditTool(params: SandboxToolParams) {
+  const base = createEditTool(params.root, {
+    operations: createSandboxEditOperations(params),
+  }) as unknown as AnyAgentTool;
+  const withRecovery = wrapEditToolWithRecovery(base, {
+    root: params.root,
+    readFile: async (absolutePath: string) =>
+      (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
+  });
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+}
+
+export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const base = createWriteTool(root, {
+    operations: createHostWriteOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+}
+
+export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const base = createEditTool(root, {
+    operations: createHostEditOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  const withRecovery = wrapEditToolWithRecovery(base, {
+    root,
+    readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
+  });
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+}
+
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) {
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
@@ -300,67 +444,6 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 const MAX_DIR_ENTRIES = 200;
 
-function getImageMimeType(ext: string): string {
-  if (ext === "svg") {return "image/svg+xml";}
-  if (ext === "jpg") {return "image/jpeg";}
-  return `image/${ext}`;
-}
-
-type SandboxToolParams = {
-  root: string;
-  bridge: SandboxFsBridge;
-  modelContextWindowTokens?: number;
-  imageSanitization?: import("./image-sanitization.js").ImageSanitizationLimits;
-};
-
-export function createSandboxedReadTool(params: SandboxToolParams) {
-  const base = createReadTool(params.root, {
-    operations: createSandboxReadOperations(params),
-  }) as unknown as AnyAgentTool;
-  return createOpenClawReadTool(base, {
-    root: params.root,
-    modelContextWindowTokens: params.modelContextWindowTokens,
-    imageSanitization: params.imageSanitization,
-  });
-}
-
-export function createSandboxedWriteTool(params: SandboxToolParams) {
-  const base = createWriteTool(params.root, {
-    operations: createSandboxWriteOperations(params),
-  }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
-}
-
-export function createSandboxedEditTool(params: SandboxToolParams) {
-  const base = createEditTool(params.root, {
-    operations: createSandboxEditOperations(params),
-  }) as unknown as AnyAgentTool;
-  const withRecovery = wrapEditToolWithRecovery(base, {
-    root: params.root,
-    readFile: async (absolutePath: string) =>
-      (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
-  });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
-}
-
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
-  const base = createWriteTool(root, {
-    operations: createHostWriteOperations(root, options),
-  }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
-}
-
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
-  const base = createEditTool(root, {
-    operations: createHostEditOperations(root, options),
-  }) as unknown as AnyAgentTool;
-  const withRecovery = wrapEditToolWithRecovery(base, {
-    root,
-    readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
-  });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
-}
-
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -381,11 +464,11 @@ export function createOpenClawReadTool(
       const limit = typeof record?.limit === 'number' ? record.limit : undefined;
 
       const rootDir = options?.root ? path.resolve(options.root) : process.cwd();
-      
+
       const inputPath = resolveToolPathAgainstWorkspaceRoot({
-          filePath: rawPath,
-          root: rootDir,
-          containerWorkdir: options?.containerWorkdir,
+        filePath: rawPath,
+        root: rootDir,
+        containerWorkdir: options?.containerWorkdir,
       });
 
       try {
@@ -393,18 +476,18 @@ export function createOpenClawReadTool(
 
         if (stats.isDirectory()) {
           if (signal?.aborted) throw new Error("Read operation aborted");
-          
+
           let files = await fs.readdir(inputPath);
           let truncated = false;
           if (files.length > MAX_DIR_ENTRIES) {
             truncated = true;
             files = files.slice(0, MAX_DIR_ENTRIES);
           }
-          
+
           const listingText = `Listing for ${inputPath}:\n${files.join("\n")}${
             truncated ? `\n\n... and ${files.length - MAX_DIR_ENTRIES} more entries not shown (limit: ${MAX_DIR_ENTRIES})` : ""
           }`;
-          
+
           return {
             toolCallId,
             content: [{ type: "text", text: listingText }],
@@ -418,21 +501,21 @@ export function createOpenClawReadTool(
         let mediaUrl = `http://localhost:18791${inputPath.split('/').map(encodeURIComponent).join('/')}`;
         // For audio and video, use direct path instead of the assistant-media endpoint
         if (AUDIO_EXTENSIONS.has(ext) || VIDEO_EXTENSIONS.has(ext)) {
-            const relativePath = path.relative(rootDir, inputPath);
-            mediaUrl = `http://localhost:18791/${encodeURIComponent(relativePath)}`;
+          const relativePath = path.relative(rootDir, inputPath);
+          mediaUrl = `http://localhost:18791/${encodeURIComponent(relativePath)}`;
         }
 
         if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) throw new Error("Read operation aborted");
-          
+
           let fileBuffer = await fs.readFile(inputPath);
           let mimeType = getImageMimeType(ext);
-          
+
           if (options?.imageSanitization) {
             try {
               const maxDimensionPx = options.imageSanitization.maxDimensionPx || 3840;
               const maxBytes = options.imageSanitization.maxBytes || 5 * 1024 * 1024;
-              
+
               const meta = await getImageMetadata(fileBuffer);
               if (meta?.width && meta?.height) {
                 if (meta.width > maxDimensionPx || meta.height > maxDimensionPx || fileBuffer.length > maxBytes) {
@@ -450,7 +533,7 @@ export function createOpenClawReadTool(
               console.warn(`Image sanitization failed for ${fileName}:`, sanitizeError);
             }
           }
-          
+
           return {
             toolCallId,
             content: [
@@ -460,41 +543,41 @@ export function createOpenClawReadTool(
                   type: "base64",
                   media_type: mimeType,
                   data: fileBuffer.toString("base64"),
-                },
-              },
-              { type: "text", text: `📷 [${fileName}](${mediaUrl})` },
-            ],
+               },
+             },
+             { type: "text", text: `📷 [${fileName}](${mediaUrl})` },
+           ],
             details: { path: inputPath, size: fileBuffer.length },
           };
         }
 
         if (AUDIO_EXTENSIONS.has(ext)) {
-            return {
-                toolCallId,
-                content: [{
-                    type: "audio",
-                    url: mediaUrl,
-                    filename: fileName,
-                } as any],
-                details: { path: inputPath, size: stats.size },
-            };
+          return {
+            toolCallId,
+            content: [{
+              type: "audio",
+              url: mediaUrl,
+              filename: fileName,
+            } as any],
+            details: { path: inputPath, size: stats.size },
+          };
         }
 
         if (VIDEO_EXTENSIONS.has(ext)) {
-            return {
-                toolCallId,
-                content: [{
-                    type: "video",
-                    url: mediaUrl,
-                    filename: fileName,
-                } as any],
-                details: { path: inputPath, size: stats.size },
-            };
+          return {
+            toolCallId,
+            content: [{
+              type: "video",
+              url: mediaUrl,
+              filename: fileName,
+            } as any],
+            details: { path: inputPath, size: stats.size },
+          };
         }
 
         if (signal?.aborted) throw new Error("Read operation aborted");
         let text = await fs.readFile(inputPath, "utf-8");
-        
+
         if (offset > 0 || limit !== undefined) {
           const lines = text.split('\n');
           const start = Math.max(0, Math.min(offset - 1, lines.length));
@@ -504,7 +587,7 @@ export function createOpenClawReadTool(
 
         const maxChars = options?.modelContextWindowTokens ? options.modelContextWindowTokens * 3 : 32000;
         if (text.length > maxChars) {
-            text = text.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
+          text = text.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
         }
 
         return {
@@ -517,92 +600,9 @@ export function createOpenClawReadTool(
         return {
           toolCallId,
           content: [{ type: "text", text: `Error reading path: ${(error as Error).message}` }],
-          details: { path: inputPath }
+          details: { path: inputPath },
         };
       }
     },
-  };
-}
-
-// --- OPERATIONS HELPERS ---
-
-function createSandboxReadOperations(params: SandboxToolParams) {
-  return {
-    readFile: (filePath: string) => params.bridge.readFile({ filePath, cwd: params.root }),
-    stat: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }),
-    readdir: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(() => []),
-    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) throw new Error("ENOENT"); })
-  };
-}
-
-function createSandboxWriteOperations(params: SandboxToolParams) {
-  return {
-    writeFile: (filePath: string, data: string) =>
-      params.bridge.writeFile({ filePath, data, cwd: params.root, mkdir: true }),
-    mkdir: (filePath: string) => params.bridge.mkdirp({ filePath, cwd: params.root })
-  };
-}
-
-function createSandboxEditOperations(params: SandboxToolParams) {
-  return {
-    readFile: (filePath: string) =>
-      params.bridge.readFile({ filePath, cwd: params.root }), 
-    writeFile: (filePath: string, data: string) =>
-      params.bridge.writeFile({ filePath, data, cwd: params.root }),
-    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) throw new Error("ENOENT"); })
-  };
-}
-
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly ?? false;
-
-  if (!workspaceOnly) {
-    // When workspaceOnly is false, allow writes anywhere on the host
-    return {
-      mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
-        await fs.mkdir(resolved, { recursive: true });
-      },
-      writeFile: (filePath: string, data: string) => fs.writeFile(path.resolve(filePath), data, "utf-8"),
-    } as const;
-  }
-
-  // When workspaceOnly is true, enforce workspace boundary
-  return {
-    writeFile: (relativePath: string, data: string) =>
-      writeFileWithinRoot({
-        rootDir: root,
-        relativePath,
-        data,
-        mkdir: true,
-      }),
-    mkdir: (relativePath: string) => 
-      fs.mkdir(path.join(root, relativePath), { recursive: true }).then(() => {})
-  };
-}
-
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  return {
-    readFile: (relativePath: string) => 
-      readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
-    writeFile: (relativePath: string, data: string) =>
-      writeFileWithinRoot({
-        rootDir: root,
-        relativePath,
-        data,
-      }),
-    access: (relativePath: string) => fs.access(path.join(root, relativePath))
-  };
-}
-
-function createHostReadOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  return {
-    readFile: (relativePath: string) => readFileWithinRoot({ rootDir: root, relativePath }),
-    stat: async (relativePath: string) => {
-        const f = await openFileWithinRoot({ rootDir: root, relativePath });
-        return f.stat; // Corrected: Property name is 'stat', not 'stats'
-    },
-    readdir: (relativePath: string) => fs.readdir(path.join(root, relativePath)),
-    access: (relativePath: string) => fs.access(path.join(root, relativePath))
   };
 }
