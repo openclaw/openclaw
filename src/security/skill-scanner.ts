@@ -430,11 +430,24 @@ async function resolveForcedFiles(params: {
   return out;
 }
 
+// Patterns that identify test files which should be skipped during security scanning.
+// Test files commonly use process.env + fetch/mocking patterns that trigger false positives.
+const TEST_FILE_PATTERNS = [
+  /(^|\/)tests?\//,
+  /(^|\/)__tests__\//,
+  /\.test\.(ts|js|mts|mjs|cts|cjs|tsx|jsx)$/,
+  /\.spec\.(ts|js|mts|mjs|cts|cjs|tsx|jsx)$/,
+];
+
+function isTestFile(filePath: string): boolean {
+  return TEST_FILE_PATTERNS.some((pattern) => pattern.test(filePath));
+}
+
 async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOptions>) {
   const forcedFiles = await resolveForcedFiles({
     rootDir: dirPath,
     includeFiles: opts.includeFiles,
-  });
+  }).then((files) => files.filter((f) => !isTestFile(f)));
   if (forcedFiles.length >= opts.maxFiles) {
     return forcedFiles.slice(0, opts.maxFiles);
   }
@@ -445,6 +458,9 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
   for (const walkedFile of walkedFiles) {
     if (out.length >= opts.maxFiles) {
       break;
+    }
+    if (isTestFile(walkedFile)) {
+      continue;
     }
     const resolved = path.resolve(walkedFile);
     if (seen.has(resolved)) {
