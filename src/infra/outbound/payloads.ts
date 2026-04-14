@@ -29,6 +29,7 @@ export type OutboundPayloadJson = {
   audioAsVoice?: boolean;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  sticker?: { raw: string };
 };
 
 export type OutboundPayloadPlan = {
@@ -203,6 +204,7 @@ export function projectOutboundPayloadPlanForJson(
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
       interactive: payload.interactive,
       channelData: payload.channelData,
+      sticker: payload.sticker,
     });
   }
   return normalized;
