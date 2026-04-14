@@ -733,7 +733,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const dynamicCtx = dynLines.length > 0 ? dynLines.join("\n") + "\n" : "";
 
         const userMessage = `${quotePart}${userContent}`;
-        const agentBody = userContent.startsWith("/")
+        const agentBody = (userContent ?? "").startsWith("/")
           ? userContent
           : `${systemPrompts.join("\n")}\n\n${dynamicCtx}${userMessage}`;
 
