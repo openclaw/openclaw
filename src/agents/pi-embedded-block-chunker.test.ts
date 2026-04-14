@@ -160,4 +160,72 @@ describe("EmbeddedBlockChunker", () => {
       expect(chunk).not.toContain("``\n```");
     }
   });
+
+  it("does not split inside a markdown table when flushOnParagraph is set", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 200,
+      breakPreference: "paragraph",
+      flushOnParagraph: true,
+    });
+
+    const text = [
+      "Intro text here.",
+      "",
+      "| Col A | Col B |",
+      "|-------|-------|",
+      "| val 1 | val 2 |",
+      "| val 3 | val 4 |",
+      "",
+      "After table.",
+    ].join("\n");
+
+    chunker.append(text);
+    const chunks = drainChunks(chunker);
+
+    // The table must not be split across chunks.
+    for (const chunk of chunks) {
+      if (chunk.includes("| Col A")) {
+        expect(chunk).toContain("| val 3 | val 4 |");
+      }
+    }
+  });
+
+  it("splits before and after a table on paragraph boundaries", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 10, maxChars: 200 });
+
+    const text = [
+      "First paragraph text.",
+      "",
+      "| H1 | H2 |",
+      "|----|-----|",
+      "| d1 | d2 |",
+      "",
+      "After table paragraph.",
+    ].join("\n");
+
+    chunker.append(text);
+    const chunks = drainChunks(chunker);
+
+    // Table should be intact in exactly one chunk.
+    const tableChunk = chunks.find((c) => c.includes("| H1 | H2 |"));
+    expect(tableChunk).toBeDefined();
+    expect(tableChunk).toContain("| d1 | d2 |");
+  });
+
+  it("still splits tables when they exceed maxChars (force)", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 30,
+      breakPreference: "paragraph",
+    });
+
+    const text = "| A | B |\n|---|---|\n" + "| x | " + "y".repeat(40) + " |";
+    chunker.append(text);
+    const chunks = drainChunks(chunker, true);
+
+    // With maxChars=30 and a very long row the chunker must eventually break.
+    expect(chunks.length).toBeGreaterThan(1);
+  });
+
 });

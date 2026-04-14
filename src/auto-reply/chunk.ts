@@ -5,6 +5,7 @@
 import type { ChannelId } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
+import { isSafeTableBreak, parseTableSpans } from "../markdown/tables.js";
 import { resolveChannelStreamingChunkMode } from "../plugin-sdk/channel-streaming.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -212,6 +213,7 @@ export function chunkByParagraph(
   }
 
   const spans = parseFenceSpans(normalized);
+  const tableSpans = parseTableSpans(normalized, spans);
 
   const parts: string[] = [];
   const re = /\n[\t ]*\n+/g; // paragraph break: blank line(s), allowing whitespace
@@ -220,7 +222,7 @@ export function chunkByParagraph(
     const idx = match.index ?? 0;
 
     // Do not split on blank lines that occur inside fenced code blocks.
-    if (!isSafeFenceBreak(spans, idx)) {
+    if (!isSafeFenceBreak(spans, idx) || !isSafeTableBreak(tableSpans, idx)) {
       continue;
     }
 
