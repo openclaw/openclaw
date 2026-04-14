@@ -17,8 +17,8 @@ import {
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  buildProviderReplayFamilyHooks,
   normalizeModelCompat,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -32,9 +32,6 @@ import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from ".
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
 const ZAI_TOOL_STREAM_HOOKS = buildProviderStreamFamilyHooks("tool-stream-default-on");
 
 function resolveGlm5ForwardCompatModel(

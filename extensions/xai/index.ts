@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
@@ -24,10 +24,6 @@ import {
 } from "./x-search-tool-shared.js";
 
 const PROVIDER_ID = "xai";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
     resolveFallbackXaiAuth(config as never)?.apiKey || readProviderEnvValue(["XAI_API_KEY"]),
