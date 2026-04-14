@@ -56,6 +56,7 @@ or via `env.shellEnv`).
 
 | Model ID                | Name             | Context |
 | ----------------------- | ---------------- | ------- |
+| `aliceai-llm`           | Alice AI LLM     | 32K     |
 | `yandexgpt/latest`      | YandexGPT Pro    | 32K     |
 | `yandexgpt/rc`          | YandexGPT Pro RC | 32K     |
 | `yandexgpt-lite/latest` | YandexGPT Lite   | 32K     |

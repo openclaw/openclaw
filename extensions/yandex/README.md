@@ -27,6 +27,7 @@ export YANDEX_FOLDER_ID=<your_folder_id>
 
 | Model ID                | Name             | Context Window |
 | ----------------------- | ---------------- | -------------- |
+| `aliceai-llm`           | Alice AI LLM     | 32 768         |
 | `yandexgpt/latest`      | YandexGPT Pro    | 32 768         |
 | `yandexgpt/rc`          | YandexGPT Pro RC | 32 768         |
 | `yandexgpt-lite/latest` | YandexGPT Lite   | 32 768         |

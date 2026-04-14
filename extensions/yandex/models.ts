@@ -20,6 +20,20 @@ export const YANDEX_BASE_URL = "https://llm.api.cloud.yandex.net/v1";
  */
 export const YANDEX_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
+    id: "aliceai-llm",
+    name: "Alice AI LLM",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 32768,
+    maxTokens: 8192,
+    cost: {
+      input: 1.2,
+      output: 1.2,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+  {
     id: "yandexgpt/latest",
     name: "YandexGPT Pro",
     reasoning: false,
