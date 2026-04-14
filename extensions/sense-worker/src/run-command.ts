@@ -38,12 +38,14 @@ type BuildQueuedRunRecordResult =
       record: RunRecord;
     };
 
-function deriveChannelId(ctx: Pick<PluginCommandContext, "channelId">): string | null {
-  const candidate =
-    typeof ctx.channelId === "string" || typeof ctx.channelId === "number"
-      ? String(ctx.channelId).trim()
-      : "";
-  return candidate || null;
+function deriveChannelId(ctx: Pick<PluginCommandContext, "from">): string | null {
+  if (typeof ctx.from === "string") {
+    const match = ctx.from.match(/^[a-z]+:channel:([A-Z0-9]+)$/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return null;
 }
 
 function classifyRunCommand(args: string | undefined): RunCommandParseResult {

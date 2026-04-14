@@ -14,14 +14,14 @@ function makeContext(args?: string): PluginCommandContext {
   return {
     senderId: "U123456789",
     channel: "slack",
-    channelId: "C0123456789",
+    channelId: "slack",
     isAuthorizedSender: true,
     args,
     commandBody: args ? `run ${args}` : "run",
     config: {},
-    from: "taro",
+    from: "slack:channel:C0123456789",
     messageThreadId: undefined,
-    to: "C0123456789",
+    to: "slash:U123456789",
     accountId: "default",
     requestConversationBinding: vi.fn(async () => ({ status: "error", message: "unused" })),
     detachConversationBinding: vi.fn(async () => ({ removed: false })),
@@ -61,7 +61,7 @@ describe("run-command", () => {
         normalized_task: "health",
         status: "queued",
         requested_by: "U123456789",
-        requested_by_name: "taro",
+        requested_by_name: "slack:channel:C0123456789",
         channel_id: "C0123456789",
       },
     });
@@ -129,15 +129,36 @@ describe("run-command", () => {
     });
   });
 
-  it("uses only ctx.to for channel_id and falls back to null", () => {
+  it("extracts the slack channel id from ctx.from for slash commands", () => {
     const built = buildQueuedRunRecord({
       args: "health",
       ctx: {
         senderId: "U123456789",
-        channelId: undefined,
+        channelId: "slack",
+        from: "slack:channel:C0123456789",
+        messageThreadId: undefined,
+        to: "slash:U123456789",
+      },
+      now: new Date("2026-04-14T14:30:22.000Z"),
+      runId: "run_20260414_143022_a3f",
+    });
+    expect(built).toMatchObject({
+      kind: "queued",
+      record: {
+        channel_id: "C0123456789",
+      },
+    });
+  });
+
+  it("returns null when ctx.from does not contain a slack channel id", () => {
+    const built = buildQueuedRunRecord({
+      args: "health",
+      ctx: {
+        senderId: "U123456789",
+        channelId: "slack",
         from: "taro",
         messageThreadId: undefined,
-        to: "   ",
+        to: "slash:U123456789",
       },
       now: new Date("2026-04-14T14:30:22.000Z"),
       runId: "run_20260414_143022_a3f",
@@ -150,13 +171,34 @@ describe("run-command", () => {
     });
   });
 
-  it("prefers plugin command channelId over ctx.to for channel_id", () => {
+  it("stores slack_ts from messageThreadId when available", () => {
     const built = buildQueuedRunRecord({
       args: "health",
       ctx: {
         senderId: "U123456789",
-        channelId: "C9999999999",
-        from: "taro",
+        channelId: "slack",
+        from: "slack:channel:C0123456789",
+        to: "slash:U123456789",
+        messageThreadId: "1712345678.123456",
+      },
+      now: new Date("2026-04-14T14:30:22.000Z"),
+      runId: "run_20260414_143022_a3f",
+    });
+    expect(built).toMatchObject({
+      kind: "queued",
+      record: {
+        slack_ts: "1712345678.123456",
+      },
+    });
+  });
+
+  it("stores the extracted slack channel id for slash command contexts", () => {
+    const built = buildQueuedRunRecord({
+      args: "health",
+      ctx: {
+        senderId: "U123456789",
+        channelId: "slack",
+        from: "slack:channel:C9999999999",
         messageThreadId: undefined,
         to: "slash:U123456789",
       },
@@ -167,27 +209,6 @@ describe("run-command", () => {
       kind: "queued",
       record: {
         channel_id: "C9999999999",
-      },
-    });
-  });
-
-  it("stores slack_ts from messageThreadId when available", () => {
-    const built = buildQueuedRunRecord({
-      args: "health",
-      ctx: {
-        senderId: "U123456789",
-        channelId: "C0123456789",
-        from: "taro",
-        to: "C0123456789",
-        messageThreadId: "1712345678.123456",
-      },
-      now: new Date("2026-04-14T14:30:22.000Z"),
-      runId: "run_20260414_143022_a3f",
-    });
-    expect(built).toMatchObject({
-      kind: "queued",
-      record: {
-        slack_ts: "1712345678.123456",
       },
     });
   });
