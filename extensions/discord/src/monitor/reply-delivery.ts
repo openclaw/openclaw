@@ -14,16 +14,18 @@ import {
   resolveRetryConfig,
   retryAsync,
   type RetryConfig,
-  type RetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import type { DiscordComponentMessageSpec } from "../components.types.js";
 import { isLikelyDiscordVideoMedia } from "../media-detection.js";
 import { createDiscordRetryRunner } from "../retry.js";
+import { sendDiscordComponentMessage } from "../send.components.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { sendDiscordText } from "../send.shared.js";
+import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -399,7 +401,7 @@ export async function deliverDiscordReply(params: {
   const channelId = resolveTargetChannelId(params.target);
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const retryConfig = resolveDeliveryRetryConfig(account.config.retry);
-  const request: RetryRunner | undefined = channelId
+  const request = channelId
     ? createDiscordRetryRunner({ configRetry: account.config.retry })
     : undefined;
   let deliveredAny = false;
@@ -447,7 +449,35 @@ export async function deliverDiscordReply(params: {
         replyTo: resolvePayloadReplyTo,
         retryConfig,
       });
+    const discordData = payload.channelData?.discord as
+      | { components?: DiscordComponentMessageSpec }
+      | undefined;
+    const rawComponentSpec =
+      discordData?.components ?? buildDiscordInteractiveComponents(payload.interactive);
+    const componentSpec = rawComponentSpec
+      ? rawComponentSpec.text
+        ? rawComponentSpec
+        : {
+            ...rawComponentSpec,
+            text: payload.text?.trim() ? payload.text : undefined,
+          }
+      : undefined;
     if (!reply.hasMedia) {
+      if (componentSpec) {
+        await sendWithRetry(
+          () =>
+            sendDiscordComponentMessage(params.target, componentSpec, {
+              cfg: params.cfg,
+              token: params.token,
+              rest: params.rest,
+              accountId: params.accountId,
+              replyTo: resolvePayloadReplyTo(),
+            }),
+          retryConfig,
+        );
+        deliveredAny = true;
+        continue;
+      }
       await sendReplyText();
       if (reply.text.trim()) {
         deliveredAny = true;
@@ -481,17 +511,49 @@ export async function deliverDiscordReply(params: {
       reply.text.trim().length > 0 &&
       reply.mediaUrls.some((mediaUrl) => isLikelyDiscordVideoMedia(mediaUrl));
     if (shouldSplitVideoMediaReply) {
-      await sendReplyText();
+      if (componentSpec) {
+        await sendWithRetry(
+          () =>
+            sendDiscordComponentMessage(params.target, componentSpec, {
+              cfg: params.cfg,
+              token: params.token,
+              rest: params.rest,
+              accountId: params.accountId,
+              replyTo: resolvePayloadReplyTo(),
+            }),
+          retryConfig,
+        );
+      } else {
+        await sendReplyText();
+      }
       await sendReplyMediaBatch(reply.mediaUrls);
       deliveredAny = true;
       continue;
     }
 
+    let sentFirstMedia = false;
     await sendMediaWithLeadingCaption({
       mediaUrls: reply.mediaUrls,
       caption: reply.text,
       send: async ({ mediaUrl, caption }) => {
         const replyTo = resolvePayloadReplyTo();
+        if (componentSpec && !sentFirstMedia) {
+          sentFirstMedia = true;
+          await sendWithRetry(
+            () =>
+              sendDiscordComponentMessage(params.target, componentSpec, {
+                cfg: params.cfg,
+                token: params.token,
+                rest: params.rest,
+                mediaUrl,
+                accountId: params.accountId,
+                mediaLocalRoots: params.mediaLocalRoots,
+                replyTo,
+              }),
+            retryConfig,
+          );
+          return;
+        }
         await sendWithRetry(
           () =>
             sendMessageDiscord(params.target, caption ?? "", {
