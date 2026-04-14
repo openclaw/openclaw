@@ -113,7 +113,9 @@ function listPluginSdkExportedSubpaths() {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
     subpaths = Object.keys(packageJson.exports ?? {})
       .filter((key) => key.startsWith("./plugin-sdk/"))
-      .map((key) => key.slice("./plugin-sdk/".length));
+      .map((key) => key.slice("./plugin-sdk/".length))
+      .filter((subpath) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath))
+      .toSorted();
   } catch {
     subpaths = [];
   }

@@ -26,6 +26,7 @@ function loadRootAliasWithStubs(options?: {
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
   aliasPath?: string;
+  packageExports?: Record<string, unknown>;
   platform?: string;
 }) {
   let createJitiCalls = 0;
@@ -63,6 +64,7 @@ function loadRootAliasWithStubs(options?: {
           JSON.stringify({
             exports: {
               "./plugin-sdk/group-access": { default: "./dist/plugin-sdk/group-access.js" },
+              ...options?.packageExports,
             },
           }),
         existsSync: (targetPath: string) => {
@@ -272,6 +274,35 @@ describe("plugin-sdk root alias", () => {
         path.join("src", "plugin-sdk", "group-access.ts"),
       ),
     });
+  });
+
+  it("keeps bootstrap plugin-sdk aliases deterministic and ignores unsafe subpaths", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      distExists: true,
+      packageExports: {
+        "./plugin-sdk/zeta": { default: "./dist/plugin-sdk/zeta.js" },
+        "./plugin-sdk/../escape": { default: "./dist/plugin-sdk/escape.js" },
+        "./plugin-sdk/alpha": { default: "./dist/plugin-sdk/alpha.js" },
+      },
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    const aliasKeys = Object.keys(
+      (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>,
+    );
+    expect(aliasKeys).toEqual([
+      "openclaw/plugin-sdk",
+      "@openclaw/plugin-sdk",
+      "openclaw/plugin-sdk/alpha",
+      "@openclaw/plugin-sdk/alpha",
+      "openclaw/plugin-sdk/group-access",
+      "@openclaw/plugin-sdk/group-access",
+      "openclaw/plugin-sdk/zeta",
+      "@openclaw/plugin-sdk/zeta",
+    ]);
   });
 
   it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
