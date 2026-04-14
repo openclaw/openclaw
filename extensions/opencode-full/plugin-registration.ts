@@ -1,11 +1,11 @@
+import { tool } from "@opencode-ai/plugin";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
-import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
 
 // OpenCode tools bridged to OpenClaw format
@@ -14,10 +14,12 @@ const lspTool = tool({
   args: {
     operation: z.enum(["definitions", "references", "symbols", "hover", "completions"]),
     file: z.string().optional(),
-    position: z.object({
-      line: z.number(),
-      character: z.number(),
-    }).optional(),
+    position: z
+      .object({
+        line: z.number(),
+        character: z.number(),
+      })
+      .optional(),
     query: z.string().optional(),
   },
   async execute(args, context) {
@@ -158,34 +160,29 @@ const debuggingTool = tool({
 
 function opencodeToolToOpenclaw(
   opencodeTool: ReturnType<typeof tool>,
-  context: OpenClawPluginToolContext
+  context: OpenClawPluginToolContext,
 ): AnyAgentTool {
   return {
     name: opencodeTool.description.split(" ")[0].toLowerCase(),
     description: opencodeTool.description,
     schema: opencodeTool.args,
     execute: async (args: Record<string, unknown>) => {
-      const result = await opencodeTool.execute(
-        args as any,
-        {
-          sessionID: context.sessionId || "unknown",
-          messageID: "openclaw-bridge",
-          agent: "opencode-full",
-          directory: context.workspaceDir || context.agentDir || process.cwd(),
-          worktree: context.workspaceDir || process.cwd(),
-          abort: new AbortController().signal,
-          metadata: () => {},
-          ask: async () => {},
-        }
-      );
+      const result = await opencodeTool.execute(args, {
+        sessionID: context.sessionId || "unknown",
+        messageID: "openclaw-bridge",
+        agent: "opencode-full",
+        directory: context.workspaceDir || context.agentDir || process.cwd(),
+        worktree: context.workspaceDir || process.cwd(),
+        abort: new AbortController().signal,
+        metadata: () => {},
+        ask: async () => {},
+      });
       return result;
     },
   };
 }
 
-function createOpencodeToolsFactory(
-  ctx: OpenClawPluginToolContext
-): AnyAgentTool[] {
+function createOpencodeToolsFactory(ctx: OpenClawPluginToolContext): AnyAgentTool[] {
   const tools = [
     lspTool,
     refactorTool,
@@ -195,7 +192,10 @@ function createOpencodeToolsFactory(
     brainstormingTool,
     refactorAdvancedTool,
     debuggingTool,
-];
+  ];
+
+  return tools.map((t) => opencodeToolToOpenclaw(t, ctx));
+}
 
 const opencodeCommands: OpenClawPluginCommandDefinition[] = [
   {
@@ -300,7 +300,8 @@ export function registerOpencodeFullPlugin(api: OpenClawPluginApi) {
   api.logger.info("Registering OpenCode Full Integration plugin");
 
   api.registerTool(
-    ((ctx: OpenClawPluginToolContext) => createOpencodeToolsFactory(ctx)) as OpenClawPluginToolFactory,
+    ((ctx: OpenClawPluginToolContext) =>
+      createOpencodeToolsFactory(ctx)) as OpenClawPluginToolFactory,
     {
       name: "opencode",
       names: [
@@ -312,21 +313,18 @@ export function registerOpencodeFullPlugin(api: OpenClawPluginApi) {
         "opencode:brainstorm",
         "opencode:debug",
       ],
-    }
+    },
   );
 
   for (const command of opencodeCommands) {
     api.registerCommand(command);
   }
 
-  api.registerHook(
-    ["chat.params", "chat.message"],
-    async (event) => {
-      if (event.type === "chat.params") {
-        api.logger.debug("OpenCode session context bridged");
-      }
+  api.registerHook(["chat.params", "chat.message"], async (event) => {
+    if (event.type === "chat.params") {
+      api.logger.debug("OpenCode session context bridged");
     }
-  );
+  });
 
   api.logger.info("OpenCode Full Integration plugin registered successfully");
 }
