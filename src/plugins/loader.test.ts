@@ -523,6 +523,7 @@ function createSetupEntryChannelPluginFixture(params: {
   configured: boolean;
   startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   useBundledSetupEntryContract?: boolean;
+  splitBundledSetupSecrets?: boolean;
 }) {
   useNoBundledPlugins();
   const pluginDir = makeTempDir();
@@ -618,6 +619,18 @@ module.exports = {
     },
     outbound: { deliveryMode: "direct" },
   }),
+  ${
+    params.splitBundledSetupSecrets
+      ? `loadSetupSecrets: () => ({
+    secretTargetRegistryEntries: [
+      {
+        id: ${JSON.stringify(`channels.${params.id}.setup-token`)},
+        targetType: "channel",
+      },
+    ],
+  }),`
+      : ""
+  }
 };`
       : `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
@@ -3216,6 +3229,33 @@ module.exports = {
       expectedChannels: 1,
     },
     {
+      name: "preserves bundled setupEntry split secrets for setup-runtime channel loads",
+      fixture: {
+        id: "setup-runtime-bundled-contract-secrets-test",
+        label: "Setup Runtime Bundled Contract Secrets Test",
+        packageName: "@openclaw/setup-runtime-bundled-contract-secrets-test",
+        fullBlurb: "full entry should not run while unconfigured",
+        setupBlurb: "setup runtime bundled contract secrets",
+        configured: false,
+        useBundledSetupEntryContract: true,
+        splitBundledSetupSecrets: true,
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          config: {
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-bundled-contract-secrets-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
+      expectedChannels: 1,
+      expectedSetupSecretId: "channels.setup-runtime-bundled-contract-secrets-test.setup-token",
+    },
+    {
       name: "does not prefer setupEntry for configured channel loads without startup opt-in",
       fixture: {
         id: "setup-runtime-not-preferred-test",
@@ -3246,15 +3286,41 @@ module.exports = {
       expectSetupLoaded: false,
       expectedChannels: 1,
     },
-  ])("$name", ({ fixture, load, expectFullLoaded, expectSetupLoaded, expectedChannels }) => {
-    const built = createSetupEntryChannelPluginFixture(fixture);
-    const registry = load({ pluginDir: built.pluginDir });
+  ])(
+    "$name",
+    ({
+      fixture,
+      load,
+      expectFullLoaded,
+      expectSetupLoaded,
+      expectedChannels,
+      expectedSetupSecretId,
+    }) => {
+      const built = createSetupEntryChannelPluginFixture(fixture);
+      const registry = load({ pluginDir: built.pluginDir });
 
-    expect(fs.existsSync(built.fullMarker)).toBe(expectFullLoaded);
-    expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
-    expect(registry.channelSetups).toHaveLength(1);
-    expect(registry.channels).toHaveLength(expectedChannels);
-  });
+      expect(fs.existsSync(built.fullMarker)).toBe(expectFullLoaded);
+      expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
+      expect(registry.channelSetups).toHaveLength(1);
+      expect(registry.channels).toHaveLength(expectedChannels);
+      if (expectedSetupSecretId) {
+        expect(registry.channelSetups[0]?.plugin.secrets?.secretTargetRegistryEntries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: expectedSetupSecretId,
+            }),
+          ]),
+        );
+        expect(registry.channels[0]?.plugin.secrets?.secretTargetRegistryEntries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: expectedSetupSecretId,
+            }),
+          ]),
+        );
+      }
+    },
+  );
 
   it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
     useNoBundledPlugins();

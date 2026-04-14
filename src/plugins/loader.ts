@@ -644,6 +644,26 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   return {};
 }
 
+function mergeSetupPluginSection<T>(
+  baseValue: T | undefined,
+  setupValue: T | undefined,
+): T | undefined {
+  if (baseValue && setupValue && typeof baseValue === "object" && typeof setupValue === "object") {
+    const merged = {
+      ...(baseValue as Record<string, unknown>),
+    };
+    for (const [key, value] of Object.entries(setupValue as Record<string, unknown>)) {
+      if (value !== undefined) {
+        merged[key] = value;
+      }
+    }
+    return {
+      ...merged,
+    } as T;
+  }
+  return setupValue ?? baseValue;
+}
+
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
   loadError?: unknown;
@@ -655,6 +675,7 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
   const setupEntryRecord = resolved as {
     kind?: unknown;
     loadSetupPlugin?: unknown;
+    loadSetupSecrets?: unknown;
   };
   if (
     setupEntryRecord.kind === "bundled-channel-setup-entry" &&
@@ -662,9 +683,20 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
   ) {
     try {
       const loadedPlugin = setupEntryRecord.loadSetupPlugin();
+      const loadedSecrets =
+        typeof setupEntryRecord.loadSetupSecrets === "function"
+          ? (setupEntryRecord.loadSetupSecrets() as ChannelPlugin["secrets"] | undefined)
+          : undefined;
       if (loadedPlugin && typeof loadedPlugin === "object") {
+        const mergedSecrets = mergeSetupPluginSection(
+          (loadedPlugin as ChannelPlugin).secrets,
+          loadedSecrets,
+        );
         return {
-          plugin: loadedPlugin as ChannelPlugin,
+          plugin: {
+            ...(loadedPlugin as ChannelPlugin),
+            ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
+          },
         };
       }
     } catch (err) {
