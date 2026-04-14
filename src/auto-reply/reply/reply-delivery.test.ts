@@ -110,6 +110,62 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("strips reasoning tags from block reply text before delivery", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({
+      text: "<think>I need to respond in Turkish</think>\nMerhaba, nasılsınız?",
+    });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Merhaba, nasılsınız?",
+      }),
+    );
+  });
+
+  it("strips nested thinking tags from Ollama/Kimi model output", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({
+      text: "<thinking>Planning my response carefully</thinking>Here is the answer.",
+    });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here is the answer.",
+      }),
+    );
+  });
+
   it("parses media directives in block replies before path normalization", () => {
     const normalized = normalizeReplyPayloadDirectives({
       payload: { text: "Result\nMEDIA: ./image.png" },

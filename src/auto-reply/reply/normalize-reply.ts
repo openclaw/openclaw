@@ -1,6 +1,7 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { sanitizeAssistantVisibleText } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -97,6 +98,9 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    // Strip reasoning tags and other internal scaffolding that may leak from
+    // certain model providers (e.g. Ollama/Kimi/Qwen `<think>` blocks).
+    text = sanitizeAssistantVisibleText(text);
   }
   if (!hasContent(text)) {
     opts.onSkip?.("empty");
