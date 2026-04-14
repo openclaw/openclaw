@@ -3,16 +3,18 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const resolveAgentEffectiveModelPrimaryMock = vi.fn(() => null);
-const runEmbeddedPiAgentMock = vi.fn();
-const runCliAgentMock = vi.fn();
+const { resolveAgentEffectiveModelPrimaryMock, runEmbeddedPiAgentMock, runCliAgentMock } =
+  vi.hoisted(() => ({
+    resolveAgentEffectiveModelPrimaryMock: vi.fn<() => string | null>(() => null),
+    runEmbeddedPiAgentMock: vi.fn(),
+    runCliAgentMock: vi.fn(),
+  }));
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
   resolveAgentWorkspaceDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-slug-workspace")),
   resolveAgentDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-slug-agent")),
-  resolveAgentEffectiveModelPrimary: (...args: unknown[]) =>
-    resolveAgentEffectiveModelPrimaryMock(...args),
+  resolveAgentEffectiveModelPrimary: resolveAgentEffectiveModelPrimaryMock,
 }));
 
 vi.mock("../agents/cli-runner.js", () => ({
