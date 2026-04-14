@@ -93,7 +93,7 @@ export async function sessionsCommand(
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configContextTokens =
     cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(displayDefaults.model) ??
+    lookupContextTokens(displayDefaults.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
@@ -161,7 +161,10 @@ export async function sessionsCommand(
           totalTokensFresh:
             typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
           contextTokens:
-            r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
+            r.contextTokens ??
+            lookupContextTokens(model, { allowAsyncLoad: false }) ??
+            configContextTokens ??
+            null,
           model,
         };
       }),
@@ -201,7 +204,10 @@ export async function sessionsCommand(
 
   for (const row of rows) {
     const model = resolveSessionDisplayModel(cfg, row, displayDefaults);
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
+    const contextTokens =
+      row.contextTokens ??
+      lookupContextTokens(model, { allowAsyncLoad: false }) ??
+      configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 
     const line = [
