@@ -295,6 +295,79 @@ describe("runBlueBubblesCatchup", () => {
     expect(processed).toEqual(["ok1", "ok2"]);
   });
 
+  it("warns when fetched count hits perRunLimit so silent truncation is visible", async () => {
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000);
+    const warnings: string[] = [];
+    const summary = await runBlueBubblesCatchup(
+      makeTarget({
+        account: {
+          accountId: "test-account",
+          enabled: true,
+          configured: true,
+          baseUrl: "http://127.0.0.1:1234",
+          config: {
+            serverUrl: "http://127.0.0.1:1234",
+            password: "x",
+            network: { dangerouslyAllowPrivateNetwork: true },
+            catchup: { perRunLimit: 3 },
+          } as unknown as WebhookTarget["account"]["config"],
+        },
+      }),
+      {
+        now: () => now,
+        fetchMessages: async () => ({
+          resolved: true,
+          messages: [
+            makeBbMessage({ guid: "a", dateCreated: 6 * 60 * 1000 }),
+            makeBbMessage({ guid: "b", dateCreated: 7 * 60 * 1000 }),
+            makeBbMessage({ guid: "c", dateCreated: 8 * 60 * 1000 }),
+          ],
+        }),
+        processMessageFn: async () => {},
+        error: (msg) => warnings.push(msg),
+      },
+    );
+    expect(summary?.replayed).toBe(3);
+    expect(summary?.fetchedCount).toBe(3);
+    const truncationWarnings = warnings.filter((w) => w.includes("perRunLimit"));
+    expect(truncationWarnings).toHaveLength(1);
+    expect(truncationWarnings[0]).toContain("WARNING");
+    expect(truncationWarnings[0]).toContain("perRunLimit=3");
+  });
+
+  it("does not warn when fetched count is below perRunLimit", async () => {
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000);
+    const warnings: string[] = [];
+    await runBlueBubblesCatchup(
+      makeTarget({
+        account: {
+          accountId: "test-account",
+          enabled: true,
+          configured: true,
+          baseUrl: "http://127.0.0.1:1234",
+          config: {
+            serverUrl: "http://127.0.0.1:1234",
+            password: "x",
+            network: { dangerouslyAllowPrivateNetwork: true },
+            catchup: { perRunLimit: 50 },
+          } as unknown as WebhookTarget["account"]["config"],
+        },
+      }),
+      {
+        now: () => now,
+        fetchMessages: async () => ({
+          resolved: true,
+          messages: [makeBbMessage({ guid: "a" }), makeBbMessage({ guid: "b" })],
+        }),
+        processMessageFn: async () => {},
+        error: (msg) => warnings.push(msg),
+      },
+    );
+    expect(warnings.filter((w) => w.includes("perRunLimit"))).toHaveLength(0);
+  });
+
   it("skips pre-cursor timestamps as defense in depth against server-inclusive bounds", async () => {
     const cursor = 5 * 60 * 1000;
     const now = 10 * 60 * 1000;
