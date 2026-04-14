@@ -341,6 +341,14 @@ export type GatewayHttpSecurityHeadersConfig = {
    * Example: "max-age=31536000; includeSubDomains"
    */
   strictTransportSecurity?: string | false;
+  /**
+   * Value for the Permissions-Policy response header.
+   * Defaults to blocking camera and geolocation while leaving microphone available
+   * for Control UI talk mode. Set to false to disable explicitly.
+   *
+   * Example: "camera=(), microphone=(self), geolocation=()"
+   */
+  permissionsPolicy?: string | false;
 };
 
 export type GatewayHttpConfig = {

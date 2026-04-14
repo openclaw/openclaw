@@ -398,5 +398,46 @@ describe("resolveGatewayRuntimeConfig", () => {
 
       expect(result.strictTransportSecurityHeader).toBe(expected);
     });
+
+    const permissionsPolicyCases = [
+      {
+        name: "resolves permissions policy headers from config",
+        permissionsPolicy: "  camera=(), microphone=(self), geolocation=()  ",
+        expected: "camera=(), microphone=(self), geolocation=()",
+      },
+      {
+        name: "supports explicitly disabling permissions policy header",
+        permissionsPolicy: false,
+        expected: false,
+      },
+      {
+        name: "uses default permissions policy when the value is blank",
+        permissionsPolicy: "   ",
+        expected: undefined,
+      },
+    ] satisfies ReadonlyArray<{
+      name: string;
+      permissionsPolicy: string | false;
+      expected: string | false | undefined;
+    }>;
+
+    it.each(permissionsPolicyCases)("$name", async ({ permissionsPolicy, expected }) => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            http: {
+              securityHeaders: {
+                permissionsPolicy,
+              },
+            },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.permissionsPolicyHeader).toBe(expected);
+    });
   });
 });

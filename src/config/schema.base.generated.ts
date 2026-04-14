@@ -21582,6 +21582,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
                   },
+                  permissionsPolicy: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "boolean",
+                        const: false,
+                      },
+                    ],
+                    title: "Permissions Policy Header",
+                    description:
+                      "Value for the Permissions-Policy response header. The default blocks camera and geolocation while leaving microphone available for Talk mode; use false to explicitly disable.",
+                  },
                 },
                 additionalProperties: false,
                 title: "Gateway HTTP Security Headers",
@@ -23304,6 +23318,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Strict Transport Security Header",
       help: "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
       tags: ["network"],
+    },
+    "gateway.http.securityHeaders.permissionsPolicy": {
+      label: "Permissions Policy Header",
+      help: "Value for the Permissions-Policy response header. The default blocks camera and geolocation while leaving microphone available for Talk mode; use false to explicitly disable.",
+      tags: ["access", "network"],
     },
     "gateway.remote.url": {
       label: "Remote Gateway URL",

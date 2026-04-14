@@ -834,6 +834,7 @@ export function createGatewayHttpServer(opts: {
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
+  permissionsPolicyHeader?: string | false;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -855,6 +856,7 @@ export function createGatewayHttpServer(opts: {
     openResponsesEnabled,
     openResponsesConfig,
     strictTransportSecurityHeader,
+    permissionsPolicyHeader,
     handleHooksRequest,
     handlePluginRequest,
     shouldEnforcePluginGatewayAuth,
@@ -875,6 +877,7 @@ export function createGatewayHttpServer(opts: {
   async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     setDefaultSecurityHeaders(res, {
       strictTransportSecurity: strictTransportSecurityHeader,
+      permissionsPolicy: permissionsPolicyHeader,
     });
 
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
