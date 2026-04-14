@@ -19,7 +19,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { runRubberBandCheck } from "../security/rubberband.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";

@@ -586,8 +586,6 @@ export async function dispatchReplyFromConfig(
           queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
-        }
-      } else {
         logVerbose(
           `dispatch-from-config: fast_abort reply suppressed by sendPolicy: deny (session=${sessionKey ?? "unknown"})`,
         );
