@@ -189,15 +189,23 @@ const STICKER_PACKAGES: Record<string, string> = {
   "11539": "Moon",
 };
 
+function sanitizeStickerKeyword(s: string): string {
+  return s
+    .replace(/\p{C}/gu, "")
+    .replace(/[{}<>`]/g, "")
+    .trim()
+    .slice(0, 50);
+}
+
 function describeStickerKeywords(sticker: StickerEventMessage): string {
   const keywords = (sticker as StickerEventMessage & { keywords?: string[] }).keywords;
   if (keywords && keywords.length > 0) {
-    return keywords.slice(0, 3).join(", ");
+    return keywords.slice(0, 3).map(sanitizeStickerKeyword).join(", ");
   }
 
   const stickerText = (sticker as StickerEventMessage & { text?: string }).text;
   if (stickerText) {
-    return stickerText;
+    return sanitizeStickerKeyword(stickerText);
   }
 
   return "";
@@ -217,7 +225,9 @@ function formatStickerInboundContext(sticker: StickerEventMessage): string {
     `sticker_id=${sticker.stickerId}`,
     `set=${packageName}`,
     ...(resourceType ? [`resource_type=${resourceType}`] : []),
-    ...(keywordList.length > 0 ? [`keywords=${keywordList.slice(0, 5).join("|")}`] : []),
+    ...(keywordList.length > 0
+      ? [`keywords=${keywordList.slice(0, 5).map(sanitizeStickerKeyword).join("|")}`]
+      : []),
   ];
 
   if (keywords) {

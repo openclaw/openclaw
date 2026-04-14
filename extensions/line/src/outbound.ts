@@ -71,6 +71,7 @@ function buildLineMediaMessageObject(
 
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
+  supportsStickerPayload: true,
   chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
   textChunkLimit: 5000,
   sendPayload: async ({ to, payload, accountId, cfg }) => {
