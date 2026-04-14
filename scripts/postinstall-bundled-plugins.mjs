@@ -55,6 +55,17 @@ const BAILEYS_MEDIA_HOTFIX_REPLACEMENT = [
   "        await Promise.all([encFinishPromise, originalFinishPromise]);",
   "        logger?.debug('encrypted data successfully');",
 ].join("\n");
+const BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT = [
+  "        encFileWriteStream.write(mac);",
+  "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+  "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+  "        encFileWriteStream.end();",
+  "        originalFileStream?.end?.();",
+  "        stream.destroy();",
+  "        await encFinishPromise;",
+  "        await originalFinishPromise;",
+  "        logger?.debug('encrypted data successfully');",
+].join("\n");
 const BAILEYS_MEDIA_DISPATCHER_NEEDLE = [
   "                const response = await fetch(url, {",
   "                    dispatcher: fetchAgent,",
@@ -270,7 +281,11 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
     let patchedText = currentText;
     let applied = false;
 
-    if (!patchedText.includes(BAILEYS_MEDIA_HOTFIX_REPLACEMENT)) {
+    const encryptedStreamAlreadyPatched =
+      patchedText.includes(BAILEYS_MEDIA_HOTFIX_REPLACEMENT) ||
+      patchedText.includes(BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT);
+
+    if (!encryptedStreamAlreadyPatched) {
       if (!patchedText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE)) {
         return { applied: false, reason: "unexpected_content" };
       }
