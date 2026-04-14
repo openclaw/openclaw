@@ -48,9 +48,9 @@ describe("buildSystemdUnit", () => {
         OPENCLAW_GATEWAY_PORT: "18789",
       },
     });
-    expect(unit).toContain("EnvironmentFile=/home/test/.openclaw/.env");
+    expect(unit).toContain("EnvironmentFile=-/home/test/.openclaw/.env");
     expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
-    expect(unit.indexOf("EnvironmentFile=/home/test/.openclaw/.env")).toBeLessThan(
+    expect(unit.indexOf("EnvironmentFile=-/home/test/.openclaw/.env")).toBeLessThan(
       unit.indexOf("Environment=OPENCLAW_GATEWAY_PORT=18789"),
     );
   });

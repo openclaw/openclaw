@@ -44,7 +44,7 @@ function renderEnvironmentFileLines(environmentFiles: string[] | undefined): str
     .filter(Boolean)
     .map((entry) => {
       assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
-      return `EnvironmentFile=${systemdEscapeArg(entry)}`;
+      return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
     });
 }
 

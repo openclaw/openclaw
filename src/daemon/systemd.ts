@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { readStateDirDotEnvVars } from "../config/state-dir-dotenv.js";
+import { readStateDirDotEnvVarsFromStateDir } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -41,6 +41,8 @@ import {
   parseSystemdEnvAssignment,
   parseSystemdExecStart,
 } from "./systemd-unit.js";
+
+const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = toPosixPath(resolveHomeDir(env));
@@ -451,9 +453,12 @@ async function writeSystemdUnit({
   }
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
-  const stateDirDotEnvVars = readStateDirDotEnvVars(env as NodeJS.ProcessEnv);
-  const stateDirDotEnvPath = path.join(resolveStateDir(env as NodeJS.ProcessEnv), ".env");
-  const environmentFiles = Object.keys(stateDirDotEnvVars).length > 0 ? [stateDirDotEnvPath] : [];
+  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const stateDirDotEnvVars = readStateDirDotEnvVarsFromStateDir(stateDir);
+  const environmentFiles = await writeSystemdGatewayEnvironmentFile({
+    stateDir,
+    dotenvVars: stateDirDotEnvVars,
+  });
   const environmentSansDotEnvEntries = Object.fromEntries(
     Object.entries(environment ?? {}).filter(([key, value]) => {
       if (typeof value !== "string") {
@@ -475,6 +480,21 @@ async function writeSystemdUnit({
   });
   await fs.writeFile(unitPath, unit, "utf8");
   return { unitPath, backedUp };
+}
+
+async function writeSystemdGatewayEnvironmentFile(params: {
+  stateDir: string;
+  dotenvVars: Record<string, string>;
+}): Promise<string[]> {
+  const entries = Object.entries(params.dotenvVars).filter(([, value]) => !/[\r\n]/.test(value));
+  if (entries.length === 0) {
+    return [];
+  }
+  const envFilePath = path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
+  const content = entries.map(([key, value]) => `${key}=${value}`).join("\n");
+  await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(envFilePath, 0o600);
+  return [envFilePath];
 }
 
 export async function stageSystemdService({
