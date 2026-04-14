@@ -233,6 +233,7 @@ export function buildOllamaChatRequest(params: {
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
   stream?: boolean;
+  keep_alive?: string | number;
 }): OllamaChatRequest {
   return {
     model: normalizeOllamaWireModelId(params.modelId),
@@ -240,6 +241,7 @@ export function buildOllamaChatRequest(params: {
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
     ...(params.options ? { options: params.options } : {}),
+    ...(params.keep_alive !== undefined ? { keep_alive: params.keep_alive } : {}),
   };
 }
 
@@ -314,6 +316,7 @@ interface OllamaChatRequest {
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
   think?: boolean;
+  keep_alive?: string | number;
 }
 
 interface OllamaChatMessage {
@@ -640,6 +643,10 @@ export function createOllamaStreamFn(
           stream: true,
           tools: ollamaTools,
           options: ollamaOptions,
+          // Keep the model loaded across adjacent turns. This reduces the
+          // pathological cold-start penalty reported for gemma4-class local
+          // models on the first heavy OpenClaw turn.
+          keep_alive: "15m",
         });
         options?.onPayload?.(body, model);
         const headers: Record<string, string> = {
