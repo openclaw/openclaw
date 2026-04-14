@@ -22,7 +22,7 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import type { BuildStatusTextParams } from "../../status/status-text.types.js";
+import { buildStatusText } from "../../auto-reply/reply/commands-status.runtime.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -57,17 +57,6 @@ const SessionStatusToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
 });
 
-type CommandsStatusRuntimeModule = {
-  buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
-};
-
-let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
-
-function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
-  commandsStatusRuntimePromise ??=
-    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
-  return commandsStatusRuntimePromise;
-}
 
 function resolveSessionEntry(params: {
   store: Record<string, SessionEntry>;
@@ -543,7 +532,6 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
-      const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,
         sessionEntry: statusSessionEntry,
