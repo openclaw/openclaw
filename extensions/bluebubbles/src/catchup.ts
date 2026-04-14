@@ -235,9 +235,12 @@ export async function runBlueBubblesCatchup(
   }
 
   const earliestAllowed = nowMs - maxAgeMs;
+  // First-run lookback is also clamped to the maxAge ceiling so a config
+  // with `maxAgeMinutes: 5, firstRunLookbackMinutes: 30` doesn't silently
+  // exceed the operator's stated lookback cap on first startup.
   const windowStartMs = existing
     ? Math.max(existing.lastSeenMs, earliestAllowed)
-    : nowMs - firstRunLookbackMs;
+    : Math.max(nowMs - firstRunLookbackMs, earliestAllowed);
 
   let baseUrl: string;
   let password: string;
