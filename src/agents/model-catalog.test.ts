@@ -349,6 +349,52 @@ describe("loadModelCatalog", () => {
     );
   });
 
+  it("dedupes configured models against discovered provider aliases", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "glm-5v-turbo",
+        provider: "z.ai",
+        name: "GLM-5V Turbo",
+        input: ["text", "image"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            "z-ai": {
+              api: "openai-completions",
+              baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+              models: [
+                {
+                  id: "glm-5v-turbo",
+                  name: "Configured GLM-5V Turbo",
+                  api: "openai-completions",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 202752,
+                  maxTokens: 131072,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const matches = result.filter(
+      (entry) => findModelInCatalog([entry], "z-ai", "glm-5v-turbo") !== undefined,
+    );
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({
+      provider: "z.ai",
+      id: "glm-5v-turbo",
+      name: "GLM-5V Turbo",
+    });
+  });
+
   it("dedupes supplemental models against registry entries", async () => {
     mockSingleOpenAiCatalogModel();
     augmentCatalogMock.mockResolvedValueOnce([

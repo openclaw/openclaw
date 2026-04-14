@@ -74,7 +74,7 @@ function instantiatePiModelRegistry(
 }
 
 function getCatalogEntryKey(provider: string, id: string): string {
-  return `${normalizeLowercaseStringOrEmpty(provider)}::${normalizeLowercaseStringOrEmpty(id)}`;
+  return `${normalizeProviderId(provider)}::${normalizeLowercaseStringOrEmpty(id)}`;
 }
 
 function appendCatalogEntryIfAbsent(
