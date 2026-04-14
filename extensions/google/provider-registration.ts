@@ -10,6 +10,7 @@ import {
   resolveGoogleGenerativeAiTransport,
 } from "./api.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
+import { resolveGoogleSystemPromptContribution } from "./prompt-overlay.js";
 
 const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
@@ -58,5 +59,10 @@ export function registerGoogleProvider(api: OpenClawPluginApi) {
       }),
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
+    resolveSystemPromptContribution: (ctx) =>
+      resolveGoogleSystemPromptContribution({
+        modelProviderId: "google",
+        modelId: ctx.modelId,
+      }),
   });
 }
