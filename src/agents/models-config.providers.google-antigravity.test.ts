@@ -73,7 +73,11 @@ describe("google-antigravity provider normalization", () => {
 
     const normalized = normalizeProviderMap(providers);
 
-    expect(normalized).toBe(providers);
+    expect(normalized).toEqual(providers);
+    expect(normalized?.["google-antigravity"]?.models.map((model) => model.id)).toEqual([
+      "gemini-3-pro-low",
+      "claude-opus-4-6-thinking",
+    ]);
   });
 });
 
@@ -105,6 +109,10 @@ describe("google-vertex provider normalization", () => {
 
     const normalized = normalizeProviderMap(providers);
 
-    expect(normalized).toBe(providers);
+    expect(normalized).toEqual(providers);
+    expect(normalized?.["google-vertex"]?.models.map((model) => model.id)).toEqual([
+      "gemini-3.1-flash-lite-preview",
+      "gemini-3-flash-preview",
+    ]);
   });
 });
