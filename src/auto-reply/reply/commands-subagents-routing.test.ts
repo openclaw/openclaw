@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMMAND,
   COMMAND_KILL,
+  COMMAND_SPAWN,
   COMMAND_STEER,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
@@ -79,6 +80,7 @@ describe("subagents command dispatch", () => {
   it("maps slash aliases to the right handled prefix", () => {
     expect(resolveHandledPrefix("/subagents list")).toBe(COMMAND);
     expect(resolveHandledPrefix("/kill 1")).toBe(COMMAND_KILL);
+    expect(resolveHandledPrefix("/spawn alpha do-the-thing")).toBe(COMMAND_SPAWN);
     expect(resolveHandledPrefix("/steer 1 continue")).toBe(COMMAND_STEER);
     expect(resolveHandledPrefix("/unknown")).toBeNull();
   });
@@ -98,6 +100,24 @@ describe("subagents command dispatch", () => {
     expect(resolveSubagentsAction({ handledPrefix: COMMAND_STEER, restTokens: steerTokens })).toBe(
       "steer",
     );
+
+    const spawnTokens = ["beta", "do", "the", "thing"];
+    expect(resolveSubagentsAction({ handledPrefix: COMMAND_SPAWN, restTokens: spawnTokens })).toBe(
+      "spawn",
+    );
+    expect(spawnTokens).toEqual(["beta", "do", "the", "thing"]);
+
+    const spawnLogTokens = ["log", "25"];
+    expect(
+      resolveSubagentsAction({ handledPrefix: COMMAND_SPAWN, restTokens: spawnLogTokens }),
+    ).toBe("log");
+    expect(spawnLogTokens).toEqual(["25"]);
+
+    const spawnStopTokens = ["stop"];
+    expect(
+      resolveSubagentsAction({ handledPrefix: COMMAND_SPAWN, restTokens: spawnStopTokens }),
+    ).toBe("kill");
+    expect(spawnStopTokens).toEqual([]);
   });
 
   it("returns null for invalid /subagents actions", () => {

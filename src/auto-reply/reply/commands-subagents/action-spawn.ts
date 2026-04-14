@@ -1,12 +1,17 @@
 import { spawnSubagentDirect } from "../../../agents/subagent-spawn.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { type SubagentsCommandContext, stopWithText } from "./shared.js";
+import {
+  COMMAND_SPAWN,
+  resolveSpawnCommandThreadId,
+  type SubagentsCommandContext,
+  stopWithText,
+} from "./shared.js";
 
 export async function handleSubagentsSpawnAction(
   ctx: SubagentsCommandContext,
 ): Promise<CommandHandlerResult> {
-  const { params, requesterKey, restTokens } = ctx;
+  const { handledPrefix, params, requesterKey, restTokens } = ctx;
   const requesterSessionEntry = params.sessionStore?.[requesterKey] ?? params.sessionEntry;
   const agentId = restTokens[0];
 
@@ -27,7 +32,9 @@ export async function handleSubagentsSpawnAction(
   const task = taskParts.join(" ").trim();
   if (!agentId || !task) {
     return stopWithText(
-      "Usage: /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
+      handledPrefix === COMMAND_SPAWN
+        ? "Usage: /spawn <agentId> <task> [--model <model>] [--thinking <level>]"
+        : "Usage: /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
     );
   }
 
@@ -35,6 +42,11 @@ export async function handleSubagentsSpawnAction(
   const originatingTo = normalizeOptionalString(params.ctx.OriginatingTo) ?? "";
   const fallbackTo = normalizeOptionalString(params.ctx.To) ?? "";
   const normalizedTo = originatingTo || commandTo || fallbackTo || undefined;
+  const replyThreadId = resolveSpawnCommandThreadId(params);
+  const replyToId =
+    handledPrefix === COMMAND_SPAWN && !params.ctx.MessageThreadId
+      ? normalizeOptionalString(params.ctx.MessageSidFull ?? params.ctx.MessageSid)
+      : undefined;
 
   const result = await spawnSubagentDirect(
     {
@@ -51,16 +63,20 @@ export async function handleSubagentsSpawnAction(
       agentChannel: params.ctx.OriginatingChannel ?? params.command.channel,
       agentAccountId: params.ctx.AccountId,
       agentTo: normalizedTo,
-      agentThreadId: params.ctx.MessageThreadId,
+      agentThreadId: replyThreadId,
       agentGroupId: requesterSessionEntry?.groupId ?? null,
       agentGroupChannel: requesterSessionEntry?.groupChannel ?? null,
       agentGroupSpace: requesterSessionEntry?.space ?? null,
     },
   );
   if (result.status === "accepted") {
-    return stopWithText(
-      `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).`,
-    );
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).`,
+        ...(replyToId ? { replyToId } : {}),
+      },
+    };
   }
   return stopWithText(`Spawn failed: ${result.error ?? result.status}`);
 }

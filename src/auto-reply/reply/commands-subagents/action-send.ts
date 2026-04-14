@@ -7,7 +7,10 @@ import { formatRunLabel } from "../subagents-utils.js";
 import {
   type SubagentsCommandContext,
   COMMAND,
+  COMMAND_SPAWN,
   resolveCommandSubagentController,
+  resolveExplicitSubagentEntryForToken,
+  resolveImplicitSubagentEntryForSpawnCommand,
   resolveSubagentEntryForToken,
   stopWithText,
 } from "./shared.js";
@@ -17,19 +20,29 @@ export async function handleSubagentsSendAction(
   steerRequested: boolean,
 ): Promise<CommandHandlerResult> {
   const { params, handledPrefix, runs, restTokens } = ctx;
-  const target = restTokens[0];
-  const message = restTokens.slice(1).join(" ").trim();
-  if (!target || !message) {
+  const firstToken = restTokens[0];
+  const explicitTarget =
+    handledPrefix === COMMAND_SPAWN ? resolveExplicitSubagentEntryForToken(runs, firstToken) : null;
+  const messageStartIndex = explicitTarget ? 1 : handledPrefix === COMMAND_SPAWN ? 0 : 1;
+  const message = restTokens.slice(messageStartIndex).join(" ").trim();
+  if ((!firstToken && handledPrefix !== COMMAND_SPAWN) || !message) {
     return stopWithText(
       steerRequested
         ? handledPrefix === COMMAND
           ? "Usage: /subagents steer <id|#> <message>"
-          : `Usage: ${handledPrefix} <id|#> <message>`
-        : "Usage: /subagents send <id|#> <message>",
+          : handledPrefix === COMMAND_SPAWN
+            ? "Usage: /spawn steer [id|#] <message>"
+            : `Usage: ${handledPrefix} <id|#> <message>`
+        : handledPrefix === COMMAND_SPAWN
+          ? "Usage: /spawn send [id|#] <message>"
+          : "Usage: /subagents send <id|#> <message>",
     );
   }
 
-  const targetResolution = resolveSubagentEntryForToken(runs, target);
+  const targetResolution =
+    handledPrefix === COMMAND_SPAWN
+      ? (explicitTarget ?? resolveImplicitSubagentEntryForSpawnCommand(ctx))
+      : resolveSubagentEntryForToken(runs, firstToken);
   if ("reply" in targetResolution) {
     return targetResolution.reply;
   }

@@ -21,6 +21,7 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
 import {
@@ -49,6 +50,7 @@ export const COMMAND_TELL = "/tell";
 export const COMMAND_FOCUS = "/focus";
 export const COMMAND_UNFOCUS = "/unfocus";
 export const COMMAND_AGENTS = "/agents";
+export const COMMAND_SPAWN = "/spawn";
 export const ACTIONS = new Set([
   "list",
   "kill",
@@ -66,6 +68,16 @@ export const ACTIONS = new Set([
 export const RECENT_WINDOW_MINUTES = 30;
 const SUBAGENT_TASK_PREVIEW_MAX = 110;
 export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
+const SPAWN_COMMAND_ACTIONS = new Map<string, SubagentsAction>([
+  ["list", "list"],
+  ["log", "log"],
+  ["info", "info"],
+  ["send", "send"],
+  ["steer", "steer"],
+  ["kill", "kill"],
+  ["stop", "kill"],
+  ["help", "help"],
+]);
 
 function compactLine(value: string) {
   return value.replace(/\s+/g, " ").trim();
@@ -86,6 +98,19 @@ export function resolveDisplayStatus(
   }
   const status = formatRunStatus(entry);
   return status === "error" ? "failed" : status;
+}
+
+export function isSubagentRunActive(entry: SubagentRunRecord) {
+  return (
+    !entry.endedAt ||
+    Math.max(
+      0,
+      countPendingDescendantRunsFromRuns(
+        getSubagentRunsSnapshotForRead(subagentRuns),
+        entry.childSessionKey,
+      ),
+    ) > 0
+  );
 }
 
 export function formatSubagentListLine(params: {
@@ -210,6 +235,136 @@ export function resolveSubagentEntryForToken(
   return { entry: resolved.entry };
 }
 
+export function resolveExplicitSubagentEntryForToken(
+  runs: SubagentRunRecord[],
+  token: string | undefined,
+): { entry: SubagentRunRecord } | null {
+  const normalized = normalizeOptionalString(token);
+  if (!normalized) {
+    return null;
+  }
+  const resolved = resolveSubagentTarget(runs, normalized);
+  return resolved.entry ? { entry: resolved.entry } : null;
+}
+
+type CommandOriginContext = {
+  channel?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string;
+};
+
+function resolveCommandOriginContext(params: SubagentsCommandParams): CommandOriginContext {
+  const channel = resolveCommandSurfaceChannel(params);
+  const accountId = resolveChannelAccountId(params);
+  const commandTo = normalizeOptionalString(params.command.to);
+  const originatingTo = normalizeOptionalString(params.ctx.OriginatingTo);
+  const fallbackTo = normalizeOptionalString(params.ctx.To);
+  const rawThreadId = params.ctx.MessageThreadId;
+  const threadId =
+    rawThreadId != null && String(rawThreadId).trim() !== ""
+      ? String(rawThreadId).trim()
+      : undefined;
+  return {
+    channel: channel || undefined,
+    accountId: accountId || undefined,
+    to: originatingTo || commandTo || fallbackTo || undefined,
+    threadId,
+  };
+}
+
+export function resolveSpawnCommandThreadId(params: SubagentsCommandParams): string | undefined {
+  const threadId = resolveCommandOriginContext(params).threadId;
+  if (threadId) {
+    return threadId;
+  }
+  return normalizeOptionalString(params.ctx.MessageSidFull ?? params.ctx.MessageSid);
+}
+
+function runMatchesCommandThread(entry: SubagentRunRecord, origin: CommandOriginContext): boolean {
+  const runThreadId =
+    entry.requesterOrigin?.threadId != null && String(entry.requesterOrigin.threadId).trim() !== ""
+      ? String(entry.requesterOrigin.threadId).trim()
+      : undefined;
+  if (!origin.threadId || !runThreadId || runThreadId !== origin.threadId) {
+    return false;
+  }
+
+  const channelMatches =
+    !origin.channel ||
+    !entry.requesterOrigin?.channel ||
+    normalizeOptionalLowercaseString(entry.requesterOrigin.channel) ===
+      normalizeOptionalLowercaseString(origin.channel);
+  if (!channelMatches) {
+    return false;
+  }
+
+  const accountIdMatches =
+    !origin.accountId ||
+    !entry.requesterOrigin?.accountId ||
+    normalizeOptionalString(entry.requesterOrigin.accountId) ===
+      normalizeOptionalString(origin.accountId);
+  if (!accountIdMatches) {
+    return false;
+  }
+
+  const runTo = normalizeOptionalString(entry.requesterOrigin?.to);
+  return !origin.to || !runTo || runTo === origin.to;
+}
+
+function sortRunsNewestFirst(runs: SubagentRunRecord[]): SubagentRunRecord[] {
+  return [...runs].toSorted((a, b) => {
+    const activeDiff = Number(isSubagentRunActive(b)) - Number(isSubagentRunActive(a));
+    if (activeDiff !== 0) {
+      return activeDiff;
+    }
+    return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+  });
+}
+
+export function resolveImplicitSubagentEntryForSpawnCommand(
+  ctx: SubagentsCommandContext,
+): { entry: SubagentRunRecord } | { reply: CommandHandlerResult } {
+  const origin = resolveCommandOriginContext(ctx.params);
+  if (origin.threadId) {
+    const threadMatches = sortRunsNewestFirst(
+      ctx.runs.filter((entry) => runMatchesCommandThread(entry, origin)),
+    );
+    if (threadMatches.length === 1) {
+      return { entry: threadMatches[0] };
+    }
+    const activeThreadMatches = threadMatches.filter((entry) => isSubagentRunActive(entry));
+    if (activeThreadMatches.length === 1) {
+      return { entry: activeThreadMatches[0] };
+    }
+    if (activeThreadMatches.length > 1 || threadMatches.length > 1) {
+      return {
+        reply: stopWithText(
+          "⚠️ Multiple subagents are tied to this thread. Use /spawn list and pick one explicitly.",
+        ),
+      };
+    }
+    return {
+      reply: stopWithText("⚠️ No subagent is attached to this thread yet."),
+    };
+  }
+
+  const activeRuns = sortRunsNewestFirst(ctx.runs.filter((entry) => isSubagentRunActive(entry)));
+  if (activeRuns.length === 1) {
+    return { entry: activeRuns[0] };
+  }
+  if (activeRuns.length > 1) {
+    return {
+      reply: stopWithText(
+        "⚠️ Multiple active subagents. Use /spawn list and target one explicitly.",
+      ),
+    };
+  }
+  return {
+    reply: stopWithText("⚠️ No active subagent to target. Use /spawn <agentId> <task> first."),
+  };
+}
+
 export function resolveRequesterSessionKey(
   params: SubagentsCommandParams,
   opts?: { preferCommandTarget?: boolean },
@@ -266,7 +421,9 @@ export function resolveHandledPrefix(normalized: string): string | null {
               ? COMMAND_UNFOCUS
               : normalized.startsWith(COMMAND_AGENTS)
                 ? COMMAND_AGENTS
-                : null;
+                : normalized.startsWith(COMMAND_SPAWN)
+                  ? COMMAND_SPAWN
+                  : null;
 }
 
 export function resolveSubagentsAction(params: {
@@ -293,6 +450,15 @@ export function resolveSubagentsAction(params: {
   }
   if (params.handledPrefix === COMMAND_AGENTS) {
     return "agents";
+  }
+  if (params.handledPrefix === COMMAND_SPAWN) {
+    const action = normalizeLowercaseStringOrEmpty(params.restTokens[0]);
+    const mapped = action ? SPAWN_COMMAND_ACTIONS.get(action) : undefined;
+    if (mapped) {
+      params.restTokens.splice(0, 1);
+      return mapped;
+    }
+    return "spawn";
   }
   return "steer";
 }
@@ -367,6 +533,8 @@ export function buildSubagentsHelp() {
     "- /subagents send <id|#> <message>",
     "- /subagents steer <id|#> <message>",
     "- /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
+    "- /spawn <agentId> <task> [--model <model>] [--thinking <level>]",
+    "- /spawn list | log [id|#] [limit] [tools] | steer [id|#] <message> | stop [id|#]",
     "- /focus <subagent-label|session-key|session-id|session-label>",
     "- /unfocus",
     "- /agents",

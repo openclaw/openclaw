@@ -336,6 +336,14 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "spawn",
+      description: "Spawn an isolated subagent run, or manage the run tied to this thread.",
+      textAlias: "/spawn",
+      acceptsArgs: true,
+      scope: "text",
+      category: "management",
+    }),
+    defineChatCommand({
       key: "acp",
       nativeName: "acp",
       description: "Manage ACP sessions and runtime options.",

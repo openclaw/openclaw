@@ -21,6 +21,8 @@ export function buildSubagentsSendContext(params?: {
   requesterKey?: string;
   runs?: SubagentRunRecord[];
   restTokens?: string[];
+  ctx?: Record<string, unknown>;
+  command?: Record<string, unknown>;
 }) {
   return {
     params: {
@@ -30,10 +32,13 @@ export function buildSubagentsSendContext(params?: {
           commands: { text: true },
           channels: { whatsapp: { allowFrom: ["*"] } },
         } as OpenClawConfig),
-      ctx: {},
+      ctx: {
+        ...params?.ctx,
+      },
       command: {
         channel: "whatsapp",
         to: "test-bot",
+        ...params?.command,
       },
     },
     handledPrefix: params?.handledPrefix ?? "/subagents",

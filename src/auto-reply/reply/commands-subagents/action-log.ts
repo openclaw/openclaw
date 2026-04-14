@@ -3,9 +3,13 @@ import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.j
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
+  COMMAND_SPAWN,
   type ChatMessage,
   type SubagentsCommandContext,
   formatLogLines,
+  resolveExplicitSubagentEntryForToken,
+  resolveImplicitSubagentEntryForSpawnCommand,
+  resolveSubagentTarget,
   resolveSubagentEntryForToken,
   stopWithText,
   stripToolMessages,
@@ -14,10 +18,23 @@ import {
 export async function handleSubagentsLogAction(
   ctx: SubagentsCommandContext,
 ): Promise<CommandHandlerResult> {
-  const { runs, restTokens } = ctx;
-  const target = restTokens[0];
-  if (!target) {
+  const { handledPrefix, runs, restTokens } = ctx;
+  const firstToken = restTokens[0];
+  const loweredFirst = normalizeLowercaseStringOrEmpty(firstToken);
+  const implicitTargetAllowed =
+    handledPrefix === COMMAND_SPAWN &&
+    (!firstToken || loweredFirst === "tools" || /^\d+$/.test(firstToken));
+  const explicitTarget = implicitTargetAllowed
+    ? null
+    : resolveExplicitSubagentEntryForToken(runs, firstToken);
+
+  if (!firstToken && handledPrefix !== COMMAND_SPAWN) {
     return stopWithText("📜 Usage: /subagents log <id|#> [limit]");
+  }
+
+  if (handledPrefix === COMMAND_SPAWN && firstToken && !implicitTargetAllowed && !explicitTarget) {
+    const targetResolution = resolveSubagentTarget(runs, firstToken);
+    return stopWithText(`⚠️ ${targetResolution.error ?? `Unknown subagent id: ${firstToken}`}`);
   }
 
   const includeTools = restTokens.some(
@@ -26,7 +43,10 @@ export async function handleSubagentsLogAction(
   const limitToken = restTokens.find((token) => /^\d+$/.test(token));
   const limit = limitToken ? Math.min(200, Math.max(1, Number.parseInt(limitToken, 10))) : 20;
 
-  const targetResolution = resolveSubagentEntryForToken(runs, target);
+  const targetResolution =
+    handledPrefix === COMMAND_SPAWN
+      ? (explicitTarget ?? resolveImplicitSubagentEntryForSpawnCommand(ctx))
+      : resolveSubagentEntryForToken(runs, firstToken);
   if ("reply" in targetResolution) {
     return targetResolution.reply;
   }

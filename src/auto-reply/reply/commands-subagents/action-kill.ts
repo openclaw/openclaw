@@ -6,7 +6,11 @@ import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
   COMMAND,
+  COMMAND_SPAWN,
   resolveCommandSubagentController,
+  resolveExplicitSubagentEntryForToken,
+  resolveImplicitSubagentEntryForSpawnCommand,
+  resolveSubagentTarget,
   resolveSubagentEntryForToken,
   stopWithText,
 } from "./shared.js";
@@ -16,7 +20,7 @@ export async function handleSubagentsKillAction(
 ): Promise<CommandHandlerResult> {
   const { params, handledPrefix, requesterKey, runs, restTokens } = ctx;
   const target = restTokens[0];
-  if (!target) {
+  if (!target && handledPrefix !== COMMAND_SPAWN) {
     return stopWithText(
       handledPrefix === COMMAND ? "Usage: /subagents kill <id|#|all>" : "Usage: /kill <id|#|all>",
     );
@@ -38,7 +42,16 @@ export async function handleSubagentsKillAction(
     return { shouldContinue: false };
   }
 
-  const targetResolution = resolveSubagentEntryForToken(runs, target);
+  const explicitTarget = resolveExplicitSubagentEntryForToken(runs, target);
+  if (handledPrefix === COMMAND_SPAWN && target && !explicitTarget) {
+    const resolved = resolveSubagentTarget(runs, target);
+    return stopWithText(`⚠️ ${resolved.error ?? `Unknown subagent id: ${target}`}`);
+  }
+
+  const targetResolution =
+    handledPrefix === COMMAND_SPAWN
+      ? (explicitTarget ?? resolveImplicitSubagentEntryForSpawnCommand(ctx))
+      : resolveSubagentEntryForToken(runs, target);
   if ("reply" in targetResolution) {
     return targetResolution.reply;
   }

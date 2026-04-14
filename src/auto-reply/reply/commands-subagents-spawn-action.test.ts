@@ -35,6 +35,7 @@ const baseCfg = {
 
 function buildContext(params?: {
   cfg?: OpenClawConfig;
+  handledPrefix?: string;
   requesterKey?: string;
   restTokens?: string[];
   commandTo?: string | undefined;
@@ -96,7 +97,7 @@ function buildContext(params?: {
       isGroup: true,
       ...(params?.sessionEntry ? { sessionEntry: params.sessionEntry } : {}),
     },
-    handledPrefix: "/subagents",
+    handledPrefix: params?.handledPrefix ?? "/subagents",
     requesterKey: params?.requesterKey ?? "agent:main:main",
     runs: [],
     restTokens: params?.restTokens ?? ["beta", "do", "the", "thing"],
@@ -153,6 +154,32 @@ describe("subagents spawn action", () => {
         agentAccountId: "default",
         agentTo: "channel:origin",
         agentThreadId: "thread-1",
+      }),
+    );
+  });
+
+  it("anchors /spawn replies to the current message and uses its message id as the thread root", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    const result = await handleSubagentsSpawnAction(
+      buildContext({
+        handledPrefix: "/spawn",
+        context: {
+          MessageThreadId: undefined,
+          MessageSid: "1710000000.000100",
+        },
+      }),
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "Spawned subagent beta (session agent:beta:subagent:test-uuid, run run-spaw).",
+        replyToId: "1710000000.000100",
+      },
+    });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        agentThreadId: "1710000000.000100",
       }),
     );
   });
