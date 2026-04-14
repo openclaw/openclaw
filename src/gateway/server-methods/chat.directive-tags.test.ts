@@ -1889,7 +1889,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("MEDIA:https://example.com/final.png");
   });
 
-  it("drops image attachments for text-only session models", async () => {
+  it("rejects image attachments for text-only session models instead of silently dropping them", async () => {
+    // Previously parseMessageWithAttachments silently dropped all attachments
+    // for text-only models with only a warning log, which hid data loss from
+    // RPC clients. It now raises UnsupportedAttachmentError, which the
+    // existing try/catch maps to an INVALID_REQUEST response. See #48123.
     createTranscriptFixture("openclaw-chat-send-text-only-attachments-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -1921,14 +1925,25 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           },
         ],
       },
-      expectBroadcast: false,
+      waitFor: "none",
     });
 
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+      }),
+    );
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(mockState.lastDispatchImageOrder).toBeUndefined();
   });
 
-  it("resolves attachment image support from the session agent model", async () => {
+  it("rejects image attachments when the session agent model resolves to text-only", async () => {
+    // Companion to the previous test — verifies the INVALID_REQUEST
+    // response path fires when `supportsImages` is resolved from the
+    // session agent's model rather than the top-level session entry. See
+    // #48123.
     createTranscriptFixture("openclaw-chat-send-agent-scoped-text-only-attachments-");
     mockState.finalText = "ok";
     mockState.config = {
@@ -1978,9 +1993,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           },
         ],
       },
-      expectBroadcast: false,
+      waitFor: "none",
     });
 
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+      }),
+    );
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(mockState.lastDispatchImageOrder).toBeUndefined();
   });

@@ -3,6 +3,8 @@ import {
   buildMessageWithAttachments,
   type ChatAttachment,
   parseMessageWithAttachments,
+  UnsupportedAttachmentError,
+  type UnsupportedAttachmentReason,
 } from "./chat-attachments.js";
 
 const PNG_1x1 =
@@ -14,6 +16,25 @@ async function parseWithWarnings(message: string, attachments: ChatAttachment[])
     log: { warn: (warning) => logs.push(warning) },
   });
   return { parsed, logs };
+}
+
+async function expectUnsupportedAttachment(
+  promise: Promise<unknown>,
+  reason: UnsupportedAttachmentReason,
+  messagePattern: RegExp,
+): Promise<void> {
+  try {
+    await promise;
+  } catch (err) {
+    expect(err).toBeInstanceOf(UnsupportedAttachmentError);
+    const caught = err as UnsupportedAttachmentError;
+    expect(caught.reason).toBe(reason);
+    expect(caught.message).toMatch(messagePattern);
+    return;
+  }
+  throw new Error(
+    `expected parseMessageWithAttachments to throw UnsupportedAttachmentError (reason=${reason})`,
+  );
 }
 
 describe("buildMessageWithAttachments", () => {
@@ -76,19 +97,24 @@ describe("parseMessageWithAttachments", () => {
     expect(logs).toHaveLength(0);
   });
 
-  it("drops non-image payloads and logs", async () => {
+  it("throws UnsupportedAttachmentError when a non-image payload is attached instead of silently dropping", async () => {
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
-    const { parsed, logs } = await parseWithWarnings("x", [
-      {
-        type: "file",
-        mimeType: "image/png",
-        fileName: "not-image.pdf",
-        content: pdf,
-      },
-    ]);
-    expect(parsed.images).toHaveLength(0);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/non-image/i);
+    await expectUnsupportedAttachment(
+      parseMessageWithAttachments(
+        "x",
+        [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "not-image.pdf",
+            content: pdf,
+          },
+        ],
+        { log: { warn: () => {} } },
+      ),
+      "non-image",
+      /non-image/i,
+    );
   });
 
   it("prefers sniffed mime type and logs mismatch", async () => {
@@ -106,36 +132,80 @@ describe("parseMessageWithAttachments", () => {
     expect(logs[0]).toMatch(/mime mismatch/i);
   });
 
-  it("drops unknown mime when sniff fails and logs", async () => {
+  it("throws UnsupportedAttachmentError when mime cannot be sniffed and provided mime is non-image", async () => {
     const unknown = Buffer.from("not an image").toString("base64");
-    const { parsed, logs } = await parseWithWarnings("x", [
-      { type: "file", fileName: "unknown.bin", content: unknown },
-    ]);
-    expect(parsed.images).toHaveLength(0);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/unable to detect image mime type/i);
+    await expectUnsupportedAttachment(
+      parseMessageWithAttachments(
+        "x",
+        [{ type: "file", fileName: "unknown.bin", content: unknown }],
+        { log: { warn: () => {} } },
+      ),
+      "unknown-mime",
+      /unable to detect image mime type/i,
+    );
   });
 
-  it("keeps valid images and drops invalid ones", async () => {
+  it("fails the entire parse when a mixed batch contains a non-image attachment", async () => {
+    // Previously the parser dropped the PDF and kept the PNG. That behaviour
+    // silently discarded user data. The batch now fails loudly so clients can
+    // retry with only the supported attachments. See #48123.
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
-    const { parsed, logs } = await parseWithWarnings("x", [
-      {
-        type: "image",
-        mimeType: "image/png",
-        fileName: "dot.png",
-        content: PNG_1x1,
-      },
-      {
-        type: "file",
-        mimeType: "image/png",
-        fileName: "not-image.pdf",
-        content: pdf,
-      },
-    ]);
-    expect(parsed.images).toHaveLength(1);
-    expect(parsed.images[0]?.mimeType).toBe("image/png");
-    expect(parsed.images[0]?.data).toBe(PNG_1x1);
-    expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+    await expectUnsupportedAttachment(
+      parseMessageWithAttachments(
+        "x",
+        [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: PNG_1x1,
+          },
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "not-image.pdf",
+            content: pdf,
+          },
+        ],
+        { log: { warn: () => {} } },
+      ),
+      "non-image",
+      /non-image/i,
+    );
+  });
+
+  it("throws UnsupportedAttachmentError when a text-only session receives any attachment", async () => {
+    // Previously `parseMessageWithAttachments` returned empty and logged a
+    // warning when `supportsImages === false`, which silently discarded all
+    // attachments (including valid images) and let callers see a successful
+    // response while the model never saw the content. Now it raises
+    // explicitly so callers can surface the failure. See #48123.
+    await expectUnsupportedAttachment(
+      parseMessageWithAttachments(
+        "describe image",
+        [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: PNG_1x1,
+          },
+        ],
+        { log: { warn: () => {} }, supportsImages: false },
+      ),
+      "text-only-session",
+      /does not support images/i,
+    );
+  });
+
+  it("passes text through unchanged for text-only sessions with no attachments", async () => {
+    const parsed = await parseMessageWithAttachments("plain text", [], {
+      log: { warn: () => {} },
+      supportsImages: false,
+    });
+    expect(parsed.message).toBe("plain text");
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(0);
   });
 });
 

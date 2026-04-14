@@ -129,6 +129,33 @@ export class MediaOffloadError extends Error {
   }
 }
 
+/**
+ * Raised when the Gateway cannot accept an attachment because of an
+ * input-validation constraint: non-image MIME type, unknown/unsniffable
+ * MIME, an empty payload, or a session whose model does not support
+ * images. Distinct from MediaOffloadError so callers can map it to a
+ * 4xx client error separately from 5xx infrastructure faults.
+ *
+ * The `reason` discriminator lets downstream handlers decide whether to
+ * surface a user-facing message, attempt format conversion, or log for
+ * operator triage. See https://github.com/openclaw/openclaw/issues/48123
+ * for the follow-up work that will lift the non-image restriction.
+ */
+export type UnsupportedAttachmentReason =
+  | "non-image"
+  | "unknown-mime"
+  | "text-only-session"
+  | "empty-payload";
+
+export class UnsupportedAttachmentError extends Error {
+  readonly reason: UnsupportedAttachmentReason;
+  constructor(message: string, reason: UnsupportedAttachmentReason) {
+    super(message);
+    this.name = "UnsupportedAttachmentError";
+    this.reason = reason;
+  }
+}
+
 function normalizeMime(mime?: string): string | undefined {
   if (!mime) {
     return undefined;
@@ -304,13 +331,17 @@ export async function parseMessageWithAttachments(
     return { message, images: [], imageOrder: [], offloadedRefs: [] };
   }
 
-  // For text-only models drop all attachments cleanly. Do not save files or
-  // inject media:// markers that would never be resolved and would leak
-  // internal path references into the model's prompt.
+  // Text-only sessions cannot process any attachment. Previously this path
+  // silently dropped all attachments with only a warning log, which hid data
+  // loss from RPC clients and channel adapters — the user saw a successful
+  // response while the model never saw the attachment. Raise an explicit
+  // error so callers can surface the failure. See #48123.
   if (opts?.supportsImages === false) {
     if (attachments.length > 0) {
-      log?.warn(
-        `parseMessageWithAttachments: ${attachments.length} attachment(s) dropped — model does not support images`,
+      throw new UnsupportedAttachmentError(
+        `${attachments.length} attachment(s) cannot be processed: session model does not support images. ` +
+          `See https://github.com/openclaw/openclaw/issues/48123.`,
+        "text-only-session",
       );
     }
     return { message, images: [], imageOrder: [], offloadedRefs: [] };
@@ -344,8 +375,10 @@ export async function parseMessageWithAttachments(
 
       const sizeBytes = estimateBase64DecodedBytes(b64);
       if (sizeBytes <= 0) {
-        log?.warn(`attachment ${label}: estimated size is zero, dropping`);
-        continue;
+        throw new UnsupportedAttachmentError(
+          `attachment ${label}: estimated payload size is zero (empty attachment)`,
+          "empty-payload",
+        );
       }
 
       if (sizeBytes > maxBytes) {
@@ -358,12 +391,20 @@ export async function parseMessageWithAttachments(
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
 
       if (sniffedMime && !isImageMime(sniffedMime)) {
-        log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
-        continue;
+        throw new UnsupportedAttachmentError(
+          `attachment ${label}: non-image attachments are not yet supported by the gateway ` +
+            `(detected ${sniffedMime}). See https://github.com/openclaw/openclaw/issues/48123 ` +
+            `for follow-up work to lift this restriction.`,
+          "non-image",
+        );
       }
       if (!sniffedMime && !isImageMime(providedMime)) {
-        log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
-        continue;
+        throw new UnsupportedAttachmentError(
+          `attachment ${label}: unable to detect image mime type ` +
+            `(provided ${providedMime ?? "unknown"}); only image/* is currently supported. ` +
+            `See https://github.com/openclaw/openclaw/issues/48123.`,
+          "unknown-mime",
+        );
       }
       if (sniffedMime && providedMime && sniffedMime !== providedMime) {
         log?.warn(

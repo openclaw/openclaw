@@ -930,4 +930,53 @@ describe("agent request events", () => {
       expect.objectContaining({ supportsImages: false }),
     );
   });
+
+  it("aborts agent.request node events when attachment parsing throws", async () => {
+    // parseMessageWithAttachments can throw UnsupportedAttachmentError,
+    // MediaOffloadError, or input-validation errors during parsing. The
+    // handler must not fall through to dispatch: there is no structured
+    // failure channel back to the spawning node, so any downstream dispatch
+    // would mask the attachment loss behind a normal agent response. Abort
+    // the whole request and log for operator triage instead. See #48123.
+    const warnSpy = vi.fn();
+    const ctx = buildCtx();
+    ctx.logGateway = { warn: warnSpy } as unknown as typeof ctx.logGateway;
+    ctx.loadGatewayModelCatalog = async () => [
+      {
+        id: "vision-model",
+        name: "Vision",
+        provider: "test-provider",
+        input: ["text", "image"],
+      },
+    ];
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("agent:main:main", {
+        model: "vision-model",
+        modelProvider: "test-provider",
+      }),
+      canonicalKey: "agent:main:main",
+    });
+    parseMessageWithAttachmentsMock.mockRejectedValueOnce(
+      new Error("attachment bad.pdf: non-image attachments are not yet supported by the gateway"),
+    );
+
+    await handleNodeEvent(ctx, "node-parse-fail", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "look at this",
+        sessionKey: "agent:main:main",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "bad.pdf",
+            content: "AAAA",
+          },
+        ],
+      }),
+    });
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("attachment parse failed"));
+  });
 });

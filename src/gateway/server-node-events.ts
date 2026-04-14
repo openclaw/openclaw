@@ -414,6 +414,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             return;
           }
         } catch (err) {
+          // Abort the entire node-event request on parser failure. The handler
+          // has no structured failure channel back to the spawning node (it is
+          // fire-and-forget), so falling through to a text-only dispatch would
+          // hide attachment loss behind a normal-looking reply. This matches
+          // the existing abort behavior for MediaOffloadError, invalid base64,
+          // and oversized payloads. See #48123.
           ctx.logGateway.warn(`agent.request attachment parse failed: ${formatErrorMessage(err)}`);
           return;
         }
