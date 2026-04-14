@@ -273,6 +273,7 @@ describe("gateway server hooks", () => {
   });
 
   test("queues direct and mapped wake payloads as untrusted system events", async () => {
+    testState.sessionConfig = { mainKey: "hooks-wake-queue" };
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
