@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  findMatrixQaProvisionedRoom,
+  type MatrixQaParticipantRole,
+  type MatrixQaProvisionedTopology,
+  type MatrixQaTopologyRoomSpec,
+  type MatrixQaTopologySpec,
+} from "./topology.js";
 
 type FetchLike = typeof fetch;
 
@@ -115,6 +122,7 @@ export type MatrixQaProvisionResult = {
   observer: MatrixQaRegisteredAccount;
   roomId: string;
   sut: MatrixQaRegisteredAccount;
+  topology: MatrixQaProvisionedTopology;
 };
 
 export type MatrixQaRoomEventWaitResult =
@@ -488,7 +496,7 @@ export function createMatrixQaClient(params: {
   }
 
   return {
-    async createPrivateRoom(opts: { inviteUserIds: string[]; name: string }) {
+    async createPrivateRoom(opts: { inviteUserIds: string[]; isDirect?: boolean; name: string }) {
       const result = await requestMatrixJson<MatrixQaRoomCreateResponse>({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
@@ -502,7 +510,7 @@ export function createMatrixQaClient(params: {
             },
           ],
           invite: opts.inviteUserIds,
-          is_direct: false,
+          is_direct: opts.isDirect === true,
           name: opts.name,
           preset: "private_chat",
         },
@@ -618,6 +626,41 @@ export function createMatrixQaClient(params: {
       });
       return result.body.room_id?.trim() || roomId;
     },
+    async inviteUserToRoom(opts: { roomId: string; userId: string }) {
+      await requestMatrixJson<Record<string, never>>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {
+          user_id: opts.userId,
+        },
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/invite`,
+        fetchImpl,
+        method: "POST",
+      });
+    },
+    async kickUserFromRoom(opts: { reason?: string; roomId: string; userId: string }) {
+      await requestMatrixJson<Record<string, never>>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {
+          user_id: opts.userId,
+          ...(opts.reason?.trim() ? { reason: opts.reason.trim() } : {}),
+        },
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/kick`,
+        fetchImpl,
+        method: "POST",
+      });
+    },
+    async leaveRoom(roomId: string) {
+      await requestMatrixJson<Record<string, never>>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {},
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/leave`,
+        fetchImpl,
+        method: "POST",
+      });
+    },
     waitForOptionalRoomEvent,
     async waitForRoomEvent(opts: {
       observedEvents: MatrixQaObservedEvent[];
@@ -659,9 +702,85 @@ async function joinRoomWithRetry(params: {
   throw new Error(`Matrix join retry failed: ${formatErrorMessage(lastError)}`);
 }
 
+function resolveProvisionedRoomRequireMention(room: MatrixQaTopologyRoomSpec) {
+  return room.kind === "group" ? room.requireMention !== false : false;
+}
+
+function resolveTopologyMemberAccounts(
+  accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>,
+  memberRoles: MatrixQaParticipantRole[],
+) {
+  const uniqueRoles = [...new Set(memberRoles)];
+  if (uniqueRoles.length === 0) {
+    throw new Error("Matrix QA room provisioning requires at least one member");
+  }
+  return uniqueRoles.map((role) => ({
+    role,
+    account: accounts[role],
+  }));
+}
+
+async function provisionMatrixQaTopology(params: {
+  accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>;
+  baseUrl: string;
+  fetchImpl?: FetchLike;
+  spec: MatrixQaTopologySpec;
+}): Promise<MatrixQaProvisionedTopology> {
+  const rooms = [];
+
+  for (const room of params.spec.rooms) {
+    const members = resolveTopologyMemberAccounts(params.accounts, room.members);
+    const creator = members[0];
+    const invitees = members.slice(1);
+    const creatorClient = createMatrixQaClient({
+      accessToken: creator.account.accessToken,
+      baseUrl: params.baseUrl,
+      fetchImpl: params.fetchImpl,
+    });
+    const roomId = await creatorClient.createPrivateRoom({
+      inviteUserIds: invitees.map((entry) => entry.account.userId),
+      isDirect: room.kind === "dm",
+      name: room.name,
+    });
+    for (const invitee of invitees) {
+      await joinRoomWithRetry({
+        accessToken: invitee.account.accessToken,
+        baseUrl: params.baseUrl,
+        fetchImpl: params.fetchImpl,
+        roomId,
+      });
+    }
+    rooms.push({
+      key: room.key,
+      kind: room.kind,
+      memberRoles: members.map((entry) => entry.role),
+      memberUserIds: members.map((entry) => entry.account.userId),
+      name: room.name,
+      requireMention: resolveProvisionedRoomRequireMention(room),
+      roomId,
+    });
+  }
+
+  const defaultRoom = findMatrixQaProvisionedRoom(
+    {
+      defaultRoomId: "",
+      defaultRoomKey: params.spec.defaultRoomKey,
+      rooms,
+    },
+    params.spec.defaultRoomKey,
+  );
+
+  return {
+    defaultRoomId: defaultRoom.roomId,
+    defaultRoomKey: params.spec.defaultRoomKey,
+    rooms,
+  };
+}
+
 export async function provisionMatrixQaRoom(params: {
   baseUrl: string;
   fetchImpl?: FetchLike;
+  topology?: MatrixQaTopologySpec;
   roomName: string;
   driverLocalpart: string;
   observerLocalpart: string;
@@ -690,32 +809,35 @@ export async function provisionMatrixQaRoom(params: {
     password: `observer-${randomUUID()}`,
     registrationToken: params.registrationToken,
   });
-  const driverClient = createMatrixQaClient({
-    accessToken: driver.accessToken,
+  const topology = await provisionMatrixQaTopology({
+    accounts: {
+      driver,
+      observer,
+      sut,
+    },
     baseUrl: params.baseUrl,
     fetchImpl: params.fetchImpl,
-  });
-  const roomId = await driverClient.createPrivateRoom({
-    inviteUserIds: [sut.userId, observer.userId],
-    name: params.roomName,
-  });
-  await joinRoomWithRetry({
-    accessToken: sut.accessToken,
-    baseUrl: params.baseUrl,
-    fetchImpl: params.fetchImpl,
-    roomId,
-  });
-  await joinRoomWithRetry({
-    accessToken: observer.accessToken,
-    baseUrl: params.baseUrl,
-    fetchImpl: params.fetchImpl,
-    roomId,
+    spec:
+      params.topology ??
+      ({
+        defaultRoomKey: "main",
+        rooms: [
+          {
+            key: "main",
+            kind: "group",
+            members: ["driver", "observer", "sut"],
+            name: params.roomName,
+            requireMention: true,
+          },
+        ],
+      } satisfies MatrixQaTopologySpec),
   });
   return {
     driver,
     observer,
-    roomId,
+    roomId: topology.defaultRoomId,
     sut,
+    topology,
   } satisfies MatrixQaProvisionResult;
 }
 

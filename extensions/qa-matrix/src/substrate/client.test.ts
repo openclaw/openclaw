@@ -5,6 +5,7 @@ import {
   provisionMatrixQaRoom,
   type MatrixQaObservedEvent,
 } from "./client.js";
+import { buildDefaultMatrixQaTopologySpec } from "./topology.js";
 
 function resolveRequestUrl(input: RequestInfo | URL) {
   if (typeof input === "string") {
@@ -308,6 +309,57 @@ describe("matrix driver client", () => {
     );
   });
 
+  it("issues Matrix room membership control requests for QA topology changes", async () => {
+    const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push({
+        body: parseJsonRequestBody(init),
+        url: resolveRequestUrl(input),
+      });
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await client.inviteUserToRoom({
+      roomId: "!room:matrix-qa.test",
+      userId: "@observer:matrix-qa.test",
+    });
+    await client.kickUserFromRoom({
+      reason: "topology reset",
+      roomId: "!room:matrix-qa.test",
+      userId: "@observer:matrix-qa.test",
+    });
+    await client.leaveRoom("!room:matrix-qa.test");
+
+    expect(requests).toEqual([
+      {
+        url: "http://127.0.0.1:28008/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/invite",
+        body: {
+          user_id: "@observer:matrix-qa.test",
+        },
+      },
+      {
+        url: "http://127.0.0.1:28008/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/kick",
+        body: {
+          reason: "topology reset",
+          user_id: "@observer:matrix-qa.test",
+        },
+      },
+      {
+        url: "http://127.0.0.1:28008/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/leave",
+        body: {},
+      },
+    ]);
+  });
+
   it("sends Matrix reactions through the protocol send endpoint", async () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       expect(resolveRequestUrl(input)).toContain(
@@ -401,15 +453,116 @@ describe("matrix driver client", () => {
       roomName: "OpenClaw Matrix QA",
       sutLocalpart: "qa-sut",
       fetchImpl,
+      topology: buildDefaultMatrixQaTopologySpec({
+        defaultRoomName: "OpenClaw Matrix QA",
+      }),
     });
 
     expect(result.roomId).toBe("!room:matrix-qa.test");
+    expect(result.topology).toMatchObject({
+      defaultRoomId: "!room:matrix-qa.test",
+      defaultRoomKey: "main",
+      rooms: [
+        {
+          key: "main",
+          kind: "group",
+          memberRoles: ["driver", "observer", "sut"],
+          memberUserIds: [
+            "@qa-driver:matrix-qa.test",
+            "@qa-observer:matrix-qa.test",
+            "@qa-sut:matrix-qa.test",
+          ],
+          requireMention: true,
+          roomId: "!room:matrix-qa.test",
+        },
+      ],
+    });
     expect(result.observer.userId).toBe("@qa-observer:matrix-qa.test");
     expect(createRoomBodies).toEqual([
       expect.objectContaining({
-        invite: ["@qa-sut:matrix-qa.test", "@qa-observer:matrix-qa.test"],
+        invite: ["@qa-observer:matrix-qa.test", "@qa-sut:matrix-qa.test"],
         is_direct: false,
         preset: "private_chat",
+      }),
+    ]);
+  });
+
+  it("provisions direct-message topology rooms with Matrix direct-room flags", async () => {
+    const createRoomBodies: Array<Record<string, unknown>> = [];
+    const roomIds = ["!group:matrix-qa.test", "!dm:matrix-qa.test"];
+    let registerCount = 0;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = resolveRequestUrl(input);
+      const body = parseJsonRequestBody(init);
+      if (url.endsWith("/_matrix/client/v3/register")) {
+        registerCount += 1;
+        const role = ["driver", "sut", "observer"][registerCount - 1];
+        return new Response(
+          JSON.stringify({
+            access_token: `token-${role}`,
+            user_id: `@qa-${role}:matrix-qa.test`,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/_matrix/client/v3/createRoom")) {
+        createRoomBodies.push(body);
+        return new Response(JSON.stringify({ room_id: roomIds.shift() }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/_matrix/client/v3/join/")) {
+        return new Response(JSON.stringify({ room_id: "!joined:matrix-qa.test" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const result = await provisionMatrixQaRoom({
+      baseUrl: "http://127.0.0.1:28008/",
+      driverLocalpart: "qa-driver",
+      observerLocalpart: "qa-observer",
+      registrationToken: "reg-token",
+      roomName: "unused",
+      sutLocalpart: "qa-sut",
+      fetchImpl,
+      topology: {
+        defaultRoomKey: "group",
+        rooms: [
+          {
+            key: "group",
+            kind: "group",
+            members: ["driver", "observer", "sut"],
+            name: "Matrix Group",
+            requireMention: true,
+          },
+          {
+            key: "sut-dm",
+            kind: "dm",
+            members: ["driver", "sut"],
+            name: "Matrix Driver/SUT DM",
+          },
+        ],
+      },
+    });
+
+    expect(result.topology.rooms).toMatchObject([
+      { key: "group", kind: "group", roomId: "!group:matrix-qa.test", requireMention: true },
+      { key: "sut-dm", kind: "dm", roomId: "!dm:matrix-qa.test", requireMention: false },
+    ]);
+    expect(createRoomBodies).toEqual([
+      expect.objectContaining({
+        invite: ["@qa-observer:matrix-qa.test", "@qa-sut:matrix-qa.test"],
+        is_direct: false,
+        name: "Matrix Group",
+      }),
+      expect.objectContaining({
+        invite: ["@qa-sut:matrix-qa.test"],
+        is_direct: true,
+        name: "Matrix Driver/SUT DM",
       }),
     ]);
   });
