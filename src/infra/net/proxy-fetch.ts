@@ -64,6 +64,21 @@ function isRequestLike(input: unknown): input is RequestLikeInput {
   return typeof url === "string" && url.trim().length > 0;
 }
 
+// Hop-by-hop and framing headers that must not be forwarded to upstream
+// servers when normalizing/proxying requests (request smuggling risk).
+const STRIP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+  "content-length",
+]);
+
 function mergeHeaders(
   requestHeaders: HeadersInit | undefined,
   initHeaders: HeadersInit | undefined,
@@ -76,6 +91,13 @@ function mergeHeaders(
     new Headers(initHeaders).forEach((value, key) => {
       merged.set(key, value);
     });
+  }
+  // Strip hop-by-hop and framing headers so they cannot be injected into
+  // the upstream request and cause request smuggling.
+  for (const key of Array.from(merged.keys())) {
+    if (STRIP_HEADERS.has(key.toLowerCase())) {
+      merged.delete(key);
+    }
   }
   return merged;
 }
