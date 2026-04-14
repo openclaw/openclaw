@@ -569,6 +569,7 @@ const THEME_OPTIONS: ThemeOption[] = [
   { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
   { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
   { id: "matrix", label: "Matrix", description: "Lime green digital rain", icon: icons.terminal },
+  { id: "cyberpunk", label: "Cyberpunk", description: "Glassmorphism HUD aesthetics", icon: icons.code },
 ];
 
 function renderAppearanceSection(props: ConfigProps) {
