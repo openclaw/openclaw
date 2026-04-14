@@ -994,6 +994,15 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/qa-matrix:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/qianfan:
     devDependencies:
       '@openclaw/plugin-sdk':
