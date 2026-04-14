@@ -41,7 +41,7 @@ import {
 } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
-const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
+const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\b[^<>]*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
 function collectPendingMediaFromInternalEvents(

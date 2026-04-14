@@ -78,6 +78,22 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onPartialReply).toHaveBeenCalled();
     expect(onPartialReply.mock.calls[0][0].text).toBe("Hello world");
   });
+  it("strips self-closing <final/> tags when enforcement is off (regression #65867)", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onPartialReply,
+    });
+
+    emitAssistantTextDelta({ emit, delta: "<final>Hello world<final/>" });
+
+    const payload = onPartialReply.mock.calls[0][0];
+    expect(payload.text).toBe("Hello world");
+  });
   it("does not require <final> when enforcement is off", () => {
     const { session, emit } = createStubSessionHarness();
 
