@@ -33,6 +33,7 @@ export function buildEmbeddedSystemPrompt(params: {
   acpEnabled?: boolean;
   runtimeInfo: {
     agentId?: string;
+    sessionKey?: string;
     host: string;
     os: string;
     arch: string;

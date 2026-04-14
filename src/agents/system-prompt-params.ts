@@ -13,6 +13,7 @@ import {
 
 export type RuntimeInfoInput = {
   agentId?: string;
+  sessionKey?: string;
   host: string;
   os: string;
   arch: string;

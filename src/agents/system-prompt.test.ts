@@ -738,6 +738,42 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("thinking=low");
   });
 
+  it("includes sessionKey in runtime line when provided", () => {
+    const line = buildRuntimeLine(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:draft:abc123",
+        host: "host",
+        os: "Linux",
+        arch: "x64",
+        node: "v20",
+        model: "anthropic/claude",
+      },
+      "webchat",
+      [],
+    );
+
+    expect(line).toContain("sessionKey=agent:main:draft:abc123");
+    expect(line).toContain("agent=main");
+  });
+
+  it("omits sessionKey from runtime line when not provided", () => {
+    const line = buildRuntimeLine(
+      {
+        agentId: "main",
+        host: "host",
+        os: "Linux",
+        arch: "x64",
+        node: "v20",
+        model: "anthropic/claude",
+      },
+      "webchat",
+      [],
+    );
+
+    expect(line).not.toContain("sessionKey=");
+  });
+
   it("renders extra system prompt exactly once", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
