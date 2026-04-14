@@ -7,6 +7,7 @@ import {
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
+import type { PluginLogger } from "./types.js";
 
 type CapabilityProviderRegistryKey =
   | "memoryEmbeddingProviders"
@@ -81,6 +82,8 @@ function resolveCapabilityProviderConfig(params: {
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   cfg?: OpenClawConfig;
+  emitTrustWarnings?: boolean;
+  logger?: PluginLogger;
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
@@ -88,7 +91,16 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
-  const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
+  const loadOptions =
+    compatConfig === undefined
+      ? undefined
+      : {
+          config: compatConfig,
+          ...(params.emitTrustWarnings !== undefined
+            ? { emitTrustWarnings: params.emitTrustWarnings }
+            : {}),
+          ...(params.logger ? { logger: params.logger } : {}),
+        };
   const registry = resolveRuntimePluginRegistry(loadOptions);
   return (registry?.[params.key] ?? []).map(
     (entry) => entry.provider,

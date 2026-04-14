@@ -310,4 +310,24 @@ describe("resolvePluginCapabilityProviders", () => {
     });
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({ config: compatConfig });
   });
+
+  it("forwards trust warning suppression when loading compatibility providers", () => {
+    const { cfg, enablementCompat } = createCompatChainConfig();
+    setBundledCapabilityFixture("speechProviders");
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
+
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({
+        key: "speechProviders",
+        cfg,
+        emitTrustWarnings: false,
+      }),
+    );
+
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config: enablementCompat,
+      emitTrustWarnings: false,
+    });
+  });
 });

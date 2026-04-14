@@ -91,6 +91,23 @@ describe("scanStatus", () => {
     );
   });
 
+  it("uses sourceConfig for plugin compatibility checks in text status output", async () => {
+    configureScanStatus({
+      sourceConfig: createStatusScanConfig({
+        marker: "source",
+      }),
+      resolvedConfig: createStatusScanConfig({
+        marker: "resolved",
+      }),
+    });
+
+    await scanStatus({ json: false }, {} as never);
+
+    expect(mocks.buildPluginCompatibilityNotices).toHaveBeenCalledWith({
+      config: expect.objectContaining({ marker: "source" }),
+    });
+  });
+
   it("skips channel plugin preload for status --json with no channel config", async () => {
     configureScanStatus({
       sourceConfig: createStatusScanConfig({

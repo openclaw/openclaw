@@ -34,5 +34,6 @@ export async function ensureCliCommandBootstrap(params: {
   await ensureCliPluginRegistryLoaded({
     scope: resolvePluginRegistryScopeForCommandPath(params.commandPath),
     routeLogsToStderr: params.suppressDoctorStdout,
+    emitTrustWarnings: false,
   });
 }

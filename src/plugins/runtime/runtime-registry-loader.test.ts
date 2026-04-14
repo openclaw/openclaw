@@ -238,6 +238,22 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
+  it("forwards trust warning suppression for read-only preloads", () => {
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: { channels: { demo: { enabled: true } } } as never,
+      emitTrustWarnings: false,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emitTrustWarnings: false,
+      }),
+    );
+  });
+
   it("does not forward empty channel scopes for broad channel loads", () => {
     mocks.resolveChannelPluginIds.mockReturnValue([]);
 

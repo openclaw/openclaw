@@ -43,6 +43,7 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
       routeLogsToStderr: true,
+      emitTrustWarnings: false,
     });
   });
 
@@ -59,6 +60,7 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
       routeLogsToStderr: true,
+      emitTrustWarnings: false,
     });
   });
 

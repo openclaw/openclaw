@@ -50,7 +50,9 @@ describe("status.scan-memory", () => {
       requireDefaultStore,
     });
 
-    expect(mocks.resolveSharedMemoryStatusSnapshot).toHaveBeenCalledWith({
+    const snapshotArgs = mocks.resolveSharedMemoryStatusSnapshot.mock.calls[0]?.[0];
+
+    expect(snapshotArgs).toEqual({
       cfg: { agents: {} },
       agentStatus: {
         defaultId: "main",
@@ -69,9 +71,20 @@ describe("status.scan-memory", () => {
         ],
       },
       memoryPlugin: { enabled: true, slot: "memory-core" },
-      resolveMemoryConfig: mocks.resolveMemorySearchConfig,
+      resolveMemoryConfig: expect.any(Function),
       getMemorySearchManager: mocks.getMemorySearchManager,
       requireDefaultStore,
+    });
+
+    expect(snapshotArgs.resolveMemoryConfig({ agents: {} }, "main")).toBeUndefined();
+    expect(mocks.resolveMemorySearchConfig).toHaveBeenCalledWith({ agents: {} }, "main", {
+      emitTrustWarnings: false,
+      logger: expect.objectContaining({
+        info: expect.any(Function),
+        warn: expect.any(Function),
+        error: expect.any(Function),
+        debug: expect.any(Function),
+      }),
     });
   });
 });

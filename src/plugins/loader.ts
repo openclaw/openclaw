@@ -126,6 +126,7 @@ export type PluginLoadOptions = {
   activate?: boolean;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
+  emitTrustWarnings?: boolean;
 };
 
 const CLI_METADATA_ENTRY_BASENAMES = [
@@ -1176,6 +1177,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
   const cacheEnabled = options.cache !== false;
+  const emitTrustWarnings = options.emitTrustWarnings ?? shouldActivate;
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
@@ -1328,7 +1330,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
     pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
-      emitWarning: shouldActivate,
+      emitWarning: emitTrustWarnings,
       logger,
       pluginsEnabled: normalized.enabled,
       allow: normalized.allow,
@@ -1881,7 +1883,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry,
       provenance,
       allowlist: normalized.allow,
-      emitWarning: shouldActivate,
+      emitWarning: emitTrustWarnings,
       logger,
       env,
     });

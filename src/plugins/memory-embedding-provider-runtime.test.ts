@@ -60,6 +60,22 @@ describe("memory embedding provider runtime resolution", () => {
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards trust warning suppression to capability fallback resolution", () => {
+    mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
+
+    expect(
+      runtimeModule.getMemoryEmbeddingProvider("ollama", undefined, {
+        emitTrustWarnings: false,
+      })?.id,
+    ).toBe("ollama");
+
+    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledWith({
+      key: "memoryEmbeddingProviders",
+      cfg: undefined,
+      emitTrustWarnings: false,
+    });
+  });
+
   it("does not consult capability fallback once runtime adapters are registered", () => {
     registerMemoryEmbeddingProvider({
       id: "openai",
