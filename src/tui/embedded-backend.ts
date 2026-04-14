@@ -38,7 +38,6 @@ import {
 } from "../gateway/session-utils.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
-import { type RuntimeEnv } from "../runtime.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type {
@@ -59,10 +58,10 @@ type LocalRunState = {
   finalSent: boolean;
 };
 
-const silentRuntime: RuntimeEnv = {
-  log: () => undefined,
-  error: () => undefined,
-  exit: (code) => {
+const silentRuntime = {
+  log: (..._args: unknown[]) => undefined,
+  error: (..._args: unknown[]) => undefined,
+  exit: (code: number): never => {
     throw new Error(`embedded tui runtime exit ${String(code)}`);
   },
 };
