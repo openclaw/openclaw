@@ -42,7 +42,7 @@ const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 
 type VoyageBatchDeps = {
   now: () => number;
-  sleep: (ms: number) => Promise<void>;
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   postJsonWithRetry: typeof postJsonWithRetry;
   uploadBatchJsonlFile: typeof uploadBatchJsonlFile;
   withRemoteHttpResponse: typeof withRemoteHttpResponse;
@@ -53,7 +53,18 @@ function resolveVoyageBatchDeps(overrides: Partial<VoyageBatchDeps> | undefined)
     now: overrides?.now ?? Date.now,
     sleep:
       overrides?.sleep ??
-      (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms))),
+      (async (ms: number, signal?: AbortSignal) =>
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(resolve, ms);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(t);
+              reject(new Error("Polling aborted"));
+            },
+            { once: true },
+          );
+        })),
     postJsonWithRetry: overrides?.postJsonWithRetry ?? postJsonWithRetry,
     uploadBatchJsonlFile: overrides?.uploadBatchJsonlFile ?? uploadBatchJsonlFile,
     withRemoteHttpResponse: overrides?.withRemoteHttpResponse ?? withRemoteHttpResponse,
@@ -70,6 +81,7 @@ async function assertVoyageResponseOk(res: Response, context: string): Promise<v
 function buildVoyageBatchRequest<T>(params: {
   client: VoyageEmbeddingClient;
   path: string;
+  signal?: AbortSignal;
   onResponse: (res: Response) => Promise<T>;
 }) {
   const baseUrl = normalizeBatchBaseUrl(params.client);
@@ -77,6 +89,7 @@ function buildVoyageBatchRequest<T>(params: {
     url: `${baseUrl}/${params.path}`,
     ssrfPolicy: params.client.ssrfPolicy,
     init: {
+      signal: params.signal,
       headers: buildBatchHeaders(params.client, { json: true }),
     },
     onResponse: params.onResponse,
@@ -119,6 +132,7 @@ async function submitVoyageBatch(params: {
 }
 
 async function fetchVoyageBatchStatus(params: {
+  signal?: AbortSignal;
   client: VoyageEmbeddingClient;
   batchId: string;
   deps: VoyageBatchDeps;
@@ -136,6 +150,7 @@ async function fetchVoyageBatchStatus(params: {
 }
 
 async function readVoyageBatchError(params: {
+  signal?: AbortSignal;
   client: VoyageEmbeddingClient;
   errorFileId: string;
   deps: VoyageBatchDeps;
@@ -173,6 +188,7 @@ async function waitForVoyageBatch(params: {
   timeoutMs: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
   initial?: VoyageBatchStatus;
+  signal?: AbortSignal;
   deps: VoyageBatchDeps;
 }): Promise<BatchCompletionResult> {
   const start = params.deps.now();
@@ -184,6 +200,7 @@ async function waitForVoyageBatch(params: {
         client: params.client,
         batchId: params.batchId,
         deps: params.deps,
+        signal: params.signal,
       }));
     const state = status.status ?? "unknown";
     if (state === "completed") {
@@ -201,6 +218,7 @@ async function waitForVoyageBatch(params: {
           client: params.client,
           errorFileId,
           deps: params.deps,
+          signal: params.signal,
         }),
     });
     if (!params.wait) {
@@ -210,7 +228,7 @@ async function waitForVoyageBatch(params: {
       throw new Error(`voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
     }
     params.debug?.(`voyage batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await params.deps.sleep(params.pollIntervalMs);
+    await params.deps.sleep(params.pollIntervalMs, params.signal);
     current = undefined;
   }
 }
@@ -257,12 +275,13 @@ export async function runVoyageEmbeddingBatches(
           await waitForVoyageBatch({
             client: params.client,
             batchId,
+            deps,
             wait: params.wait,
             pollIntervalMs: params.pollIntervalMs,
             timeoutMs: params.timeoutMs,
             debug: params.debug,
             initial: batchInfo,
-            deps,
+            signal: params.signal,
           }),
       });
 
@@ -274,6 +293,7 @@ export async function runVoyageEmbeddingBatches(
         url: `${baseUrl}/files/${completed.outputFileId}/content`,
         ssrfPolicy: params.client.ssrfPolicy,
         init: {
+          signal: params.signal,
           headers: buildBatchHeaders(params.client, { json: true }),
         },
         onResponse: async (contentRes) => {

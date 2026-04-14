@@ -73,6 +73,7 @@ function buildGeminiUploadBody(params: { jsonl: string; displayName: string }): 
 }
 
 async function submitGeminiBatch(params: {
+  signal?: AbortSignal;
   gemini: GeminiEmbeddingClient;
   requests: GeminiBatchRequest[];
   agentId: string;
@@ -105,6 +106,7 @@ async function submitGeminiBatch(params: {
         "Content-Type": uploadPayload.contentType,
       },
       body: uploadPayload.body,
+      signal: params.signal,
     },
     onResponse: async (fileRes) => {
       if (!fileRes.ok) {
@@ -140,6 +142,7 @@ async function submitGeminiBatch(params: {
       method: "POST",
       headers: buildBatchHeaders(params.gemini, { json: true }),
       body: JSON.stringify(batchBody),
+      signal: params.signal,
     },
     onResponse: async (batchRes) => {
       if (batchRes.ok) {
@@ -157,6 +160,7 @@ async function submitGeminiBatch(params: {
 }
 
 async function fetchGeminiBatchStatus(params: {
+  signal?: AbortSignal;
   gemini: GeminiEmbeddingClient;
   batchName: string;
 }): Promise<GeminiBatchStatus> {
@@ -183,6 +187,7 @@ async function fetchGeminiBatchStatus(params: {
 }
 
 async function fetchGeminiFileContent(params: {
+  signal?: AbortSignal;
   gemini: GeminiEmbeddingClient;
   fileId: string;
 }): Promise<string> {
@@ -195,6 +200,7 @@ async function fetchGeminiFileContent(params: {
     ssrfPolicy: params.gemini.ssrfPolicy,
     init: {
       headers: buildBatchHeaders(params.gemini, { json: true }),
+      signal: params.signal,
     },
     onResponse: async (res) => {
       if (!res.ok) {
@@ -225,6 +231,7 @@ async function waitForGeminiBatch(params: {
   timeoutMs: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
   initial?: GeminiBatchStatus;
+  signal?: AbortSignal;
 }): Promise<{ outputFileId: string }> {
   const start = Date.now();
   let current: GeminiBatchStatus | undefined = params.initial;
@@ -257,7 +264,17 @@ async function waitForGeminiBatch(params: {
       throw new Error(`gemini batch ${params.batchName} timed out after ${params.timeoutMs}ms`);
     }
     params.debug?.(`gemini batch ${params.batchName} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(resolve, params.pollIntervalMs);
+      params.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(t);
+          reject(new Error("Aborted"));
+        },
+        { once: true },
+      );
+    });
     current = undefined;
   }
 }
@@ -279,6 +296,7 @@ export async function runGeminiEmbeddingBatches(
         gemini: params.gemini,
         requests: group,
         agentId: params.agentId,
+        signal: params.signal,
       });
       const batchName = batchInfo.name ?? "";
       if (!batchName) {
@@ -319,6 +337,7 @@ export async function runGeminiEmbeddingBatches(
               pollIntervalMs: params.pollIntervalMs,
               timeoutMs: params.timeoutMs,
               debug: params.debug,
+              signal: params.signal,
               initial: batchInfo,
             });
       if (!completed.outputFileId) {

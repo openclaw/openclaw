@@ -7,6 +7,7 @@ export type EmbeddingBatchExecutionParams = {
   timeoutMs: number;
   concurrency: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
+  signal?: AbortSignal;
 };
 
 export async function runEmbeddingBatchGroups<TRequest>(params: {
