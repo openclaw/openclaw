@@ -230,6 +230,38 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("ignores bullet-prefixed dreaming snippets when recording short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "action preference",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 5,
+            score: 0.92,
+            snippet: [
+              "- Candidate: Default to action.",
+              "  - confidence: 0.76",
+              "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
+              "  - recalls: 3",
+              "  - status: staged",
+            ].join("\n"),
+          },
+        ],
+      });
+
+      expect(
+        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
+      ).toMatchObject({
+        version: 1,
+        entries: {},
+      });
+    });
+  });
+
   it("records recalls and ranks candidates with weighted scores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -1013,6 +1045,14 @@ describe("short-term promotion", () => {
 
       expect(ranked).toEqual([]);
     });
+  });
+
+  it("treats diff-prefixed dreaming snippets as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "@@ -1,1 - Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+      ),
+    ).toBe(true);
   });
 
   it("skips direct candidates that exceed maxAgeDays during apply", async () => {

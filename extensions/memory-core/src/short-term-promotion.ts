@@ -33,12 +33,16 @@ const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
 const DREAMING_NARRATIVE_PROMPT_PREFIX = "Write a dream diary entry from these memory fragments";
-const DREAMING_PROMOTION_META_PREFIX = "openclaw-memory-promotion:";
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
 const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
+const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+const DREAMING_CANDIDATE_LEAD_RE =
+  /^(?:[-*+>]\s+|@@\s*-\d+(?:,\d+)?\s+[-*+]\s+|[([]\s*)*Candidate:/i;
+const DREAMING_REFLECTION_LEAD_RE =
+  /^(?:[-*+>]\s+|@@\s*-\d+(?:,\d+)?\s+[-*+]\s+|[([]\s*)*Reflections?:/i;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
@@ -244,15 +248,14 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   }
   if (
     snippet.includes(DREAMING_NARRATIVE_PROMPT_PREFIX) ||
-    snippet.includes(DREAMING_PROMOTION_META_PREFIX) ||
-    snippet.includes("dreaming-narrative-")
+    snippet.includes(PROMOTION_MARKER_PREFIX) ||
+    snippet.includes(DREAMING_NARRATIVE_RUN_PREFIX)
   ) {
     return true;
   }
 
-  const hasCandidateLead = /^Candidate:/i.test(snippet) || /[([]\s*Candidate:/i.test(snippet);
-  const hasReflectionLead =
-    /^Reflections?:/i.test(snippet) || /[([]\s*Reflections?:/i.test(snippet);
+  const hasCandidateLead = DREAMING_CANDIDATE_LEAD_RE.test(snippet);
+  const hasReflectionLead = DREAMING_REFLECTION_LEAD_RE.test(snippet);
   const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
   const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
     snippet,

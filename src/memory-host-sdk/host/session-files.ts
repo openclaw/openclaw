@@ -47,7 +47,7 @@ function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
 }
 
 function hasDreamingNarrativeRunId(value: unknown): boolean {
-  return typeof value === "string" && value.includes(DREAMING_NARRATIVE_RUN_PREFIX);
+  return typeof value === "string" && value.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
 }
 
 function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {

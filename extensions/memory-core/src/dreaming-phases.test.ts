@@ -713,8 +713,8 @@ describe("memory-core dreaming phases", () => {
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
     expect(Object.values(sessionIngestion.files)).toEqual([
       expect.objectContaining({
-        lineCount: 2,
-        lastContentLine: 2,
+        lineCount: 0,
+        lastContentLine: 0,
         contentHash: expect.any(String),
       }),
     ]);
