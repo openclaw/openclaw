@@ -164,7 +164,9 @@ Compatibility notes for stricter OpenAI-compatible backends:
 - Some smaller or stricter local backends are unstable with OpenClaw's full
   agent-runtime prompt shape, especially when tool schemas are included. If the
   backend works for tiny direct `/v1/chat/completions` calls but fails on normal
-  OpenClaw agent turns, try
+  OpenClaw agent turns, first try
+  `agents.defaults.localModelMode: "lean"` to drop heavyweight default tools
+  like `browser`, `cron`, and `message`, then try
   `models.providers.<provider>.models[].compat.supportsTools: false` first.
 - If the backend still fails only on larger OpenClaw runs, the remaining issue
   is usually upstream model/server capacity or a backend bug, not OpenClaw's
