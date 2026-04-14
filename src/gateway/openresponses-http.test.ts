@@ -921,6 +921,28 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
+  it("maps reasoning.effort to one-shot thinking while keeping streamed reasoning enabled", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+    } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: "hi",
+      reasoning: { effort: "high", summary: "auto" },
+    });
+
+    expect(res.status).toBe(200);
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { thinkingOnce?: string; reasoningLevel?: string }
+      | undefined;
+    expect(opts?.thinkingOnce).toBe("high");
+    expect(opts?.reasoningLevel).toBe("stream");
+    await ensureResponseConsumed(res);
+  });
+
   it("preserves assistant text alongside non-stream function_call output", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

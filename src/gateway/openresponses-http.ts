@@ -419,6 +419,7 @@ async function runResponsesAgentCommand(params: {
   streamParams: { maxTokens: number } | undefined;
   sessionKey: string;
   runId: string;
+  thinkingOnce?: string;
   reasoningLevel?: "stream";
   providerMetadata?: Record<string, unknown>;
   toolResultMaxDataBytes?: number;
@@ -441,6 +442,7 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
+      thinkingOnce: params.thinkingOnce,
       reasoningLevel: params.reasoningLevel,
       providerMetadata: params.providerMetadata,
       toolResultMaxDataBytes: params.toolResultMaxDataBytes,
@@ -509,7 +511,7 @@ export async function handleOpenResponsesHttpRequest(
       : undefined);
   const toolResultMaxDataBytes = opts.config?.toolResultMaxDataBytes;
   const reasoning = payload.reasoning;
-  // `reasoning.effort` is accepted for parity but currently ignored.
+  const thinkingOnce = reasoning?.effort;
   const reasoningLevel = reasoning ? "stream" : undefined;
   const reasoningSummary = Boolean(reasoning?.summary);
   const agentId = resolveAgentIdForRequest({ req, model });
@@ -861,6 +863,7 @@ export async function handleOpenResponsesHttpRequest(
         streamParams,
         sessionKey,
         runId: responseId,
+        thinkingOnce,
         reasoningLevel,
         providerMetadata,
         toolResultMaxDataBytes,
@@ -1167,6 +1170,7 @@ export async function handleOpenResponsesHttpRequest(
         streamParams,
         sessionKey,
         runId: responseId,
+        thinkingOnce,
         reasoningLevel,
         providerMetadata,
         toolResultMaxDataBytes,
