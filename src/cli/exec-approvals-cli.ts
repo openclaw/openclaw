@@ -36,8 +36,7 @@ type ConfigSnapshotLike = {
 };
 type ConfigLoadResult = {
   config: OpenClawConfig | null;
-  errorMessage?: string;
-  timedOut?: boolean;
+  timedOut: boolean;
 };
 type ApprovalsTargetSource = "gateway" | "node" | "local";
 type EffectivePolicyReport = {
@@ -177,7 +176,7 @@ async function loadConfigForApprovalsTarget(params: {
 }): Promise<ConfigLoadResult> {
   try {
     if (params.source === "local") {
-      return { config: await readBestEffortConfig() };
+      return { config: await readBestEffortConfig(), timedOut: false };
     }
     const snapshot = (await callGatewayFromCli(
       "config.get",
@@ -186,13 +185,12 @@ async function loadConfigForApprovalsTarget(params: {
     )) as ConfigSnapshotLike;
     return {
       config: snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null,
+      timedOut: false,
     };
   } catch (err) {
-    const errorMessage = formatCliError(err);
     return {
       config: null,
-      errorMessage,
-      timedOut: /^gateway timeout after \d+ms\b/i.test(errorMessage),
+      timedOut: /^gateway timeout after \d+ms\b/i.test(formatCliError(err)),
     };
   }
 }
@@ -205,7 +203,7 @@ function buildEffectivePolicyReport(params: {
 }): EffectivePolicyReport {
   const cfg = params.configLoad.config;
   const timeoutNote = params.configLoad.timedOut
-    ? `Config fetch timed out (${params.configLoad.errorMessage}). Re-run with a higher --timeout to inspect Effective Policy.`
+    ? "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy."
     : null;
   if (params.source === "node") {
     if (!cfg) {

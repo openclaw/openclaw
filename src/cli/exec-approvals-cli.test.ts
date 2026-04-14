@@ -359,7 +359,7 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
-  it("reports gateway config timeout explicitly and sanitizes the error message", async () => {
+  it("reports gateway config timeout explicitly", async () => {
     callGatewayFromCli.mockImplementation(
       async (method: string, _opts: unknown, params?: unknown) => {
         if (method === "config.get") {
@@ -382,7 +382,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         effectivePolicy: {
-          note: "Config fetch timed out (gateway timeout after 10000ms). Re-run with a higher --timeout to inspect Effective Policy.",
+          note: "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy.",
           scopes: [],
         },
       }),
