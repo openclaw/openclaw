@@ -389,6 +389,12 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      const normalizedToolName = normalizeToolName(toolName || "tool");
+      const toolCtx = {
+        toolName: normalizedToolName,
+        agentId: ctx?.agentId,
+        sessionKey: ctx?.sessionKey,
+      };
       const outcome = await runBeforeToolCallHook({
         toolName,
         params,
@@ -397,6 +403,25 @@ export function wrapToolWithBeforeToolCallHook(
         signal,
       });
       if (outcome.blocked) {
+        // Fire after_tool_call with blocked=true for veto
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("after_tool_call")) {
+          try {
+            await hookRunner.runAfterToolCall(
+              {
+                toolName: normalizedToolName,
+                params: isPlainObject(params) ? params : {},
+                blocked: true,
+                blockReason: outcome.reason,
+              },
+              toolCtx,
+            );
+          } catch (hookErr) {
+            log.warn(
+              `after_tool_call hook failed: tool=${normalizedToolName} error=${String(hookErr)}`,
+            );
+          }
+        }
         throw new Error(outcome.reason);
       }
       if (toolCallId) {
@@ -409,7 +434,6 @@ export function wrapToolWithBeforeToolCallHook(
           }
         }
       }
-      const normalizedToolName = normalizeToolName(toolName || "tool");
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
         await recordLoopOutcome({
@@ -419,6 +443,24 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result,
         });
+        // Fire after_tool_call on success
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("after_tool_call")) {
+          try {
+            await hookRunner.runAfterToolCall(
+              {
+                toolName: normalizedToolName,
+                params: isPlainObject(outcome.params) ? outcome.params : {},
+                result,
+              },
+              toolCtx,
+            );
+          } catch (hookErr) {
+            log.warn(
+              `after_tool_call hook failed: tool=${normalizedToolName} error=${String(hookErr)}`,
+            );
+          }
+        }
         return result;
       } catch (err) {
         await recordLoopOutcome({
@@ -428,6 +470,25 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           error: err,
         });
+        // Fire after_tool_call on error
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("after_tool_call")) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          try {
+            await hookRunner.runAfterToolCall(
+              {
+                toolName: normalizedToolName,
+                params: isPlainObject(outcome.params) ? outcome.params : {},
+                error: errorMsg,
+              },
+              toolCtx,
+            );
+          } catch (hookErr) {
+            log.warn(
+              `after_tool_call hook failed: tool=${normalizedToolName} error=${String(hookErr)}`,
+            );
+          }
+        }
         throw err;
       }
     },
