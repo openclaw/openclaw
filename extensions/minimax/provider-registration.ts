@@ -38,10 +38,11 @@ const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   anthropicModelDropThinkingBlocks: true,
 });
 const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
-
-function resolveMinimaxReasoningOutputMode(): "native" {
-  return "native";
-}
+const MINIMAX_PROVIDER_HOOKS = {
+  ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
+  ...MINIMAX_FAST_MODE_STREAM_HOOKS,
+  resolveReasoningOutputMode: () => "native" as const,
+};
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
   return region === "cn" ? DEFAULT_BASE_URL_CN : DEFAULT_BASE_URL_GLOBAL;
@@ -240,9 +241,7 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
       });
       return apiKey ? { token: apiKey } : null;
     },
-    ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
-    ...MINIMAX_FAST_MODE_STREAM_HOOKS,
-    resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
+    ...MINIMAX_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     fetchUsageSnapshot: async (ctx) =>
       await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
@@ -289,9 +288,7 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
         run: createOAuthHandler("cn"),
       },
     ],
-    ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
-    ...MINIMAX_FAST_MODE_STREAM_HOOKS,
-    resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
+    ...MINIMAX_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
   });
 }

@@ -147,6 +147,20 @@ describe("minimax provider hooks", () => {
     expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
+  it("shares the provider hook bundle across MiniMax variants", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    expect(apiProvider.buildReplayPolicy).toBe(portalProvider.buildReplayPolicy);
+    expect(apiProvider.wrapStreamFn).toBe(portalProvider.wrapStreamFn);
+    expect(apiProvider.resolveReasoningOutputMode).toBe(portalProvider.resolveReasoningOutputMode);
+  });
+
   it("registers the bundled MiniMax web search provider", () => {
     const webSearchProviders: unknown[] = [];
 
