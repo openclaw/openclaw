@@ -1,6 +1,7 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { sanitizeContextFileForInjection } from "./context-file-injection-scan.js";
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
@@ -114,7 +115,10 @@ function buildProjectContextSection(params: {
     lines.push("");
   }
   for (const file of params.files) {
-    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+    const sanitizedContent = sanitizeContextFileForInjection(
+      sanitizeContextFileContentForPrompt(file.content),
+    );
+    lines.push(`## ${file.path}`, "", sanitizedContent, "");
   }
   return lines;
 }
