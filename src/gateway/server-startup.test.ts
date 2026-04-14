@@ -11,7 +11,7 @@ const resolveModelMock = vi.fn<
     agentDir: unknown,
     cfg: unknown,
     options?: unknown,
-  ) => { model: { id: string; provider: string; api: string } }
+  ) => { model?: { id: string; provider: string; api: string }; error?: string }
 >(() => ({
   model: {
     id: "gpt-5.4",
@@ -42,7 +42,10 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
     agentDir: unknown,
     cfg: unknown,
     options?: unknown,
-  ) => resolveModelMock(provider, modelId, agentDir, cfg, options),
+  ) =>
+    options === undefined
+      ? resolveModelMock(provider, modelId, agentDir, cfg)
+      : resolveModelMock(provider, modelId, agentDir, cfg, options),
 }));
 
 vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
@@ -84,9 +87,52 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
-    expect(resolveModelMock).toHaveBeenCalledWith("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
-      skipProviderRuntimeHooks: true,
+    expect(resolveModelMock).toHaveBeenCalledWith("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+  });
+
+  it("keeps provider-runtime-resolved codex warmup from warning", async () => {
+    resolveModelMock.mockImplementation(
+      (
+        provider: unknown,
+        modelId: unknown,
+        _agentDir: unknown,
+        _cfg: unknown,
+        options?: unknown,
+      ) => {
+        const skipProviderRuntimeHooks =
+          typeof options === "object" && options !== null && "skipProviderRuntimeHooks" in options
+            ? (options as { skipProviderRuntimeHooks?: boolean }).skipProviderRuntimeHooks
+            : undefined;
+        if (provider === "codex" && modelId === "gpt-5.4" && skipProviderRuntimeHooks) {
+          return { error: "Unknown model: codex/gpt-5.4" };
+        }
+        return {
+          model: {
+            id: "gpt-5.4",
+            provider: typeof provider === "string" ? provider : "codex",
+            api: "openai-codex-responses",
+          },
+        };
+      },
+    );
+    const warn = vi.fn();
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/gpt-5.4",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await prewarmConfiguredPrimaryModel({
+      cfg,
+      log: { warn },
     });
+
+    expect(resolveModelMock).toHaveBeenCalledWith("codex", "gpt-5.4", "/tmp/agent", cfg);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("skips warmup when no explicit primary model is configured", async () => {

@@ -74,14 +74,9 @@ async function prewarmConfiguredPrimaryModel(params: {
   const agentDir = resolveOpenClawAgentDir();
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir);
-    const resolved = resolveModel(provider, model, agentDir, params.cfg, {
-      skipProviderRuntimeHooks: true,
-    });
+    const resolved = resolveModel(provider, model, agentDir, params.cfg);
     if (!resolved.model) {
-      throw new Error(
-        resolved.error ??
-          `Unknown model: ${provider}/${model} (startup warmup only checks static model resolution)`,
-      );
+      throw new Error(resolved.error ?? `Unknown model: ${provider}/${model}`);
     }
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
