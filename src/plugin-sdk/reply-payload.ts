@@ -99,10 +99,14 @@ export function hasOutboundText(payload: { text?: string }, options?: { trim?: b
 
 /** Check whether an outbound payload includes any sendable text or media. */
 export function hasOutboundReplyContent(
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; sticker?: unknown },
   options?: { trimText?: boolean },
 ): boolean {
-  return hasOutboundText(payload, { trim: options?.trimText }) || hasOutboundMedia(payload);
+  return (
+    hasOutboundText(payload, { trim: options?.trimText }) ||
+    hasOutboundMedia(payload) ||
+    Boolean(payload.sticker)
+  );
 }
 
 /** Normalize reply payload text/media into a trimmed, sendable shape for delivery paths. */

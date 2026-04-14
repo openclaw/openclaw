@@ -59,6 +59,12 @@ export async function deliverLineAutoReply(params: {
     ...params.payload,
     text: parsedDirectives.text ?? params.payload.text,
     sticker: params.payload.sticker ?? parsedDirectives.sticker,
+    mediaUrl: params.payload.mediaUrl ?? parsedDirectives.mediaUrl,
+    mediaUrls: params.payload.mediaUrls?.length
+      ? params.payload.mediaUrls
+      : parsedDirectives.mediaUrls?.length
+        ? parsedDirectives.mediaUrls
+        : undefined,
   };
   let replyTokenUsed = params.replyTokenUsed;
 
