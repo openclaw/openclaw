@@ -268,6 +268,18 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[1].replyToId).toBe("42");
   });
 
+  it("does not treat replyToCurrent: false as an explicit opt-out of implicit threading", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "hello", replyToCurrent: false }],
+      replyToMode: "all",
+      currentMessageId: "42",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("42");
+    expect(result[0].replyToCurrent).toBe(false);
+  });
+
   it("strips replyToId when mode is 'off'", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "A" }],

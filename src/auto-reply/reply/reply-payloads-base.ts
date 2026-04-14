@@ -37,10 +37,7 @@ function resolveReplyThreadingForPayload(params: {
   );
 
   let resolved: ReplyPayload =
-    params.payload.replyToId ||
-    params.payload.replyToCurrent === false ||
-    !implicitReplyToId ||
-    !allowImplicitReplyToCurrentMessage
+    params.payload.replyToId || !implicitReplyToId || !allowImplicitReplyToCurrentMessage
       ? params.payload
       : { ...params.payload, replyToId: implicitReplyToId };
 
