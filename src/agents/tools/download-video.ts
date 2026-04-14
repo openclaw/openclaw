@@ -207,7 +207,8 @@ export const downloadVideoTool = {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // Get the actual filename from output or scan directory
-      let downloadedFile = ytDlpOutput?.split('\n').filter(Boolean).pop()?.trim();
+      const lines = ytDlpOutput?.split('\n').filter(Boolean);
+      let downloadedFile = lines?.[lines.length - 1]?.trim();
       
       if (!downloadedFile || !downloadedFile.includes(sanitized)) {
         // Fallback: scan directory for the most recent matching file
@@ -265,7 +266,9 @@ export const downloadVideoTool = {
           }
         };
       } catch (statError) {
-        throw new Error(`File verification failed: ${finalPath} does not exist or is inaccessible`);
+        throw new Error(`File verification failed: ${finalPath} does not exist or is inaccessible`, {
+          cause: statError
+        });
       }
       
     } catch (err: unknown) {
