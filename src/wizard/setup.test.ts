@@ -278,7 +278,7 @@ describe("runSetupWizard", () => {
     return dir;
   }
 
-  it("does not crash when provider entries are missing ids (defensive trim)", async () => {
+  it("does not crash when preferred-provider lookup sees a provider without an id", async () => {
     setupChannels.mockClear();
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
@@ -301,7 +301,6 @@ describe("runSetupWizard", () => {
     const caseDir = await makeCaseDir("provider-missing-id-");
     const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
       if (message === "Select setup mode") return "quickstart";
-      if (message === "Select provider authentication") return "skip";
       if (message === "Select channel (QuickStart)") return "__skip__";
       if (message === "How do you want to hatch your bot?") return "skip";
       return "skip";
@@ -315,7 +314,7 @@ describe("runSetupWizard", () => {
         {
           acceptRisk: true,
           flow: "quickstart",
-          authChoice: "skip",
+          authChoice: "ollama",
           installDaemon: false,
           skipProviders: false,
           skipSkills: true,
@@ -328,8 +327,10 @@ describe("runSetupWizard", () => {
         prompter,
       ),
     ).resolves.toBeUndefined();
-
-    // Avoid leaking call counts into later tests in this file.
+    expect(resolvePreferredProviderForAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({ choice: "ollama" }),
+    );
+    expect(resolvePluginProvidersRuntime).toHaveBeenCalled();
     setupChannels.mockClear();
   });
 
