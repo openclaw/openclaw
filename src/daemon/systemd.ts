@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
+import { readStateDirDotEnvVars } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -449,11 +451,27 @@ async function writeSystemdUnit({
   }
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const stateDirDotEnvVars = readStateDirDotEnvVars(env as NodeJS.ProcessEnv);
+  const stateDirDotEnvPath = path.join(resolveStateDir(env as NodeJS.ProcessEnv), ".env");
+  const environmentFiles = Object.keys(stateDirDotEnvVars).length > 0 ? [stateDirDotEnvPath] : [];
+  const environmentSansDotEnvEntries = Object.fromEntries(
+    Object.entries(environment ?? {}).filter(([key, value]) => {
+      if (typeof value !== "string") {
+        return false;
+      }
+      const stateDirValue = stateDirDotEnvVars[key];
+      if (typeof stateDirValue !== "string") {
+        return true;
+      }
+      return value.trim() !== stateDirValue.trim();
+    }),
+  );
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,
     workingDirectory,
-    environment,
+    environment: environmentSansDotEnvEntries,
+    environmentFiles,
   });
   await fs.writeFile(unitPath, unit, "utf8");
   return { unitPath, backedUp };
