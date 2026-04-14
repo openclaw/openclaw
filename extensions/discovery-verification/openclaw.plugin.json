@@ -1,0 +1,37 @@
+{
+  "id": "discovery-verification",
+  "name": "Discovery & Verification",
+  "description": "Fetches structured capability metadata from /.well-known/agent-discovery.json (Agent Discovery Protocol, ADP) before tool calls to external domains and surfaces capability signals into the tool call log. Schema-agnostic by design: future commits will add A2A Agent Card and agent.json resolvers behind the same hook.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Master switch for the plugin. Default: true."
+      },
+      "cacheTtlSeconds": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 86400,
+        "description": "How long to cache discovery results (success and authoritative misses) per domain. Default: 3600."
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 30000,
+        "description": "Per-attempt HTTP timeout for the discovery fetch. Default: 5000."
+      },
+      "maxBodyBytes": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 10485760,
+        "description": "Cap on the response body size to prevent memory exhaustion. Default: 1048576 (1 MiB)."
+      },
+      "logCapabilitySignals": {
+        "type": "boolean",
+        "description": "When true, emits a structured log entry every time a discovery resolves. Default: true."
+      }
+    }
+  }
+}

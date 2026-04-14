@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/discovery-verification-plugin",
+  "version": "2026.4.14",
+  "private": true,
+  "description": "OpenClaw discovery & verification plugin -- surfaces structured capability metadata from /.well-known/agent-discovery.json into tool call decisions.",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
