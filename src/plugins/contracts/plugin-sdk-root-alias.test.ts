@@ -253,6 +253,27 @@ describe("plugin-sdk root alias", () => {
     );
   });
 
+  it("builds scoped and unscoped plugin-sdk aliases for jiti loads", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      distExists: true,
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    expect(lazyModule.createJitiOptions.at(-1)?.alias).toMatchObject({
+      "openclaw/plugin-sdk": rootAliasPath,
+      "@openclaw/plugin-sdk": rootAliasPath,
+      "openclaw/plugin-sdk/group-access": expect.stringContaining(
+        path.join("src", "plugin-sdk", "group-access.ts"),
+      ),
+      "@openclaw/plugin-sdk/group-access": expect.stringContaining(
+        path.join("src", "plugin-sdk", "group-access.ts"),
+      ),
+    });
+  });
+
   it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
     const packageRoot = createPackageRoot();
     const distAliasPath = createDistAliasPath();
