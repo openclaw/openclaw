@@ -359,11 +359,11 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
-  it("reports gateway config timeout explicitly", async () => {
+  it("reports gateway config timeout explicitly and sanitizes the error message", async () => {
     callGatewayFromCli.mockImplementation(
       async (method: string, _opts: unknown, params?: unknown) => {
         if (method === "config.get") {
-          throw new Error("gateway timeout after 10000ms\nRPC config.get");
+          throw new Error("gateway timeout after 10000ms\u001b[2K\u0007\nRPC config.get");
         }
         if (method === "exec.approvals.get") {
           return {

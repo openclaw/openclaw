@@ -16,6 +16,7 @@ import {
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -165,7 +166,9 @@ async function saveSnapshotTargeted(params: {
 
 function formatCliError(err: unknown): string {
   const msg = formatErrorMessage(err);
-  return msg.includes("\n") ? msg.split("\n")[0] : msg;
+  const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
+  const safe = sanitizeForLog(firstLine);
+  return safe.length > 300 ? `${safe.slice(0, 300)}...` : safe;
 }
 
 async function loadConfigForApprovalsTarget(params: {
