@@ -286,17 +286,31 @@ function resolvesToExistingFileSync(rawOperand: string, cwd: string | undefined)
 }
 
 function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
+  if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+    return true;
+  }
+  if (
+    buffer.length >= 4 &&
+    (buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xce])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xce, 0xfa, 0xed, 0xfe])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xcf])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe])))
+  ) {
+    return true;
+  }
+  if (buffer.length < 0x40 || !buffer.subarray(0, 2).equals(Buffer.from([0x4d, 0x5a]))) {
+    return false;
+  }
+  const peOffset = buffer.readUInt32LE(0x3c);
   return (
-    buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
-    buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xce])) ||
-    buffer.subarray(0, 4).equals(Buffer.from([0xce, 0xfa, 0xed, 0xfe])) ||
-    buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xcf])) ||
-    buffer.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe])) ||
-    buffer.subarray(0, 2).equals(Buffer.from([0x4d, 0x5a]))
+    peOffset >= 0 &&
+    peOffset <= buffer.length - 4 &&
+    buffer.subarray(peOffset, peOffset + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00]))
   );
 }
 
 function isLikelyScriptLikePathSync(targetPath: string): boolean {
+  // Stat defensively in case a future caller has not already confirmed the file exists.
   let stat: fs.Stats;
   try {
     stat = fs.statSync(targetPath);
@@ -310,7 +324,7 @@ function isLikelyScriptLikePathSync(targetPath: string): boolean {
   try {
     const fd = fs.openSync(targetPath, "r");
     try {
-      header = Buffer.alloc(256);
+      header = Buffer.alloc(1024);
       const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
       header = header.subarray(0, bytesRead);
     } finally {
@@ -320,7 +334,7 @@ function isLikelyScriptLikePathSync(targetPath: string): boolean {
     return true;
   }
   if (header.length === 0) {
-    return false;
+    return true;
   }
   if (header.subarray(0, 2).equals(Buffer.from("#!"))) {
     return true;

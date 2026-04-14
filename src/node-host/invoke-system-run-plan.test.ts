@@ -769,6 +769,82 @@ describe("hardenApprovedExecutionPaths", () => {
     );
   });
 
+  it("allows shell payloads that invoke absolute-path native binaries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["/bin/sh", "-lc", process.execPath],
+      rawCommand: process.execPath,
+      cwd: process.cwd(),
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
+    expect(prepared.plan.mutableFileOperand).toBeUndefined();
+  });
+
+  it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-script-binding-"));
+    try {
+      const scriptPath = path.join(tmp, "run.sh");
+      fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+      fs.chmodSync(scriptPath, 0o755);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", scriptPath],
+        rawCommand: scriptPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps fail-closed behavior for empty shell payload files", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-empty-binding-"));
+    try {
+      const scriptPath = path.join(tmp, "empty");
+      fs.writeFileSync(scriptPath, "");
+      fs.chmodSync(scriptPath, 0o755);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", scriptPath],
+        rawCommand: scriptPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat weak MZ text headers as native binaries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-mz-text-binding-"));
+    try {
+      const scriptPath = path.join(tmp, "mz-script");
+      fs.writeFileSync(scriptPath, "MZ not really a PE file\n");
+      fs.chmodSync(scriptPath, 0o755);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", scriptPath],
+        rawCommand: scriptPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it.each(unsafeRuntimeInvocationCases)("$name", (testCase) => {
     withFakeRuntimeBin({
       binName: testCase.binName,
