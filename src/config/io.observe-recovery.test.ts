@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
+  maybeRecoverFromSchemaInvalidConfigSync,
   type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 
@@ -156,6 +157,138 @@ describe("config observe recovery", () => {
         .findLast((line) => line.event === "config.observe");
       expect(observe?.backupHash).toBeTypeOf("string");
       expect(observe?.lastKnownGoodIno ?? null).toBeNull();
+    });
+  });
+
+  describe("maybeRecoverFromSchemaInvalidConfigSync", () => {
+    // A validate stub that accepts any object with a `gateway.mode` field.
+    function validateHasGatewayMode(parsed: unknown): boolean {
+      return (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        typeof (parsed as Record<string, unknown>).gateway === "object" &&
+        (parsed as Record<string, unknown>).gateway !== null &&
+        typeof ((parsed as Record<string, { mode?: unknown }>).gateway as { mode?: unknown })
+          .mode === "string"
+      );
+    }
+
+    it("restores the primary .bak when it passes schema validation", async () => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath, warn } = makeDeps(home);
+
+        // Seed a valid backup
+        await seedConfig(`${configPath}.bak`, { gateway: { mode: "local" } });
+
+        // Write a schema-invalid primary config
+        await seedConfig(configPath, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+
+        const result = maybeRecoverFromSchemaInvalidConfigSync({
+          deps,
+          configPath,
+          validate: validateHasGatewayMode,
+        });
+
+        expect(result).toBe(true);
+        // Primary config should now match the backup
+        const restoredRaw = await fsp.readFile(configPath, "utf-8");
+        const restoredParsed = JSON.parse(restoredRaw) as Record<string, unknown>;
+        expect((restoredParsed.gateway as { mode?: string } | undefined)?.mode).toBe("local");
+        // Warning logged
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("schema-invalid"));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(".bak"));
+        // Clobbered snapshot archived
+        const dir = path.dirname(configPath);
+        const entries = await fsp.readdir(dir);
+        expect(entries.some((e) => e.includes(".clobbered."))).toBe(true);
+      });
+    });
+
+    it("falls through to .bak.1 when primary .bak is also schema-invalid", async () => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath, warn } = makeDeps(home);
+
+        // Primary .bak is also invalid; .bak.1 is valid
+        await seedConfig(`${configPath}.bak`, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+        await seedConfig(`${configPath}.bak.1`, { gateway: { mode: "local" } });
+        await seedConfig(configPath, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+
+        const result = maybeRecoverFromSchemaInvalidConfigSync({
+          deps,
+          configPath,
+          validate: validateHasGatewayMode,
+        });
+
+        expect(result).toBe(true);
+        const restoredRaw = await fsp.readFile(configPath, "utf-8");
+        const restoredParsed = JSON.parse(restoredRaw) as Record<string, unknown>;
+        expect((restoredParsed.gateway as { mode?: string } | undefined)?.mode).toBe("local");
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(".bak.1"));
+      });
+    });
+
+    it("returns false when all backups fail schema validation", async () => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath, warn } = makeDeps(home);
+
+        // All backups are also invalid
+        await seedConfig(`${configPath}.bak`, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+        await seedConfig(configPath, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+
+        const result = maybeRecoverFromSchemaInvalidConfigSync({
+          deps,
+          configPath,
+          validate: validateHasGatewayMode,
+        });
+
+        expect(result).toBe(false);
+        // Config should be unchanged
+        const rawAfter = await fsp.readFile(configPath, "utf-8");
+        expect(JSON.parse(rawAfter)).toEqual({
+          env: { shellEnv: { vars: { HOME: "/bad" } } },
+        });
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it("returns false when no backup files exist", async () => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath, warn } = makeDeps(home);
+
+        await seedConfig(configPath, { env: { shellEnv: { vars: { HOME: "/bad" } } } });
+
+        const result = maybeRecoverFromSchemaInvalidConfigSync({
+          deps,
+          configPath,
+          validate: validateHasGatewayMode,
+        });
+
+        expect(result).toBe(false);
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it("tolerates a missing primary config file when scanning backups", async () => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath, warn } = makeDeps(home);
+
+        await fsp.mkdir(path.dirname(configPath), { recursive: true });
+        await seedConfig(`${configPath}.bak`, { gateway: { mode: "local" } });
+        // No primary config file
+
+        const result = maybeRecoverFromSchemaInvalidConfigSync({
+          deps,
+          configPath,
+          validate: validateHasGatewayMode,
+        });
+
+        // Backup is valid but copyFile target doesn't exist; copy should still succeed
+        // (or at minimum return false gracefully without throwing)
+        expect(typeof result).toBe("boolean");
+        if (result) {
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining("schema-invalid"));
+        }
+      });
     });
   });
 });

@@ -48,6 +48,7 @@ import { throwInvalidConfig } from "./io.invalid-config.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
+  maybeRecoverFromSchemaInvalidConfigSync,
 } from "./io.observe-recovery.js";
 import { persistGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
@@ -1084,7 +1085,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     return applyConfigOverrides(cfgWithOwnerDisplaySecret);
   }
 
-  function loadConfig(): OpenClawConfig {
+  function loadConfig(isSchemaRecoveryAttempt = false): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
       if (!deps.fs.existsSync(configPath)) {
@@ -1206,6 +1207,25 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const error = err as { code?: string };
       if (error?.code === "INVALID_CONFIG") {
+        // Before failing closed, attempt a one-shot recovery from the backup
+        // rotation ring. This handles the direct-write attack vector where an
+        // agent with `tools.exec` capability writes a schema-invalid config
+        // directly to the config file path, bypassing all validated write
+        // paths. Without this recovery the process would be permanently bricked.
+        //
+        // The guard on isSchemaRecoveryAttempt prevents infinite recursion: if
+        // the restored backup itself fails schema validation we stop immediately
+        // and fail closed as before.
+        if (!isSchemaRecoveryAttempt) {
+          const recovered = maybeRecoverFromSchemaInvalidConfigSync({
+            deps,
+            configPath,
+            validate: (parsed) => validateConfigObjectRawWithPlugins(parsed, { env: deps.env }).ok,
+          });
+          if (recovered) {
+            return loadConfig(true);
+          }
+        }
         // Fail closed so invalid configs cannot silently fall back to permissive defaults.
         throw err;
       }

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { isRecord } from "../utils.js";
+import { CONFIG_BACKUP_COUNT } from "./backup-rotation.js";
 import {
   appendConfigAuditRecord,
   appendConfigAuditRecordSync,
@@ -681,6 +682,97 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   });
   writeConfigHealthStateSync(params.deps, healthState);
   return { raw: backupRaw, parsed: backupParsed };
+}
+
+/**
+ * Callback type for schema validation used by the schema-invalid recovery path.
+ * Receives the parsed (but not yet validated) config object and returns true
+ * if it passes schema validation.
+ */
+export type SchemaValidateFn = (parsed: unknown) => boolean;
+
+/**
+ * Attempts to recover from a schema-invalid config file by scanning the backup
+ * rotation ring for the most-recent schema-valid snapshot and restoring it.
+ *
+ * This is the recovery path for the direct-write attack vector: an agent with
+ * `tools.exec` capability can write an invalid config directly to the config
+ * file path, bypassing all validated write paths. The existing
+ * `maybeRecoverSuspiciousConfigReadSync` only handles the `update-channel-only-root`
+ * heuristic and does not detect schema violations; `loadConfig` would then
+ * hard-fail with INVALID_CONFIG and leave OpenClaw permanently bricked.
+ *
+ * Returns `true` if a valid backup was found and restored; `false` otherwise.
+ * The corrupted config file is archived as a `.clobbered.*` snapshot before
+ * being overwritten, so it is available for forensic analysis.
+ */
+export function maybeRecoverFromSchemaInvalidConfigSync(params: {
+  deps: ObserveRecoveryDeps;
+  configPath: string;
+  validate: SchemaValidateFn;
+}): boolean {
+  const { deps, configPath, validate } = params;
+
+  // Archive the corrupted file for forensics before overwriting it.
+  let invalidRaw: string | null = null;
+  try {
+    invalidRaw = deps.fs.readFileSync(configPath, "utf-8");
+  } catch {
+    // If we can't read the invalid file that's fine — proceed to backup scan.
+  }
+
+  // Scan the backup rotation ring: .bak, .bak.1, .bak.2, …, .bak.{N-1}
+  const backupBase = `${configPath}.bak`;
+  const candidatePaths: string[] = [backupBase];
+  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
+    candidatePaths.push(`${backupBase}.${i}`);
+  }
+
+  for (const candidatePath of candidatePaths) {
+    let raw: string;
+    try {
+      raw = deps.fs.readFileSync(candidatePath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = deps.json5.parse(raw);
+    } catch {
+      continue;
+    }
+
+    if (!validate(parsed)) {
+      continue;
+    }
+
+    // Found a schema-valid backup. Archive the corrupted config before restoring.
+    if (invalidRaw !== null) {
+      persistClobberedConfigSnapshotSync({
+        deps,
+        configPath,
+        raw: invalidRaw,
+        observedAt: new Date().toISOString(),
+      });
+    }
+
+    let restored = false;
+    try {
+      deps.fs.copyFileSync(candidatePath, configPath);
+      restored = true;
+    } catch {
+      // Copy failed — we cannot restore, skip to next candidate.
+      continue;
+    }
+
+    deps.logger.warn(
+      `Config schema-invalid; auto-restored from backup: ${configPath} <- ${candidatePath}`,
+    );
+    return restored;
+  }
+
+  return false;
 }
 
 export async function observeConfigSnapshot(
