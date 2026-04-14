@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/opencode-full",
+  "version": "2026.4.12",
+  "private": true,
+  "description": "OpenCode full integration plugin for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.3.0",
+    "@opencode-ai/sdk": "^1.3.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

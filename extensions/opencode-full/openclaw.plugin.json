@@ -1,0 +1,36 @@
+{
+  "id": "opencode-full",
+  "enabledByDefault": true,
+  "description": "OpenCode full integration - tools, commands, and session bridging",
+  "tools": [
+    "opencode:lsp",
+    "opencode:refactor",
+    "opencode:tdd",
+    "opencode:test",
+    "opencode:review"
+  ],
+  "commands": [
+    "opencode"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable OpenCode integration"
+      },
+      "opencodeDir": {
+        "type": "string",
+        "description": "Path to OpenCode configuration directory",
+        "default": "~/.config/opencode"
+      },
+      "defaultAgent": {
+        "type": "string",
+        "description": "Default OpenCode agent to use",
+        "default": "sisyphus"
+      }
+    }
+  }
+}
