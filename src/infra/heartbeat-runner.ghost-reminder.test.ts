@@ -466,6 +466,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledTimes(1);
+      const calledCtx = getReplySpy.mock.calls[0]?.[0] as { Body?: string } | undefined;
+      expect(calledCtx?.Body).toContain("Exec completed (review-run, code 0)");
+      expect(calledCtx?.Body).toContain("The result is:");
+      expect(calledCtx?.Body).toContain("Please relay the command output to the user");
       expect(sendTelegram).toHaveBeenCalledTimes(1);
       expect(sendTelegram).toHaveBeenCalledWith(
         "telegram:-1003774691294:topic:47",
