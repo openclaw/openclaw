@@ -151,7 +151,7 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
       }
     }
 
-    result.push(lines[index]!);
+    result.push(lines[index]);
   }
 
   return result;
