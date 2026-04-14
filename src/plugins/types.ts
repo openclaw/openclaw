@@ -2193,6 +2193,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "inbound_claim"
+  | "message_accepted"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -2229,6 +2230,7 @@ export const PLUGIN_HOOK_NAMES = [
   "after_compaction",
   "before_reset",
   "inbound_claim",
+  "message_accepted",
   "message_received",
   "message_sending",
   "message_sent",
@@ -2566,6 +2568,14 @@ export type PluginHookReplyDispatchResult = {
   handled: boolean;
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+};
+
+// message_accepted hook
+export type PluginHookMessageAcceptedEvent = {
+  from: string;
+  content: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
 };
 
 // message_received hook
@@ -3004,6 +3014,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookReplyDispatchEvent,
     ctx: PluginHookReplyDispatchContext,
   ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
+  message_accepted: (
+    event: PluginHookMessageAcceptedEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

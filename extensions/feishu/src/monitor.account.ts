@@ -1,5 +1,10 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   type ClawdbotConfig,
   type RuntimeEnv,
@@ -32,6 +37,7 @@ import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { buildRecalledEventSummary } from "./monitor.utils.js";
+import { isFeishuGroupAllowed, resolveFeishuGroupConfig } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
@@ -51,6 +57,20 @@ export type FeishuReactionCreatedEvent = {
 
 export type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
   reaction_id?: string;
+};
+
+export type PluginMessageAcceptedHookCall = {
+  event: {
+    from: string;
+    content: string;
+    timestamp: number;
+    metadata: Record<string, unknown>;
+  };
+  ctx: {
+    channelId: "feishu";
+    accountId: string;
+    conversationId: string;
+  };
 };
 
 type ResolveReactionSyntheticEventParams = {
@@ -396,6 +416,134 @@ function resolveFeishuDebounceMentions(params: {
   return botMentions.length > 0 ? botMentions : undefined;
 }
 
+export function buildPluginMessageAcceptedHookCall(params: {
+  cfg: ClawdbotConfig;
+  accountId: string;
+  event: FeishuMessageEvent;
+  botOpenId?: string;
+  botName?: string;
+  allBotOpenIds?: Iterable<string | undefined>;
+  accountConfig: ResolvedFeishuAccount["config"];
+  isControlCommandMessage: (content: string) => boolean;
+  resolveBoundSession: (conversationId: string) => string | undefined;
+  accountBotOpenId?: string;
+  botOpenIdsByAccount?: Record<string, string | undefined>;
+}): PluginMessageAcceptedHookCall | null {
+  if ((params.accountConfig.dispatchMode ?? "auto") !== "plugin") {
+    return null;
+  }
+
+  const parsed = parseFeishuMessageEvent(
+    params.event,
+    params.botOpenId,
+    params.botName,
+    params.allBotOpenIds,
+  );
+  if (parsed.chatType !== "group") {
+    return null;
+  }
+
+  const groupConfig = resolveFeishuGroupConfig({
+    cfg: params.accountConfig,
+    groupId: parsed.chatId,
+  });
+  if (groupConfig?.enabled === false) {
+    return null;
+  }
+
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
+  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.feishu !== undefined,
+    groupPolicy: params.accountConfig.groupPolicy,
+    defaultGroupPolicy,
+  });
+  const groupAllowFrom = params.accountConfig.groupAllowFrom ?? [];
+  const groupAllowed = isFeishuGroupAllowed({
+    groupPolicy,
+    allowFrom: groupAllowFrom,
+    senderId: parsed.chatId,
+    senderName: undefined,
+  });
+  if (!groupAllowed) {
+    return null;
+  }
+
+  const senderUserId = params.event.sender.sender_id.user_id?.trim() || undefined;
+  const effectiveGroupSenderAllowFrom =
+    (groupConfig?.allowFrom?.length ?? 0) > 0
+      ? (groupConfig?.allowFrom ?? [])
+      : (params.accountConfig.groupSenderAllowFrom ?? []);
+  if (effectiveGroupSenderAllowFrom.length > 0) {
+    const senderAllowed = isFeishuGroupAllowed({
+      groupPolicy: "allowlist",
+      allowFrom: effectiveGroupSenderAllowFrom,
+      senderId: parsed.senderOpenId,
+      senderIds: [senderUserId],
+      senderName: undefined,
+    });
+    if (!senderAllowed) {
+      return null;
+    }
+  }
+
+  const inboundRootId = parsed.rootId?.trim() || parsed.threadId?.trim();
+  if (inboundRootId) {
+    const boundSessionKey = params.resolveBoundSession(`${parsed.chatId}:${inboundRootId}`);
+    if (boundSessionKey) {
+      return null;
+    }
+  }
+
+  const shouldForwardControlCommands =
+    params.accountConfig.pluginMode?.forwardControlCommands ?? true;
+  if (!shouldForwardControlCommands && params.isControlCommandMessage(parsed.content)) {
+    return null;
+  }
+
+  const messageCreateTimeMs = params.event.message.create_time
+    ? parseInt(params.event.message.create_time, 10)
+    : Date.now();
+
+  return {
+    event: {
+      from: `feishu:${parsed.senderOpenId}`,
+      content: parsed.content,
+      timestamp: messageCreateTimeMs,
+      metadata: {
+        to: `chat:${parsed.chatId}`,
+        provider: "feishu",
+        surface: "feishu",
+        threadId: parsed.rootId ?? parsed.threadId,
+        originatingChannel: "feishu",
+        originatingTo: `chat:${parsed.chatId}`,
+        messageId: parsed.messageId,
+        senderId: parsed.senderOpenId,
+        channelData: {
+          messageId: parsed.messageId,
+          chatId: parsed.chatId,
+          accountId: params.accountId,
+          accountBotOpenId: params.accountBotOpenId,
+          botOpenIdsByAccount: params.botOpenIdsByAccount,
+          chatType: parsed.chatType,
+          messageType: parsed.contentType,
+          rawContent: params.event.message.content,
+          rootId: parsed.rootId,
+          parentId: parsed.parentId,
+          mentions: params.event.message.mentions,
+          senderType: params.event.sender.sender_type,
+          senderOpenId: parsed.senderOpenId,
+          senderUnionId: params.event.sender.sender_id.union_id,
+        },
+      },
+    },
+    ctx: {
+      channelId: "feishu",
+      accountId: params.accountId,
+      conversationId: parsed.chatId,
+    },
+  };
+}
+
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
@@ -421,6 +569,39 @@ function registerEventHandlers(
     } catch (err) {
       error(`${params.errorMessage}: ${String(err)}`);
     }
+  };
+  const emitPluginMessageAccepted = async (event: FeishuMessageEvent): Promise<void> => {
+    const account = resolveFeishuAccount({ cfg, accountId });
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("message_accepted")) {
+      return;
+    }
+    const hookCall = buildPluginMessageAcceptedHookCall({
+      cfg,
+      accountId,
+      event,
+      botOpenId: botOpenIds.get(accountId),
+      botName: botNames.get(accountId),
+      allBotOpenIds: botOpenIds.values(),
+      accountConfig: account.config,
+      isControlCommandMessage: (content) =>
+        core.channel.commands.isControlCommandMessage(content, cfg),
+      resolveBoundSession: (conversationId) =>
+        getSessionBindingService().resolveByConversation({
+          channel: "feishu",
+          accountId,
+          conversationId,
+        })?.targetSessionKey,
+      accountBotOpenId: botOpenIds.get(accountId),
+      botOpenIdsByAccount: Object.fromEntries(botOpenIds.entries()),
+    });
+    if (!hookCall) {
+      return;
+    }
+
+    void hookRunner.runMessageAccepted(hookCall.event, hookCall.ctx).catch((err) => {
+      error(`feishu[${accountId}]: message_accepted hook failed: ${String(err)}`);
+    });
   };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
@@ -506,6 +687,11 @@ function registerEventHandlers(
         return;
       }
       if (entries.length === 1) {
+        if (await isMessageAlreadyProcessed(last)) {
+          releaseFeishuMessageProcessing(last.message.message_id, accountId);
+          return;
+        }
+        await emitPluginMessageAccepted(last);
         await dispatchFeishuMessage(last);
         return;
       }
@@ -530,6 +716,13 @@ function registerEventHandlers(
         botOpenId: botOpenIds.get(accountId),
       });
       if (!combinedText.trim()) {
+        await emitPluginMessageAccepted({
+          ...dispatchEntry,
+          message: {
+            ...dispatchEntry.message,
+            mentions: mergedMentions ?? dispatchEntry.message.mentions,
+          },
+        });
         await dispatchFeishuMessage({
           ...dispatchEntry,
           message: {
@@ -539,6 +732,15 @@ function registerEventHandlers(
         });
         return;
       }
+      await emitPluginMessageAccepted({
+        ...dispatchEntry,
+        message: {
+          ...dispatchEntry.message,
+          message_type: "text",
+          content: JSON.stringify({ text: combinedText }),
+          mentions: mergedMentions ?? dispatchEntry.message.mentions,
+        },
+      });
       await dispatchFeishuMessage({
         ...dispatchEntry,
         message: {

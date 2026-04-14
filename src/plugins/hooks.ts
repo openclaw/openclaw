@@ -41,6 +41,7 @@ import type {
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
+  PluginHookMessageAcceptedEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
@@ -97,6 +98,7 @@ export type {
   PluginHookChatMemberBotEvent,
   PluginHookChatMemberUserEvent,
   PluginHookMessageContext,
+  PluginHookMessageAcceptedEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
@@ -662,6 +664,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run message_accepted hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runMessageAccepted(
+    event: PluginHookMessageAcceptedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("message_accepted", event, ctx);
+  }
+
+  /**
    * Run message_received hook.
    * Runs in parallel (fire-and-forget).
    */
@@ -1176,6 +1189,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
+    runMessageAccepted,
     runMessageReceived,
     runBeforeDispatch,
     runReplyDispatch,

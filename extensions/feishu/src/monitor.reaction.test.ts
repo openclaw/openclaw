@@ -166,6 +166,7 @@ function createTextEvent(params: {
 async function setupDebounceMonitor(params?: {
   botOpenId?: string;
   botName?: string;
+  cfg?: ClawdbotConfig;
 }): Promise<(data: unknown) => Promise<void>> {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -173,7 +174,7 @@ async function setupDebounceMonitor(params?: {
   createEventDispatcherMock.mockReturnValue({ register });
 
   await monitorSingleAccount({
-    cfg: buildDebounceConfig(),
+    cfg: params?.cfg ?? buildDebounceConfig(),
     account: buildDebounceAccount(),
     runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
     botOpenIdSource: {
