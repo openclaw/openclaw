@@ -1,5 +1,5 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildYandexModelDefinition, YANDEX_BASE_URL, YANDEX_MODEL_CATALOG } from "./api.js";
+import { buildYandexModelDefinition, YANDEX_BASE_URL, YANDEX_MODEL_CATALOG } from "./models.js";
 
 /**
  * Build the Yandex provider config.
