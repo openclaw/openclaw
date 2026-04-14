@@ -17,7 +17,7 @@ vi.mock("@slack/bolt", () => {
     command = vi.fn();
     error = vi.fn();
   }
-  class HTTPReceiver {}
+  class HTTPReceiver {requestListener = vi.fn();}
   return { default: App, App, HTTPReceiver };
 });
 

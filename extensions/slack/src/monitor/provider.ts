@@ -501,7 +501,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
             reconnectAttempts >= SLACK_SOCKET_RECONNECT_POLICY.maxAttempts
           ) {
-            throw err;
+            runtime.error?.(
+              `slack socket mode failed to start after ${reconnectAttempts} attempts — stopping channel (${formatUnknownError(err)})`,
+            );
+            return;
           }
           const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           runtime.error?.(
