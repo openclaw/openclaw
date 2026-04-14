@@ -129,6 +129,37 @@ describe("runBlueBubblesCatchup", () => {
     expect(cursor?.lastSeenMs).toBe(now);
   });
 
+  it("clamps first-run lookback to maxAgeMinutes when smaller", async () => {
+    const now = 1_000_000;
+    let seenSince = -1;
+    await runBlueBubblesCatchup(
+      makeTarget({
+        account: {
+          accountId: "test-account",
+          enabled: true,
+          configured: true,
+          baseUrl: "http://127.0.0.1:1234",
+          config: {
+            serverUrl: "http://127.0.0.1:1234",
+            password: "x",
+            network: { dangerouslyAllowPrivateNetwork: true },
+            // maxAge tighter than firstRunLookback — must clamp on first run.
+            catchup: { maxAgeMinutes: 5, firstRunLookbackMinutes: 30 },
+          } as unknown as WebhookTarget["account"]["config"],
+        },
+      }),
+      {
+        now: () => now,
+        fetchMessages: async (sinceMs) => {
+          seenSince = sinceMs;
+          return { resolved: true, messages: [] };
+        },
+        processMessageFn: async () => {},
+      },
+    );
+    expect(seenSince).toBe(now - 5 * 60_000);
+  });
+
   it("uses firstRunLookback when no cursor exists", async () => {
     const now = 1_000_000;
     let seenSince = 0;
