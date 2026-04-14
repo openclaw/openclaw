@@ -88,6 +88,7 @@ import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settin
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import { authorizeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
@@ -492,7 +493,7 @@ export async function runEmbeddedAttempt(
     const toolsRaw = params.disableTools
       ? []
       : (() => {
-          const allTools = createOpenClawCodingTools({
+          let allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
             ...buildEmbeddedAttemptToolRunContext(params),
             exec: {
@@ -550,6 +551,18 @@ export async function runEmbeddedAttempt(
               abortSessionForYield?.();
             },
           });
+          // Apply scope ceiling: remove tools that require higher privilege than the caller holds.
+          // This runs before toolsAllow so that disallowed scopes cannot be bypassed via toolsAllow.
+          if (params.operatorScopes && params.operatorScopes.length > 0) {
+            const scopes = [...params.operatorScopes];
+            allTools = allTools.filter((tool) => {
+              // Map tool name to its corresponding gateway method name.
+              // Tool names use underscores; gateway methods use dots (e.g. config_patch → config.patch).
+              const methodName = tool.name.replace(/_/g, ".");
+              const auth = authorizeOperatorScopesForMethod(methodName, scopes);
+              return auth.allowed;
+            });
+          }
           if (params.toolsAllow && params.toolsAllow.length > 0) {
             const allowSet = new Set(params.toolsAllow);
             return allTools.filter((tool) => allowSet.has(tool.name));

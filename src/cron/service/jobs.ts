@@ -548,7 +548,11 @@ export function nextWakeAtMs(state: CronServiceState) {
   }, first);
 }
 
-export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
+export function createJob(
+  state: CronServiceState,
+  input: CronJobCreate,
+  creatorScopes?: readonly import("../../gateway/operator-scopes.js").OperatorScope[],
+): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
   const schedule =
@@ -595,6 +599,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     payload: input.payload,
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
+    creatorScopes: creatorScopes ? [...creatorScopes] : undefined,
     state: {
       ...input.state,
     },

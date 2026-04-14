@@ -6,6 +6,7 @@ import type {
 import * as ops from "./service/ops.js";
 import { type CronServiceDeps, createCronServiceState } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 
 export type { CronEvent, CronServiceDeps } from "./service/state.js";
 export type {
@@ -42,8 +43,8 @@ export class CronService implements CronServiceContract {
     return await ops.listPage(this.state, opts);
   }
 
-  async add(input: CronJobCreate) {
-    return await ops.add(this.state, input);
+  async add(input: CronJobCreate, creatorScopes?: OperatorScope[]) {
+    return await ops.add(this.state, input, creatorScopes);
   }
 
   async update(id: string, patch: CronJobPatch) {

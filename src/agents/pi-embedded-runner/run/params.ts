@@ -93,6 +93,12 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /**
+   * Operator privilege scopes for this run.
+   * When set, tools that require higher privilege than the caller holds are
+   * removed from the tool list before it is sent to the model (scope ceiling).
+   */
+  operatorScopes?: readonly string[];
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
