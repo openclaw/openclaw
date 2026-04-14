@@ -2995,6 +2995,10 @@ td.data-table-key-col {
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
+  max-height: 90dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .exec-approval-header {
@@ -3034,6 +3038,8 @@ td.data-table-key-col {
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
+  max-height: 30vh;
+  overflow-y: auto;
 }
 
 .exec-approval-meta {
@@ -3066,6 +3072,7 @@ td.data-table-key-col {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ===========================================
