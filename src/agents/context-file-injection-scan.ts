@@ -34,7 +34,7 @@ const INJECTION_PATTERNS: Array<{ re: RegExp; label: string }> = [
   },
   // Invisible unicode characters (3+ in a row) used to hide instructions
   {
-    re: /[\u200B\u200C\u200D\uFEFF\u2060\u2061\u2062\u2063\u2064\u00AD]{3,}/u,
+    re: /[\u200B-\u200D\uFEFF\u2060-\u2064\u00AD]{3,}/u,
     label: "invisible-unicode",
   },
   // Base64-encoded instruction blocks
