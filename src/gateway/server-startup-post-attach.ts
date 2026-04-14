@@ -75,7 +75,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir);
     const resolved = resolveModel(provider, model, agentDir, params.cfg, {
-      skipProviderRuntimeHooks: true,
+      skipProviderRuntimeHooks: false,
     });
     if (!resolved.model) {
       throw new Error(
