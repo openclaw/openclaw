@@ -538,7 +538,7 @@ export async function prepareSlackMessage(params: {
       {
         channel: message.channel,
         threadTs: message.thread_ts,
-        requireMention: Boolean(shouldRequireMention),
+        requireMention: shouldRequireMention,
         implicitMention: mentionDecision.implicitMention,
         matchedKinds: mentionDecision.matchedImplicitMentionKinds,
         reason,
