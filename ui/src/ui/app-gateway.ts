@@ -421,7 +421,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
 
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string; message?: unknown } | undefined,
+  payload: { sessionKey?: string; message?: unknown; messageId?: unknown } | undefined,
 ) {
   const sessionKey = payload?.sessionKey?.trim();
   if (!sessionKey || sessionKey !== host.sessionKey) {
@@ -432,11 +432,20 @@ function handleSessionMessageGatewayEvent(
     message && typeof message === "object" && typeof (message as { role?: unknown }).role === "string"
       ? (message as { role: string }).role.trim().toLowerCase()
       : "";
-  const hasStableMessageId =
+  const metaId =
     message &&
     typeof message === "object" &&
-    (typeof (message as { id?: unknown }).id === "string" ||
-      typeof (message as { messageId?: unknown }).messageId === "string");
+    (message as { __openclaw?: { id?: unknown } }).__openclaw &&
+    typeof (message as { __openclaw?: { id?: unknown } }).__openclaw?.id === "string"
+      ? (message as { __openclaw: { id: string } }).__openclaw.id
+      : "";
+  const hasStableMessageId =
+    typeof payload?.messageId === "string" ||
+    Boolean(metaId) ||
+    (message &&
+      typeof message === "object" &&
+      (typeof (message as { id?: unknown }).id === "string" ||
+        typeof (message as { messageId?: unknown }).messageId === "string"));
   const chatMessages = (host as GatewayHostWithChatMessages).chatMessages;
   const lastMessage = Array.isArray(chatMessages) ? chatMessages.at(-1) : undefined;
   const lastRole =
@@ -505,7 +514,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   if (evt.event === "session.message") {
     handleSessionMessageGatewayEvent(
       host,
-      evt.payload as { sessionKey?: string; message?: unknown } | undefined,
+      evt.payload as { sessionKey?: string; message?: unknown; messageId?: unknown } | undefined,
     );
     return;
   }

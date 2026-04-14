@@ -160,9 +160,9 @@ describe("handleGatewayEvent session.message", () => {
       event: "session.message",
       payload: {
         sessionKey: "agent:qa:main",
+        messageId: "msg-user-1",
         message: {
           role: "user",
-          id: "msg-user-1",
           content: [{ type: "text", text: "hello" }],
         },
       },
@@ -190,9 +190,9 @@ describe("handleGatewayEvent session.message", () => {
       event: "session.message",
       payload: {
         sessionKey: "agent:qa:main",
+        messageId: "msg-user-2",
         message: {
           role: "user",
-          id: "msg-user-2",
           content: [{ type: "text", text: "from another client" }],
         },
       },
