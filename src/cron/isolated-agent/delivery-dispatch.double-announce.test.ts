@@ -88,6 +88,7 @@ import {
   dispatchCronDelivery,
   getCompletedDirectCronDeliveriesCountForTests,
   resetCompletedDirectCronDeliveriesForTests,
+  resetSlotDeliveriesForTests,
 } from "./delivery-dispatch.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import type { RunCronAgentTurnResult } from "./run.js";
@@ -173,6 +174,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetCompletedDirectCronDeliveriesForTests();
+    resetSlotDeliveriesForTests();
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -673,11 +675,17 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
+    const baseMs = Date.now();
     for (let i = 0; i < 2003; i += 1) {
       const params = makeBaseParams({
         synthesizedText: `Replay-safe cron update ${i}.`,
         runStartedAt: i,
       });
+      // Give each run a unique scheduled time so the slot-level dedup
+      // treats them as distinct slots (matching the per-run cache intent).
+      (params.job as { state?: { nextRunAtMs?: number } }).state = {
+        nextRunAtMs: baseMs + i,
+      };
       const state = await dispatchCronDelivery(params);
       expect(state.delivered).toBe(true);
     }
@@ -1241,5 +1249,42 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         payloads: [{ text: "Working on it..." }],
       }),
     );
+  });
+
+  it("prevents duplicate delivery when same job fires twice for same scheduled slot with different runStartedAt", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const scheduledAtMs = Date.now();
+    // Two runs share the same scheduled slot but have different runStartedAt
+    // values, which is what restart catch-up produces. The execution-level
+    // dedup keys on runStartedAt and would let both through; the slot-level
+    // guard catches the duplicate.
+    const params1 = makeBaseParams({
+      synthesizedText: "Morning briefing.",
+      runStartedAt: scheduledAtMs,
+    });
+    (params1.job as { state?: { nextRunAtMs?: number } }).state = {
+      nextRunAtMs: scheduledAtMs,
+    };
+
+    const params2 = makeBaseParams({
+      synthesizedText: "Morning briefing.",
+      runStartedAt: scheduledAtMs + 250,
+    });
+    (params2.job as { state?: { nextRunAtMs?: number } }).state = {
+      nextRunAtMs: scheduledAtMs,
+    };
+
+    const first = await dispatchCronDelivery(params1);
+    expect(first.delivered).toBe(true);
+    expect(first.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    const second = await dispatchCronDelivery(params2);
+    expect(second.delivered).toBe(true);
+    expect(second.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 });
