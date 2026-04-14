@@ -27,24 +27,36 @@ export type GatewayResponseFrame = {
   id: string;
   ok: boolean;
   payload?: unknown;
-  error?: { code: string; message: string; details?: unknown };
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+    retryable?: boolean;
+    retryAfterMs?: number;
+  };
 };
 
 export type GatewayErrorInfo = {
   code: string;
   message: string;
   details?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
 };
 
 export class GatewayRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
     super(error.message);
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
     this.details = error.details;
+    this.retryable = error.retryable === true;
+    this.retryAfterMs = error.retryAfterMs;
   }
 }
 
@@ -111,6 +123,7 @@ export type GatewayHelloOk = {
     scopes?: string[];
     issuedAtMs?: number;
   };
+  canvasHostUrl?: string;
   policy?: { tickIntervalMs?: number };
 };
 
@@ -294,10 +307,7 @@ export class GatewayBrowserClient {
 
   stop() {
     this.closed = true;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    this.clearConnectTimer();
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -318,7 +328,7 @@ export class GatewayBrowserClient {
     this.ws.addEventListener("open", () => this.queueConnect());
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
-      const reason = String(ev.reason ?? "");
+      const reason = ev.reason ?? "";
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
@@ -347,7 +357,11 @@ export class GatewayBrowserClient {
     }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
-    window.setTimeout(() => this.connect(), delay);
+    this.clearConnectTimer();
+    this.connectTimer = window.setTimeout(() => {
+      this.connectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private flushPending(err: Error) {
@@ -476,6 +490,8 @@ export class GatewayBrowserClient {
         code: err.gatewayCode,
         message: err.message,
         details: err.details,
+        retryable: err.retryable,
+        retryAfterMs: err.retryAfterMs,
       };
     } else {
       this.pendingConnectError = undefined;
@@ -495,10 +511,7 @@ export class GatewayBrowserClient {
       return;
     }
     this.connectSent = true;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    this.clearConnectTimer();
 
     const plan = await this.buildConnectPlan();
     void this.request<GatewayHelloOk>("connect", this.buildConnectParams(plan))
@@ -556,6 +569,8 @@ export class GatewayBrowserClient {
             code: res.error?.code ?? "UNAVAILABLE",
             message: res.error?.message ?? "request failed",
             details: res.error?.details,
+            retryable: res.error?.retryable,
+            retryAfterMs: res.error?.retryAfterMs,
           }),
         );
       }
@@ -612,11 +627,17 @@ export class GatewayBrowserClient {
   private queueConnect() {
     this.connectNonce = null;
     this.connectSent = false;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-    }
+    this.clearConnectTimer();
     this.connectTimer = window.setTimeout(() => {
+      this.connectTimer = null;
       void this.sendConnect();
     }, 750);
+  }
+
+  private clearConnectTimer() {
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
   }
 }

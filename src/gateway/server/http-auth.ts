@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../../canvas-host/a2ui.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
@@ -8,9 +8,7 @@ import {
   type ResolvedGatewayAuth,
 } from "../auth.js";
 import { CANVAS_CAPABILITY_TTL_MS } from "../canvas-capability.js";
-import { authorizeGatewayBearerRequestOrReply } from "../http-auth-helpers.js";
 import { getBearerToken, resolveHttpBrowserOriginPolicy } from "../http-utils.js";
-import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "../protocol/client-info.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 export function isCanvasPath(pathname: string): boolean {
@@ -23,22 +21,12 @@ export function isCanvasPath(pathname: string): boolean {
   );
 }
 
-function isNodeWsClient(client: GatewayWsClient): boolean {
-  if (client.connect.role === "node") {
-    return true;
-  }
-  return normalizeGatewayClientMode(client.connect.client.mode) === GATEWAY_CLIENT_MODES.NODE;
-}
-
-function hasAuthorizedNodeWsClientForCanvasCapability(
+function hasAuthorizedWsClientForCanvasCapability(
   clients: Set<GatewayWsClient>,
   capability: string,
 ): boolean {
   const nowMs = Date.now();
   for (const client of clients) {
-    if (!isNodeWsClient(client)) {
-      continue;
-    }
     if (!client.canvasCapability || !client.canvasCapabilityExpiresAtMs) {
       continue;
     }
@@ -96,19 +84,8 @@ export async function authorizeCanvasRequest(params: {
     lastAuthFailure = authResult;
   }
 
-  if (canvasCapability && hasAuthorizedNodeWsClientForCanvasCapability(clients, canvasCapability)) {
+  if (canvasCapability && hasAuthorizedWsClientForCanvasCapability(clients, canvasCapability)) {
     return { ok: true };
   }
   return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
-}
-
-export async function enforcePluginRouteGatewayAuth(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  auth: ResolvedGatewayAuth;
-  trustedProxies: string[];
-  allowRealIpFallback: boolean;
-  rateLimiter?: AuthRateLimiter;
-}): Promise<boolean> {
-  return await authorizeGatewayBearerRequestOrReply(params);
 }

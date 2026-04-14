@@ -19,15 +19,19 @@ const mockWriteConfigFile = vi.fn<
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-  writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
-    mockWriteConfigFile(cfg, options),
-  replaceConfigFile: (params: {
-    nextConfig: OpenClawConfig;
-    writeOptions?: { unsetPaths?: string[][] };
-  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+    writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
+      mockWriteConfigFile(cfg, options),
+    replaceConfigFile: (params: {
+      nextConfig: OpenClawConfig;
+      writeOptions?: { unsetPaths?: string[][] };
+    }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
+  };
+});
 
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
@@ -238,6 +242,59 @@ describe("config cli", () => {
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
+    it("writes agents.defaults.videoGenerationModel.primary without disturbing sibling defaults", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            imageGenerationModel: {
+              primary: "openai/gpt-image-1",
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.videoGenerationModel.primary",
+        "qwen/wan2.6-t2v",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.model).toBe("openai/gpt-5.4");
+      expect(written.agents?.defaults?.imageGenerationModel).toEqual({
+        primary: "openai/gpt-image-1",
+      });
+      expect(written.agents?.defaults?.videoGenerationModel).toEqual({
+        primary: "qwen/wan2.6-t2v",
+      });
+    });
+
+    it("writes agents.defaults.llm.idleTimeoutSeconds without disturbing sibling defaults", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            timeoutSeconds: 300,
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "agents.defaults.llm.idleTimeoutSeconds", "900"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.model).toBe("openai/gpt-5.4");
+      expect(written.agents?.defaults?.timeoutSeconds).toBe(300);
+      expect(written.agents?.defaults?.llm).toEqual({
+        idleTimeoutSeconds: 900,
+      });
+    });
+
     it("drops gateway.auth.password when switching mode to token", async () => {
       const resolved: OpenClawConfig = {
         gateway: {
@@ -444,6 +501,13 @@ describe("config cli", () => {
 
   describe("config schema", () => {
     it("prints the generated JSON schema as plain text", async () => {
+      const { computeBaseConfigSchemaResponse } = await import("../config/schema-base.js");
+      mockReadBestEffortRuntimeConfigSchema.mockResolvedValueOnce(
+        computeBaseConfigSchemaResponse({
+          generatedAt: "2026-03-25T00:00:00.000Z",
+        }),
+      );
+
       await runConfigCommand(["config", "schema"]);
 
       expect(mockExit).not.toHaveBeenCalled();
@@ -454,23 +518,28 @@ describe("config cli", () => {
       const payload = JSON.parse(String(raw)) as {
         properties?: Record<string, unknown>;
       };
+      const gateway = payload.properties?.gateway as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const gatewayPort = gateway?.properties?.port as
+        | { title?: string; description?: string }
+        | undefined;
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(payload.properties?.channels).toEqual({
-        type: "object",
-        properties: {
-          telegram: {
-            type: "object",
-            properties: {
-              token: { type: "string" },
-            },
-          },
-        },
+      expect(gatewayPort).toMatchObject({
+        title: "Gateway Port",
+        description: expect.stringContaining("TCP port used by the gateway listener"),
       });
-      expect(payload.properties?.plugins).toEqual({
-        type: "object",
+      expect(payload.properties?.channels).toMatchObject({
+        title: "Channels",
+        properties: {},
+        additionalProperties: true,
+      });
+      expect(payload.properties?.plugins).toMatchObject({
+        title: "Plugins",
+        description: expect.stringContaining("Plugin system controls"),
         properties: {
           entries: {
-            type: "object",
+            title: "Plugin Entries",
           },
         },
       });

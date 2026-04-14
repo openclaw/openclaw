@@ -1,17 +1,24 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayClientMode, GatewayClientName } from "../../gateway/protocol/client-info.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
-import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
-import type { ChatChannelId } from "../registry.js";
+import type { ChannelId } from "./channel-id.types.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
-export type ChannelId = ChatChannelId | (string & {});
+export type { ChannelId } from "./channel-id.types.js";
+
+export type ChannelExposure = {
+  configured?: boolean;
+  setup?: boolean;
+  docs?: boolean;
+};
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
@@ -40,6 +47,7 @@ export type ChannelMessageActionDiscoveryContext = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 };
 
 /**
@@ -83,12 +91,15 @@ export type ChannelSetupInput = {
   audience?: string;
   useEnv?: boolean;
   homeserver?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
+  /** Compatibility alias for legacy setup callers; prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;
   deviceName?: string;
+  avatarUrl?: string;
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
@@ -143,7 +154,9 @@ export type ChannelMeta = {
   detailLabel?: string;
   systemImage?: string;
   markdownCapable?: boolean;
+  exposure?: ChannelExposure;
   showConfigured?: boolean;
+  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
@@ -334,7 +347,7 @@ export type ChannelThreadingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
     chatType?: string | null;
-  }) => "off" | "first" | "all";
+  }) => "off" | "first" | "all" | "batched";
   /**
    * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
    *
@@ -388,10 +401,11 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
+  currentGraphChannelId?: string;
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
@@ -404,10 +418,31 @@ export type ChannelThreadingToolContext = {
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
+  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+  isLegacyGroupSessionKey?: (key: string) => boolean;
+  canonicalizeLegacySessionKey?: (params: {
+    key: string;
+    agentId: string;
+  }) => string | null | undefined;
+  resolveLegacyGroupSessionKey?: (ctx: MsgContext) => {
+    key: string;
+    channel: string;
+    id: string;
+    chatType: "group" | "channel";
+  } | null;
+  resolveInboundAttachmentRoots?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string[];
+  resolveRemoteInboundAttachmentRoots?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string[];
   resolveInboundConversation?: (params: {
     from?: string;
     to?: string;
@@ -509,6 +544,7 @@ export type ChannelMessagingAdapter = {
     agentId: string;
     accountId?: string | null;
     target: string;
+    currentSessionKey?: string;
     resolvedTarget?: {
       to: string;
       kind: ChannelDirectoryEntryKind | "channel";
@@ -567,6 +603,7 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
   sessionKey?: string | null;
   sessionId?: string | null;
   agentId?: string | null;
@@ -599,6 +636,7 @@ export type ChannelMessageActionAdapter = {
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
+  resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
     action: ChannelMessageActionName;
     args: Record<string, unknown>;
@@ -606,6 +644,14 @@ export type ChannelMessageActionAdapter = {
     action: ChannelMessageActionName;
     args: Record<string, unknown>;
   };
+  messageActionTargetAliases?: Partial<
+    Record<
+      ChannelMessageActionName,
+      {
+        aliases: string[];
+      }
+    >
+  >;
   requiresTrustedRequesterSender?: (params: {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;

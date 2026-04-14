@@ -3,6 +3,7 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
+  listProviderPluginCommandSpecs,
 } from "openclaw/plugin-sdk/command-auth";
 import { type ChatCommandDefinition, type CommandArgs } from "openclaw/plugin-sdk/command-auth";
 import {
@@ -11,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { chunkItems } from "openclaw/plugin-sdk/text-runtime";
+import { chunkItems, normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
@@ -670,6 +671,17 @@ export async function registerSlackMonitorSlashCommands(params: {
       skillCommands,
       provider: "slack",
     });
+    const existingNativeNames = new Set(
+      nativeCommands.map((c) => normalizeLowercaseStringOrEmpty(c.name)).filter(Boolean),
+    );
+    for (const pluginCommand of listProviderPluginCommandSpecs("slack")) {
+      const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
+      if (!normalizedName || existingNativeNames.has(normalizedName)) {
+        continue;
+      }
+      existingNativeNames.add(normalizedName);
+      nativeCommands.push(pluginCommand);
+    }
   }
 
   if (nativeCommands.length > 0) {
@@ -769,9 +781,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         await ack({ options: [] });
         return;
       }
-      const query = typedBody.value?.trim().toLowerCase() ?? "";
+      const query = normalizeLowercaseStringOrEmpty(typedBody.value);
       const options = entry.choices
-        .filter((choice) => !query || choice.label.toLowerCase().includes(query))
+        .filter((choice) => !query || normalizeLowercaseStringOrEmpty(choice.label).includes(query))
         .slice(0, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX)
         .map((choice) => ({
           text: { type: "plain_text", text: choice.label.slice(0, 75) },

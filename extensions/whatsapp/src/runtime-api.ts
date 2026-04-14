@@ -1,14 +1,11 @@
 export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
-export {
-  buildChannelConfigSchema,
-  WhatsAppConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
   formatWhatsAppConfigAllowFromEntries,
   resolveWhatsAppConfigAllowFrom,
   resolveWhatsAppConfigDefaultTo,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+} from "./config-accessors.js";
 export {
   createActionGate,
   jsonResult,
@@ -21,7 +18,7 @@ export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
 export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+export { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -44,9 +41,7 @@ export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 export { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 
 export type OpenClawConfig = RuntimeOpenClawConfig;
-export type WhatsAppAccountConfig = NonNullable<
-  NonNullable<NonNullable<RuntimeOpenClawConfig["channels"]>["whatsapp"]>["accounts"]
->[string];
+export type { WhatsAppAccountConfig } from "./account-types.js";
 
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
@@ -62,39 +57,4 @@ export async function monitorWebChannel(
 ): ReturnType<MonitorWebChannel> {
   const { monitorWebChannel } = await loadChannelRuntime();
   return await monitorWebChannel(...args);
-}
-
-export async function loadOutboundMediaFromUrl(
-  mediaUrl: string,
-  options: {
-    maxBytes?: number;
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    };
-    mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  } = {},
-) {
-  const readFile = options.mediaAccess?.readFile ?? options.mediaReadFile;
-  const localRoots =
-    options.mediaAccess?.localRoots?.length && options.mediaAccess.localRoots.length > 0
-      ? options.mediaAccess.localRoots
-      : options.mediaLocalRoots && options.mediaLocalRoots.length > 0
-        ? options.mediaLocalRoots
-        : undefined;
-  return await loadWebMedia(
-    mediaUrl,
-    readFile
-      ? {
-          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
-          localRoots: "any",
-          readFile,
-          hostReadCapability: true,
-        }
-      : {
-          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
-          ...(localRoots ? { localRoots } : {}),
-        },
-  );
 }

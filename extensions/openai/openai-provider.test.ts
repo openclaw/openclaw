@@ -163,6 +163,25 @@ describe("buildOpenAIProvider", () => {
     );
   });
 
+  it("owns native reasoning output mode for OpenAI and Azure OpenAI responses", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "azure-openai-responses",
+        modelApi: "azure-openai-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe("native");
+  });
+
   it("keeps GPT-5.4 family metadata aligned with native OpenAI docs", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
@@ -191,7 +210,7 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.4",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
-      contextWindow: 400_000,
+      contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
   });
@@ -295,6 +314,11 @@ describe("buildOpenAIProvider", () => {
 
   it("owns direct OpenAI wrapper composition for responses payloads", () => {
     const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
     const extraParams = provider.prepareExtraParams?.({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -305,7 +329,7 @@ describe("buildOpenAIProvider", () => {
       },
     } as never);
     const result = runWrappedPayloadCase({
-      wrap: provider.wrapStreamFn as NonNullable<typeof provider.wrapStreamFn>,
+      wrap,
       provider: "openai",
       modelId: "gpt-5.4",
       extraParams: extraParams ?? undefined,
@@ -331,8 +355,13 @@ describe("buildOpenAIProvider", () => {
 
   it("owns Azure OpenAI reasoning compatibility without forcing OpenAI transport defaults", () => {
     const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected Azure OpenAI wrapper");
+    }
     const result = runWrappedPayloadCase({
-      wrap: provider.wrapStreamFn as NonNullable<typeof provider.wrapStreamFn>,
+      wrap,
       provider: "azure-openai-responses",
       modelId: "gpt-5.4",
       model: {
@@ -353,8 +382,13 @@ describe("buildOpenAIProvider", () => {
 
   it("owns Codex wrapper composition for responses payloads", () => {
     const provider = buildOpenAICodexProviderPlugin();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected Codex wrapper");
+    }
     const result = runWrappedPayloadCase({
-      wrap: provider.wrapStreamFn as NonNullable<typeof provider.wrapStreamFn>,
+      wrap,
       provider: "openai-codex",
       modelId: "gpt-5.4",
       extraParams: {

@@ -33,7 +33,9 @@ export {
   sanitizeTextContent,
   stripToolMessages,
 } from "./chat-history-text.js";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
@@ -82,14 +84,10 @@ export type SessionListRow = {
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: string | number;
   transcriptPath?: string;
   messages?: unknown[];
 };
-
-function normalizeKey(value?: string) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 export function resolveSessionToolContext(opts?: {
   agentSessionKey?: string;
@@ -144,11 +142,11 @@ export function deriveChannel(params: {
   if (params.kind === "cron" || params.kind === "hook" || params.kind === "node") {
     return "internal";
   }
-  const channel = normalizeKey(params.channel ?? undefined);
+  const channel = normalizeOptionalString(params.channel ?? undefined);
   if (channel) {
     return channel;
   }
-  const lastChannel = normalizeKey(params.lastChannel ?? undefined);
+  const lastChannel = normalizeOptionalString(params.lastChannel ?? undefined);
   if (lastChannel) {
     return lastChannel;
   }

@@ -24,7 +24,7 @@ wired end-to-end.
 
 1. `agent` RPC validates params, resolves session (sessionKey/sessionId), persists session metadata, returns `{ runId, acceptedAt }` immediately.
 2. `agentCommand` runs the agent:
-   - resolves model + thinking/verbose defaults
+   - resolves model + thinking/verbose/trace defaults
    - loads skills snapshot
    - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
    - emits **lifecycle end/error** if the embedded loop does not emit one
@@ -38,7 +38,7 @@ wired end-to-end.
    - tool events => `stream: "tool"`
    - assistant deltas => `stream: "assistant"`
    - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
-5. `agent.wait` uses `waitForAgentJob`:
+5. `agent.wait` uses `waitForAgentRun`:
    - waits for **lifecycle end/error** for `runId`
    - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
@@ -124,7 +124,8 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
   - assistant text (and optional reasoning)
   - inline tool summaries (when verbose + allowed)
   - assistant error text when the model errors
-- `NO_REPLY` is treated as a silent token and filtered from outgoing payloads.
+- The exact silent token `NO_REPLY` / `no_reply` is filtered from outgoing
+  payloads.
 - Messaging tool duplicates are removed from the final payload list.
 - If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted
   (unless a messaging tool already sent a user-visible reply).
@@ -150,6 +151,7 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
+- LLM idle timeout: `agents.defaults.llm.idleTimeoutSeconds` aborts a model request when no response chunks arrive before the idle window. Set it explicitly for slow local models or reasoning/tool-call providers; set it to 0 to disable. If it is not set, OpenClaw uses `agents.defaults.timeoutSeconds` when configured, otherwise 120s. Cron-triggered runs with no explicit LLM or agent timeout disable the idle watchdog and rely on the cron outer timeout.
 
 ## Where things can end early
 

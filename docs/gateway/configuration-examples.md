@@ -67,19 +67,15 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Auth profile metadata (secrets live in auth-profiles.json)
   auth: {
     profiles: {
-      "anthropic:me@example.com": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "me@example.com",
-      },
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
       "openai:default": { provider: "openai", mode: "api_key" },
-      "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+      "openai-codex:personal": { provider: "openai-codex", mode: "oauth" },
     },
     order: {
-      anthropic: ["anthropic:me@example.com", "anthropic:work"],
+      anthropic: ["anthropic:default", "anthropic:work"],
       openai: ["openai:default"],
-      "openai-codex": ["openai-codex:default"],
+      "openai-codex": ["openai-codex:personal"],
     },
   },
 
@@ -240,7 +236,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       userTimezone: "America/Chicago",
       model: {
         primary: "anthropic/claude-sonnet-4-6",
-        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
+        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.4"],
       },
       imageModel: {
         primary: "openrouter/anthropic/claude-sonnet-4-6",
@@ -248,7 +244,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-        "openai/gpt-5.2": { alias: "gpt" },
+        "openai/gpt-5.4": { alias: "gpt" },
       },
       skills: ["github", "weather"], // inherited by agents that omit list[].skills
       thinkingDefault: "low",
@@ -449,7 +445,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
     install: {
       preferBrew: true,
-      nodeManager: "npm",
+      nodeManager: "npm", // npm | pnpm | yarn | bun
     },
     entries: {
       "image-lab": {
@@ -536,60 +532,19 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 For Discord/Slack/Google Chat/Microsoft Teams/Mattermost/IRC, sender authorization is ID-first by default.
 Only enable direct mutable name/email/nick matching with each channel's `dangerouslyAllowNameMatching: true` if you explicitly accept that risk.
 
-### OAuth with API key failover
+### Anthropic API key + MiniMax fallback
 
 ```json5
 {
   auth: {
     profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "me@example.com",
-      },
       "anthropic:api": {
         provider: "anthropic",
         mode: "api_key",
       },
     },
     order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
-    },
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: {
-      primary: "anthropic/claude-sonnet-4-6",
-      fallbacks: ["anthropic/claude-opus-4-6"],
-    },
-  },
-}
-```
-
-### Anthropic setup-token + API key, MiniMax fallback
-
-<Warning>
-Anthropic setup-token usage outside Claude Code has been restricted for some
-users in the past. Treat this as user-choice risk and verify current Anthropic
-terms before depending on subscription auth.
-</Warning>
-
-```json5
-{
-  auth: {
-    profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "user@example.com",
-      },
-      "anthropic:api": {
-        provider: "anthropic",
-        mode: "api_key",
-      },
-    },
-    order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
+      anthropic: ["anthropic:api"],
     },
   },
   models: {

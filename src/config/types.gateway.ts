@@ -49,17 +49,9 @@ export type CanvasHostConfig = {
 };
 
 export type TalkProviderConfig = {
-  /** Default voice ID for the provider's Talk mode implementation. */
-  voiceId?: string;
-  /** Optional voice name -> provider voice ID map. */
-  voiceAliases?: Record<string, string>;
-  /** Default provider model ID for Talk mode. */
-  modelId?: string;
-  /** Default provider output format (for example pcm_44100). */
-  outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
-  /** Provider-specific extensions. */
+  /** Provider-owned Talk config fields. */
   [key: string]: unknown;
 };
 
@@ -71,20 +63,10 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
-  /** Active Talk TTS provider (for example "elevenlabs"). */
+  /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
-  /** @deprecated Legacy top-level Talk provider API key; normalized into talk.providers.<provider>.apiKey on load. */
-  apiKey?: SecretInput;
-  /** @deprecated Legacy top-level Talk voice id; normalized into talk.providers.<provider>.voiceId on load. */
-  voiceId?: string;
-  /** @deprecated Legacy top-level Talk voice aliases; normalized into talk.providers.<provider>.voiceAliases on load. */
-  voiceAliases?: Record<string, string>;
-  /** @deprecated Legacy top-level Talk model id; normalized into talk.providers.<provider>.modelId on load. */
-  modelId?: string;
-  /** @deprecated Legacy top-level Talk output format; normalized into talk.providers.<provider>.outputFormat on load. */
-  outputFormat?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
@@ -103,6 +85,18 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /**
+   * Embed sandbox mode for hosted Control UI previews.
+   * - strict: no script execution inside embeds
+   * - scripts: allow scripts while keeping embeds origin-isolated (default)
+   * - trusted: allow scripts and same-origin privileges
+   */
+  embedSandbox?: "strict" | "scripts" | "trusted";
+  /**
+   * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
+   * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+   */
+  allowExternalEmbedUrls?: boolean;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**

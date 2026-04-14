@@ -1,10 +1,9 @@
-import { Type } from "@sinclair/typebox";
 import {
+  createMessageToolButtonsSchema,
   createUnionActionGate,
   listTokenSourcedAccounts,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -12,6 +11,7 @@ import type {
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
   createTelegramActionGate,
@@ -177,7 +177,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       action: "topic-create",
       args: {
         ...rest,
-        name: typeof threadName === "string" ? threadName : undefined,
+        name: readStringValue(threadName),
       },
     };
   },

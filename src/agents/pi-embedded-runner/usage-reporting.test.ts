@@ -18,9 +18,12 @@ function makeAttemptResult(
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
+    idleTimedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "test-session",
     messagesSnapshot: [],
     assistantTexts: [],
@@ -33,6 +36,11 @@ function makeAttemptResult(
         didSendViaMessagingTool,
         successfulCronAdds,
       }),
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
     didSendViaMessagingTool,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
@@ -49,7 +57,7 @@ function makeAssistantMessage(
     role: "assistant",
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: { input: 0, output: 0 } as AssistantMessage["usage"],
     stopReason: "end_turn" as AssistantMessage["stopReason"],
     timestamp: Date.now(),

@@ -19,6 +19,8 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+const OPENROUTER_MODEL_NOT_FOUND_PAYLOAD =
+  '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
 const TOGETHER_MONTHLY_SPEND_CAP_MESSAGE =
   "The account associated with this API key has reached its maximum allowed monthly spending limit.";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
@@ -181,6 +183,61 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("classifies OpenRouter no-endpoints 404s as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 404,
+        message: "No endpoints found for deepseek/deepseek-r1:free.",
+      }),
+    ).toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "404 No endpoints found for deepseek/deepseek-r1:free.",
+      }),
+    ).toBe("model_not_found");
+  });
+
+  it("classifies JSON-wrapped OpenRouter stealth-model 404s as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: OPENROUTER_MODEL_NOT_FOUND_PAYLOAD,
+      }),
+    ).toBe("model_not_found");
+  });
+
+  it("classifies generic model-does-not-exist messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The model gpt-foo does not exist.",
+      }),
+    ).toBe("model_not_found");
+  });
+
+  it("does not classify generic access errors as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The deployment does not exist or you do not have access.",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not classify generic deprecation transition messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The endpoint has been deprecated. Transition to v2 API for continued access.",
+      }),
+    ).toBeNull();
+  });
+
+  it("classifies model-scoped deprecation transition messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
+      }),
+    ).toBe("model_not_found");
+  });
+
   it("keeps status-only 503s conservative unless the payload is clearly overloaded", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -194,6 +251,46 @@ describe("failover-error", () => {
         message: '{"error":{"message":"The model is overloaded. Please try later"}}',
       }),
     ).toBe("overloaded");
+  });
+
+  it("classifies provider-scoped generic upstream errors for failover", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "anthropic",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "Provider returned error",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("does not classify provider-scoped upstream errors without the matching provider", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "An unknown error occurred",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "An unknown error occurred",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Provider returned error",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "anthropic",
+        message: "Provider returned error",
+      }),
+    ).toBeNull();
   });
 
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
@@ -473,13 +570,23 @@ describe("failover-error", () => {
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
     });
     expect(err?.name).toBe("FailoverError");
     expect(err?.reason).toBe("billing");
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
-    expect(err?.model).toBe("claude-opus-4-5");
+    expect(err?.model).toBe("claude-opus-4-6");
+  });
+
+  it("coerces JSON-wrapped OpenRouter stealth-model 404s into FailoverError", () => {
+    const err = coerceToFailoverError(OPENROUTER_MODEL_NOT_FOUND_PAYLOAD, {
+      provider: "openrouter",
+      model: "openrouter/healer-alpha",
+    });
+
+    expect(err?.reason).toBe("model_not_found");
+    expect(err?.status).toBe(404);
   });
 
   it("maps overloaded to a 503 fallback status", () => {
@@ -510,6 +617,46 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403, message: "api key revoked" })).toBe(
       "auth_permanent",
     );
+  });
+
+  it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {
+    // GitHub: openclaw/openclaw#53849 — OpenRouter returns 403 with "Key limit exceeded"
+    // when the monthly key spending limit is reached. This must trigger billing failover
+    // (model fallback), not generic auth.
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "Key limit exceeded",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "403 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("billing");
+  });
+
+  it("401 billing-style message returns billing instead of generic auth", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 401,
+        message: "401 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("billing");
+  });
+
+  it("does not treat OpenRouter key-limit text as billing without provider context", () => {
+    expect(resolveFailoverReasonFromError({ message: "Key limit exceeded" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "403 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("auth");
   });
 
   it("resolveFailoverStatus maps auth_permanent to 403", () => {

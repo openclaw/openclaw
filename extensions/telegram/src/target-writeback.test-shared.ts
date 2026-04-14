@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -10,8 +10,10 @@ export const loadCronStore: AsyncUnknownMock = vi.fn();
 export const resolveCronStorePath: UnknownMock = vi.fn();
 export const saveCronStore: AsyncUnknownMock = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
     readConfigFileSnapshotForWrite,
@@ -28,9 +30,11 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
   describe("maybePersistResolvedTelegramTarget", () => {
     let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
 
-    beforeEach(async () => {
-      vi.resetModules();
+    beforeAll(async () => {
       ({ maybePersistResolvedTelegramTarget } = await import("./target-writeback.js"));
+    });
+
+    beforeEach(() => {
       readConfigFileSnapshotForWrite.mockReset();
       writeConfigFile.mockReset();
       loadCronStore.mockReset();

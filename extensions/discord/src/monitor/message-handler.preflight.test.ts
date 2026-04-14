@@ -480,12 +480,11 @@ describe("preflightDiscordMessage", () => {
         bot: true,
       },
     }));
-    const client = {
-      ...createThreadClient({ threadId, parentId }),
+    const client = Object.assign(createThreadClient({ threadId, parentId }), {
       rest: {
         get: restGet,
       },
-    } as unknown as DiscordClient;
+    }) as unknown as DiscordClient;
 
     const result = await preflightDiscordMessage({
       ...createPreflightArgs({
@@ -595,6 +594,45 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
   });
 
+  it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
+    const channelId = "channel-bot-command-no-mention";
+    const guildId = "guild-bot-command-no-mention";
+    const message = createDiscordMessage({
+      id: "m-bot-command-no-mention",
+      channelId,
+      content: "/new incident room",
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+
+    const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
+
+    expect(result).toBeNull();
+  });
+
+  it("still allows bot control commands with an explicit mention when allowBots=mentions", async () => {
+    const channelId = "channel-bot-command-with-mention";
+    const guildId = "guild-bot-command-with-mention";
+    const message = createDiscordMessage({
+      id: "m-bot-command-with-mention",
+      channelId,
+      content: "<@openclaw-bot> /new incident room",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+
+    const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
+
+    expect(result).not.toBeNull();
+  });
+
   it("treats @everyone as a mention when requireMention is true", async () => {
     const channelId = "channel-everyone-mention";
     const guildId = "guild-everyone-mention";
@@ -621,7 +659,7 @@ describe("preflightDiscordMessage", () => {
         [guildId]: {
           channels: {
             [channelId]: {
-              allow: true,
+              enabled: true,
               requireMention: true,
             },
           },
@@ -655,7 +693,7 @@ describe("preflightDiscordMessage", () => {
         "guild-1": {
           channels: {
             "ch-1": {
-              allow: true,
+              enabled: true,
               requireMention: false,
             },
           },
@@ -704,7 +742,7 @@ describe("preflightDiscordMessage", () => {
         "guild-1": {
           channels: {
             [parentId]: {
-              allow: true,
+              enabled: true,
               requireMention: false,
             },
           },
@@ -890,7 +928,7 @@ describe("preflightDiscordMessage", () => {
         "guild-1": {
           channels: {
             [channelId]: {
-              allow: true,
+              enabled: true,
               requireMention: true,
             },
           },
@@ -958,7 +996,7 @@ describe("preflightDiscordMessage", () => {
         [guildId]: {
           channels: {
             [channelId]: {
-              allow: true,
+              enabled: true,
               requireMention: true,
               users: ["user-1"],
             },
@@ -1004,7 +1042,7 @@ describe("preflightDiscordMessage", () => {
         }),
         discordConfig: {} as DiscordConfig,
         guildEntries: {
-          "guild-1": { channels: { [channelId]: { allow: true, requireMention: true } } },
+          "guild-1": { channels: { [channelId]: { enabled: true, requireMention: true } } },
         },
       });
       expect(result).toBeNull();
@@ -1048,7 +1086,7 @@ describe("preflightDiscordMessage", () => {
         }),
         discordConfig: {} as DiscordConfig,
         guildEntries: {
-          "guild-1": { channels: { [channelId]: { allow: true, requireMention: true } } },
+          "guild-1": { channels: { [channelId]: { enabled: true, requireMention: true } } },
         },
       });
       expect(result).not.toBeNull();

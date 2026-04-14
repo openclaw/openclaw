@@ -2,7 +2,7 @@
 // Prefer narrower SDK subpaths plus local extension seams over the legacy signal barrel.
 
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
-export { SignalConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+export { buildChannelConfigSchema, SignalConfigSchema } from "../config-api.js";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 export type { RuntimeOpenClawConfig as OpenClawConfig };
@@ -11,7 +11,6 @@ export type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 export {
   DEFAULT_ACCOUNT_ID,
   applyAccountNameToChannelSection,
-  buildChannelConfigSchema,
   deleteAccountFromConfigSection,
   emptyPluginConfigSchema,
   formatPairingApproveHint,
@@ -50,7 +49,4 @@ export { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 export { sendMessageSignal } from "./send.js";
 export { signalMessageActions } from "./message-actions.js";
 export type { ResolvedSignalAccount } from "./accounts.js";
-export type SignalAccountConfig = Omit<
-  Exclude<NonNullable<RuntimeOpenClawConfig["channels"]>["signal"], undefined>,
-  "accounts"
->;
+export type { SignalAccountConfig } from "./account-types.js";

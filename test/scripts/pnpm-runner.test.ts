@@ -22,6 +22,28 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
+  it("prepends node args when launching pnpm through node", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath: "/home/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
+        nodeArgs: ["--no-maglev"],
+        nodeExecPath: "/usr/local/bin/node",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "linux",
+      }),
+    ).toEqual({
+      command: "/usr/local/bin/node",
+      args: [
+        "--no-maglev",
+        "/home/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
+        "exec",
+        "vitest",
+        "run",
+      ],
+      shell: false,
+    });
+  });
+
   it("falls back to bare pnpm on non-Windows when npm_execpath is missing", () => {
     expect(
       resolvePnpmRunner({
@@ -72,6 +94,8 @@ describe("resolvePnpmRunner", () => {
     const env = { PATH: "/custom/bin", FOO: "bar" };
     expect(
       createPnpmRunnerSpawnSpec({
+        cwd: "/repo",
+        detached: true,
         npmExecPath: "",
         pnpmArgs: ["exec", "vitest", "run"],
         platform: "linux",
@@ -81,6 +105,8 @@ describe("resolvePnpmRunner", () => {
       command: "pnpm",
       args: ["exec", "vitest", "run"],
       options: {
+        cwd: "/repo",
+        detached: true,
         stdio: "inherit",
         env,
         shell: false,

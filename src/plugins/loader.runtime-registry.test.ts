@@ -8,13 +8,17 @@ import {
 import {
   buildMemoryPromptSection,
   getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
+  registerMemoryPromptSupplement,
   registerMemoryPromptSection,
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
@@ -36,7 +40,7 @@ describe("getCompatibleActivePluginRegistry", () => {
       },
     };
     const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
     expect(
@@ -54,7 +58,45 @@ describe("getCompatibleActivePluginRegistry", () => {
     expect(
       __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
+        onlyPluginIds: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
         runtimeOptions: undefined,
+      }),
+    ).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        runtimeOptions: {
+          subagent: {} as CreatePluginRuntimeOptions["subagent"],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat a default-mode active registry as compatible with gateway binding", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey, "default");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
       }),
     ).toBeUndefined();
   });
@@ -147,6 +189,25 @@ describe("resolveRuntimePluginRegistry", () => {
 
     expect(resolveRuntimePluginRegistry()).toBe(registry);
   });
+
+  it("does not treat an explicit empty plugin scope as the active runtime", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const scopedEmpty = resolveRuntimePluginRegistry({ ...loadOptions, onlyPluginIds: [] });
+    expect(scopedEmpty).not.toBe(registry);
+    expect(scopedEmpty?.plugins).toEqual([]);
+  });
 });
 
 describe("clearPluginLoaderCache", () => {
@@ -155,7 +216,12 @@ describe("clearPluginLoaderCache", () => {
       id: "stale",
       create: async () => ({ provider: null }),
     });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => null,
+    });
     registerMemoryPromptSection(() => ["stale memory section"]);
+    registerMemoryPromptSupplement("memory-wiki", () => ["stale wiki supplement"]);
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
       forceFlushTranscriptBytes: 2,
@@ -174,7 +240,9 @@ describe("clearPluginLoaderCache", () => {
     });
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "stale memory section",
+      "stale wiki supplement",
     ]);
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
     expect(getMemoryRuntime()).toBeDefined();
     expect(getMemoryEmbeddingProvider("stale")).toBeDefined();
@@ -182,6 +250,7 @@ describe("clearPluginLoaderCache", () => {
     clearPluginLoaderCache();
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(listMemoryCorpusSupplements()).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();

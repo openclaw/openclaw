@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
@@ -25,6 +25,7 @@ const {
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
 let getLineRuntimeState: typeof import("./monitor.js").getLineRuntimeState;
+let clearLineRuntimeStateForTests: typeof import("./monitor.js").clearLineRuntimeStateForTests;
 let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
 vi.mock("./bot.js", () => ({
@@ -92,8 +93,13 @@ vi.mock("./template-messages.js", () => ({
 }));
 
 describe("monitorLineProvider lifecycle", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ monitorLineProvider, getLineRuntimeState, clearLineRuntimeStateForTests } =
+      await import("./monitor.js"));
+  });
+
+  beforeEach(() => {
+    clearLineRuntimeStateForTests();
     createLineBotMock.mockReset();
     createLineBotMock.mockReturnValue({
       account: { accountId: "default" },
@@ -105,7 +111,6 @@ describe("monitorLineProvider lifecycle", () => {
       .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerPluginHttpRouteMock.mockReset().mockReturnValue(unregisterHttpMock);
-    ({ monitorLineProvider, getLineRuntimeState } = await import("./monitor.js"));
   });
 
   const createRouteResponse = () => {

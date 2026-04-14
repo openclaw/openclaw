@@ -2,9 +2,11 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isProxyReasoningUnsupportedModelHint } from "../../plugin-sdk/provider-model-shared.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
-import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -58,10 +60,24 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const provider = readStringValue(model.provider);
+    const modelId = readStringValue(model.id);
+    // Keep OpenRouter-specific cache markers on verified OpenRouter routes
+    // (or the provider's default route), but not on arbitrary OpenAI proxies.
+    const endpointClass = resolveProviderRequestPolicy({
+      provider,
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport: "stream",
+    }).endpointClass;
     if (
-      typeof model.provider !== "string" ||
-      typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModelRef(model.provider, model.id)
+      !modelId ||
+      !isAnthropicModelRef(modelId) ||
+      !(
+        endpointClass === "openrouter" ||
+        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
+      )
     ) {
       return underlying(model, context, options);
     }
@@ -79,9 +95,9 @@ export function createOpenRouterWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const headers = resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : "openrouter",
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider) ?? "openrouter",
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,
@@ -113,9 +129,9 @@ export function createKilocodeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const headers = resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : "kilocode",
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider) ?? "kilocode",
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,

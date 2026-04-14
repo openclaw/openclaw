@@ -118,6 +118,7 @@ const TARGET_KEYS = [
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
+  "gateway.controlUi.embedSandbox",
   "cron",
   "cron.enabled",
   "cron.store",
@@ -306,6 +307,7 @@ const TARGET_KEYS = [
   "discovery.wideArea.enabled",
   "discovery.mdns",
   "discovery.mdns.mode",
+  "gateway.controlUi.embedSandbox",
   "canvasHost",
   "canvasHost.enabled",
   "canvasHost.root",
@@ -366,18 +368,12 @@ const TARGET_KEYS = [
   "models.providers.*.api",
   "models.providers.*.headers",
   "models.providers.*.models",
-  "models.bedrockDiscovery",
-  "models.bedrockDiscovery.enabled",
-  "models.bedrockDiscovery.region",
-  "models.bedrockDiscovery.providerFilter",
-  "models.bedrockDiscovery.refreshInterval",
-  "models.bedrockDiscovery.defaultContextWindow",
-  "models.bedrockDiscovery.defaultMaxTokens",
   "agents",
   "agents.defaults",
   "agents.list",
   "agents.defaults.compaction",
   "agents.defaults.compaction.mode",
+  "agents.defaults.compaction.provider",
   "agents.defaults.compaction.reserveTokens",
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
@@ -776,10 +772,6 @@ describe("config help copy quality", () => {
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
 
-    const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
-    expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
-    expect(/cost|noise|api/i.test(bedrockRefresh)).toBe(true);
-
     const authCooldowns = FIELD_HELP["auth.cooldowns"];
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
   });
@@ -811,5 +803,17 @@ describe("config help copy quality", () => {
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
+  });
+
+  it("documents agent startup-context preload controls", () => {
+    const startupContext = FIELD_HELP["agents.defaults.startupContext"];
+    expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
+
+    const applyOn = FIELD_HELP["agents.defaults.startupContext.applyOn"];
+    expect(applyOn.includes('"new"')).toBe(true);
+    expect(applyOn.includes('"reset"')).toBe(true);
+
+    const dailyMemoryDays = FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"];
+    expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
   });
 });

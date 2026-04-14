@@ -13,7 +13,13 @@ type SandboxBrowserHashInput = {
   docker: SandboxDockerConfig;
   browser: Pick<
     SandboxBrowserConfig,
-    "cdpPort" | "cdpSourceRange" | "vncPort" | "noVncPort" | "headless" | "enableNoVnc"
+    | "cdpPort"
+    | "cdpSourceRange"
+    | "vncPort"
+    | "noVncPort"
+    | "headless"
+    | "enableNoVnc"
+    | "autoStartTimeoutMs"
   >;
   securityEpoch: string;
   workspaceAccess: SandboxWorkspaceAccess;

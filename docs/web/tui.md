@@ -37,7 +37,7 @@ Use `--password` if your Gateway uses password auth.
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
-- Footer: connection state + agent + session + model + think/fast/verbose/reasoning + token counts + deliver.
+- Footer: connection state + agent + session + model + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
@@ -94,6 +94,7 @@ Session controls:
 - `/think <off|minimal|low|medium|high>`
 - `/fast <status|on|off>`
 - `/verbose <on|full|off>`
+- `/trace <on|off>`
 - `/reasoning <on|off|stream>`
 - `/usage <off|tokens|full>`
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
@@ -148,7 +149,9 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - `--session <key>`: Session key (default: `main`, or `global` when scope is global)
 - `--deliver`: Deliver assistant replies to the provider (default off)
 - `--thinking <level>`: Override thinking level for sends
+- `--message <text>`: Send an initial message after connecting
 - `--timeout-ms <ms>`: Agent timeout in ms (defaults to `agents.defaults.timeoutSeconds`)
+- `--history-limit <n>`: History entries to load (default `200`)
 
 Note: when you set `--url`, the TUI does not fall back to config or environment credentials.
 Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
@@ -161,7 +164,6 @@ No output after sending a message:
 - Check the Gateway logs: `openclaw logs --follow`.
 - Confirm the agent can run: `openclaw status` and `openclaw models status`.
 - If you expect messages in a chat channel, enable delivery (`/deliver on` or `--deliver`).
-- `--history-limit <n>`: History entries to load (default 200)
 
 ## Connection troubleshooting
 

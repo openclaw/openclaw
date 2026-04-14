@@ -1,8 +1,16 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
@@ -10,12 +18,11 @@ import { resolveRequestUrl } from "./request-url.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
-import { resolveChatGuidForTarget, createChatForHandle } from "./send.js";
+import { createChatForHandle, resolveChatGuidForTarget } from "./send.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesAttachment,
-  type BlueBubblesSendTarget,
   type SsrFPolicy,
 } from "./types.js";
 
@@ -45,7 +52,7 @@ function sanitizeFilename(input: string | undefined, fallback: string): string {
 
 function ensureExtension(filename: string, extension: string, fallbackBase: string): string {
   const currentExt = path.extname(filename);
-  if (currentExt.toLowerCase() === extension) {
+  if (normalizeLowercaseStringOrEmpty(currentExt) === extension) {
     return filename;
   }
   const base = currentExt ? filename.slice(0, -currentExt.length) : filename;
@@ -53,8 +60,8 @@ function ensureExtension(filename: string, extension: string, fallbackBase: stri
 }
 
 function resolveVoiceInfo(filename: string, contentType?: string) {
-  const normalizedType = contentType?.trim().toLowerCase();
-  const extension = path.extname(filename).toLowerCase();
+  const normalizedType = normalizeOptionalLowercaseString(contentType);
+  const extension = normalizeLowercaseStringOrEmpty(path.extname(filename));
   const isMp3 =
     extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
   const isCaf =
@@ -96,7 +103,8 @@ export async function downloadBlueBubblesAttachment(
   if (!guid) {
     throw new Error("BlueBubbles attachment guid is required");
   }
-  const { baseUrl, password, allowPrivateNetwork } = resolveAccount(opts);
+  const { baseUrl, password, allowPrivateNetwork, allowPrivateNetworkConfig } =
+    resolveAccount(opts);
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/attachment/${encodeURIComponent(guid)}/download`,
@@ -104,6 +112,7 @@ export async function downloadBlueBubblesAttachment(
   });
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
   const trustedHostname = safeExtractHostname(baseUrl);
+  const trustedHostnameIsPrivate = trustedHostname ? isBlockedHostnameOrIp(trustedHostname) : false;
   try {
     const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
       url,
@@ -111,7 +120,7 @@ export async function downloadBlueBubblesAttachment(
       maxBytes,
       ssrfPolicy: allowPrivateNetwork
         ? { allowPrivateNetwork: true }
-        : trustedHostname
+        : trustedHostname && (allowPrivateNetworkConfig !== false || !trustedHostnameIsPrivate)
           ? { allowedHostnames: [trustedHostname] }
           : undefined,
       fetchImpl: async (input, init) =>
@@ -127,10 +136,12 @@ export async function downloadBlueBubblesAttachment(
     };
   } catch (error) {
     if (readMediaFetchErrorCode(error) === "max_bytes") {
-      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
+      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`, {
+        cause: error,
+      });
     }
-    const text = error instanceof Error ? error.message : String(error);
-    throw new Error(`BlueBubbles attachment download failed: ${text}`);
+    const text = formatErrorMessage(error);
+    throw new Error(`BlueBubbles attachment download failed: ${text}`, { cause: error });
   }
 }
 
@@ -159,9 +170,29 @@ export async function sendBlueBubblesAttachment(params: {
   const wantsVoice = asVoice === true;
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
   filename = sanitizeFilename(filename, fallbackName);
-  contentType = contentType?.trim() || undefined;
+  contentType = normalizeOptionalString(contentType);
   const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+
+  // Lazy refresh: when the cache has expired and Private API features are needed,
+  // fetch server info before making the decision. This prevents silent degradation
+  // of reply threading after the 10-minute cache TTL expires. (#43764)
+  const wantsReplyThread = Boolean(replyToMessageGuid?.trim());
+  if (privateApiStatus === null && wantsReplyThread) {
+    try {
+      await fetchBlueBubblesServerInfo({
+        baseUrl,
+        password,
+        accountId,
+        timeoutMs: opts.timeoutMs ?? 5000,
+        allowPrivateNetwork,
+      });
+      privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+    } catch {
+      // Refresh failed — proceed with null status (existing graceful degradation)
+    }
+  }
+
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).

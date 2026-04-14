@@ -1,11 +1,13 @@
-import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
-import { isChannelExecApprovalClientEnabledFromConfig } from "openclaw/plugin-sdk/approval-runtime";
-import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
-import { parseDiscordTarget } from "./targets.js";
+import {
+  getExecApprovalReplyMetadata,
+  isChannelExecApprovalClientEnabledFromConfig,
+  resolveApprovalApprovers,
+} from "./approval-runtime.js";
+import { parseDiscordTarget } from "./target-parsing.js";
 
 function normalizeDiscordApproverId(value: string): string | undefined {
   const trimmed = value.trim();

@@ -31,7 +31,7 @@ export {
   isTrustedProxyAddress,
 } from "openclaw/plugin-sdk/core";
 export { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/channel-status";
-export { createAccountStatusSink } from "openclaw/plugin-sdk/compat";
+export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export {
   buildModelsProviderData,
@@ -61,7 +61,7 @@ export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-ac
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-export { rawDataToString } from "openclaw/plugin-sdk/browser-support";
+export { rawDataToString } from "openclaw/plugin-sdk/browser-node-runtime";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -86,3 +86,4 @@ export {
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
 export { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+export { setMattermostRuntime } from "./src/runtime.js";

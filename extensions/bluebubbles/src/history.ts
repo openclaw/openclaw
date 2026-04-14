@@ -169,7 +169,7 @@ export async function fetchBlueBubblesHistory(
         entries: historyEntries.slice(0, effectiveLimit), // Ensure we don't exceed the requested limit
         resolved: true,
       };
-    } catch (error) {
+    } catch {
       // Continue to next path
       continue;
     }

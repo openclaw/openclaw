@@ -1,4 +1,6 @@
-import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
+import type { ChatChannelId } from "../channels/ids.js";
+import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import {
   createScopedAccountReplyToModeResolver,
@@ -9,6 +11,7 @@ import type {
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
 } from "../channels/plugins/types.adapters.js";
+import type { ChannelConfigSchema, ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
@@ -16,15 +19,18 @@ import type {
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { OpenClawPluginApi, OpenClawPluginConfigSchema } from "../plugins/types.js";
+import type { OpenClawPluginApi } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type {
+  AgentHarness,
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
@@ -65,21 +71,36 @@ export type {
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
   ProviderResolveDynamicModelContext,
+  ProviderResolveTransportTurnStateContext,
+  ProviderResolveWebSocketSessionPolicyContext,
   ProviderResolvedUsageAuth,
+  RealtimeTranscriptionProviderPlugin,
   ProviderSanitizeReplayHistoryContext,
+  ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
-  ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
+  ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
   SpeechProviderPlugin,
 } from "./plugin-entry.js";
+export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
+export type {
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
+} from "../plugins/memory-state.js";
+export type {
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
+} from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export type { AllowlistMatch } from "../channels/allowlist-match.js";
 export type {
   BaseProbeResult,
@@ -88,7 +109,7 @@ export type {
   ChannelMessageActionName,
   ChannelMeta,
   ChannelSetupInput,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChatType } from "../channels/chat-type.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
@@ -124,8 +145,9 @@ export type {
   UsageProviderId,
   UsageWindow,
 } from "../infra/provider-usage.types.js";
-export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
-export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { ChannelMessageActionContext } from "../channels/plugins/types.public.js";
+export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -134,9 +156,15 @@ export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/con
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
-export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
+export {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export {
+  buildChannelConfigSchema,
+  emptyChannelConfigSchema,
+} from "../channels/plugins/config-schema.js";
 export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
@@ -150,7 +178,6 @@ export {
   formatPairingApproveHint,
   parseOptionalDelimitedEntries,
 } from "../channels/plugins/helpers.js";
-export { getChatChannelMeta } from "../channels/chat-meta.js";
 export {
   channelTargetSchema,
   channelTargetsSchema,
@@ -200,12 +227,23 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
+var cachedSdkChatChannelMeta: ReturnType<typeof buildChatChannelMetaById> | undefined;
+
+function resolveSdkChatChannelMeta(id: string) {
+  cachedSdkChatChannelMeta ??= buildChatChannelMetaById();
+  return cachedSdkChatChannelMeta[id];
+}
+
+export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
+  return resolveSdkChatChannelMeta(id);
+}
+
 /** Remove one of the known provider prefixes from a free-form target string. */
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
   const trimmed = raw.trim();
   for (const provider of providers) {
-    const prefix = `${provider.toLowerCase()}:`;
-    if (trimmed.toLowerCase().startsWith(prefix)) {
+    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
+    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
       return trimmed.slice(prefix.length).trim();
     }
   }
@@ -251,12 +289,17 @@ export function buildChannelOutboundSessionRoute(params: {
 }
 
 /** Options for a channel plugin entry that should register a channel capability. */
+type ChannelEntryConfigSchema<TPlugin> =
+  TPlugin extends ChannelPlugin<unknown>
+    ? NonNullable<TPlugin["configSchema"]>
+    : ChannelConfigSchema;
+
 type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
   plugin: TPlugin;
-  configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
+  configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   setRuntime?: (runtime: PluginRuntime) => void;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
@@ -266,7 +309,7 @@ type DefinedChannelPluginEntry<TPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: OpenClawPluginConfigSchema;
+  configSchema: ChannelEntryConfigSchema<TPlugin>;
   register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
@@ -324,12 +367,15 @@ export function defineChannelPluginEntry<TPlugin>({
   name,
   description,
   plugin,
-  configSchema = emptyPluginConfigSchema,
+  configSchema,
   setRuntime,
   registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  const resolvedConfigSchema = typeof configSchema === "function" ? configSchema() : configSchema;
+  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
+    typeof configSchema === "function"
+      ? configSchema()
+      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
   const entry = {
     id,
     name,
@@ -592,7 +638,7 @@ export function createChannelPluginBase<TResolvedAccount>(
   return {
     id: params.id,
     meta: {
-      ...getChatChannelMeta(params.id as Parameters<typeof getChatChannelMeta>[0]),
+      ...resolveSdkChatChannelMeta(params.id),
       ...params.meta,
     },
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),

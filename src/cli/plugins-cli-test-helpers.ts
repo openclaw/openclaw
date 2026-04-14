@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -32,6 +32,7 @@ export const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallSh
 export const enablePluginInConfig: UnknownMock = vi.fn();
 export const recordPluginInstall: UnknownMock = vi.fn();
 export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
+export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 export const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
@@ -52,6 +53,33 @@ const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
 export { runtimeErrors, runtimeLogs };
+
+function restoreRuntimeCaptureMocks() {
+  defaultRuntime.log.mockReset();
+  defaultRuntime.log.mockImplementation((...args: unknown[]) => {
+    runtimeLogs.push(args.map((value) => String(value)).join(" "));
+  });
+
+  defaultRuntime.error.mockReset();
+  defaultRuntime.error.mockImplementation((...args: unknown[]) => {
+    runtimeErrors.push(args.map((value) => String(value)).join(" "));
+  });
+
+  defaultRuntime.writeStdout.mockReset();
+  defaultRuntime.writeStdout.mockImplementation((value: string) => {
+    defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+  });
+
+  defaultRuntime.writeJson.mockReset();
+  defaultRuntime.writeJson.mockImplementation((value: unknown, space = 2) => {
+    defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+  });
+
+  defaultRuntime.exit.mockReset();
+  defaultRuntime.exit.mockImplementation((code: number) => {
+    throw new Error(`__exit__:${code}`);
+  });
+}
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
@@ -120,6 +148,10 @@ vi.mock("../plugins/installs.js", () => ({
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   clearPluginManifestRegistryCache: () => clearPluginManifestRegistryCache(),
+  loadPluginManifestRegistry: ((...args: unknown[]) =>
+    invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
+    ...args: unknown[]
+  ) => unknown,
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -313,15 +345,18 @@ const { registerPluginsCli } = await import("./plugins-cli.js");
 
 export { registerPluginsCli };
 
-export function runPluginsCommand(argv: string[]) {
+export async function runPluginsCommand(argv: string[]) {
   const program = new Command();
   program.exitOverride();
-  registerPluginsCli(program);
-  return program.parseAsync(argv, { from: "user" });
+  vi.resetModules();
+  const { registerPluginsCli: registerPluginsCliFresh } = await import("./plugins-cli.js");
+  registerPluginsCliFresh(program);
+  return await program.parseAsync(argv, { from: "user" });
 }
 
 export function resetPluginsCliTestState() {
   resetRuntimeCapture();
+  restoreRuntimeCaptureMocks();
   loadConfig.mockReset();
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset();
@@ -333,6 +368,7 @@ export function resetPluginsCliTestState() {
   enablePluginInConfig.mockReset();
   recordPluginInstall.mockReset();
   clearPluginManifestRegistryCache.mockReset();
+  loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
   buildPluginDiagnosticsReport.mockReset();
   buildPluginCompatibilityNotices.mockReset();
@@ -385,6 +421,10 @@ export function resetPluginsCliTestState() {
   recordPluginInstall.mockImplementation(
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
+  loadPluginManifestRegistry.mockReturnValue({
+    plugins: [],
+    diagnostics: [],
+  });
   const defaultPluginReport = {
     plugins: [],
     diagnostics: [],

@@ -12,6 +12,10 @@ const { createOllamaEmbeddingProviderMock } = vi.hoisted(() => ({
   }),
 }));
 
+const { hasAwsCredentialsMock } = vi.hoisted(() => ({
+  hasAwsCredentialsMock: vi.fn(async () => false),
+}));
+
 vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: async (params: {
     url: string;
@@ -34,6 +38,15 @@ vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
 vi.mock("./embeddings-ollama.js", () => ({
   createOllamaEmbeddingProvider: createOllamaEmbeddingProviderMock,
 }));
+
+vi.mock("./embeddings-bedrock.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./embeddings-bedrock.js")>("./embeddings-bedrock.js");
+  return {
+    ...actual,
+    hasAwsCredentials: hasAwsCredentialsMock,
+  };
+});
 
 const createFetchMock = () =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -251,6 +264,8 @@ describe("embedding provider remote overrides", () => {
   });
 
   it("fails fast when Gemini remote apiKey is an unresolved SecretRef", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
+
     await expect(
       createEmbeddingProvider({
         config: {} as never,

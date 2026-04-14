@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { hasBinary } from "../agents/skills.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
@@ -52,7 +53,7 @@ function formatCommandResult(command: string, result: SpawnResult): string {
 }
 
 function formatJsonParseFailure(command: string, result: SpawnResult, err: unknown): string {
-  const reason = err instanceof Error ? err.message : String(err);
+  const reason = formatErrorMessage(err);
   return `${command} returned invalid JSON: ${reason}\n${formatCommandResult(command, result)}`;
 }
 

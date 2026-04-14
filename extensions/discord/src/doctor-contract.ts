@@ -3,83 +3,12 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  asObjectRecord,
+  normalizeLegacyDmAliases,
+  normalizeLegacyStreamingAliases,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function normalizeDiscordStreamingAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { entry: Record<string, unknown>; changed: boolean } {
-  let updated = params.entry;
-  const hadLegacyStreamMode = updated.streamMode !== undefined;
-  const beforeStreaming = updated.streaming;
-  const resolved = resolveDiscordPreviewStreamMode(updated);
-  const shouldNormalize =
-    hadLegacyStreamMode ||
-    typeof beforeStreaming === "boolean" ||
-    (typeof beforeStreaming === "string" && beforeStreaming !== resolved);
-  if (!shouldNormalize) {
-    return { entry: updated, changed: false };
-  }
-
-  let changed = false;
-  if (beforeStreaming !== resolved) {
-    updated = { ...updated, streaming: resolved };
-    changed = true;
-  }
-  if (hadLegacyStreamMode) {
-    const { streamMode: _ignored, ...rest } = updated;
-    updated = rest;
-    changed = true;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-    );
-  }
-  if (typeof beforeStreaming === "boolean") {
-    params.changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-  } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
-    params.changes.push(
-      `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
-    );
-  }
-  if (
-    params.pathPrefix.startsWith("channels.discord") &&
-    resolved === "off" &&
-    hadLegacyStreamMode
-  ) {
-    params.changes.push(
-      `${params.pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${params.pathPrefix}.streaming="partial" to opt in explicitly.`,
-    );
-  }
-  return { entry: updated, changed };
-}
-
-function hasLegacyDiscordStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
-  }
-  return (
-    entry.streamMode !== undefined ||
-    typeof entry.streaming === "boolean" ||
-    (typeof entry.streaming === "string" &&
-      entry.streaming !== resolveDiscordPreviewStreamMode(entry))
-  );
-}
-
-function hasLegacyDiscordAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyDiscordStreamingAliases(account));
-}
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 
@@ -180,27 +109,15 @@ function migrateLegacyTtsConfig(
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
-    path: ["channels", "discord"],
-    message:
-      "channels.discord.streamMode and boolean channels.discord.streaming are legacy; use channels.discord.streaming.",
-    match: hasLegacyDiscordStreamingAliases,
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message:
-      "channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming.",
-    match: hasLegacyDiscordAccountStreamingAliases,
-  },
-  {
     path: ["channels", "discord", "voice", "tts"],
     message:
-      "channels.discord.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.voice.tts.providers.<provider> (auto-migrated on load).",
+      'channels.discord.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.voice.tts.providers.<provider>. Run "openclaw doctor --fix".',
     match: hasLegacyTtsProviderKeys,
   },
   {
     path: ["channels", "discord", "accounts"],
     message:
-      "channels.discord.accounts.<id>.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.accounts.<id>.voice.tts.providers.<provider> (auto-migrated on load).",
+      'channels.discord.accounts.<id>.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.accounts.<id>.voice.tts.providers.<provider>. Run "openclaw doctor --fix".',
     match: hasLegacyDiscordAccountTtsProviderKeys,
   },
 ];
@@ -218,11 +135,23 @@ export function normalizeCompatibilityConfig({
   const changes: string[] = [];
   let updated = rawEntry;
   let changed = false;
+  const shouldPromoteRootDmAllowFrom = !asObjectRecord(updated.accounts);
 
-  const streaming = normalizeDiscordStreamingAliases({
+  const dm = normalizeLegacyDmAliases({
     entry: updated,
     pathPrefix: "channels.discord",
     changes,
+    promoteAllowFrom: shouldPromoteRootDmAllowFrom,
+  });
+  updated = dm.entry;
+  changed = changed || dm.changed;
+
+  const streaming = normalizeLegacyStreamingAliases({
+    entry: updated,
+    pathPrefix: "channels.discord",
+    changes,
+    resolvedMode: resolveDiscordPreviewStreamMode(updated),
+    includePreviewChunk: true,
   });
   updated = streaming.entry;
   changed = changed || streaming.changed;
@@ -236,16 +165,25 @@ export function normalizeCompatibilityConfig({
       if (!account) {
         continue;
       }
-      const accountStreaming = normalizeDiscordStreamingAliases({
-        entry: account,
+      let accountEntry = account;
+      let accountChanged = false;
+      const accountDm = normalizeLegacyDmAliases({
+        entry: accountEntry,
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
       });
-      if (accountStreaming.changed) {
-        accounts[accountId] = accountStreaming.entry;
-        accountsChanged = true;
-      }
-      const accountVoice = asObjectRecord(accountStreaming.entry.voice);
+      accountEntry = accountDm.entry;
+      accountChanged = accountDm.changed;
+      const accountStreaming = normalizeLegacyStreamingAliases({
+        entry: accountEntry,
+        pathPrefix: `channels.discord.accounts.${accountId}`,
+        changes,
+        resolvedMode: resolveDiscordPreviewStreamMode(accountEntry),
+        includePreviewChunk: true,
+      });
+      accountEntry = accountStreaming.entry;
+      accountChanged = accountChanged || accountStreaming.changed;
+      const accountVoice = asObjectRecord(accountEntry.voice);
       if (
         accountVoice &&
         migrateLegacyTtsConfig(
@@ -254,10 +192,14 @@ export function normalizeCompatibilityConfig({
           changes,
         )
       ) {
-        accounts[accountId] = {
-          ...accountStreaming.entry,
+        accountEntry = {
+          ...accountEntry,
           voice: accountVoice,
         };
+        accountChanged = true;
+      }
+      if (accountChanged) {
+        accounts[accountId] = accountEntry;
         accountsChanged = true;
       }
     }

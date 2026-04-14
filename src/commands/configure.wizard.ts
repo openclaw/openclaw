@@ -1,12 +1,13 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -370,7 +371,7 @@ export async function runConfigureWizard(
       token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
       password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
     });
-    const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
+    const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
     const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
       cfg: baseConfig,
       value: baseConfig.gateway?.remote?.token,
@@ -463,7 +464,9 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
+      workspaceDir = resolveUserPath(
+        normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,
+      );
       if (!snapshot.exists) {
         const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
           nodePath.join(workspaceDir, name),
@@ -527,7 +530,7 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      gatewayPort = Number.parseInt(String(portInput), 10);
+      gatewayPort = Number.parseInt(portInput, 10);
     };
 
     if (opts.sections) {

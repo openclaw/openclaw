@@ -18,10 +18,9 @@ export function resolveMatrixAckReactionConfig(params: {
     channel: "matrix",
     accountId: params.accountId ?? undefined,
   }).trim();
-  const ackReactionScope =
-    accountConfig.ackReactionScope ??
+  const ackReactionScope = (accountConfig.ackReactionScope ??
     matrixConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
-    "group-mentions";
+    "group-mentions") as MatrixAckReactionScope;
   return { ackReaction, ackReactionScope };
 }

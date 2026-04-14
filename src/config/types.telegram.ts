@@ -1,6 +1,5 @@
 import type {
-  BlockStreamingChunkConfig,
-  BlockStreamingCoalesceConfig,
+  ChannelPreviewStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -120,7 +119,7 @@ export type TelegramAccountConfig = {
   botToken?: string;
   /** Path to a regular file containing the bot token; symlinks are rejected. */
   tokenFile?: string;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
@@ -148,24 +147,8 @@ export type TelegramAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /**
-   * Stream preview mode:
-   * - "off": disable preview updates
-   * - "partial": edit a single preview message
-   * - "block": stream in larger chunked updates
-   * - "progress": alias that maps to "partial" on Telegram
-   */
-  streaming?: TelegramStreamingMode;
-  /** @deprecated Legacy preview streaming key; normalized into `streaming` on load. */
-  streamMode?: "off" | "partial" | "block" | "progress";
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */
-  draftChunk?: BlockStreamingChunkConfig;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
+  streaming?: ChannelPreviewStreamingConfig;
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
@@ -229,6 +212,8 @@ export type TelegramAccountConfig = {
   ackReaction?: string;
   /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server). */
   apiRoot?: string;
+  /** Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. */
+  trustedLocalFileRoots?: string[];
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
 };

@@ -1,3 +1,4 @@
+import { readStringValue } from "../shared/string-coerce.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 
 type OpenAIResponsesPayloadModel = {
@@ -80,8 +81,8 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
     return;
   }
 
-  // GPT-5 models reject `reasoning.effort: "none"`. Treat the disabled effort
-  // as "reasoning omitted" instead of forwarding an unsupported value.
+  // Proxy/OpenAI-compat routes can reject `reasoning.effort: "none"`. Treat the
+  // disabled effort as "reasoning omitted" instead of forwarding an unsupported value.
   const reasoningObj = reasoning as Record<string, unknown>;
   if (reasoningObj.effort === "none") {
     delete payloadObj.reasoning;
@@ -93,9 +94,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
   options: OpenAIResponsesPayloadPolicyOptions = {},
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveProviderRequestPolicyConfig({
-    provider: typeof model.provider === "string" ? model.provider : undefined,
-    api: typeof model.api === "string" ? model.api : undefined,
-    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+    provider: readStringValue(model.provider),
+    api: readStringValue(model.api),
+    baseUrl: readStringValue(model.baseUrl),
     compat: model.compat,
     capability: "llm",
     transport: "stream",
@@ -119,8 +120,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       parsePositiveInteger(options.extraParams?.responsesCompactThreshold) ??
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
-    shouldStripDisabledReasoningPayload:
-      capabilities.supportsOpenAIReasoningCompatPayload && !capabilities.usesKnownNativeOpenAIRoute,
+    shouldStripDisabledReasoningPayload: isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:

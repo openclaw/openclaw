@@ -4,6 +4,10 @@ import {
   removeAckReactionAfterReply,
   shouldAckReaction,
 } from "../../../src/channels/ack-reactions.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../../../src/channels/mention-gating.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 
 type DeepPartial<T> = {
@@ -98,6 +102,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         payloads: [],
         meta: {},
       }) as unknown as PluginRuntime["agent"]["runEmbeddedPiAgent"],
+      runEmbeddedAgent: vi.fn().mockResolvedValue({
+        payloads: [],
+        meta: {},
+      }) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"],
       resolveAgentTimeoutMs: vi.fn(
         () => 30_000,
       ) as unknown as PluginRuntime["agent"]["resolveAgentTimeoutMs"],
@@ -161,6 +169,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     imageGeneration: {
       generate: vi.fn() as unknown as PluginRuntime["imageGeneration"]["generate"],
       listProviders: vi.fn() as unknown as PluginRuntime["imageGeneration"]["listProviders"],
+    },
+    musicGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["musicGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["musicGeneration"]["listProviders"],
+    },
+    videoGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["videoGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["videoGeneration"]["listProviders"],
     },
     webSearch: {
       listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
@@ -290,6 +306,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               ? true
               : params.mentionRegexes.some((regex) => regex.test(params.text)),
         ) as unknown as PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"],
+        implicitMentionKindWhen,
+        resolveInboundMentionDecision,
       },
       reactions: {
         shouldAckReaction,
@@ -336,6 +354,17 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         setMaxAgeBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
       },
+      runtimeContexts: {
+        register: vi.fn(({ abortSignal }: { abortSignal?: AbortSignal }) => {
+          const lease = { dispose: vi.fn() };
+          abortSignal?.addEventListener("abort", lease.dispose, { once: true });
+          return lease;
+        }) as unknown as PluginRuntime["channel"]["runtimeContexts"]["register"],
+        get: vi.fn() as unknown as PluginRuntime["channel"]["runtimeContexts"]["get"],
+        watch: vi.fn(() =>
+          vi.fn(),
+        ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["watch"],
+      },
       activity: {} as PluginRuntime["channel"]["activity"],
     },
     events: {
@@ -370,6 +399,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     taskFlow,
     modelAuth: {
       getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
+      getRuntimeAuthForModel:
+        vi.fn() as unknown as PluginRuntime["modelAuth"]["getRuntimeAuthForModel"],
       resolveApiKeyForProvider:
         vi.fn() as unknown as PluginRuntime["modelAuth"]["resolveApiKeyForProvider"],
     },

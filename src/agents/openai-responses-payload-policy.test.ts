@@ -81,6 +81,7 @@ describe("openai responses payload policy", () => {
       reasoning: {
         effort: "none",
       },
+      store: false,
     });
   });
 

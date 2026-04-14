@@ -10,6 +10,7 @@ import {
   withStrictWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
+import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveFirecrawlApiKey,
@@ -89,6 +90,7 @@ async function postFirecrawlJson<T>(
   },
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const apiKey = normalizeSecretInput(params.apiKey);
   return await withStrictWebToolsEndpoint(
     {
       url: params.url,
@@ -96,7 +98,7 @@ async function postFirecrawlJson<T>(
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${params.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(params.body),
@@ -104,17 +106,37 @@ async function postFirecrawlJson<T>(
     },
     async ({ response }) => {
       if (!response.ok) {
-        let detail = response.statusText;
-        const errorBody = await readResponseText(response, { maxBytes: 64_000 });
-        try {
-          const payload = JSON.parse(errorBody.text) as Record<string, unknown>;
+        let detail =
+          typeof response.statusText === "string" && response.statusText.trim()
+            ? response.statusText.trim()
+            : "request failed";
+
+        const readJsonPayload = async (): Promise<Record<string, unknown> | null> => {
+          const candidate = response as Response & { clone?: () => Response };
+          const jsonResponse = typeof candidate.clone === "function" ? candidate.clone() : response;
+          if (typeof jsonResponse.json !== "function") {
+            return null;
+          }
+          try {
+            const payload = await jsonResponse.json();
+            return payload && typeof payload === "object" && !Array.isArray(payload)
+              ? (payload as Record<string, unknown>)
+              : null;
+          } catch {
+            return null;
+          }
+        };
+
+        const payload = await readJsonPayload();
+        if (payload) {
           detail =
             typeof payload.error === "string"
               ? payload.error
               : typeof payload.message === "string"
                 ? payload.message
                 : detail;
-        } catch {
+        } else {
+          const errorBody = await readResponseText(response, { maxBytes: 64_000 });
           if (errorBody.text) {
             detail = errorBody.text;
           }

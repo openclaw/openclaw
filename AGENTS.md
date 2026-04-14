@@ -30,16 +30,27 @@
   - `src/plugins/*` = plugin discovery, manifest validation, loader, registry, and contract enforcement
   - `src/gateway/protocol/*` = typed Gateway control-plane and node wire protocol
 - Progressive disclosure lives in local boundary guides:
-  - bundled-plugin-tree `AGENTS.md`
+  - repo root `AGENTS.md`
+  - bundled-plugin-tree `extensions/AGENTS.md`
   - `src/plugin-sdk/AGENTS.md`
   - `src/channels/AGENTS.md`
   - `src/plugins/AGENTS.md`
   - `src/gateway/protocol/AGENTS.md`
+- Workflow hygiene:
+  - Do not grep or existence-check every `docs/*.md`, `AGENTS.md`, or guide path mentioned in this file before starting work.
+  - Read only the guides and docs that are directly relevant to the files or boundary you are touching.
+  - Only do full broken-link or missing-guide sweeps when the task is explicitly about docs or repo-instruction maintenance.
 - Plugin and extension boundary:
   - Public docs: `docs/plugins/building-plugins.md`, `docs/plugins/architecture.md`, `docs/plugins/sdk-overview.md`, `docs/plugins/sdk-entrypoints.md`, `docs/plugins/sdk-runtime.md`, `docs/plugins/manifest.md`, `docs/plugins/sdk-channel-plugins.md`, `docs/plugins/sdk-provider-plugins.md`
   - Definition files: `src/plugin-sdk/plugin-entry.ts`, `src/plugin-sdk/core.ts`, `src/plugin-sdk/provider-entry.ts`, `src/plugin-sdk/channel-contract.ts`, `scripts/lib/plugin-sdk-entrypoints.json`, `package.json`
+  - Invariant: core must stay extension-agnostic. Adding a bundled or third-party extension should not require unrelated core edits just to teach core that the extension exists.
   - Rule: extensions must cross into core only through `openclaw/plugin-sdk/*`, manifest metadata, and documented runtime helpers. Do not import `src/**` from extension production code.
   - Rule: core code and tests must not deep-import bundled plugin internals such as a plugin's `src/**` files or `onboard.js`. If core needs a bundled plugin helper, expose it through that plugin's `api.ts` and, when it is a real cross-package contract, through `src/plugin-sdk/<id>.ts`.
+  - Rule: do not add hardcoded bundled extension/provider/channel/capability id lists, maps, or named special cases in core when a manifest, capability, registry, or plugin-owned contract can express the same behavior.
+  - Rule: extension-owned compatibility behavior belongs to the owning extension. Core may orchestrate generic doctor/config flows, but extension-specific legacy repairs, detection rules, onboarding, auth detection, and provider defaults should live in plugin-owned contracts.
+  - Rule: for legacy config specifically, prefer doctor-owned repair paths over startup/load-time core migrations. Do not add new plugin-specific legacy migration logic to shared core/runtime surfaces when `openclaw doctor --fix` can own it.
+  - Rule: when a test is asserting extension-specific behavior, keep that coverage in the owning extension when feasible. Core tests should assert generic contracts and registry/capability behavior, not extension internals.
+  - Refactor trigger: if you encounter core code or tests that name a specific extension/provider/channel for extension-owned behavior, refactor toward a generic registry/capability/plugin-owned seam instead of adding another special case.
   - Compatibility: new plugin seams are allowed, but they must be added as documented, backwards-compatible, versioned contracts. We have third-party plugins in the wild and do not break them casually.
 - Channel boundary:
   - Public docs: `docs/plugins/sdk-channel-plugins.md`, `docs/plugins/architecture.md`
@@ -55,36 +66,40 @@
   - Public docs: `docs/gateway/protocol.md`, `docs/gateway/bridge-protocol.md`, `docs/concepts/architecture.md`
   - Definition files: `src/gateway/protocol/schema.ts`, `src/gateway/protocol/schema/*.ts`, `src/gateway/protocol/index.ts`
   - Rule: protocol changes are contract changes. Prefer additive evolution; incompatible changes require explicit versioning, docs, and client/codegen follow-through.
+- Config contract boundary:
+  - Canonical public config lives in exported config types, zod/schema surfaces, schema help/labels, generated config metadata, config baselines, and any user-facing gateway/config payloads. Keep those surfaces aligned.
+  - When a legacy config key is retired from the public contract, remove it from every public config surface above. Keep backward compatibility only through raw-config migration/doctor seams unless explicit product policy says otherwise.
+  - Do not reintroduce removed legacy aliases into public types/schema/help/baselines “for convenience”. If old configs still need to load, handle that in `legacy.migrations.*`, config ingest, or `openclaw doctor --fix`.
+  - `hooks.internal.entries` is the canonical public hook config model. `hooks.internal.handlers` is compatibility-only input and must not be re-exposed in public schema/help/baseline surfaces.
 - Bundled plugin contract boundary:
   - Public docs: `docs/plugins/architecture.md`, `docs/plugins/manifest.md`, `docs/plugins/sdk-overview.md`
-- Definition files: `src/plugins/contracts/registry.ts`, `src/plugins/types.ts`, `src/plugins/public-artifacts.ts`
+  - Definition files: `src/plugins/contracts/registry.ts`, `src/plugins/types.ts`, `src/plugins/public-artifacts.ts`
   - Rule: keep manifest metadata, runtime registration, public SDK exports, and contract tests aligned. Do not create a hidden path around the declared plugin interfaces.
 - Extension test boundary:
   - Keep extension-owned onboarding/config/provider coverage under the owning bundled plugin package when feasible.
   - If core tests need bundled plugin behavior, consume it through public `src/plugin-sdk/<id>.ts` facades or the plugin's `api.ts`, not private extension modules.
+  - Shared helpers under `test/helpers/**` are part of that same boundary. Do not hardcode repo-relative `extensions/**` imports there, and do not keep plugin-local deep mocks in shared helpers just because multiple tests use them.
+  - When core tests or shared helpers need bundled plugin public surfaces, use `src/test-utils/bundled-plugin-public-surface.ts` for `api.ts`, `runtime-api.ts`, `contract-api.ts`, `test-api.ts`, plugin entrypoint `index.js`, and resolved module ids for dynamic import or mocking.
+  - If a core test is asserting extension-specific behavior instead of a generic contract, move it to the owning extension package.
+- Scoped guides still matter:
+  - `extensions/AGENTS.md` expands extension/plugin boundary rules.
+  - `src/channels/AGENTS.md` expands core channel boundary and hot-path rules.
+  - `src/plugin-sdk/AGENTS.md` expands public SDK contract rules.
+  - `src/plugins/AGENTS.md` expands plugin loading, registry, and manifest rules.
+  - `src/gateway/protocol/AGENTS.md` expands typed Gateway protocol rules.
+  - `test/helpers/AGENTS.md` and `test/helpers/channels/AGENTS.md` expand shared test helper boundary rules.
+- Plugin architecture direction:
+  - Keep a manifest-first control plane: discovery, validation, enablement, setup hints, and activation planning should stay metadata-driven by default.
+  - Keep runtime execution separate: actual provider/channel/tool execution should resolve through narrow targeted loaders, not broad registry materialization.
+  - Host loads plugins; plugins do not load host internals. Prefer a small versioned host/kernel seam plus documented SDK entrypoints over ambient reachability.
+  - Treat broad runtime registries and mutable global plugin state as transitional compatibility surfaces, not the target architecture.
+  - If a setup or config flow truly needs plugin runtime, make that explicit instead of silently importing runtime code on the cold path.
 
-## Docs Linking (Mintlify)
+## Scoped Workflow Guides
 
-- Docs are hosted on Mintlify (docs.openclaw.ai).
-- Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
-- When working with documentation, read the mintlify skill.
-- For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime behavior (for example auto-detection or execution order).
-- Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
-- Doc headings and anchors: avoid em dashes and apostrophes in headings because they break Mintlify anchor links.
-- When the user asks for links, reply with full `https://docs.openclaw.ai/...` URLs (not root-relative).
-- When you touch docs, end the reply with the `https://docs.openclaw.ai/...` URLs you referenced.
-- README (GitHub): keep absolute docs URLs (`https://docs.openclaw.ai/...`) so links work on GitHub.
-- Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
-
-## Docs i18n (zh-CN)
-
-- `docs/zh-CN/**` is generated; do not edit unless the user explicitly asks.
-- Pipeline: update English docs → adjust glossary (`docs/.i18n/glossary.zh-CN.json`) → run `scripts/docs-i18n` → apply targeted fixes only if instructed.
-- Before rerunning `scripts/docs-i18n`, add glossary entries for any new technical terms, page titles, or short nav labels that must stay in English or use a fixed translation (for example `Doctor` or `Polls`).
-- `pnpm docs:check-i18n-glossary` enforces glossary coverage for changed English doc titles and short internal doc labels before translation reruns.
-- Translation memory: `docs/.i18n/zh-CN.tm.jsonl` (generated).
-- See `docs/.i18n/README.md`.
-- The pipeline can be slow/inefficient; if it’s dragging, ping @jospalmbier on Discord instead of hacking around it.
+- `docs/AGENTS.md` owns Mintlify docs, docs links, and docs i18n rules.
+- `ui/AGENTS.md` owns Control UI i18n and generated locale rules.
+- `scripts/AGENTS.md` owns script-runner, local-check lock, and test/lint wrapper rules.
 
 ## exe.dev VM ops (general)
 
@@ -112,7 +127,7 @@
 - Type-check/build: `pnpm build`
 - TypeScript checks: `pnpm tsgo`
 - Lint/format: `pnpm check`
-- Local agent/dev shells default to lower-memory `OPENCLAW_LOCAL_CHECK=1` behavior for `pnpm tsgo` and `pnpm lint`; set `OPENCLAW_LOCAL_CHECK=0` in CI/shared runs.
+- Local agent/dev shells default to host-aware `OPENCLAW_LOCAL_CHECK=1` behavior for `pnpm tsgo` and `pnpm lint`; set `OPENCLAW_LOCAL_CHECK_MODE=throttled` to force the lower-memory profile, `OPENCLAW_LOCAL_CHECK_MODE=full` to keep lock-only behavior, or `OPENCLAW_LOCAL_CHECK=0` in CI/shared runs.
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Terminology:
@@ -125,10 +140,11 @@
 - Formatting gate: the pre-commit hook runs `pnpm format` before `pnpm check`. If you want a formatting-only preflight locally, run `pnpm format` explicitly.
 - If you need a fast commit loop, `FAST_COMMIT=1 git commit ...` skips the hook’s repo-wide `pnpm format` and `pnpm check`; use that only when you are deliberately covering the touched surface some other way.
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
-- Generated baseline artifacts live together under `docs/.generated/`.
+- Generated baseline drift detection uses SHA-256 hash files under `docs/.generated/` (`.sha256` files tracked in git; full JSON baselines are gitignored, generated locally for inspection).
 - Config schema drift uses `pnpm config:docs:gen` / `pnpm config:docs:check`.
 - Plugin SDK API drift uses `pnpm plugin-sdk:api:gen` / `pnpm plugin-sdk:api:check`.
-- If you change config schema/help or the public Plugin SDK surface, update the matching baseline artifact and keep the two drift-check flows adjacent in scripts/workflows/docs guidance rather than inventing a third pattern.
+- If you change config schema/help or the public Plugin SDK surface, run the matching gen command and commit the updated `.sha256` hash file. Keep the two drift-check flows adjacent in scripts/workflows/docs guidance rather than inventing a third pattern.
+- When `pnpm tsgo` fails, triage by coherent surface instead of by raw error count: rerun the gate, group failures by package/module/type contract, open the source-of-truth type or export file first, fix the root mismatch, then rerun `pnpm tsgo` before widening into downstream consumers. Check `origin/main` before doing broad cleanup because some apparent type debt is already fixed upstream.
 - For narrowly scoped changes, prefer narrowly scoped tests that directly validate the touched behavior. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
 - Verification modes for work on `main`:
   - Default mode: `main` is relatively stable. Count pre-commit hook coverage when it already verified the current tree, avoid rerunning the exact same checks just for ceremony, and prefer keeping CI/main green before landing.
@@ -139,6 +155,14 @@
 - Default rule: do not land changes with failing format, lint, type, build, or required test checks when those failures are caused by the change or plausibly related to the touched surface. Fast-commit mode changes how verification is sequenced; it does not lower the requirement to validate and clean up the touched surface before final landing.
 - For narrowly scoped changes, if unrelated failures already exist on latest `origin/main`, state that clearly, report the scoped tests you ran, and ask before broadening scope into unrelated fixes or landing despite those failures.
 - Do not use scoped tests as permission to ignore plausibly related failures.
+
+## Prompt Cache Stability
+
+- Treat prompt-cache stability as correctness/perf-critical, not cosmetic.
+- Any code that assembles model or tool payloads from maps, sets, registries, plugin lists, MCP catalogs, filesystem reads, or network results must make ordering deterministic before building the request.
+- Do not rewrite older transcript/history bytes on every turn unless you intentionally want to invalidate the cached prefix. Legacy cleanup, pruning, normalization, and migration logic should preserve recent prompt bytes when possible.
+- If truncation or compaction is required, prefer mutating newest or tail content first so the cached prefix stays byte-identical for as long as possible.
+- For cache-sensitive changes, require a regression test that proves turn-to-turn prefix stability or deterministic request assembly; helper-local tests alone are not enough.
 
 ## Coding Style & Naming Conventions
 
@@ -155,6 +179,7 @@
 - New runtime control-flow code should not branch on `error: string` or `reason: string` when a closed code union would be reasonable.
 - Dynamic import guardrail: do not mix `await import("x")` and static `import ... from "x"` for the same module in production code paths. If you need lazy loading, create a dedicated `*.runtime.ts` boundary (that re-exports from `x`) and dynamically import that boundary from lazy callers only.
 - Dynamic import verification: after refactors that touch lazy-loading/module boundaries, run `pnpm build` and check for `[INEFFECTIVE_DYNAMIC_IMPORT]` warnings before submitting.
+- Circular dependencies: keep both `pnpm check:import-cycles` and `pnpm check:madge-import-cycles` green; do not reintroduce runtime import cycles or madge-detected import loops.
 - Extension SDK self-import guardrail: inside an extension package, do not import that same extension via `openclaw/plugin-sdk/<extension>` from production files. Route internal imports through a local barrel such as `./api.ts` or `./runtime-api.ts`, and keep the `plugin-sdk/<extension>` path as the external contract only.
 - Extension package boundary guardrail: inside a bundled plugin package, do not use relative imports/exports that resolve outside that same package root. If shared code belongs in the plugin SDK, import `openclaw/plugin-sdk/<subpath>` instead of reaching into `src/plugin-sdk/**` or other repo paths via `../`.
 - Extension API surface rule: `openclaw/plugin-sdk/<subpath>` is the only public cross-package contract for extension-facing SDK code. If an extension needs a new seam, add a public subpath first; do not reach into `src/plugin-sdk/**` by relative path.
@@ -191,10 +216,10 @@
 - Test performance guardrail: prefer narrow public SDK subpaths such as `models-provider-runtime`, `skill-commands-runtime`, and `reply-dispatch-runtime` over older broad helper barrels when both expose the needed helper.
 - Test performance guardrail: treat import-dominated test time as a boundary bug. Refactor the import surface before adding more cases to the slow file.
 - Agents MUST NOT modify baseline, inventory, ignore, snapshot, or expected-failure files to silence failing checks without explicit approval in this chat.
-- For targeted/local debugging, keep using the wrapper: `pnpm test -- <path-or-filter> [vitest args...]` (for example `pnpm test -- src/commands/onboard-search.test.ts -t "shows registered plugin providers"`); do not default to raw `pnpm vitest run ...` because it bypasses wrapper config/profile/pool routing.
+- For targeted/local debugging, use the native root-project entrypoint: `pnpm test <path-or-filter> [vitest args...]` (for example `pnpm test src/commands/onboard-search.test.ts -t "shows registered plugin providers"`); do not default to raw `pnpm vitest run ...` because it bypasses the repo's default config/profile/pool routing.
 - Do not set test workers above 16; tried already.
-- Keep Vitest on `forks` only. Do not introduce or reintroduce any non-`forks` Vitest pool or alternate execution mode in configs, wrapper scripts, or default test commands without explicit approval in this chat. This includes `threads`, `vmThreads`, `vmForks`, and any future/nonstandard pool variant.
-- If local Vitest runs cause memory pressure, the wrapper now derives budgets from host capabilities (CPU, memory band, current load). For a conservative explicit override during land/gate runs, use `OPENCLAW_TEST_PROFILE=serial OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test`.
+- Vitest now defaults to native root-project `threads`, with hard `forks` exceptions for `gateway`, `agents`, and `commands`. Keep new pool changes explicit and justified; use `OPENCLAW_VITEST_POOL=forks` for full local fork debugging.
+- If local Vitest runs cause memory pressure, the default worker budget now derives from host capabilities (CPU, memory band, current load). For a conservative explicit override during land/gate runs, use `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`.
 - Live tests (real keys): `OPENCLAW_LIVE_TEST=1 pnpm test:live` (OpenClaw-only) or `LIVE=1 pnpm test:live` (includes provider live tests). Docker: `pnpm test:docker:live-models`, `pnpm test:docker:live-gateway`. Onboarding Docker E2E: `pnpm test:docker:onboard`.
 - `pnpm test:live` defaults quiet now. Keep `[live]` progress; suppress profile/gateway chatter. Full logs: `OPENCLAW_LIVE_TEST_QUIET=0 pnpm test:live`.
 - Full kit + what’s covered: `docs/help/testing.md`.
@@ -252,6 +277,8 @@
 - "Bump version everywhere" means all version locations above **except** `appcast.xml` (only touch appcast when cutting a new macOS Sparkle release).
 - **Restart apps:** “restart iOS/Android apps” means rebuild (recompile/install) and relaunch, not just kill/launch.
 - **Device checks:** before testing, verify connected real devices (iOS/Android) before reaching for simulators/emulators.
+- Mobile pairing: `ws://` (cleartext) is allowed for private LAN addresses (RFC 1918, link-local, mDNS `.local`) and loopback. Private LAN hosts typically lack PKI-backed identity, so requiring TLS there adds complexity without meaningful security gain. `wss://` is required for Tailscale and public endpoints.
+- Security report scope: reports that treat cleartext `ws://` mobile pairing over private LAN as a vulnerability are out of scope unless they demonstrate a trust-boundary bypass beyond passive network observation on the same LAN.
 - iOS Team ID lookup: `security find-identity -p codesigning -v` → use Apple Development (…) TEAMID. Fallback: `defaults read com.apple.dt.Xcode IDEProvisioningTeamIdentifiers`.
 - A2UI bundle hash: `src/canvas-host/a2ui/.bundle.hash` is auto-generated; ignore unexpected changes, and only regenerate via `pnpm canvas:a2ui:bundle` (or `scripts/bundle-a2ui.sh`) when needed. Commit the hash as a separate commit.
 - Release signing/notary credentials are managed outside the repo; maintainers keep that setup in the private [maintainer release docs](https://github.com/openclaw/maintainers/tree/main/release).
@@ -266,7 +293,7 @@
 
 - When working on a GitHub Issue or PR, print the full URL at the end of the task.
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
-- Never update the Carbon dependency.
+- Carbon version edits are owner-only: do not change `@buape/carbon` version pins unless you are Shadow (@thewilloftheshadow) as verified by gh.
 - Any dependency with `pnpm.patchedDependencies` must use an exact version (no `^`/`~`).
 - Patching dependencies (pnpm patches, overrides, or vendored changes) requires explicit approval; do not do this by default.
 - **Multi-agent safety:** do **not** create/apply/drop `git stash` entries unless explicitly requested (this includes `git pull --rebase --autostash`). Assume other agents may be working; keep unrelated WIP untouched and avoid cross-cutting state changes.
@@ -282,7 +309,7 @@
   - Only ask when changes are semantic (logic/data/behavior).
 - **Multi-agent safety:** focus reports on your edits; avoid guard-rail disclaimers unless truly blocked; when multiple agents touch the same file, continue if safe; end with a brief “other files present” note only if relevant.
 - Bug investigations: read source code of relevant npm dependencies and all related local code before concluding; aim for high-confidence root cause.
-- Code style: add brief comments for tricky logic; keep files under ~500 LOC when feasible (split/refactor as needed).
+- Code style: add brief comments for tricky logic; keep files under ~700 LOC when feasible (split/refactor as needed).
 - Tool schema guardrails (google-antigravity): avoid `Type.Union` in tool input schemas; no `anyOf`/`oneOf`/`allOf`. Use `stringEnum`/`optionalStringEnum` (Type.Unsafe enum) for string lists, and `Type.Optional(...)` instead of `... | null`. Keep top-level tool schema as `type: "object"` with `properties`.
 - Tool schema guardrails: avoid raw `format` property names in tool schemas; some validators treat `format` as a reserved keyword and reject the schema.
 - Never send streaming/partial replies to external messaging surfaces (WhatsApp, Telegram); only final replies should be delivered there. Streaming/tool events may still go to internal UIs/control channel.

@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -8,15 +9,20 @@ export function composeSystemPromptWithHookContext(params: {
   prependSystemContext?: string;
   appendSystemContext?: string;
 }): string | undefined {
-  const prependSystem = params.prependSystemContext?.trim();
-  const appendSystem = params.appendSystemContext?.trim();
+  const prependSystem =
+    typeof params.prependSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.prependSystemContext)
+      : "";
+  const appendSystem =
+    typeof params.appendSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.appendSystemContext)
+      : "";
   if (!prependSystem && !appendSystem) {
     return undefined;
   }
-  return joinPresentTextSegments(
-    [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
-    { trim: true },
-  );
+  return joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
+    trim: true,
+  });
 }
 
 export function resolveAttemptSpawnWorkspaceDir(params: {
@@ -80,5 +86,21 @@ export function appendAttemptCacheTtlIfNeeded(params: {
     provider: params.provider,
     modelId: params.modelId,
   });
+  return true;
+}
+
+export function shouldPersistCompletedBootstrapTurn(params: {
+  shouldRecordCompletedBootstrapTurn: boolean;
+  promptError: unknown;
+  aborted: boolean;
+  timedOutDuringCompaction: boolean;
+  compactionOccurredThisAttempt: boolean;
+}): boolean {
+  if (!params.shouldRecordCompletedBootstrapTurn || params.promptError || params.aborted) {
+    return false;
+  }
+  if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
+    return false;
+  }
   return true;
 }

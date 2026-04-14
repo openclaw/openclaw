@@ -1,99 +1,40 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import "./agent-command.test-mocks.js";
 import "../cron/isolated-agent.mocks.js";
-import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
-import * as configModule from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
-import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import type { RuntimeEnv } from "../runtime.js";
+import * as configIoModule from "../config/io.js";
+import { createDefaultAgentCommandResult } from "./agent-command.test-support.js";
+import {
+  mockSharedAgentCommandConfig,
+  resetSharedAgentCommandRuntimeState,
+  runtime,
+  withSharedAgentCommandTempHome,
+} from "./agent-runtime-config.test-support.js";
 import { agentCommand } from "./agent.js";
 
-vi.mock("../logging/subsystem.js", () => {
-  const createMockLogger = () => ({
-    subsystem: "test",
-    isEnabled: vi.fn(() => true),
-    trace: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child: vi.fn(() => createMockLogger()),
-  });
-  return {
-    createSubsystemLogger: vi.fn(() => createMockLogger()),
-  };
-});
-
-vi.mock("../agents/workspace.js", () => ({
-  DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
-  DEFAULT_AGENTS_FILENAME: "AGENTS.md",
-  DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
-  resolveDefaultAgentWorkspaceDir: () => "/tmp/openclaw-workspace",
-  ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
-}));
-
-vi.mock("../agents/command/session-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/command/session-store.js")>();
-  return {
-    ...actual,
-    updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
-  };
-});
-
-vi.mock("../agents/skills.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
-  loadWorkspaceSkillEntries: vi.fn(() => []),
-}));
-
-vi.mock("../agents/skills/refresh.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => 0),
-}));
-
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
-  }),
-};
-
-const configSpy = vi.spyOn(configModule, "loadConfig");
-const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
+const configSpy = vi.spyOn(configIoModule, "loadConfig");
+const readConfigFileSnapshotForWriteSpy = vi.spyOn(
+  configIoModule,
+  "readConfigFileSnapshotForWrite",
+);
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-cli-" });
+  return withSharedAgentCommandTempHome("openclaw-agent-cli-", fn);
 }
 
 function mockConfig(
   home: string,
   storePath: string,
-  agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
+  agentOverrides?: Parameters<typeof mockSharedAgentCommandConfig>[3],
 ) {
-  const cfg = {
-    agents: {
-      defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
-        models: { "anthropic/claude-opus-4-5": {} },
-        workspace: path.join(home, "openclaw"),
-        ...agentOverrides,
-      },
-    },
-    session: { store: storePath, mainKey: "main" },
-  } as OpenClawConfig;
-  configSpy.mockReturnValue(cfg);
-  return cfg;
+  return mockSharedAgentCommandConfig(configSpy, home, storePath, agentOverrides);
 }
 
 function writeSessionStoreSeed(
@@ -108,16 +49,6 @@ function readSessionStore<T>(storePath: string): Record<string, T> {
   return JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, T>;
 }
 
-function createDefaultAgentResult() {
-  return {
-    payloads: [{ text: "ok" }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  };
-}
-
 function expectLastEmbeddedProviderModel(provider: string, model: string): void {
   const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
   expect(callArgs?.provider).toBe(provider);
@@ -125,21 +56,8 @@ function expectLastEmbeddedProviderModel(provider: string, model: string): void 
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest();
-  resetAgentRunContextForTest();
-  resetPluginRuntimeStateForTest();
-  acpManagerTesting.resetAcpSessionManagerForTests();
-  configModule.clearRuntimeConfigSnapshot();
-  runCliAgentSpy.mockResolvedValue(createDefaultAgentResult() as never);
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
-  vi.mocked(loadModelCatalog).mockResolvedValue([]);
-  vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
-  readConfigFileSnapshotForWriteSpy.mockResolvedValue({
-    snapshot: { valid: false, resolved: {} as OpenClawConfig },
-    writeOptions: {},
-  } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
+  resetSharedAgentCommandRuntimeState(readConfigFileSnapshotForWriteSpy);
+  runCliAgentSpy.mockResolvedValue(createDefaultAgentCommandResult() as never);
 });
 
 describe("agentCommand CLI provider handling", () => {

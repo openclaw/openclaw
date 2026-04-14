@@ -1,4 +1,7 @@
-import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
+import {
+  applyProviderNativeStreamingUsageCompat,
+  supportsNativeStreamingUsageCompat,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
@@ -53,42 +56,19 @@ const MOONSHOT_MODEL_CATALOG = [
 ] as const;
 
 export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
-  return resolveProviderRequestCapabilities({
-    provider: "moonshot",
-    api: "openai-completions",
+  return supportsNativeStreamingUsageCompat({
+    providerId: "moonshot",
     baseUrl,
-    capability: "llm",
-    transport: "stream",
-  }).supportsNativeStreamingUsageCompat;
-}
-
-function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
-    return provider;
-  }
-
-  let changed = false;
-  const models = provider.models.map((model) => {
-    if (model.compat?.supportsUsageInStreaming !== undefined) {
-      return model;
-    }
-    changed = true;
-    return {
-      ...model,
-      compat: {
-        ...model.compat,
-        supportsUsageInStreaming: true,
-      },
-    };
   });
-
-  return changed ? { ...provider, models } : provider;
 }
 
 export function applyMoonshotNativeStreamingUsageCompat(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
-  return isNativeMoonshotBaseUrl(provider.baseUrl) ? withStreamingUsageCompat(provider) : provider;
+  return applyProviderNativeStreamingUsageCompat({
+    providerId: "moonshot",
+    providerConfig: provider,
+  });
 }
 
 export function buildMoonshotProvider(): ModelProviderConfig {

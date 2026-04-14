@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 let MEDIA_DIR = "";
@@ -21,6 +21,7 @@ vi.mock("./store.js", async () => {
 let startMediaServer: typeof import("./server.js").startMediaServer;
 let MEDIA_MAX_BYTES: typeof import("./store.js").MEDIA_MAX_BYTES;
 let realFetch: typeof import("undici").fetch;
+const mediaRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-media-test-" });
 const LOOPBACK_FETCH_ENV = {
   HTTP_PROXY: undefined,
   HTTPS_PROXY: undefined,
@@ -121,7 +122,8 @@ describe("media server", () => {
     ({ startMediaServer } = await import("./server.js"));
     ({ MEDIA_MAX_BYTES } = await import("./store.js"));
     ({ fetch: realFetch } = require("undici") as typeof import("undici"));
-    MEDIA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
+    await mediaRootTracker.setup();
+    MEDIA_DIR = await mediaRootTracker.make("case");
     try {
       server = await startMediaServer(0, 1_000);
     } catch (error) {
@@ -147,7 +149,7 @@ describe("media server", () => {
     if (boundServer) {
       await new Promise((r) => boundServer.close(r));
     }
-    await fs.rm(MEDIA_DIR, { recursive: true, force: true });
+    await mediaRootTracker.cleanup();
     MEDIA_DIR = "";
   });
 

@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export const testServiceAuditCodes = {
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
   gatewayTokenMismatch: "gateway-token-mismatch",
@@ -11,5 +13,5 @@ export function readEmbeddedGatewayTokenForTest(
 ) {
   return command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file"
     ? undefined
-    : command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+    : normalizeOptionalString(command?.environment?.OPENCLAW_GATEWAY_TOKEN);
 }

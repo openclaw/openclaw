@@ -279,6 +279,36 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateIds(candidates, { includes: ["alpha", "beta"] });
   });
 
+  it("does not recurse arbitrary workspace directories for plugin auto-discovery", () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const workspaceExt = path.join(workspaceDir, ".openclaw", "extensions");
+
+    const expectedWorkspacePluginDir = path.join(workspaceExt, "workspace-plugin");
+    createPackagePluginWithEntry({
+      packageDir: expectedWorkspacePluginDir,
+      packageName: "@openclaw/workspace-plugin",
+      pluginId: "workspace-plugin",
+    });
+
+    const unrelatedWorkspaceDir = path.join(workspaceDir, "lobster-integrations", "bin");
+    createPackagePluginWithEntry({
+      packageDir: unrelatedWorkspaceDir,
+      packageName: "@openclaw/stray-workspace-plugin",
+    });
+
+    const result = discoverOpenClawPlugins({
+      workspaceDir,
+      env: buildDiscoveryEnv(stateDir),
+    });
+
+    expectCandidatePresence(result, {
+      present: ["workspace-plugin"],
+      absent: ["stray-workspace-plugin"],
+    });
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("resolves tilde workspace dirs against the provided env", () => {
     const stateDir = makeTempDir();
     const homeDir = makeTempDir();
@@ -324,6 +354,32 @@ describe("discoverOpenClawPlugins", () => {
       includes: ["live"],
       excludes: ["feishu.backup-20260222", "telegram.disabled.20260222", "discord.bak"],
     });
+  });
+
+  it("does not treat repo-level live or test files as plugin entrypoints", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    mkdirSafe(bundledDir);
+
+    writeStandalonePlugin(
+      path.join(bundledDir, "video-generation-providers.live.test.ts"),
+      "export default {}",
+    );
+    writeStandalonePlugin(
+      path.join(bundledDir, "music-generation-providers.live.test.ts"),
+      "export default {}",
+    );
+    writeStandalonePlugin(path.join(bundledDir, "real-plugin.ts"), "export default {}");
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+
+    expectCandidateOrder(candidates, ["real-plugin"]);
+    expect(diagnostics).toEqual([]);
   });
 
   it("loads package extension packs", async () => {
@@ -388,9 +444,10 @@ describe("discoverOpenClawPlugins", () => {
   it("skips dependency and build directories while scanning workspace roots", () => {
     const stateDir = makeTempDir();
     const workspaceDir = path.join(stateDir, "workspace");
-    const workspacePluginDir = path.join(workspaceDir, "packages", "workspace-plugin");
-    const nestedNodeModulesDir = path.join(workspaceDir, "node_modules", "openclaw");
-    const nestedDistDir = path.join(workspaceDir, "dist", "extensions", "diffs");
+    const workspaceRoot = path.join(workspaceDir, ".openclaw", "extensions");
+    const workspacePluginDir = path.join(workspaceRoot, "workspace-plugin");
+    const nestedNodeModulesDir = path.join(workspaceRoot, "node_modules", "openclaw");
+    const nestedDistDir = path.join(workspaceRoot, "dist", "extensions", "diffs");
     mkdirSafe(path.join(workspacePluginDir, "src"));
     mkdirSafe(path.join(nestedNodeModulesDir, "src"));
     mkdirSafe(nestedDistDir);
@@ -608,6 +665,7 @@ describe("discoverOpenClawPlugins", () => {
           packageName: "@openclaw/missing-entry-pack",
           extensions: ["./missing.ts"],
         });
+        return true;
       },
     },
     {
@@ -631,6 +689,7 @@ describe("discoverOpenClawPlugins", () => {
           packageName: "@openclaw/pack",
           extensions: ["./linked/escape.ts"],
         });
+        return true;
       },
     },
     {
@@ -661,6 +720,7 @@ describe("discoverOpenClawPlugins", () => {
           packageName: "@openclaw/pack",
           extensions: ["./escape.ts"],
         });
+        return true;
       },
     },
   ] as const)("$name", async ({ setup, expectedDiagnostic, expectedId }) => {

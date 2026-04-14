@@ -176,17 +176,17 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       expectDefaultModelCall({
-        primary: "anthropic/claude-sonnet-4-5",
+        primary: "anthropic/claude-sonnet-4-6",
         fallbacks: defaultFallbacks,
       });
     }
 
     it("preserves defaults when agent overrides primary as string", async () => {
-      await expectPrimaryOverridePreservesDefaults("anthropic/claude-sonnet-4-5");
+      await expectPrimaryOverridePreservesDefaults("anthropic/claude-sonnet-4-6");
     });
 
     it("preserves defaults when agent overrides primary in object form", async () => {
-      await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-5" });
+      await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-6" });
     });
 
     it("applies payload.model override when model is allowed", async () => {
@@ -353,7 +353,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(512_000);
-      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-4", {
+      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-5.4", {
         allowAsyncLoad: false,
       });
     });

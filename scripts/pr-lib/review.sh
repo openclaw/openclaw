@@ -514,6 +514,7 @@ review_init() {
 
   printf '%s\n' "$json" | jq '{number,title,url,state,isDraft,author:.author.login,base:.baseRefName,head:.headRefName,headSha:.headRefOid,headRepo:.headRepository.nameWithOwner,additions,deletions,files:(.files|length)}'
   echo "worktree=$PWD"
+  echo "pr_url=${PR_URL:-}"
   echo "merge_base=$mb"
   echo "branch=$(git branch --show-current)"
   echo "wrote=.local/pr-meta.json .local/pr-meta.env .local/review-context.env .local/review-mode.env"

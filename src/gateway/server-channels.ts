@@ -1,12 +1,14 @@
+import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
 import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -14,6 +16,8 @@ import {
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+export type { ChannelRuntimeSnapshot };
 
 const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,
@@ -22,11 +26,7 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   jitter: 0.1,
 };
 const MAX_RESTART_ATTEMPTS = 10;
-
-export type ChannelRuntimeSnapshot = {
-  channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
-  channelAccounts: Partial<Record<ChannelId, Record<string, ChannelAccountSnapshot>>>;
-};
+const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -73,11 +73,37 @@ function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAc
   return { ...resolveDefaultRuntime(channelId), accountId };
 }
 
+async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, timeoutMs: number) {
+  if (!task) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    }, timeoutMs);
+    timer.unref?.();
+    const resolveSettled = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    void task.then(resolveSettled, resolveSettled);
+  });
+}
+
 function applyDescribedAccountFields(
   next: ChannelAccountSnapshot,
   described: ChannelAccountSnapshot | undefined,
 ) {
   if (!described) {
+    next.configured ??= true;
     return next;
   }
   if (typeof described.configured === "boolean") {
@@ -107,7 +133,8 @@ type ChannelManagerOptions = {
    * because they can directly import internal modules from the monorepo.
    *
    * This field is optional - omitting it maintains backward compatibility
-   * with existing channels.
+   * with existing channels. When provided, it must be a real
+   * `createPluginRuntime().channel` surface; partial stubs are not supported.
    *
    * @example
    * ```typescript
@@ -124,15 +151,16 @@ type ChannelManagerOptions = {
    * @since Plugin SDK 2026.2.19
    * @see {@link ChannelGatewayContext.channelRuntime}
    */
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   /**
    * Lazily resolves optional channel runtime helpers for external channel plugins.
    *
    * Use this when the caller wants to avoid instantiating the full plugin channel
    * runtime during gateway startup. The manager only needs the runtime surface once
-   * a channel account actually starts.
+   * a channel account actually starts. The resolved value must be a real
+   * `createPluginRuntime().channel` surface.
    */
-  resolveChannelRuntime?: () => PluginRuntime["channel"];
+  resolveChannelRuntime?: () => ChannelRuntimeSurface;
 };
 
 type StartChannelOptions = {
@@ -250,7 +278,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return next;
   };
 
-  const getChannelRuntime = (): PluginRuntime["channel"] | undefined => {
+  const getChannelRuntime = (): ChannelRuntimeSurface | undefined => {
     return channelRuntime ?? resolveChannelRuntime?.();
   };
 
@@ -295,8 +323,31 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const abort = new AbortController();
         store.aborts.set(id, abort);
         let handedOffTask = false;
+        const log = channelLogs[channelId];
+        let scopedChannelRuntime: ReturnType<typeof createTaskScopedChannelRuntime> | null = null;
+        let channelRuntimeForTask: ChannelRuntimeSurface | undefined;
+        let stopApprovalBootstrap: () => Promise<void> = async () => {};
+        const stopTaskScopedApprovalRuntime = async () => {
+          const scopedRuntime = scopedChannelRuntime;
+          scopedChannelRuntime = null;
+          const stopBootstrap = stopApprovalBootstrap;
+          stopApprovalBootstrap = async () => {};
+          scopedRuntime?.dispose();
+          await stopBootstrap();
+        };
+        const cleanupTaskScopedApprovalRuntime = async (label: string) => {
+          try {
+            await stopTaskScopedApprovalRuntime();
+          } catch (error) {
+            log.error?.(`[${id}] ${label}: ${formatErrorMessage(error)}`);
+          }
+        };
 
         try {
+          scopedChannelRuntime = createTaskScopedChannelRuntime({
+            channelRuntime: getChannelRuntime(),
+          });
+          channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
@@ -347,6 +398,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (!preserveRestartAttempts) {
             restartAttempts.delete(rKey);
           }
+          stopApprovalBootstrap = await startChannelApprovalHandlerBootstrap({
+            plugin,
+            cfg,
+            accountId: id,
+            channelRuntime: channelRuntimeForTask,
+            logger: log,
+          });
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
@@ -357,27 +415,27 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
-
-          const log = channelLogs[channelId];
-          const resolvedChannelRuntime = getChannelRuntime();
-          const task = startAccount({
-            cfg,
-            accountId: id,
-            account,
-            runtime: channelRuntimeEnvs[channelId],
-            abortSignal: abort.signal,
-            log,
-            getStatus: () => getRuntime(channelId, id),
-            setStatus: (next) => setRuntime(channelId, id, next),
-            ...(resolvedChannelRuntime ? { channelRuntime: resolvedChannelRuntime } : {}),
-          });
-          const trackedPromise = Promise.resolve(task)
+          const task = Promise.resolve().then(() =>
+            startAccount({
+              cfg,
+              accountId: id,
+              account,
+              runtime: channelRuntimeEnvs[channelId],
+              abortSignal: abort.signal,
+              log,
+              getStatus: () => getRuntime(channelId, id),
+              setStatus: (next) => setRuntime(channelId, id, next),
+              ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+            }),
+          );
+          const trackedPromise = task
             .catch((err) => {
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
-            .finally(() => {
+            .finally(async () => {
+              await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
               setRuntime(channelId, id, {
                 accountId: id,
                 running: false,
@@ -437,10 +495,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             });
           handedOffTask = true;
           store.tasks.set(id, trackedPromise);
+        } catch (error) {
+          if (!handedOffTask) {
+            setRuntime(channelId, id, {
+              accountId: id,
+              running: false,
+              restartPending: false,
+              lastError: formatErrorMessage(error),
+            });
+          }
+          throw error;
         } finally {
           resolveStart?.();
           if (store.starting.get(id) === startGate) {
             store.starting.delete(id);
+          }
+          if (!handedOffTask) {
+            await cleanupTaskScopedApprovalRuntime("channel startup cleanup failed");
           }
           if (!handedOffTask && store.aborts.get(id) === abort) {
             store.aborts.delete(id);
@@ -482,6 +553,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         }
         manuallyStopped.add(restartKey(channelId, id));
         abort?.abort();
+        const log = channelLogs[channelId];
         if (plugin?.gateway?.stopAccount) {
           const account = plugin.config.resolveAccount(cfg, id);
           await plugin.gateway.stopAccount({
@@ -495,10 +567,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             setStatus: (next) => setRuntime(channelId, id, next),
           });
         }
-        try {
-          await task;
-        } catch {
-          // ignore
+        const stoppedCleanly = await waitForChannelStopGracefully(
+          task,
+          CHANNEL_STOP_ABORT_TIMEOUT_MS,
+        );
+        if (!stoppedCleanly) {
+          log.warn?.(
+            `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
+          );
+          setRuntime(channelId, id, {
+            accountId: id,
+            running: true,
+            restartPending: false,
+            lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+          });
+          return;
         }
         store.aborts.delete(id);
         store.tasks.delete(id);

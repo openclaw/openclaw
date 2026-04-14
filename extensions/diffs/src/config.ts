@@ -1,4 +1,4 @@
-import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { OpenClawPluginConfigSchema } from "../api.js";
 import {

@@ -1,10 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
 import { Type } from "@sinclair/typebox";
-import { isRestartEnabled } from "../../config/commands.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
-import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -12,14 +12,24 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
+import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
-const PROTECTED_GATEWAY_CONFIG_PATHS = ["tools.exec.ask", "tools.exec.security"] as const;
+const PROTECTED_GATEWAY_CONFIG_PATHS = [
+  "tools.exec.ask",
+  "tools.exec.security",
+  "tools.exec.safeBins",
+  "tools.exec.safeBinProfiles",
+  "tools.exec.safeBinTrustedDirs",
+  "tools.exec.strictInlineEval",
+] as const;
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -28,8 +38,8 @@ function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   const hashValue = (snapshot as { hash?: unknown }).hash;
   const rawValue = (snapshot as { raw?: unknown }).raw;
   const hash = resolveConfigSnapshotHash({
-    hash: typeof hashValue === "string" ? hashValue : undefined,
-    raw: typeof rawValue === "string" ? rawValue : undefined,
+    hash: readStringValue(hashValue),
+    raw: readStringValue(rawValue),
   });
   return hash ?? undefined;
 }
@@ -63,7 +73,7 @@ function parseGatewayConfigMutationRaw(
   return parsedRes.parsed;
 }
 
-function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+function getValueAtCanonicalPath(config: Record<string, unknown>, path: string): unknown {
   let current: unknown = config;
   for (const part of path.split(".")) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {
@@ -72,6 +82,17 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+  const direct = getValueAtCanonicalPath(config, path);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!path.startsWith("tools.exec.")) {
+    return undefined;
+  }
+  return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
 function assertGatewayConfigMutationAllowed(params: {
@@ -86,17 +107,31 @@ function assertGatewayConfigMutationAllowed(params: {
       : (applyMergePatch(params.currentConfig, parsed, {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
-  const migratedNextConfig = applyLegacyMigrations(nextConfig).next ?? nextConfig;
   const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
     (path) =>
-      getValueAtPath(params.currentConfig, path) !== getValueAtPath(migratedNextConfig, path),
+      !isDeepStrictEqual(
+        getValueAtPath(params.currentConfig, path),
+        getValueAtPath(nextConfig, path),
+      ),
   );
-  if (changedProtectedPaths.length === 0) {
-    return;
+  if (changedProtectedPaths.length > 0) {
+    throw new Error(
+      `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+    );
   }
-  throw new Error(
-    `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+
+  // Block writes that newly enable any dangerous config flag.
+  // Uses the same flag enumeration as `openclaw security audit`.
+  const currentFlags = new Set(
+    collectEnabledInsecureOrDangerousFlags(params.currentConfig as OpenClawConfig),
   );
+  const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig);
+  const newlyEnabled = nextFlags.filter((f) => !currentFlags.has(f));
+  if (newlyEnabled.length > 0) {
+    throw new Error(
+      `gateway ${params.action} cannot enable dangerous config flags: ${newlyEnabled.join(", ")}`,
+    );
+  }
 }
 
 const GATEWAY_ACTIONS = [
@@ -142,9 +177,9 @@ export function createGatewayTool(opts?: {
   return {
     label: "Gateway",
     name: "gateway",
-    ownerOnly: true,
+    ownerOnly: isOpenClawOwnerOnlyCoreToolName("gateway"),
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -154,19 +189,14 @@ export function createGatewayTool(opts?: {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
         const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
+          normalizeOptionalString(params.sessionKey) ??
+          normalizeOptionalString(opts?.agentSessionKey);
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
             ? Math.floor(params.delayMs)
             : undefined;
-        const reason =
-          typeof params.reason === "string" && params.reason.trim()
-            ? params.reason.trim().slice(0, 200)
-            : undefined;
-        const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
+        const note = normalizeOptionalString(params.note);
         // Extract channel + threadId for routing after restart.
         // Uses generic :thread: parsing plus plugin-owned session grammars.
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -207,11 +237,9 @@ export function createGatewayTool(opts?: {
         restartDelayMs: number | undefined;
       } => {
         const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
-        const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+          normalizeOptionalString(params.sessionKey) ??
+          normalizeOptionalString(opts?.agentSessionKey);
+        const note = normalizeOptionalString(params.note);
         const restartDelayMs =
           typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)

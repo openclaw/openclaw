@@ -14,6 +14,24 @@ vi.mock("./provider-transport-fetch.js", () => ({
 let buildGoogleGenerativeAiParams: typeof import("./google-transport-stream.js").buildGoogleGenerativeAiParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./google-transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 
+function buildGeminiModel(
+  overrides: Partial<Model<"google-generative-ai">> = {},
+): Model<"google-generative-ai"> {
+  return {
+    id: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro",
+    api: "google-generative-ai",
+    provider: "google",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+    ...overrides,
+  };
+}
+
 function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
   const encoder = new TextEncoder();
@@ -112,6 +130,7 @@ describe("google transport stream", () => {
         } as unknown as Parameters<typeof streamFn>[1],
         {
           apiKey: "gemini-api-key",
+          cachedContent: "cachedContents/request-cache",
           reasoning: "medium",
           toolChoice: "auto",
         } as Parameters<typeof streamFn>[2],
@@ -142,6 +161,7 @@ describe("google transport stream", () => {
     expect(payload.systemInstruction).toEqual({
       parts: [{ text: "Follow policy." }],
     });
+    expect(payload.cachedContent).toBe("cachedContents/request-cache");
     expect(payload.generationConfig).toMatchObject({
       thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" },
     });
@@ -215,6 +235,34 @@ describe("google transport stream", () => {
     );
   });
 
+  it("coerces replayed malformed tool-call args to an object for Google payloads", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        {
+          role: "assistant",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.4",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: "{not valid json",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [{ functionCall: { name: "lookup", args: {} } }],
+    });
+  });
+
   it("builds direct Gemini payloads without negative fallback thinking budgets", () => {
     const model = {
       id: "custom-gemini-model",
@@ -245,5 +293,19 @@ describe("google transport stream", () => {
     expect(params.generationConfig).not.toMatchObject({
       thinkingConfig: { thinkingBudget: -1 },
     });
+  });
+
+  it("includes cachedContent in direct Gemini payloads when requested", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        cachedContent: "cachedContents/prebuilt-context",
+      },
+    );
+
+    expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
   });
 });

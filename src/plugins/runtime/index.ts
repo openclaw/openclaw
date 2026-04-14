@@ -1,5 +1,13 @@
 import { resolveStateDir } from "../../config/paths.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
+import {
+  generateImage as generateRuntimeImage,
+  listRuntimeImageGenerationProviders,
+} from "../../image-generation/runtime.js";
+import {
+  generateMusic as generateRuntimeMusic,
+  listRuntimeMusicGenerationProviders,
+} from "../../music-generation/runtime.js";
+import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -7,6 +15,10 @@ import {
   createLazyRuntimeModule,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
+import {
+  generateVideo as generateRuntimeVideo,
+  listRuntimeVideoGenerationProviders,
+} from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
@@ -18,11 +30,13 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
-import type { PluginRuntime } from "./types.js";
+import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
-const loadTtsRuntime = createLazyRuntimeModule(() => import("./runtime-tts.runtime.js"));
+export type { CreatePluginRuntimeOptions } from "./types.js";
+
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
-  () => import("./runtime-media-understanding.runtime.js"),
+  () => import("../../media-understanding/runtime.js"),
 );
 const loadModelAuthRuntime = createLazyRuntimeModule(
   () => import("./runtime-model-auth.runtime.js"),
@@ -52,26 +66,24 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
   };
 }
 
-type RuntimeImageGenerationModule = Pick<
-  typeof import("../../plugin-sdk/image-generation-runtime.js"),
-  "generateImage" | "listRuntimeImageGenerationProviders"
->;
-let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
-
-function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
-  cachedRuntimeImageGenerationModule ??=
-    loadBundledPluginPublicSurfaceModuleSync<RuntimeImageGenerationModule>({
-      dirName: "image-generation-core",
-      artifactBasename: "runtime-api.js",
-    });
-  return cachedRuntimeImageGenerationModule;
-}
-
 function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
   return {
-    generate: (params) => loadRuntimeImageGenerationModule().generateImage(params),
-    listProviders: (params) =>
-      loadRuntimeImageGenerationModule().listRuntimeImageGenerationProviders(params),
+    generate: (params) => generateRuntimeImage(params),
+    listProviders: (params) => listRuntimeImageGenerationProviders(params),
+  };
+}
+
+function createRuntimeVideoGeneration(): PluginRuntime["videoGeneration"] {
+  return {
+    generate: (params) => generateRuntimeVideo(params),
+    listProviders: (params) => listRuntimeVideoGenerationProviders(params),
+  };
+}
+
+function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
+  return {
+    generate: (params) => generateRuntimeMusic(params),
+    listProviders: (params) => listRuntimeMusicGenerationProviders(params),
   };
 }
 
@@ -79,6 +91,10 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
   const getApiKeyForModel = createLazyRuntimeMethod(
     loadModelAuthRuntime,
     (runtime) => runtime.getApiKeyForModel,
+  );
+  const getRuntimeAuthForModel = createLazyRuntimeMethod(
+    loadModelAuthRuntime,
+    (runtime) => runtime.getRuntimeAuthForModel,
   );
   const resolveApiKeyForProvider = createLazyRuntimeMethod(
     loadModelAuthRuntime,
@@ -90,6 +106,12 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
         model: params.model,
         cfg: params.cfg,
       }),
+    getRuntimeAuthForModel: (params) =>
+      getRuntimeAuthForModel({
+        model: params.model,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+      }),
     resolveApiKeyForProvider: (params) =>
       resolveApiKeyForProvider({
         provider: params.provider,
@@ -100,7 +122,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
 
 function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   const unavailable = () => {
-    throw new Error("Plugin runtime subagent methods are only available during a gateway request.");
+    throw new RequestScopedSubagentRuntimeError();
   };
   return {
     run: unavailable,
@@ -178,11 +200,6 @@ function createLateBindingSubagent(
   });
 }
 
-export type CreatePluginRuntimeOptions = {
-  subagent?: PluginRuntime["subagent"];
-  allowGatewaySubagentBinding?: boolean;
-};
-
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -213,10 +230,25 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     taskFlow,
   } satisfies Omit<
     PluginRuntime,
-    "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"
+    | "tts"
+    | "mediaUnderstanding"
+    | "stt"
+    | "modelAuth"
+    | "imageGeneration"
+    | "videoGeneration"
+    | "musicGeneration"
   > &
     Partial<
-      Pick<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration">
+      Pick<
+        PluginRuntime,
+        | "tts"
+        | "mediaUnderstanding"
+        | "stt"
+        | "modelAuth"
+        | "imageGeneration"
+        | "videoGeneration"
+        | "musicGeneration"
+      >
     >;
 
   defineCachedValue(runtime, "tts", createRuntimeTts);
@@ -226,6 +258,8 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   }));
   defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
+  defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
+  defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
 
   return runtime as PluginRuntime;
 }

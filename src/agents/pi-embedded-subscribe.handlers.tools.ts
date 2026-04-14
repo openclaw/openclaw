@@ -1,14 +1,26 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import type {
+  AgentApprovalEventData,
+  AgentCommandOutputEventData,
+  AgentItemEventData,
+  AgentPatchSummaryEventData,
+} from "../infra/agent-events.js";
 import {
-  buildExecApprovalPendingReplyPayload,
-  buildExecApprovalUnavailableReplyPayload,
-} from "../infra/exec-approval-reply.js";
+  emitAgentApprovalEvent,
+  emitAgentCommandOutputEvent,
+  emitAgentEvent,
+  emitAgentItemEvent,
+  emitAgentPatchSummaryEvent,
+} from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
+import type { ApplyPatchSummary } from "./apply-patch.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
+import { mergeEmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -25,9 +37,38 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
-import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+
+type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
+type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
+type MediaParseModule = typeof import("../media/parse.js");
+type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
+
+let execApprovalReplyModulePromise: Promise<ExecApprovalReplyModule> | undefined;
+let hookRunnerGlobalModulePromise: Promise<HookRunnerGlobalModule> | undefined;
+let mediaParseModulePromise: Promise<MediaParseModule> | undefined;
+let beforeToolCallModulePromise: Promise<BeforeToolCallModule> | undefined;
+
+function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
+  execApprovalReplyModulePromise ??= import("../infra/exec-approval-reply.js");
+  return execApprovalReplyModulePromise;
+}
+
+function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
+  hookRunnerGlobalModulePromise ??= import("../plugins/hook-runner-global.js");
+  return hookRunnerGlobalModulePromise;
+}
+
+function loadMediaParse(): Promise<MediaParseModule> {
+  mediaParseModulePromise ??= import("../media/parse.js");
+  return mediaParseModulePromise;
+}
+
+function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
+  beforeToolCallModulePromise ??= import("./pi-tools.before-tool-call.js");
+  return beforeToolCallModulePromise;
+}
 
 type ToolStartRecord = {
   startTime: number;
@@ -46,7 +87,7 @@ function isCronAddAction(args: unknown): boolean {
     return false;
   }
   const action = (args as Record<string, unknown>).action;
-  return typeof action === "string" && action.trim().toLowerCase() === "add";
+  return normalizeOptionalLowercaseString(action) === "add";
 }
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
@@ -58,8 +99,112 @@ function buildToolCallSummary(toolName: string, args: unknown, meta?: string): T
   };
 }
 
+function buildToolItemId(toolCallId: string): string {
+  return `tool:${toolCallId}`;
+}
+
+function buildToolItemTitle(toolName: string, meta?: string): string {
+  return meta ? `${toolName} ${meta}` : toolName;
+}
+
+function isExecToolName(toolName: string): boolean {
+  return toolName === "exec" || toolName === "bash";
+}
+
+function isPatchToolName(toolName: string): boolean {
+  return toolName === "apply_patch";
+}
+
+function buildCommandItemId(toolCallId: string): string {
+  return `command:${toolCallId}`;
+}
+
+function buildPatchItemId(toolCallId: string): string {
+  return `patch:${toolCallId}`;
+}
+
+function buildCommandItemTitle(toolName: string, meta?: string): string {
+  return meta ? `command ${meta}` : `${toolName} command`;
+}
+
+function buildPatchItemTitle(meta?: string): string {
+  return meta ? `patch ${meta}` : "apply patch";
+}
+
+function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventData): void {
+  if (itemData.phase === "start") {
+    ctx.state.itemActiveIds.add(itemData.itemId);
+    ctx.state.itemStartedCount += 1;
+  } else if (itemData.phase === "end") {
+    ctx.state.itemActiveIds.delete(itemData.itemId);
+    ctx.state.itemCompletedCount += 1;
+  }
+  emitAgentItemEvent({
+    runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    data: itemData,
+  });
+  void ctx.params.onAgentEvent?.({
+    stream: "item",
+    data: itemData,
+  });
+}
+
+function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const details = (result as { details?: unknown }).details;
+  return details && typeof details === "object" && !Array.isArray(details)
+    ? (details as Record<string, unknown>)
+    : undefined;
+}
+
+function readExecToolDetails(result: unknown): ExecToolDetails | null {
+  const details = readToolResultDetailsRecord(result);
+  if (!details || typeof details.status !== "string") {
+    return null;
+  }
+  return details as ExecToolDetails;
+}
+
+function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
+  const details = readToolResultDetailsRecord(result);
+  const summary =
+    details?.summary && typeof details.summary === "object" && !Array.isArray(details.summary)
+      ? (details.summary as Record<string, unknown>)
+      : null;
+  if (!summary) {
+    return null;
+  }
+  const added = Array.isArray(summary.added)
+    ? summary.added.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const modified = Array.isArray(summary.modified)
+    ? summary.modified.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const deleted = Array.isArray(summary.deleted)
+    ? summary.deleted.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  return { added, modified, deleted };
+}
+
+function buildPatchSummaryText(summary: ApplyPatchSummary): string {
+  const parts: string[] = [];
+  if (summary.added.length > 0) {
+    parts.push(`${summary.added.length} added`);
+  }
+  if (summary.modified.length > 0) {
+    parts.push(`${summary.modified.length} modified`);
+  }
+  if (summary.deleted.length > 0) {
+    parts.push(`${summary.deleted.length} deleted`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "no file changes recorded";
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(toolName);
   if (normalized !== "exec" && normalized !== "bash") {
     return meta;
   }
@@ -163,6 +308,43 @@ function queuePendingToolMedia(
   }
 }
 
+async function collectEmittedToolOutputMediaUrls(
+  toolName: string,
+  outputText: string,
+  result: unknown,
+): Promise<string[]> {
+  const { splitMediaFromOutput } = await loadMediaParse();
+  const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
+  if (mediaUrls.length === 0) {
+    return [];
+  }
+  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+}
+
+const COMPACT_PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
+
+function hasProviderInventoryDetails(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const details = readToolResultDetailsRecord(result);
+  return Array.isArray(details?.providers);
+}
+
+function shouldEmitCompactToolOutput(params: {
+  toolName: string;
+  result: unknown;
+  outputText?: string;
+}): boolean {
+  if (!COMPACT_PROVIDER_INVENTORY_TOOLS.has(params.toolName)) {
+    return false;
+  }
+  if (!hasProviderInventoryDetails(params.result)) {
+    return false;
+  }
+  return Boolean(params.outputText?.trim());
+}
+
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -185,8 +367,8 @@ function readExecApprovalPendingDetails(result: unknown): {
   if (details.status !== "approval-pending") {
     return null;
   }
-  const approvalId = typeof details.approvalId === "string" ? details.approvalId.trim() : "";
-  const approvalSlug = typeof details.approvalSlug === "string" ? details.approvalSlug.trim() : "";
+  const approvalId = readStringValue(details.approvalId) ?? "";
+  const approvalSlug = readStringValue(details.approvalSlug) ?? "";
   const command = typeof details.command === "string" ? details.command : "";
   const host = details.host === "node" ? "node" : details.host === "gateway" ? "gateway" : null;
   if (!approvalId || !approvalSlug || !command || !host) {
@@ -204,16 +386,18 @@ function readExecApprovalPendingDetails(result: unknown): {
       : undefined,
     host,
     command,
-    cwd: typeof details.cwd === "string" ? details.cwd : undefined,
-    nodeId: typeof details.nodeId === "string" ? details.nodeId : undefined,
-    warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+    cwd: readStringValue(details.cwd),
+    nodeId: readStringValue(details.nodeId),
+    warningText: readStringValue(details.warningText),
   };
 }
 
 function readExecApprovalUnavailableDetails(result: unknown): {
   reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
   warningText?: string;
+  channel?: string;
   channelLabel?: string;
+  accountId?: string;
   sentApproverDms?: boolean;
 } | null {
   if (!result || typeof result !== "object") {
@@ -238,8 +422,10 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   }
   return {
     reason,
-    warningText: typeof details.warningText === "string" ? details.warningText : undefined,
-    channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
+    warningText: readStringValue(details.warningText),
+    channel: readStringValue(details.channel),
+    channelLabel: readStringValue(details.channelLabel),
+    accountId: readStringValue(details.accountId),
     sentApproverDms: details.sentApproverDms === true,
   };
 }
@@ -263,11 +449,14 @@ async function emitToolResultOutput(params: {
       "object" &&
     !Array.isArray((result as { details?: { media?: unknown } }).details?.media);
   const approvalPending = readExecApprovalPendingDetails(result);
+  let emittedToolOutputMediaUrls: string[] = [];
   if (!isToolError && approvalPending) {
     if (!ctx.params.onToolResult) {
       return;
     }
+    ctx.state.deterministicApprovalPromptPending = true;
     try {
+      const { buildExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult(
         buildExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
@@ -283,7 +472,9 @@ async function emitToolResultOutput(params: {
       );
       ctx.state.deterministicApprovalPromptSent = true;
     } catch {
-      // ignore delivery failures
+      ctx.state.deterministicApprovalPromptSent = false;
+    } finally {
+      ctx.state.deterministicApprovalPromptPending = false;
     }
     return;
   }
@@ -293,26 +484,41 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    ctx.state.deterministicApprovalPromptPending = true;
     try {
+      const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,
           warningText: approvalUnavailable.warningText,
+          channel: approvalUnavailable.channel,
           channelLabel: approvalUnavailable.channelLabel,
+          accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
     } catch {
-      // ignore delivery failures
+      ctx.state.deterministicApprovalPromptSent = false;
+    } finally {
+      ctx.state.deterministicApprovalPromptPending = false;
     }
     return;
   }
 
-  if (ctx.shouldEmitToolOutput()) {
-    const outputText = extractToolResultText(sanitizedResult);
+  const outputText = extractToolResultText(sanitizedResult);
+  const shouldEmitOutput =
+    ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText });
+  if (shouldEmitOutput) {
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText, result);
+      if (ctx.params.toolResultFormat === "plain") {
+        emittedToolOutputMediaUrls = await collectEmittedToolOutputMediaUrls(
+          toolName,
+          outputText,
+          result,
+        );
+      }
     }
     if (!hasStructuredMedia) {
       return;
@@ -328,11 +534,15 @@ async function emitToolResultOutput(params: {
     return;
   }
   const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls, result);
-  if (mediaUrls.length === 0) {
+  const pendingMediaUrls =
+    mediaReply.audioAsVoice || emittedToolOutputMediaUrls.length === 0
+      ? mediaUrls
+      : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
+  if (pendingMediaUrls.length === 0) {
     return;
   }
   queuePendingToolMedia(ctx, {
-    mediaUrls,
+    mediaUrls: pendingMediaUrls,
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
   });
 }
@@ -340,8 +550,8 @@ async function emitToolResultOutput(params: {
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
-) {
-  const continueAfterBlockReplyFlush = () => {
+): void | Promise<void> {
+  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
@@ -349,17 +559,19 @@ export function handleToolExecutionStart(
       });
     }
     continueToolExecutionStart();
+    return undefined;
   };
 
   const continueToolExecutionStart = () => {
-    const rawToolName = String(evt.toolName);
+    const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
-    const toolCallId = String(evt.toolCallId);
+    const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
 
-    // Track start time and args for after_tool_call hook
-    toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
+    // Track start time and args for after_tool_call hook.
+    const startedAt = Date.now();
+    toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -371,7 +583,7 @@ export function handleToolExecutionStart(
             : "";
       const filePath = filePathValue.trim();
       if (!filePath) {
-        const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
+        const argsPreview = readStringValue(args)?.slice(0, 200);
         ctx.log.warn(
           `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
         );
@@ -395,11 +607,49 @@ export function handleToolExecutionStart(
         args: args as Record<string, unknown>,
       },
     });
+    const itemData: AgentItemEventData = {
+      itemId: buildToolItemId(toolCallId),
+      phase: "start",
+      kind: "tool",
+      title: buildToolItemTitle(toolName, meta),
+      status: "running",
+      name: toolName,
+      meta,
+      toolCallId,
+      startedAt,
+    };
+    emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
     void ctx.params.onAgentEvent?.({
       stream: "tool",
       data: { phase: "start", name: toolName, toolCallId },
     });
+
+    if (isExecToolName(toolName)) {
+      emitTrackedItemEvent(ctx, {
+        itemId: buildCommandItemId(toolCallId),
+        phase: "start",
+        kind: "command",
+        title: buildCommandItemTitle(toolName, meta),
+        status: "running",
+        name: toolName,
+        meta,
+        toolCallId,
+        startedAt,
+      });
+    } else if (isPatchToolName(toolName)) {
+      emitTrackedItemEvent(ctx, {
+        itemId: buildPatchItemId(toolCallId),
+        phase: "start",
+        kind: "patch",
+        title: buildPatchItemTitle(meta),
+        status: "running",
+        name: toolName,
+        meta,
+        toolCallId,
+        startedAt,
+      });
+    }
 
     if (
       ctx.params.onToolResult &&
@@ -450,8 +700,8 @@ export function handleToolExecutionUpdate(
     partialResult?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
-  const toolCallId = String(evt.toolCallId);
+  const toolName = normalizeToolName(evt.toolName);
+  const toolCallId = evt.toolCallId;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   emitAgentEvent({
@@ -464,6 +714,17 @@ export function handleToolExecutionUpdate(
       partialResult: sanitized,
     },
   });
+  const itemData: AgentItemEventData = {
+    itemId: buildToolItemId(toolCallId),
+    phase: "update",
+    kind: "tool",
+    title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+    status: "running",
+    name: toolName,
+    meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
+    toolCallId,
+  };
+  emitTrackedItemEvent(ctx, itemData);
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
@@ -472,6 +733,41 @@ export function handleToolExecutionUpdate(
       toolCallId,
     },
   });
+  if (isExecToolName(toolName)) {
+    const output = extractToolResultText(sanitized);
+    const commandData: AgentItemEventData = {
+      itemId: buildCommandItemId(toolCallId),
+      phase: "update",
+      kind: "command",
+      title: buildCommandItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+      status: "running",
+      name: toolName,
+      meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
+      toolCallId,
+      ...(output ? { progressText: output } : {}),
+    };
+    emitTrackedItemEvent(ctx, commandData);
+    if (output) {
+      const outputData: AgentCommandOutputEventData = {
+        itemId: commandData.itemId,
+        phase: "delta",
+        title: commandData.title,
+        toolCallId,
+        name: toolName,
+        output,
+        status: "running",
+      };
+      emitAgentCommandOutputEvent({
+        runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        data: outputData,
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "command_output",
+        data: outputData,
+      });
+    }
+  }
 }
 
 export async function handleToolExecutionEnd(
@@ -483,10 +779,10 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
-  const toolCallId = String(evt.toolCallId);
+  const toolName = normalizeToolName(evt.toolName);
+  const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
-  const isError = Boolean(evt.isError);
+  const isError = evt.isError;
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
@@ -494,6 +790,7 @@ export async function handleToolExecutionEnd(
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
+  const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
   ctx.state.toolMetaById.delete(toolCallId);
@@ -524,6 +821,12 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
+  if (completedMutatingAction) {
+    ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  }
 
   // Commit messaging tool text on success, discard on error.
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
@@ -550,11 +853,6 @@ export async function handleToolExecutionEnd(
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
       : {};
-  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
-  const afterToolCallArgs =
-    adjustedArgs && typeof adjustedArgs === "object"
-      ? (adjustedArgs as Record<string, unknown>)
-      : startArgs;
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
@@ -586,6 +884,24 @@ export async function handleToolExecutionEnd(
       result: sanitizedResult,
     },
   });
+  const endedAt = Date.now();
+  const itemId = buildToolItemId(toolCallId);
+  const itemData: AgentItemEventData = {
+    itemId,
+    phase: "end",
+    kind: "tool",
+    title: buildToolItemTitle(toolName, meta),
+    status: isToolError ? "failed" : "completed",
+    name: toolName,
+    meta,
+    toolCallId,
+    startedAt: startData?.startTime,
+    endedAt,
+    ...(isToolError && extractToolErrorMessage(sanitizedResult)
+      ? { error: extractToolErrorMessage(sanitizedResult) }
+      : {}),
+  };
+  emitTrackedItemEvent(ctx, itemData);
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
@@ -597,6 +913,188 @@ export async function handleToolExecutionEnd(
     },
   });
 
+  if (isExecToolName(toolName)) {
+    const execDetails = readExecToolDetails(result);
+    const commandItemId = buildCommandItemId(toolCallId);
+    if (
+      execDetails?.status === "approval-pending" ||
+      execDetails?.status === "approval-unavailable"
+    ) {
+      const approvalStatus = execDetails.status === "approval-pending" ? "pending" : "unavailable";
+      const approvalData: AgentApprovalEventData = {
+        phase: "requested",
+        kind: "exec",
+        status: approvalStatus,
+        title:
+          approvalStatus === "pending"
+            ? "Command approval requested"
+            : "Command approval unavailable",
+        itemId: commandItemId,
+        toolCallId,
+        ...(execDetails.status === "approval-pending"
+          ? {
+              approvalId: execDetails.approvalId,
+              approvalSlug: execDetails.approvalSlug,
+            }
+          : {}),
+        command: execDetails.command,
+        host: execDetails.host,
+        ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
+        message: execDetails.warningText,
+      };
+      emitAgentApprovalEvent({
+        runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        data: approvalData,
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "approval",
+        data: approvalData,
+      });
+      emitTrackedItemEvent(ctx, {
+        itemId: commandItemId,
+        phase: "end",
+        kind: "command",
+        title: buildCommandItemTitle(toolName, meta),
+        status: "blocked",
+        name: toolName,
+        meta,
+        toolCallId,
+        startedAt: startData?.startTime,
+        endedAt,
+        ...(execDetails.status === "approval-pending"
+          ? {
+              approvalId: execDetails.approvalId,
+              approvalSlug: execDetails.approvalSlug,
+              summary: "Awaiting approval before command can run.",
+            }
+          : {
+              summary: "Command is blocked because no interactive approval route is available.",
+            }),
+      });
+    } else {
+      const output =
+        execDetails && "aggregated" in execDetails
+          ? execDetails.aggregated
+          : extractToolResultText(sanitizedResult);
+      const commandStatus =
+        execDetails?.status === "failed" || isToolError ? "failed" : "completed";
+      emitTrackedItemEvent(ctx, {
+        itemId: commandItemId,
+        phase: "end",
+        kind: "command",
+        title: buildCommandItemTitle(toolName, meta),
+        status: commandStatus,
+        name: toolName,
+        meta,
+        toolCallId,
+        startedAt: startData?.startTime,
+        endedAt,
+        ...(output ? { summary: output } : {}),
+        ...(isToolError && extractToolErrorMessage(sanitizedResult)
+          ? { error: extractToolErrorMessage(sanitizedResult) }
+          : {}),
+      });
+      const outputData: AgentCommandOutputEventData = {
+        itemId: commandItemId,
+        phase: "end",
+        title: buildCommandItemTitle(toolName, meta),
+        toolCallId,
+        name: toolName,
+        ...(output ? { output } : {}),
+        status: commandStatus,
+        ...(execDetails && "exitCode" in execDetails ? { exitCode: execDetails.exitCode } : {}),
+        ...(execDetails && "durationMs" in execDetails
+          ? { durationMs: execDetails.durationMs }
+          : {}),
+        ...(execDetails && "cwd" in execDetails && typeof execDetails.cwd === "string"
+          ? { cwd: execDetails.cwd }
+          : {}),
+      };
+      emitAgentCommandOutputEvent({
+        runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        data: outputData,
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "command_output",
+        data: outputData,
+      });
+
+      if (typeof output === "string") {
+        const parsedApprovalResult = parseExecApprovalResultText(output);
+        if (parsedApprovalResult.kind === "denied") {
+          const approvalData: AgentApprovalEventData = {
+            phase: "resolved",
+            kind: "exec",
+            status: normalizeOptionalLowercaseString(parsedApprovalResult.metadata)?.includes(
+              "approval-request-failed",
+            )
+              ? "failed"
+              : "denied",
+            title: "Command approval resolved",
+            itemId: commandItemId,
+            toolCallId,
+            message: parsedApprovalResult.body || parsedApprovalResult.raw,
+          };
+          emitAgentApprovalEvent({
+            runId: ctx.params.runId,
+            ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+            data: approvalData,
+          });
+          void ctx.params.onAgentEvent?.({
+            stream: "approval",
+            data: approvalData,
+          });
+        }
+      }
+    }
+  }
+
+  if (isPatchToolName(toolName)) {
+    const patchSummary = readApplyPatchSummary(result);
+    const patchItemId = buildPatchItemId(toolCallId);
+    const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;
+    emitTrackedItemEvent(ctx, {
+      itemId: patchItemId,
+      phase: "end",
+      kind: "patch",
+      title: buildPatchItemTitle(meta),
+      status: isToolError ? "failed" : "completed",
+      name: toolName,
+      meta,
+      toolCallId,
+      startedAt: startData?.startTime,
+      endedAt,
+      ...(summaryText ? { summary: summaryText } : {}),
+      ...(isToolError && extractToolErrorMessage(sanitizedResult)
+        ? { error: extractToolErrorMessage(sanitizedResult) }
+        : {}),
+    });
+    if (patchSummary) {
+      const patchData: AgentPatchSummaryEventData = {
+        itemId: patchItemId,
+        phase: "end",
+        title: buildPatchItemTitle(meta),
+        toolCallId,
+        name: toolName,
+        added: patchSummary.added,
+        modified: patchSummary.modified,
+        deleted: patchSummary.deleted,
+        summary: summaryText ?? buildPatchSummaryText(patchSummary),
+      };
+      emitAgentPatchSummaryEvent({
+        runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        data: patchData,
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "patch",
+        data: patchData,
+      });
+    }
+  }
+
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
@@ -604,8 +1102,14 @@ export async function handleToolExecutionEnd(
   await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
   // Run after_tool_call plugin hook (fire-and-forget)
-  const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
+  const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+    const { consumeAdjustedParamsForToolCall } = await loadBeforeToolCall();
+    const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+    const afterToolCallArgs =
+      adjustedArgs && typeof adjustedArgs === "object"
+        ? (adjustedArgs as Record<string, unknown>)
+        : startArgs;
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,

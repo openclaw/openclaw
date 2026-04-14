@@ -53,7 +53,6 @@ describe("before_tool_call loop detection behavior", () => {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
     };
-    // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     hookRunner.hasHooks.mockReturnValue(false);
   });
@@ -180,7 +179,6 @@ describe("before_tool_call loop detection behavior", () => {
       content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
       details: { status: "running", aggregated: "steady" },
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "process", execute } as any, {
       ...disabledLoopDetectionContext,
     });
@@ -349,7 +347,6 @@ describe("before_tool_call requireApproval handling", () => {
       hasHooks: vi.fn().mockReturnValue(true),
       runBeforeToolCall: vi.fn(),
     };
-    // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.
@@ -367,6 +364,28 @@ describe("before_tool_call requireApproval handling", () => {
     hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
     mockCallGateway.mockReset();
   });
+
+  async function runAbortDuringApprovalWait(options?: { onResolution?: ReturnType<typeof vi.fn> }) {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Abortable",
+        description: "Will be aborted",
+        onResolution: options?.onResolution,
+      },
+    });
+
+    const controller = new AbortController();
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
+    mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
+    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
+
+    return await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+      signal: controller.signal,
+    });
+  }
 
   it("blocks without triggering approval when both block and requireApproval are set", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -577,31 +596,7 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("unblocks immediately when abort signal fires during waitDecision", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Abortable",
-        description: "Will be aborted",
-      },
-    });
-
-    const controller = new AbortController();
-
-    // First call: plugin.approval.request → accepted
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
-    // Second call: plugin.approval.waitDecision → never resolves (simulates long wait)
-    mockCallGateway.mockImplementationOnce(
-      () => new Promise(() => {}), // hangs forever
-    );
-
-    // Abort after a short delay
-    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-      signal: controller.signal,
-    });
+    const result = await runAbortDuringApprovalWait();
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
@@ -770,30 +765,7 @@ describe("before_tool_call requireApproval handling", () => {
 
   it("calls onResolution with cancelled when abort signal fires", async () => {
     const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Abortable with callback",
-        description: "Will be aborted",
-        onResolution,
-      },
-    });
-
-    const controller = new AbortController();
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r5", status: "accepted" });
-    mockCallGateway.mockImplementationOnce(
-      () => new Promise(() => {}), // hangs forever
-    );
-
-    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-      signal: controller.signal,
-    });
+    const result = await runAbortDuringApprovalWait({ onResolution });
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");

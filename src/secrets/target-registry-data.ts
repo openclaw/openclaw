@@ -1,17 +1,29 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
-
-type ChannelSecretTargetRegistrySurface = {
-  secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
-};
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
 const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
-  return (getBundledChannelContractSurfaces() as ChannelSecretTargetRegistrySurface[]).flatMap(
-    (surface) => surface.secretTargetRegistryEntries ?? [],
-  );
+  const entries: SecretTargetRegistryEntry[] = [];
+
+  for (const record of loadPluginManifestRegistry({}).plugins) {
+    if (record.origin !== "bundled") {
+      continue;
+    }
+    const channelIds = record.channels;
+    if (channelIds.length === 0) {
+      continue;
+    }
+    try {
+      const contractApi = loadBundledChannelSecretContractApi(record.id);
+      entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
+    } catch {
+      // Ignore bundled channels that do not expose a usable secret contract artifact.
+    }
+  }
+  return entries;
 }
 
 const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
@@ -57,127 +69,6 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     targetType: "agents.list[].memorySearch.remote.apiKey",
     configFile: "openclaw.json",
     pathPattern: "agents.list[].memorySearch.remote.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.bluebubbles.accounts.*.password",
-    targetType: "channels.bluebubbles.accounts.*.password",
-    configFile: "openclaw.json",
-    pathPattern: "channels.bluebubbles.accounts.*.password",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.bluebubbles.password",
-    targetType: "channels.bluebubbles.password",
-    configFile: "openclaw.json",
-    pathPattern: "channels.bluebubbles.password",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.irc.accounts.*.nickserv.password",
-    targetType: "channels.irc.accounts.*.nickserv.password",
-    configFile: "openclaw.json",
-    pathPattern: "channels.irc.accounts.*.nickserv.password",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.irc.accounts.*.password",
-    targetType: "channels.irc.accounts.*.password",
-    configFile: "openclaw.json",
-    pathPattern: "channels.irc.accounts.*.password",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.irc.nickserv.password",
-    targetType: "channels.irc.nickserv.password",
-    configFile: "openclaw.json",
-    pathPattern: "channels.irc.nickserv.password",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.irc.password",
-    targetType: "channels.irc.password",
-    configFile: "openclaw.json",
-    pathPattern: "channels.irc.password",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.msteams.appPassword",
-    targetType: "channels.msteams.appPassword",
-    configFile: "openclaw.json",
-    pathPattern: "channels.msteams.appPassword",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.nextcloud-talk.accounts.*.apiPassword",
-    targetType: "channels.nextcloud-talk.accounts.*.apiPassword",
-    configFile: "openclaw.json",
-    pathPattern: "channels.nextcloud-talk.accounts.*.apiPassword",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.nextcloud-talk.accounts.*.botSecret",
-    targetType: "channels.nextcloud-talk.accounts.*.botSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.nextcloud-talk.accounts.*.botSecret",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.nextcloud-talk.apiPassword",
-    targetType: "channels.nextcloud-talk.apiPassword",
-    configFile: "openclaw.json",
-    pathPattern: "channels.nextcloud-talk.apiPassword",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.nextcloud-talk.botSecret",
-    targetType: "channels.nextcloud-talk.botSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.nextcloud-talk.botSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,
@@ -434,17 +325,6 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
-    id: "talk.apiKey",
-    targetType: "talk.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "talk.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
     id: "talk.providers.*.apiKey",
     targetType: "talk.providers.*.apiKey",
     configFile: "openclaw.json",
@@ -454,6 +334,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
+    providerIdPathSegmentIndex: 2,
   },
   {
     id: "tools.web.search.apiKey",
@@ -554,11 +435,32 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
   },
+  {
+    id: "plugins.entries.minimax.config.webSearch.apiKey",
+    targetType: "plugins.entries.minimax.config.webSearch.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "plugins.entries.minimax.config.webSearch.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
 ];
 
-const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
-  ...CORE_SECRET_TARGET_REGISTRY,
-  ...listChannelSecretTargetRegistryEntries(),
-];
+let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
 
-export { SECRET_TARGET_REGISTRY };
+export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  return CORE_SECRET_TARGET_REGISTRY;
+}
+
+export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  if (cachedSecretTargetRegistry) {
+    return cachedSecretTargetRegistry;
+  }
+  cachedSecretTargetRegistry = [
+    ...CORE_SECRET_TARGET_REGISTRY,
+    ...listChannelSecretTargetRegistryEntries(),
+  ];
+  return cachedSecretTargetRegistry;
+}

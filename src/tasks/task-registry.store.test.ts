@@ -8,6 +8,7 @@ import {
   createTaskRecord,
   deleteTaskRecordById,
   findTaskByRunId,
+  markTaskLostById,
   maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
@@ -225,6 +226,53 @@ describe("task-registry store runtime", () => {
     });
   });
 
+  it("preserves requesterSessionKey when it differs from ownerKey across sqlite restore", () => {
+    const created = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:slack:channel:C1234567890",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:slack:channel:C1234567890",
+      runId: "run-requester-session-restore",
+      task: "Reply to channel task",
+      status: "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(findTaskByRunId("run-requester-session-restore")).toMatchObject({
+      taskId: created.taskId,
+      requesterSessionKey: "agent:main:slack:channel:C1234567890",
+      ownerKey: "agent:main:main",
+      childSessionKey: "agent:main:slack:channel:C1234567890",
+    });
+  });
+
+  it("preserves taskKind across sqlite restore", () => {
+    const created = createTaskRecord({
+      runtime: "acp",
+      taskKind: "video_generation",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:video",
+      runId: "run-task-kind-restore",
+      task: "Render a short clip",
+      status: "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(findTaskByRunId("run-task-kind-restore")).toMatchObject({
+      taskId: created.taskId,
+      taskKind: "video_generation",
+      runId: "run-task-kind-restore",
+    });
+  });
+
   it("hardens the sqlite task store directory and file modes", () => {
     if (process.platform === "win32") {
       return;
@@ -332,6 +380,90 @@ describe("task-registry store runtime", () => {
       scopeKind: "system",
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
+    });
+  });
+
+  it("keeps legacy requester_session_key rows writable after restore", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-task-store-legacy-write-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+    mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(sqlitePath);
+    db.exec(`
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        source_id TEXT,
+        requester_session_key TEXT NOT NULL,
+        child_session_key TEXT,
+        parent_task_id TEXT,
+        agent_id TEXT,
+        run_id TEXT,
+        label TEXT,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        last_event_at INTEGER,
+        cleanup_after INTEGER,
+        error TEXT,
+        progress_summary TEXT,
+        terminal_summary TEXT,
+        terminal_outcome TEXT
+      );
+    `);
+    db.exec(`
+      CREATE TABLE task_delivery_state (
+        task_id TEXT PRIMARY KEY,
+        requester_origin_json TEXT,
+        last_notified_event_at INTEGER
+      );
+    `);
+    db.prepare(`
+      INSERT INTO task_runs (
+        task_id,
+        runtime,
+        requester_session_key,
+        run_id,
+        task,
+        status,
+        delivery_status,
+        notify_policy,
+        created_at,
+        last_event_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-session-task",
+      "acp",
+      "agent:main:main",
+      "legacy-session-run",
+      "Legacy session task",
+      "running",
+      "pending",
+      "done_only",
+      100,
+      100,
+    );
+    db.close();
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(() =>
+      markTaskLostById({
+        taskId: "legacy-session-task",
+        endedAt: 200,
+        lastEventAt: 200,
+        error: "session missing",
+      }),
+    ).not.toThrow();
+    expect(findTaskByRunId("legacy-session-run")).toMatchObject({
+      taskId: "legacy-session-task",
+      status: "lost",
+      error: "session missing",
     });
   });
 });

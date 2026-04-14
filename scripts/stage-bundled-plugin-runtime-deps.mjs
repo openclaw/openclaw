@@ -62,6 +62,57 @@ function dependencyVersionSatisfied(spec, installedVersion) {
   return semverSatisfies(installedVersion, spec, { includePrerelease: false });
 }
 
+const defaultStagedRuntimeDepGlobalPruneSuffixes = [".d.ts", ".map"];
+const defaultStagedRuntimeDepPruneRules = new Map([
+  // Type declarations only; runtime resolves through lib/es entrypoints.
+  ["@larksuiteoapi/node-sdk", { paths: ["types"] }],
+  [
+    "@matrix-org/matrix-sdk-crypto-nodejs",
+    {
+      paths: ["index.d.ts", "README.md", "CHANGELOG.md", "RELEASING.md", ".node-version"],
+    },
+  ],
+  [
+    "@matrix-org/matrix-sdk-crypto-wasm",
+    {
+      paths: [
+        "index.d.ts",
+        "pkg/matrix_sdk_crypto_wasm.d.ts",
+        "pkg/matrix_sdk_crypto_wasm_bg.wasm.d.ts",
+        "README.md",
+      ],
+    },
+  ],
+  [
+    "matrix-js-sdk",
+    {
+      paths: ["src", "CHANGELOG.md", "CONTRIBUTING.rst", "README.md", "release.sh"],
+      suffixes: [".d.ts"],
+    },
+  ],
+  ["matrix-widget-api", { paths: ["src"], suffixes: [".d.ts"] }],
+  ["oidc-client-ts", { paths: ["README.md"], suffixes: [".d.ts"] }],
+  ["music-metadata", { paths: ["README.md"], suffixes: [".d.ts"] }],
+  ["@cloudflare/workers-types", { paths: ["."] }],
+  ["gifwrap", { paths: ["test"] }],
+  ["playwright-core", { paths: ["types"], suffixes: [".d.ts"] }],
+  ["@jimp/plugin-blit", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-blur", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-color", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-print", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-quantize", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-threshold", { paths: ["src/__image_snapshots__"] }],
+]);
+const runtimeDepsStagingVersion = 2;
+
+function resolveRuntimeDepPruneConfig(params = {}) {
+  return {
+    globalPruneSuffixes:
+      params.stagedRuntimeDepGlobalPruneSuffixes ?? defaultStagedRuntimeDepGlobalPruneSuffixes,
+    pruneRules: params.stagedRuntimeDepPruneRules ?? defaultStagedRuntimeDepPruneRules,
+  };
+}
+
 function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
   const packageCache = new Map();
   const closure = new Set();
@@ -96,6 +147,76 @@ function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
   return [...closure];
 }
 
+function walkFiles(rootDir, visitFile) {
+  if (!fs.existsSync(rootDir)) {
+    return;
+  }
+  const queue = [rootDir];
+  while (queue.length > 0) {
+    const currentDir = queue.shift();
+    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+      if (entry.isFile()) {
+        visitFile(fullPath);
+      }
+    }
+  }
+}
+
+function pruneDependencyFilesBySuffixes(depRoot, suffixes) {
+  if (!suffixes || suffixes.length === 0 || !fs.existsSync(depRoot)) {
+    return;
+  }
+  walkFiles(depRoot, (fullPath) => {
+    if (suffixes.some((suffix) => fullPath.endsWith(suffix))) {
+      removePathIfExists(fullPath);
+    }
+  });
+}
+
+function pruneStagedInstalledDependencyCargo(nodeModulesDir, depName, pruneConfig) {
+  const depRoot = dependencyNodeModulesPath(nodeModulesDir, depName);
+  const pruneRule = pruneConfig.pruneRules.get(depName);
+  for (const relativePath of pruneRule?.paths ?? []) {
+    removePathIfExists(path.join(depRoot, relativePath));
+  }
+  pruneDependencyFilesBySuffixes(depRoot, pruneConfig.globalPruneSuffixes);
+  pruneDependencyFilesBySuffixes(depRoot, pruneRule?.suffixes ?? []);
+}
+
+function listInstalledDependencyNames(nodeModulesDir) {
+  if (!fs.existsSync(nodeModulesDir)) {
+    return [];
+  }
+  const names = [];
+  for (const entry of fs.readdirSync(nodeModulesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (entry.name.startsWith("@")) {
+      const scopeDir = path.join(nodeModulesDir, entry.name);
+      for (const scopedEntry of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+        if (scopedEntry.isDirectory()) {
+          names.push(`${entry.name}/${scopedEntry.name}`);
+        }
+      }
+      continue;
+    }
+    names.push(entry.name);
+  }
+  return names;
+}
+
+function pruneStagedRuntimeDependencyCargo(nodeModulesDir, pruneConfig) {
+  for (const depName of listInstalledDependencyNames(nodeModulesDir)) {
+    pruneStagedInstalledDependencyCargo(nodeModulesDir, depName, pruneConfig);
+  }
+}
+
 function listBundledPluginRuntimeDirs(repoRoot) {
   const extensionsRoot = path.join(repoRoot, "dist", "extensions");
   if (!fs.existsSync(extensionsRoot)) {
@@ -125,36 +246,18 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
   const packageJson = readJson(manifestPath);
   let changed = false;
 
-  if (packageJson.peerDependencies?.openclaw) {
-    const nextPeerDependencies = { ...packageJson.peerDependencies };
-    delete nextPeerDependencies.openclaw;
-    if (Object.keys(nextPeerDependencies).length === 0) {
-      delete packageJson.peerDependencies;
-    } else {
-      packageJson.peerDependencies = nextPeerDependencies;
-    }
+  if (packageJson.peerDependencies) {
+    delete packageJson.peerDependencies;
     changed = true;
   }
 
-  if (packageJson.peerDependenciesMeta?.openclaw) {
-    const nextPeerDependenciesMeta = { ...packageJson.peerDependenciesMeta };
-    delete nextPeerDependenciesMeta.openclaw;
-    if (Object.keys(nextPeerDependenciesMeta).length === 0) {
-      delete packageJson.peerDependenciesMeta;
-    } else {
-      packageJson.peerDependenciesMeta = nextPeerDependenciesMeta;
-    }
+  if (packageJson.peerDependenciesMeta) {
+    delete packageJson.peerDependenciesMeta;
     changed = true;
   }
 
-  if (packageJson.devDependencies?.openclaw) {
-    const nextDevDependencies = { ...packageJson.devDependencies };
-    delete nextDevDependencies.openclaw;
-    if (Object.keys(nextDevDependencies).length === 0) {
-      delete packageJson.devDependencies;
-    } else {
-      packageJson.devDependencies = nextDevDependencies;
-    }
+  if (packageJson.devDependencies) {
+    delete packageJson.devDependencies;
     changed = true;
   }
 
@@ -169,8 +272,17 @@ function resolveRuntimeDepsStampPath(pluginDir) {
   return path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
 }
 
-function createRuntimeDepsFingerprint(packageJson) {
-  return createHash("sha256").update(JSON.stringify(packageJson)).digest("hex");
+function createRuntimeDepsFingerprint(packageJson, pruneConfig) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        globalPruneSuffixes: pruneConfig.globalPruneSuffixes,
+        packageJson,
+        pruneRules: [...pruneConfig.pruneRules.entries()],
+        version: runtimeDepsStagingVersion,
+      }),
+    )
+    .digest("hex");
 }
 
 function readRuntimeDepsStamp(stampPath) {
@@ -185,7 +297,7 @@ function readRuntimeDepsStamp(stampPath) {
 }
 
 function stageInstalledRootRuntimeDeps(params) {
-  const { fingerprint, packageJson, pluginDir, repoRoot } = params;
+  const { fingerprint, packageJson, pluginDir, pruneConfig, repoRoot } = params;
   const dependencySpecs = {
     ...packageJson.dependencies,
     ...packageJson.optionalDependencies,
@@ -217,6 +329,7 @@ function stageInstalledRootRuntimeDeps(params) {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.cpSync(sourcePath, targetPath, { recursive: true, force: true, dereference: true });
     }
+    pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
 
     replaceDir(nodeModulesDir, stagedNodeModulesDir);
     writeJson(stampPath, {
@@ -230,10 +343,10 @@ function stageInstalledRootRuntimeDeps(params) {
 }
 
 function installPluginRuntimeDeps(params) {
-  const { fingerprint, packageJson, pluginDir, pluginId, repoRoot } = params;
+  const { fingerprint, packageJson, pluginDir, pluginId, pruneConfig, repoRoot } = params;
   if (
     repoRoot &&
-    stageInstalledRootRuntimeDeps({ fingerprint, packageJson, pluginDir, repoRoot })
+    stageInstalledRootRuntimeDeps({ fingerprint, packageJson, pluginDir, pruneConfig, repoRoot })
   ) {
     return;
   }
@@ -277,6 +390,8 @@ function installPluginRuntimeDeps(params) {
       );
     }
 
+    pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
+
     replaceDir(nodeModulesDir, stagedNodeModulesDir);
     writeJson(stampPath, {
       fingerprint,
@@ -309,6 +424,7 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
   const installPluginRuntimeDepsImpl =
     params.installPluginRuntimeDepsImpl ?? installPluginRuntimeDeps;
   const installAttempts = params.installAttempts ?? 3;
+  const pruneConfig = resolveRuntimeDepPruneConfig(params);
   for (const pluginDir of listBundledPluginRuntimeDirs(repoRoot)) {
     const pluginId = path.basename(pluginDir);
     const packageJson = sanitizeBundledManifestForRuntimeInstall(pluginDir);
@@ -319,7 +435,7 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       removePathIfExists(stampPath);
       continue;
     }
-    const fingerprint = createRuntimeDepsFingerprint(packageJson);
+    const fingerprint = createRuntimeDepsFingerprint(packageJson, pruneConfig);
     const stamp = readRuntimeDepsStamp(stampPath);
     if (fs.existsSync(nodeModulesDir) && stamp?.fingerprint === fingerprint) {
       continue;
@@ -332,6 +448,7 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
         packageJson,
         pluginDir,
         pluginId,
+        pruneConfig,
         repoRoot,
       },
     });

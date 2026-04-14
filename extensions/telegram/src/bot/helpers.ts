@@ -1,5 +1,5 @@
 import type { Chat, Message } from "@grammyjs/types";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
@@ -20,10 +21,10 @@ import {
   normalizeForwardedContext,
   resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
-  type TelegramTextEntity,
 } from "./body-helpers.js";
 import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
+export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helpers.js";
 export {
   buildSenderLabel,
   buildSenderName,
@@ -34,7 +35,6 @@ export {
   normalizeForwardedContext,
   resolveTelegramMediaPlaceholder,
 };
-export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helpers.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -280,7 +280,8 @@ export function resolveTelegramDirectPeerId(params: {
   chatId: number | string;
   senderId?: number | string | null;
 }) {
-  const senderId = params.senderId != null ? String(params.senderId).trim() : "";
+  const senderId =
+    params.senderId != null ? (normalizeOptionalString(String(params.senderId)) ?? "") : "";
   if (senderId) {
     return senderId;
   }

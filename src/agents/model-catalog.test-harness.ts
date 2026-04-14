@@ -12,6 +12,10 @@ vi.mock("./agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/openclaw",
 }));
 
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
+}));
+
 export function installModelCatalogTestHooks() {
   beforeEach(() => {
     resetModelCatalogCacheForTest();
@@ -35,7 +39,7 @@ export function mockCatalogImportFailThenRecover() {
     }
     return {
       discoverAuthStorage: () => ({}),
-      AuthStorage: class {},
+      AuthStorage: function AuthStorage() {},
       ModelRegistry: class {
         getAll() {
           return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];

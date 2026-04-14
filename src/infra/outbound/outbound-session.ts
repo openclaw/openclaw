@@ -1,13 +1,15 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
   recordSessionMetaFromInbound,
   resolveStorePath,
 } from "../../config/sessions/inbound.runtime.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type OutboundSessionRoute = {
@@ -26,6 +28,7 @@ export type ResolveOutboundSessionRouteParams = {
   agentId: string;
   accountId?: string | null;
   target: string;
+  currentSessionKey?: string;
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -37,8 +40,8 @@ function resolveOutboundChannelPlugin(channel: ChannelId) {
 
 function stripProviderPrefix(raw: string, channel: string): string {
   const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
-  const prefix = `${channel.toLowerCase()}:`;
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const prefix = `${normalizeLowercaseStringOrEmpty(channel)}:`;
   if (lower.startsWith(prefix)) {
     return trimmed.slice(prefix.length).trim();
   }
@@ -147,13 +150,12 @@ export async function resolveOutboundSessionRoute(
 
 export async function ensureOutboundSessionEntry(params: {
   cfg: OpenClawConfig;
-  agentId: string;
   channel: ChannelId;
   accountId?: string | null;
   route: OutboundSessionRoute;
 }): Promise<void> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
+    agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
   });
   const ctx: MsgContext = {
     From: params.route.from,

@@ -259,52 +259,6 @@ async function runTelegramDirectOutboundSend(params: {
 }
 
 describe("messageCommand", () => {
-  it("threads resolved SecretRef config into outbound send actions", async () => {
-    const rawConfig = createTelegramSecretRawConfig();
-    const resolvedConfig = createTelegramResolvedTokenConfig("12345:resolved-token");
-    mockResolvedCommandConfig({
-      rawConfig: rawConfig as unknown as Record<string, unknown>,
-      resolvedConfig: resolvedConfig as unknown as Record<string, unknown>,
-    });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          ...createTelegramSendPluginRegistration(),
-        },
-      ]),
-    );
-
-    const deps = makeDeps();
-    await messageCommand(
-      {
-        action: "send",
-        channel: "telegram",
-        target: "123456",
-        message: "hi",
-      },
-      deps,
-      runtime,
-    );
-
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: rawConfig,
-        commandName: "message",
-      }),
-    );
-    const secretResolveCall = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
-      targetIds?: Set<string>;
-    };
-    expect(secretResolveCall.targetIds).toBeInstanceOf(Set);
-    expect(
-      [...(secretResolveCall.targetIds ?? [])].every((id) => id.startsWith("channels.telegram.")),
-    ).toBe(true);
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "send", to: "123456", accountId: undefined }),
-      resolvedConfig,
-    );
-  });
-
   it("threads resolved SecretRef config into outbound adapter sends", async () => {
     const rawConfig = createTelegramSecretRawConfig();
     const resolvedConfig = createTelegramResolvedTokenConfig("12345:resolved-token");

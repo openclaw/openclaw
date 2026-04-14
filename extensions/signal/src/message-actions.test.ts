@@ -52,9 +52,9 @@ describe("signalMessageActions", () => {
   it("honors account-scoped reaction gates during discovery", () => {
     const cfg = createSignalAccountOverrideCfg();
 
-    expect(signalMessageActions.describeMessageTool?.({ cfg, accountId: "default" })?.actions).toEqual(
-      ["send"],
-    );
+    expect(
+      signalMessageActions.describeMessageTool?.({ cfg, accountId: "default" })?.actions,
+    ).toEqual(["send"]);
     expect(signalMessageActions.describeMessageTool?.({ cfg, accountId: "work" })?.actions).toEqual(
       ["send", "react"],
     );

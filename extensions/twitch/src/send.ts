@@ -5,7 +5,8 @@
  * They support dependency injection via the `deps` parameter for testability.
  */
 
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
 import { resolveTwitchAccountContext } from "./config.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
@@ -127,7 +128,7 @@ export async function sendMessageTwitchInternal(
       messageId: result.messageId ?? generateMessageId(),
     };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = formatErrorMessage(error);
     logger.error(`Failed to send message: ${errorMsg}`);
     return {
       ok: false,

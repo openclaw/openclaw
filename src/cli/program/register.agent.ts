@@ -11,6 +11,7 @@ import {
 } from "../../commands/agents.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -73,7 +74,8 @@ ${formatHelpExamples([
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/agent")}`,
     )
     .action(async (opts) => {
-      const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
+      const verboseLevel =
+        typeof opts.verbose === "string" ? normalizeLowercaseStringOrEmpty(opts.verbose) : "";
       setVerbose(verboseLevel === "on");
       // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();

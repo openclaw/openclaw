@@ -6,6 +6,7 @@ import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
 } from "../plugin-sdk/telegram-command-config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -70,6 +71,30 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
+const TextChunkModeSchema = z.enum(["length", "newline"]);
+const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
+const ChannelStreamingBlockSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    coalesce: BlockStreamingCoalesceSchema.optional(),
+  })
+  .strict();
+const ChannelStreamingPreviewSchema = z
+  .object({
+    chunk: BlockStreamingChunkSchema.optional(),
+  })
+  .strict();
+const ChannelPreviewStreamingConfigSchema = z
+  .object({
+    mode: UnifiedStreamingModeSchema.optional(),
+    chunkMode: TextChunkModeSchema.optional(),
+    preview: ChannelStreamingPreviewSchema.optional(),
+    block: ChannelStreamingBlockSchema.optional(),
+  })
+  .strict();
+const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  nativeTransport: z.boolean().optional(),
+}).strict();
 const SlackCapabilitiesSchema = z.union([
   z.array(z.string()),
   z
@@ -205,11 +230,7 @@ export const TelegramAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    streaming: z.enum(["off", "partial", "block", "progress"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    draftChunk: BlockStreamingChunkSchema.optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
@@ -298,6 +319,12 @@ export const TelegramAccountSchemaBase = z
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),
+    trustedLocalFileRoots: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths under these roots are read directly; all other absolute paths are rejected.",
+      ),
     autoTopicLabel: AutoTopicLabelSchema,
   })
   .strict();
@@ -405,7 +432,6 @@ export const DiscordDmSchema = z
 
 export const DiscordGuildChannelSchema = z
   .object({
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     tools: ToolPolicySchema,
@@ -494,11 +520,7 @@ export const DiscordAccountSchema = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streaming: z.enum(["off", "partial", "block", "progress"]).optional(),
-    draftChunk: BlockStreamingChunkSchema.optional(),
+    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     retry: RetryConfigSchema,
@@ -624,10 +646,10 @@ export const DiscordAccountSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const activityText = typeof value.activity === "string" ? value.activity.trim() : "";
+    const activityText = normalizeOptionalString(value.activity) ?? "";
     const hasActivity = Boolean(activityText);
     const hasActivityType = value.activityType !== undefined;
-    const activityUrl = typeof value.activityUrl === "string" ? value.activityUrl.trim() : "";
+    const activityUrl = normalizeOptionalString(value.activityUrl) ?? "";
     const hasActivityUrl = Boolean(activityUrl);
 
     if ((hasActivityType || hasActivityUrl) && !hasActivity) {
@@ -757,7 +779,6 @@ export const GoogleChatDmSchema = z
 export const GoogleChatGroupSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
@@ -796,7 +817,6 @@ export const GoogleChatAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streamMode: z.enum(["replace", "status_final", "append"]).optional().default("replace"),
     mediaMaxMb: z.number().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     actions: z
@@ -831,7 +851,6 @@ export const SlackDmSchema = z
 export const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
@@ -847,6 +866,7 @@ export const SlackThreadSchema = z
     historyScope: z.enum(["thread", "channel"]).optional(),
     inheritParent: z.boolean().optional(),
     initialHistoryLimit: z.number().int().min(0).optional(),
+    requireExplicitMention: z.boolean().optional(),
   })
   .strict();
 
@@ -892,11 +912,7 @@ export const SlackAccountSchema = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streaming: z.enum(["off", "partial", "block", "progress"]).optional(),
-    nativeStreaming: z.boolean().optional(),
+    streaming: SlackStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
@@ -1422,7 +1438,12 @@ export const BlueBubblesAccountSchemaBase = z
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
-    allowPrivateNetwork: z.boolean().optional(),
+    network: z
+      .object({
+        dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
@@ -1517,6 +1538,11 @@ export const MSTeamsConfigSchema = z
     appId: z.string().optional(),
     appPassword: SecretInputSchema.optional().register(sensitive),
     tenantId: z.string().optional(),
+    authType: z.enum(["secret", "federated"]).optional(),
+    certificatePath: z.string().optional(),
+    certificateThumbprint: z.string().optional(),
+    useManagedIdentity: z.boolean().optional(),
+    managedIdentityClientId: z.string().optional(),
     webhook: z
       .object({
         port: z.number().int().positive().optional(),
@@ -1532,6 +1558,7 @@ export const MSTeamsConfigSchema = z
     contextVisibility: ContextVisibilityModeSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    typingIndicator: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
@@ -1555,6 +1582,20 @@ export const MSTeamsConfigSchema = z
     feedbackEnabled: z.boolean().optional(),
     feedbackReflection: z.boolean().optional(),
     feedbackReflectionCooldownMs: z.number().int().min(0).optional(),
+    delegatedAuth: z
+      .object({
+        enabled: z.boolean().optional(),
+        scopes: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    sso: z
+      .object({
+        enabled: z.boolean().optional(),
+        connectionName: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -1574,4 +1615,17 @@ export const MSTeamsConfigSchema = z
       message:
         'channels.msteams.dmPolicy="allowlist" requires channels.msteams.allowFrom to contain at least one sender ID',
     });
+    if (value.sso?.enabled === true && !value.sso.connectionName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sso", "connectionName"],
+        message:
+          "channels.msteams.sso.enabled=true requires channels.msteams.sso.connectionName to identify the Bot Framework OAuth connection",
+      });
+    }
+
+    // Federated auth fields (appId, tenantId, certificatePath,
+    // useManagedIdentity) may come from MSTEAMS_* environment variables,
+    // so we cannot require them in the config object itself.
+    // Runtime validation happens in resolveMSTeamsCredentials().
   });

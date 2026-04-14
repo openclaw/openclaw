@@ -9,11 +9,13 @@ export {
 export * from "./src/account-selection.js";
 export * from "./src/env-vars.js";
 export * from "./src/storage-paths.js";
+export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromAllowPrivateNetwork,
   type LookupFn,
   type SsrFPolicy,
@@ -30,10 +32,10 @@ export type {
   OpenClawConfig,
   PluginRuntime,
   RuntimeLogger,
+  RuntimeEnv,
   WizardPrompter,
-} from "openclaw/plugin-sdk/core";
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export { formatZonedTimestamp } from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/matrix-runtime-shared";
+export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
 
 export function chunkTextForOutbound(text: string, limit: number): string[] {
   const chunks: string[] = [];

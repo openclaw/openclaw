@@ -5,17 +5,19 @@ import {
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
   TelegramDirectConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -27,15 +29,14 @@ import {
 } from "./bot-message-dispatch.agent.runtime.js";
 import {
   generateTopicLabel,
-  loadSessionStore,
-  resolveMarkdownTableMode,
-  resolveSessionStoreEntry,
-  resolveStorePath,
   getAgentScopedMediaLocalRoots,
+  loadSessionStore,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
+  resolveMarkdownTableMode,
+  resolveSessionStoreEntry,
 } from "./bot-message-dispatch.runtime.js";
-import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -199,9 +200,8 @@ export const dispatchTelegramMessage = async ({
     parseMode: "HTML" as const,
   });
   const accountBlockStreamingEnabled =
-    typeof telegramCfg.blockStreaming === "boolean"
-      ? telegramCfg.blockStreaming
-      : cfg.agents?.defaults?.blockStreamingDefault === "on";
+    resolveChannelStreamingBlockEnabled(telegramCfg) ??
+    cfg.agents?.defaults?.blockStreamingDefault === "on";
   const resolvedReasoningLevel = resolveTelegramReasoningLevel({
     cfg,
     sessionKey: ctxPayload.SessionKey,
@@ -213,7 +213,7 @@ export const dispatchTelegramMessage = async ({
   const previewStreamingEnabled = streamMode !== "off";
   const canStreamAnswerDraft =
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
-  const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
+  const canStreamReasoningDraft = streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
@@ -389,12 +389,13 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
 
+  const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
   const disableBlockStreaming = !previewStreamingEnabled
     ? true
     : forceBlockStreamingForReasoning
       ? false
-      : typeof telegramCfg.blockStreaming === "boolean"
-        ? !telegramCfg.blockStreaming
+      : typeof resolvedBlockStreamingEnabled === "boolean"
+        ? !resolvedBlockStreamingEnabled
         : canStreamAnswerDraft
           ? true
           : undefined;
@@ -568,9 +569,7 @@ export const dispatchTelegramMessage = async ({
         logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }
     } catch (err) {
-      logVerbose(
-        `auto-topic-label: session store error: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      logVerbose(`auto-topic-label: session store error: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -630,7 +629,7 @@ export const dispatchTelegramMessage = async ({
           const split = splitTextIntoLaneSegments(payload.text);
           const segments = split.segments;
           const reply = resolveSendableOutboundReplyParts(payload);
-          const hasMedia = reply.hasMedia;
+          const _hasMedia = reply.hasMedia;
 
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
@@ -812,7 +811,7 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onToolStart: statusReactionController
           ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
+              await Promise.resolve(statusReactionController.setTool(payload.name ?? "tool"));
             }
           : undefined,
         onCompactionStart: statusReactionController
@@ -916,7 +915,7 @@ export const dispatchTelegramMessage = async ({
   const hasFinalResponse = queuedFinal || sentFallback;
 
   if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
+    void Promise.resolve(statusReactionController.setError()).catch((err: unknown) => {
       logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
     });
   }
@@ -957,9 +956,7 @@ export const dispatchTelegramMessage = async ({
             await bot.api.editForumTopic(chatId, topicThreadId, { name: label });
             logVerbose(`auto-topic-label: renamed topic ${chatId}/${topicThreadId}`);
           } catch (err) {
-            logVerbose(
-              `auto-topic-label: failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
+            logVerbose(`auto-topic-label: failed: ${formatErrorMessage(err)}`);
           }
         })();
       }
@@ -967,7 +964,7 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void statusReactionController.setDone().catch((err) => {
+    void Promise.resolve(statusReactionController.setDone()).catch((err: unknown) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });
   } else {

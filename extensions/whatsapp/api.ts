@@ -1,3 +1,5 @@
+export { whatsappPlugin } from "./src/channel.js";
+export { whatsappSetupPlugin } from "./src/channel.setup.js";
 export * from "./src/accounts.js";
 export * from "./src/auto-reply/constants.js";
 export { whatsappCommandPolicy } from "./src/command-policy.js";
@@ -19,5 +21,9 @@ export {
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./src/normalize-target.js";
+export {
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
+} from "./src/group-policy.js";
 export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";
 export { __testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";

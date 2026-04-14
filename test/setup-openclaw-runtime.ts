@@ -1,31 +1,32 @@
 import { afterAll, afterEach, beforeAll } from "vitest";
+import { resetContextWindowCacheForTest } from "../src/agents/context-runtime-state.js";
+import { resetModelsJsonReadyCacheForTest } from "../src/agents/models-config-state.js";
+import {
+  drainSessionWriteLockStateForTest,
+  resetSessionWriteLockStateForTest,
+} from "../src/agents/session-write-lock.js";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { clearSessionStoreCaches } from "../src/config/sessions/store-cache.js";
+import { drainSessionStoreLockQueuesForTest } from "../src/config/sessions/store-lock-state.js";
+import { drainFileLockStateForTest, resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
+import { clearPluginDiscoveryCache } from "../src/plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../src/plugins/manifest-registry-state.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
-const testEnv = installSharedTestSetup();
+installSharedTestSetup();
 
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
-const WORKER_CLEANUP_DEPS = Symbol.for("openclaw.testSetupCleanupDeps");
-
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
-};
-
-type WorkerCleanupDeps = {
-  resetContextWindowCacheForTest: typeof import("../src/agents/context.js").resetContextWindowCacheForTest;
-  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config.js").resetModelsJsonReadyCacheForTest;
-  drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
-  resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
-  cleanupSessionStateForTest: typeof import("../src/test-utils/session-state-cleanup.js").cleanupSessionStateForTest;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -44,41 +45,6 @@ const workerRuntimeState = (() => {
   }
   return globalState[WORKER_RUNTIME_STATE];
 })();
-
-async function loadWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
-  const [
-    { resetContextWindowCacheForTest },
-    { resetModelsJsonReadyCacheForTest },
-    { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
-    { cleanupSessionStateForTest },
-  ] = await Promise.all([
-    import("../src/agents/context.js"),
-    import("../src/agents/models-config.js"),
-    import("../src/agents/session-write-lock.js"),
-    import("../src/test-utils/session-state-cleanup.js"),
-  ]);
-
-  return {
-    resetContextWindowCacheForTest,
-    resetModelsJsonReadyCacheForTest,
-    drainSessionWriteLockStateForTest,
-    resetSessionWriteLockStateForTest,
-    cleanupSessionStateForTest,
-  };
-}
-
-function getWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
-  const globalState = globalThis as typeof globalThis & {
-    [WORKER_CLEANUP_DEPS]?: Promise<WorkerCleanupDeps>;
-  };
-  globalState[WORKER_CLEANUP_DEPS] ??= loadWorkerCleanupDeps();
-  return globalState[WORKER_CLEANUP_DEPS];
-}
-
-// Preload cleanup/runtime helpers before per-file vi.mock hoists run in
-// non-isolated workers, otherwise test-scoped module mocks can leak into the
-// shared cleanup dependency graph.
-void getWorkerCleanupDeps();
 
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
@@ -110,13 +76,21 @@ function createTestRegistryForSetup(
     })),
     providers: [],
     speechProviders: [],
+    realtimeTranscriptionProviders: [],
+    realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    memoryEmbeddingProviders: [],
     gatewayHandlers: {},
+    gatewayMethodScopes: {},
     httpRoutes: [],
     cliRegistrars: [],
+    reloads: [],
+    nodeHostCommands: [],
+    securityAuditCollectors: [],
     services: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
@@ -352,23 +326,23 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
-  const {
-    cleanupSessionStateForTest,
-    resetContextWindowCacheForTest,
-    resetModelsJsonReadyCacheForTest,
-    resetSessionWriteLockStateForTest,
-  } = await getWorkerCleanupDeps();
-  await cleanupSessionStateForTest();
+  await drainSessionStoreLockQueuesForTest();
+  clearSessionStoreCaches();
+  await drainFileLockStateForTest();
+  await drainSessionWriteLockStateForTest();
+  resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
   installDefaultPluginRegistry();
 });
 
 afterAll(async () => {
-  const { cleanupSessionStateForTest, drainSessionWriteLockStateForTest } =
-    await getWorkerCleanupDeps();
-  await cleanupSessionStateForTest();
+  clearSessionStoreCaches();
+  await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();
-  testEnv.cleanup();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
 });

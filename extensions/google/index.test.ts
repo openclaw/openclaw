@@ -1,3 +1,5 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Context, Model } from "@mariozechner/pi-ai";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
@@ -7,12 +9,20 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
-import googlePlugin from "./index.js";
+import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { registerGoogleProvider } from "./provider-registration.js";
+
+const googleProviderPlugin = {
+  register(api: Parameters<typeof registerGoogleProvider>[0]) {
+    registerGoogleProvider(api);
+    registerGoogleGeminiCliProvider(api);
+  },
+};
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
-    const { providers } = registerProviderPlugin({
-      plugin: googlePlugin,
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
@@ -81,9 +91,9 @@ describe("google provider plugin hooks", () => {
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
 
-  it("owns Gemini CLI tool schema normalization", () => {
-    const { providers } = registerProviderPlugin({
-      plugin: googlePlugin,
+  it("owns Gemini CLI tool schema normalization", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
@@ -126,5 +136,56 @@ describe("google provider plugin hooks", () => {
         tools: [tool],
       } as never),
     ).toEqual([]);
+  });
+
+  it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const googleProvider = requireRegisteredProvider(providers, "google");
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+    let capturedPayload: Record<string, unknown> | undefined;
+
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload = { config: { thinkingConfig: { thinkingBudget: -1 } } } as Record<
+        string,
+        unknown
+      >;
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {} as never;
+    };
+
+    const runCase = (provider: typeof googleProvider, providerId: string) => {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: providerId,
+        modelId: "gemini-3.1-pro-preview",
+        thinkingLevel: "high",
+        streamFn: baseStreamFn,
+      } as never);
+
+      void wrapped?.(
+        {
+          api: "google-generative-ai",
+          provider: providerId,
+          id: "gemini-3.1-pro-preview",
+        } as Model<"google-generative-ai">,
+        { messages: [] } as Context,
+        {},
+      );
+
+      expect(capturedPayload).toMatchObject({
+        config: { thinkingConfig: { thinkingLevel: "HIGH" } },
+      });
+      const thinkingConfig = (
+        (capturedPayload as Record<string, unknown>).config as Record<string, unknown>
+      ).thinkingConfig as Record<string, unknown>;
+      expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
+    };
+
+    runCase(googleProvider, "google");
+    runCase(cliProvider, "google-gemini-cli");
   });
 });

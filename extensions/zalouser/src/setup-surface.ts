@@ -54,7 +54,7 @@ function setZalouserAccountScopedConfig(
     accountId,
     patch: defaultPatch,
     accountPatch,
-  }) as OpenClawConfig;
+  });
 }
 
 function setZalouserDmPolicy(
@@ -69,15 +69,11 @@ function setZalouserDmPolicy(
     resolvedAccountId,
     {
       dmPolicy: policy,
-      ...(policy === "open"
-        ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) }
-        : {}),
+      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
     },
     {
       dmPolicy: policy,
-      ...(policy === "open"
-        ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) }
-        : {}),
+      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
     },
   );
 }
@@ -98,7 +94,7 @@ function setZalouserGroupAllowlist(
   groupKeys: string[],
 ): OpenClawConfig {
   const groups = Object.fromEntries(
-    groupKeys.map((key) => [key, { allow: true, requireMention: true }]),
+    groupKeys.map((key) => [key, { enabled: true, requireMention: true }]),
   );
   return setZalouserAccountScopedConfig(cfg, accountId, {
     groups,
@@ -162,7 +158,7 @@ async function promptZalouserAllowFrom(params: {
       placeholder: ZALOUSER_ALLOW_FROM_PLACEHOLDER,
       initialValue: existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : undefined,
     });
-    const parts = parseZalouserEntries(String(entry));
+    const parts = parseZalouserEntries(entry);
     if (parts.length === 0) {
       await prompter.note(
         [
@@ -216,10 +212,10 @@ const zalouserDmPolicy: ChannelSetupDmPolicy = {
   policyKey: "channels.zalouser.dmPolicy",
   allowFromKey: "channels.zalouser.allowFrom",
   resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultZalouserAccountId(cfg as OpenClawConfig)) !== DEFAULT_ACCOUNT_ID
+    (accountId ?? resolveDefaultZalouserAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg as OpenClawConfig)}.dmPolicy`,
-          allowFromKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg as OpenClawConfig)}.allowFrom`,
+          policyKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg)}.dmPolicy`,
+          allowFromKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg)}.allowFrom`,
         }
       : {
           policyKey: "channels.zalouser.dmPolicy",
@@ -228,21 +224,17 @@ const zalouserDmPolicy: ChannelSetupDmPolicy = {
   getCurrent: (cfg, accountId) =>
     resolveZalouserAccountSync({
       cfg,
-      accountId: accountId ?? resolveDefaultZalouserAccountId(cfg as OpenClawConfig),
+      accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) =>
-    setZalouserDmPolicy(
-      cfg as OpenClawConfig,
-      accountId ?? resolveDefaultZalouserAccountId(cfg as OpenClawConfig),
-      policy,
-    ),
+    setZalouserDmPolicy(cfg, accountId ?? resolveDefaultZalouserAccountId(cfg), policy),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const id =
       accountId && normalizeAccountId(accountId)
         ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZalouserAccountId(cfg as OpenClawConfig);
+        : resolveDefaultZalouserAccountId(cfg);
     return await promptZalouserAllowFrom({
-      cfg: cfg as OpenClawConfig,
+      cfg: cfg,
       prompter,
       accountId: id,
     });
@@ -318,9 +310,10 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
     },
     resolveStatusLines: async ({ cfg, accountId, configured }) => {
       void cfg;
-      const label = accountId && accountId !== DEFAULT_ACCOUNT_ID
-        ? `Zalo Personal (${accountId})`
-        : "Zalo Personal";
+      const label =
+        accountId && accountId !== DEFAULT_ACCOUNT_ID
+          ? `Zalo Personal (${accountId})`
+          : "Zalo Personal";
       return [`${label}: ${configured ? "logged in" : "needs QR login"}`];
     },
   },
@@ -418,8 +411,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       Object.keys(resolveZalouserAccountSync({ cfg, accountId }).config.groups ?? {}),
     updatePrompt: ({ cfg, accountId }) =>
       Boolean(resolveZalouserAccountSync({ cfg, accountId }).config.groups),
-    setPolicy: ({ cfg, accountId, policy }) =>
-      setZalouserGroupPolicy(cfg as OpenClawConfig, accountId, policy),
+    setPolicy: ({ cfg, accountId, policy }) => setZalouserGroupPolicy(cfg, accountId, policy),
     resolveAllowlist: async ({ cfg, accountId, entries, prompter }) => {
       if (entries.length === 0) {
         await prompter.note(
@@ -433,7 +425,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
         );
         return [];
       }
-      const updatedAccount = resolveZalouserAccountSync({ cfg: cfg as OpenClawConfig, accountId });
+      const updatedAccount = resolveZalouserAccountSync({ cfg: cfg, accountId });
       try {
         const resolved = await resolveZaloGroupsByEntries({
           profile: updatedAccount.profile,
@@ -461,7 +453,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       }
     },
     applyAllowlist: ({ cfg, accountId, resolved }) =>
-      setZalouserGroupAllowlist(cfg as OpenClawConfig, accountId, resolved as string[]),
+      setZalouserGroupAllowlist(cfg, accountId, resolved as string[]),
   },
   finalize: async ({ cfg, accountId, forceAllowFrom, options, prompter }) => {
     let next = cfg;
