@@ -568,6 +568,7 @@ const THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
   { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
   { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
+  { id: "matrix", label: "Matrix", description: "Lime green digital rain", icon: icons.terminal },
 ];
 
 function renderAppearanceSection(props: ConfigProps) {
