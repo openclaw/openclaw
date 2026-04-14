@@ -197,7 +197,7 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 openclaw plugins install -l ./my-plugin
 ```
 
-Repo QA example:
+Repo QA example (source-linked dev surface; not shipped in packaged installs):
 
 ```bash
 openclaw plugins install -l ./extensions/qa-matrix

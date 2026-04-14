@@ -29,10 +29,6 @@
     },
     "build": {
       "openclawVersion": "2026.4.12"
-    },
-    "release": {
-      "publishToClawHub": true,
-      "publishToNpm": true
     }
   }
 }
