@@ -1,1 +1,1 @@
-export { registerMatrixQaCli } from "./src/cli.js";
+export { qaRunnerCliRegistrations, registerMatrixQaCli } from "./src/cli.js";

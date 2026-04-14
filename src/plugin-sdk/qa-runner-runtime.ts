@@ -36,13 +36,15 @@ export type QaRunnerCliContribution =
     };
 
 function listDeclaredQaRunnerPlugins(): Array<
-  Pick<PluginManifestRecord, "id" | "qaRunners" | "rootDir">
+  PluginManifestRecord & {
+    qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
+  }
 > {
   return loadPluginManifestRegistry({ cache: true })
     .plugins.filter(
       (
         plugin,
-      ): plugin is Pick<PluginManifestRecord, "id" | "qaRunners" | "rootDir"> & {
+      ): plugin is PluginManifestRecord & {
         qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
       } => Array.isArray(plugin.qaRunners) && plugin.qaRunners.length > 0,
     )
