@@ -143,7 +143,9 @@ netsh interface portproxy add v4tov4 `
   listenport=9222 listenaddress=0.0.0.0 `
   connectport=9222 connectaddress=127.0.0.1
 
-# 2. Open the firewall
+# 2. Open the firewall — choose ONE of the two options below
+
+# Option A: Broad allow (simple, use only on trusted/private networks)
 New-NetFirewallRule `
   -DisplayName "Chrome CDP" `
   -Direction Inbound `
@@ -151,12 +153,8 @@ New-NetFirewallRule `
   -Protocol TCP `
   -Action Allow `
   -Profile Any
-```
 
-**Constrained variant — limit to WSL2/Tailscale subnet only:**
-
-```powershell
-# Replace RemoteAddress with your WSL2 gateway or Tailscale subnet
+# Option B: Constrained to WSL2/Tailscale subnets only (recommended)
 New-NetFirewallRule `
   -DisplayName "Chrome CDP (WSL2 only)" `
   -Direction Inbound `
@@ -166,6 +164,14 @@ New-NetFirewallRule `
   -Profile Any `
   -RemoteAddress "100.64.0.0/10","172.16.0.0/12"
 ```
+
+> **Important:** Do not run both firewall rules. Option A and Option B are
+> mutually exclusive. If you previously created Option A and want to switch
+> to the constrained variant, remove the broad rule first:
+>
+> ```powershell
+> Remove-NetFirewallRule -DisplayName "Chrome CDP"
+> ```
 
 **Why both steps are needed:**
 
