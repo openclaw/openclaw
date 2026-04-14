@@ -14,11 +14,11 @@ function finalNonEmptyLine(text) {
   return text
     .replace(/\r\n/g, "\n")
     .split("\n")
-    .reverse()
+    .toReversed()
     .find((line) => line.trim().length > 0) ?? null;
 }
 
-test("openclaw handoff compatibility stays aligned with the shared Codex contract", () => {
+void test("openclaw handoff compatibility stays aligned with the shared Codex contract", () => {
   const agents = read("AGENTS.md");
   const readme = read("README.md");
 

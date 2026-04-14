@@ -7,7 +7,7 @@ function read(relativePath) {
   return readFileSync(path.join(process.cwd(), relativePath), "utf8");
 }
 
-test("repo-specific QC overlay stays complementary with shared authority", () => {
+void test("repo-specific QC overlay stays complementary with shared authority", () => {
   const agents = read("AGENTS.md");
   const readme = read("README.md");
   const packageJson = JSON.parse(read("package.json"));
