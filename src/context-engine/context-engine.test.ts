@@ -83,11 +83,15 @@ function registerPromptTrackingEngine(engineId: string) {
 
 /** A minimal mock engine that satisfies the ContextEngine interface. */
 class MockContextEngine implements ContextEngine {
-  readonly info: ContextEngineInfo = {
-    id: "mock",
-    name: "Mock Engine",
-    version: "0.0.1",
-  };
+  readonly info: ContextEngineInfo;
+
+  constructor(engineId = "mock") {
+    this.info = {
+      id: engineId,
+      name: "Mock Engine",
+      version: "0.0.1",
+    };
+  }
 
   async ingest(_params: {
     sessionId: string;
@@ -812,6 +816,15 @@ describe("Invalid engine fallback", () => {
       `Context engine "${engineId}" factory returned an invalid ContextEngine: missing assemble(), missing compact().`,
     );
   });
+
+  // Regression test for #66591: MockContextEngine with dynamic id must resolve
+  it("resolves class-based engines that accept dynamic engineId (#66591)", async () => {
+    const engineId = `dynamic-class-${Date.now().toString(36)}`;
+    registerContextEngine(engineId, () => new MockContextEngine(engineId));
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe(engineId);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -975,7 +988,7 @@ describe("Bundle chunk isolation (#40096)", () => {
 
     // Chunk A registers an engine
     const engineId = `cross-chunk-${ts}`;
-    chunkA.registerContextEngine(engineId, () => new MockContextEngine());
+    chunkA.registerContextEngine(engineId, () => new MockContextEngine(engineId));
 
     // Chunk B must see it
     expect(chunkB.getContextEngineFactory(engineId)).toBeDefined();
@@ -1028,7 +1041,7 @@ describe("Bundle chunk isolation (#40096)", () => {
     const registrationTasks = chunks.map(async (chunk, i) => {
       const id = `concurrent-${ts}-${i}`;
       await registrationStart;
-      chunk.registerContextEngine(id, () => new MockContextEngine());
+      chunk.registerContextEngine(id, () => new MockContextEngine(id));
     });
     releaseRegistrations?.();
     await Promise.all(registrationTasks);
