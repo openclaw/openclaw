@@ -934,6 +934,10 @@
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
     },
+    "./plugin-sdk/opencode": {
+      "types": "./dist/plugin-sdk/opencode.d.ts",
+      "default": "./dist/plugin-sdk/opencode.js"
+    },
     "./plugin-sdk/volc-model-catalog-shared": {
       "types": "./dist/plugin-sdk/volc-model-catalog-shared.d.ts",
       "default": "./dist/plugin-sdk/volc-model-catalog-shared.js"
