@@ -56,4 +56,20 @@ describe("transcribeAudioFile", () => {
       }),
     ).rejects.toThrow("boom");
   });
+
+  it("forwards agentId when present", async () => {
+    transcribeAudioFileFromRuntime.mockResolvedValue({ text: "hola" });
+
+    await transcribeAudioFile({
+      filePath: "/tmp/note.wav",
+      cfg: {} as OpenClawConfig,
+      agentId: "spanish",
+    });
+
+    expect(transcribeAudioFileFromRuntime).toHaveBeenCalledWith({
+      filePath: "/tmp/note.wav",
+      cfg: {} as OpenClawConfig,
+      agentId: "spanish",
+    });
+  });
 });

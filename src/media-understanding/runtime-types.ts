@@ -53,6 +53,7 @@ export type DescribeVideoFileParams = {
 export type TranscribeAudioFileParams = {
   filePath: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;

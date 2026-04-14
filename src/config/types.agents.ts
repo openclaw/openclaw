@@ -8,6 +8,8 @@ import type {
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+import type { MediaUnderstandingConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
 
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
@@ -103,6 +105,10 @@ export type AgentConfig = {
     /** Optional per-agent execution contract override. */
     executionContract?: EmbeddedPiExecutionContract;
   };
+  /** Optional per-agent TTS overrides merged onto messages.tts. */
+  tts?: TtsConfig;
+  /** Optional per-agent STT overrides merged onto tools.media.audio. */
+  stt?: MediaUnderstandingConfig;
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */

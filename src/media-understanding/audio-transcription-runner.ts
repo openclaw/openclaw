@@ -1,3 +1,4 @@
+import { resolveSessionSpeechConfig } from "../agents/speech-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
@@ -22,8 +23,12 @@ export async function runAudioTranscription(params: {
   if (attachments.length === 0) {
     return { transcript: undefined, attachments };
   }
+  const effectiveCfg = resolveSessionSpeechConfig({
+    cfg: params.cfg,
+    sessionKey: params.ctx.SessionKey,
+  });
 
-  const providerRegistry = buildProviderRegistry(params.providers, params.cfg);
+  const providerRegistry = buildProviderRegistry(params.providers, effectiveCfg);
   const cache = createMediaAttachmentCache(
     attachments,
     params.localPathRoots ? { localPathRoots: params.localPathRoots } : undefined,
@@ -32,13 +37,13 @@ export async function runAudioTranscription(params: {
   try {
     const result = await runCapability({
       capability: "audio",
-      cfg: params.cfg,
+      cfg: effectiveCfg,
       ctx: params.ctx,
       attachments: cache,
       media: attachments,
       agentDir: params.agentDir,
       providerRegistry,
-      config: params.cfg.tools?.media?.audio,
+      config: effectiveCfg.tools?.media?.audio,
       activeModel: params.activeModel,
     });
     const output = result.outputs.find((entry) => entry.kind === "audio.transcription");

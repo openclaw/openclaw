@@ -106,6 +106,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { resolveAgentSpeechConfig } from "../../speech-config.js";
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
@@ -725,7 +726,9 @@ export async function runEmbeddedAttempt(
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ttsHint = params.config
+      ? buildTtsSystemPromptHint(resolveAgentSpeechConfig(params.config, params.agentId))
+      : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const heartbeatPrompt = shouldInjectHeartbeatPrompt({
       config: params.config,

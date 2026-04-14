@@ -28,6 +28,8 @@ export type ResolvedAgentConfig = {
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
   embeddedPi?: AgentEntry["embeddedPi"];
+  tts?: AgentEntry["tts"];
+  stt?: AgentEntry["stt"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
@@ -123,6 +125,8 @@ export function resolveAgentConfig(
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     embeddedPi:
       typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
+    tts: entry.tts,
+    stt: entry.stt,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };

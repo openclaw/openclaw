@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveAgentSpeechConfig } from "../agents/speech-config.js";
 import { normalizeMediaProviderId } from "./provider-registry.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
@@ -140,16 +141,17 @@ export async function describeVideoFile(
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<{ text: string | undefined }> {
+  const effectiveCfg = resolveAgentSpeechConfig(params.cfg, params.agentId);
   const cfg =
     params.language || params.prompt
       ? {
-          ...params.cfg,
+          ...effectiveCfg,
           tools: {
-            ...params.cfg.tools,
+            ...effectiveCfg.tools,
             media: {
-              ...params.cfg.tools?.media,
+              ...effectiveCfg.tools?.media,
               audio: {
-                ...params.cfg.tools?.media?.audio,
+                ...effectiveCfg.tools?.media?.audio,
                 ...(params.language ? { _requestLanguageOverride: params.language } : {}),
                 ...(params.prompt ? { _requestPromptOverride: params.prompt } : {}),
                 ...(params.language ? { language: params.language } : {}),
@@ -158,7 +160,7 @@ export async function transcribeAudioFile(
             },
           },
         }
-      : params.cfg;
+      : effectiveCfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return { text: result.text };
 }

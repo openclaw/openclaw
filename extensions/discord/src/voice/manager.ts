@@ -7,6 +7,7 @@ import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentSpeechConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -122,18 +123,23 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   };
 }
 
-function resolveVoiceTtsConfig(params: { cfg: OpenClawConfig; override?: TtsConfig }): {
+function resolveVoiceTtsConfig(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  override?: TtsConfig;
+}): {
   cfg: OpenClawConfig;
   resolved: ResolvedTtsConfig;
 } {
+  const agentCfg = resolveAgentSpeechConfig(params.cfg, params.agentId);
   if (!params.override) {
-    return { cfg: params.cfg, resolved: resolveTtsConfig(params.cfg) };
+    return { cfg: agentCfg, resolved: resolveTtsConfig(agentCfg) };
   }
-  const base = params.cfg.messages?.tts ?? {};
+  const base = agentCfg.messages?.tts ?? {};
   const merged = mergeTtsConfig(base, params.override);
-  const messages = params.cfg.messages ?? {};
+  const messages = agentCfg.messages ?? {};
   const cfg = {
-    ...params.cfg,
+    ...agentCfg,
     messages: {
       ...messages,
       tts: merged,
@@ -298,6 +304,7 @@ async function transcribeAudio(params: {
   const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
     filePath: params.filePath,
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
     mime: "audio/wav",
   });
@@ -804,6 +811,7 @@ export class DiscordVoiceManager {
 
     const { cfg: ttsCfg, resolved: ttsConfig } = resolveVoiceTtsConfig({
       cfg: this.params.cfg,
+      agentId: entry.route.agentId,
       override: this.params.discordConfig.voice?.tts,
     });
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {

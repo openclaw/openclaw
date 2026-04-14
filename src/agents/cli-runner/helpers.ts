@@ -23,6 +23,7 @@ import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { resolveAgentSpeechConfig } from "../speech-config.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
@@ -97,7 +98,9 @@ export function buildSystemPrompt(params: {
       shell: detectRuntimeShell(),
     },
   });
-  const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+  const ttsHint = params.config
+    ? buildTtsSystemPromptHint(resolveAgentSpeechConfig(params.config, params.agentId))
+    : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,

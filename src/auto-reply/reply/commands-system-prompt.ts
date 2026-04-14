@@ -9,6 +9,7 @@ import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import { resolveAgentSpeechConfig } from "../../agents/speech-config.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
@@ -134,7 +135,8 @@ export async function resolveCommandsSystemPromptBundle(
         },
       }
     : { enabled: false };
-  const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
+  const speechCfg = resolveAgentSpeechConfig(params.cfg, sessionAgentId);
+  const ttsHint = buildTtsSystemPromptHint(speechCfg);
 
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,

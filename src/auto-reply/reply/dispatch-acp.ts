@@ -6,6 +6,7 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
+import { resolveAgentSpeechConfig } from "../../agents/speech-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -194,11 +195,15 @@ async function finalizeAcpTurnOutput(params: {
   await params.delivery.settleVisibleText();
   let queuedFinal =
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
-  const ttsMode = resolveConfiguredTtsMode(params.cfg);
+  const speechCfg = resolveAgentSpeechConfig(
+    params.cfg,
+    resolveAgentIdFromSessionKey(params.sessionKey),
+  );
+  const ttsMode = resolveConfiguredTtsMode(speechCfg);
   const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
   const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
   const ttsStatus = resolveStatusTtsSnapshot({
-    cfg: params.cfg,
+    cfg: speechCfg,
     sessionAuto: params.sessionTtsAuto,
   });
   const canAttemptFinalTts =
@@ -210,7 +215,7 @@ async function finalizeAcpTurnOutput(params: {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
         payload: { text: accumulatedBlockText },
-        cfg: params.cfg,
+        cfg: speechCfg,
         channel: params.ttsChannel,
         kind: "final",
         inboundAudio: params.inboundAudio,
@@ -305,10 +310,14 @@ export async function tryDispatchAcpReply(params: {
     return null;
   }
   const canonicalSessionKey = acpResolution.sessionKey;
+  const speechCfg = resolveAgentSpeechConfig(
+    params.cfg,
+    resolveAgentIdFromSessionKey(canonicalSessionKey),
+  );
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
-    cfg: params.cfg,
+    cfg: speechCfg,
     ctx: params.ctx,
     dispatcher: params.dispatcher,
     inboundAudio: params.inboundAudio,

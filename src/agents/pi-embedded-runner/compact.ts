@@ -89,6 +89,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../skills.js";
+import { resolveAgentSpeechConfig } from "../speech-config.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
@@ -671,7 +672,9 @@ export async function compactEmbeddedPiSessionDirect(
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ttsHint = params.config
+      ? buildTtsSystemPromptHint(resolveAgentSpeechConfig(params.config, sessionAgentId))
+      : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const promptContribution = resolveProviderSystemPromptContribution({
       provider,
