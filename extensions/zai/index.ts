@@ -21,6 +21,7 @@ import {
   normalizeModelCompat,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
@@ -281,15 +282,7 @@ export default definePluginEntry({
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
-      prepareExtraParams: (ctx) => {
-        if (ctx.extraParams?.tool_stream !== undefined) {
-          return ctx.extraParams;
-        }
-        return {
-          ...ctx.extraParams,
-          tool_stream: true,
-        };
-      },
+      prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
       ...ZAI_TOOL_STREAM_HOOKS,
       isBinaryThinking: () => true,
       isModernModelRef: ({ modelId }) => {

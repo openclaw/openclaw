@@ -37,6 +37,7 @@ export {
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
+  defaultToolStreamExtraParams,
   hasCopilotVisionInput,
   isAnthropicBedrockModel,
   type ProviderStreamWrapperFactory,

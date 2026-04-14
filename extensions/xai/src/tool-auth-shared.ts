@@ -1,14 +1,14 @@
-import type { OpenClawConfig } from "@openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   coerceSecretRef,
   resolveNonEnvSecretRefApiKeyMarker,
-} from "@openclaw/plugin-sdk/provider-auth";
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderEnvValue,
   readConfiguredSecretString,
   resolveProviderWebSearchPluginConfig,
-} from "@openclaw/plugin-sdk/provider-web-search";
-import { normalizeSecretInputString } from "@openclaw/plugin-sdk/secret-input";
+} from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 export type XaiFallbackAuth = {
   apiKey: string;
