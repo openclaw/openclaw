@@ -127,6 +127,10 @@ type MemoryFlushAppendOnlyWriteOptions = {
   };
 };
 
+async function writeHostFile(absolutePath: string, data: string): Promise<void> {
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  await fs.writeFile(absolutePath, data, "utf-8");
+}
 async function readOptionalUtf8File(params: {
   absolutePath: string;
   relativePath: string;
@@ -295,7 +299,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   };
 }
 
-const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg"]);
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 const MAX_DIR_ENTRIES = 200;
@@ -416,7 +420,13 @@ export function createOpenClawReadTool(
         const fileName = path.basename(inputPath);
         
         const encodedSource = encodeURIComponent(inputPath);
-        const mediaUrl = `http://localhost:18791/__openclaw__/assistant-media?source=${encodedSource}`;
+        let mediaUrl = `http://localhost:18791/__openclaw__/assistant-media?source=${encodedSource}`;
+        
+        // For audio and video, use direct path instead of the assistant-media endpoint
+        if (AUDIO_EXTENSIONS.has(ext) || VIDEO_EXTENSIONS.has(ext)) {
+            const relativePath = path.relative(rootDir, inputPath);
+            mediaUrl = `http://localhost:18791/${encodeURIComponent(relativePath)}`;
+        }
 
         if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) throw new Error("Read operation aborted");

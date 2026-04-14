@@ -129,8 +129,8 @@ function buildWebchatAudioOnlyAssistantMessage(
     return null;
   }
   return {
-    transcriptText: "Audio reply",
-    content: [{ type: "text", text: "Audio reply" }, ...audioBlocks],
+    transcriptText: "",  // Empty text - don't add duplicate!
+    content: audioBlocks,  // Only audio blocks, no text block
   };
 }
 
@@ -208,35 +208,6 @@ type SideResultPayload = {
   isError?: boolean;
   ts: number;
 };
-
-function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
-  const chunks = payloads
-    .map((payload) => {
-      const parts = resolveSendableOutboundReplyParts(payload);
-      const lines: string[] = [];
-      if (typeof payload.replyToId === "string" && payload.replyToId.trim()) {
-        lines.push(`[[reply_to:${payload.replyToId.trim()}]]`);
-      } else if (payload.replyToCurrent) {
-        lines.push("[[reply_to_current]]");
-      }
-      const text = payload.text?.trim();
-      if (text && !isSuppressedControlReplyText(text)) {
-        lines.push(text);
-      }
-      for (const mediaUrl of parts.mediaUrls) {
-        const trimmed = mediaUrl.trim();
-        if (trimmed) {
-          lines.push(`MEDIA:${trimmed}`);
-        }
-      }
-      if (payload.audioAsVoice && parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))) {
-        lines.push("[[audio_as_voice]]");
-      }
-      return lines.join("\n").trim();
-    })
-    .filter(Boolean);
-  return chunks.join("\n\n").trim();
-}
 
 function resolveChatSendOriginatingRoute(params: {
   client?: { mode?: string | null; id?: string | null } | null;
@@ -2203,47 +2174,49 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
               });
             } else {
-              const combinedReply = buildTranscriptReplyText(
-                deliveredReplies
-                  .filter((entry) => entry.kind === "final")
-                  .map((entry) => entry.payload),
-              );
+              const finalPayloads = deliveredReplies.filter((entry) => entry.kind === "final").map((entry) => entry.payload);
+              const mediaPayloads = finalPayloads.filter((p) => isMediaBearingPayload(p));
+              const textPayloads = finalPayloads.filter((p) => !isMediaBearingPayload(p));
+              
               let message: Record<string, unknown> | undefined;
-              if (combinedReply) {
-                const { storePath: latestStorePath, entry: latestEntry } =
-                  loadSessionEntry(sessionKey);
-                const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-                const appended = appendAssistantTranscriptMessage({
-                  message: combinedReply,
-                  sessionId,
-                  storePath: latestStorePath,
-                  sessionFile: latestEntry?.sessionFile,
-                  agentId,
-                  createIfMissing: true,
-                });
-                if (appended.ok) {
-                  message = appended.message;
-                } else {
-                  context.logGateway.warn(
-                    `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-                  );
-                  const now = Date.now();
-                  message = {
-                    role: "assistant",
-                    content: [{ type: "text", text: combinedReply }],
-                    timestamp: now,
-                    // Keep this compatible with Pi stopReason enums even though this message isn't
-                    // persisted to the transcript due to the append failure.
-                    stopReason: "stop",
-                    usage: { input: 0, output: 0, totalTokens: 0 },
-                  };
+              
+              if (textPayloads.length > 0) {
+                const combinedReply = ""; // Get rid of extra unwanted message that was being generated from here
+                if (combinedReply) {
+                  const { storePath: latestStorePath, entry: latestEntry } =
+                    loadSessionEntry(sessionKey);
+                  const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+                  const appended = appendAssistantTranscriptMessage({
+                    message: combinedReply,
+                    sessionId,
+                    storePath: latestStorePath,
+                    sessionFile: latestEntry?.sessionFile,
+                    agentId,
+                    createIfMissing: true,
+                  });
+                  if (appended.ok) {
+                    message = appended.message;
+                  } else {
+                    context.logGateway.warn(
+                      `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+                    );
+                    const now = Date.now();
+                    message = {
+                      role: "assistant",
+                      content: [{ type: "text", text: combinedReply }],
+                      timestamp: now,
+                      stopReason: "stop",
+                      usage: { input: 0, output: 0, totalTokens: 0 },
+                    };
+                  }
                 }
               }
+              
               broadcastChatFinal({
                 context,
                 runId: clientRunId,
                 sessionKey,
-                message,
+                message: textPayloads.length > 0 ? message : undefined,
               });
             }
           } else {
