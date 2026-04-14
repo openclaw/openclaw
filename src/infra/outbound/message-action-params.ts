@@ -13,6 +13,7 @@ import {
 } from "../../media/load-options.js";
 import { extensionForMime } from "../../media/mime.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
@@ -29,6 +30,24 @@ export const BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS = [
 
 function readMediaParam(args: Record<string, unknown>, key: string): string | undefined {
   return readStringParam(args, key, { trim: false });
+}
+
+function resolveMediaParamEntry(
+  args: Record<string, unknown>,
+  key: string,
+): { key: string; value: string } | undefined {
+  const resolvedKey = resolveSnakeCaseParamKey(args, key);
+  if (!resolvedKey) {
+    return undefined;
+  }
+  const value = readMediaParam(args, key);
+  if (!value) {
+    return undefined;
+  }
+  return {
+    key: resolvedKey,
+    value,
+  };
 }
 
 function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): string[] {
@@ -67,9 +86,9 @@ export function collectActionMediaSourceHints(
 ): string[] {
   const sources: string[] = [];
   for (const key of buildActionMediaSourceParamKeys(extraParamKeys)) {
-    const source = typeof args[key] === "string" ? args[key] : undefined;
-    if (source && normalizeOptionalString(source)) {
-      sources.push(source);
+    const entry = resolveMediaParamEntry(args, key);
+    if (entry && normalizeOptionalString(entry.value)) {
+      sources.push(entry.value);
     }
   }
   return sources;
@@ -277,17 +296,17 @@ export async function normalizeSandboxMediaParams(params: {
   const sandboxRoot =
     params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
   for (const key of buildActionMediaSourceParamKeys(params.extraParamKeys)) {
-    const raw = readMediaParam(params.args, key);
-    if (!raw) {
+    const entry = resolveMediaParamEntry(params.args, key);
+    if (!entry) {
       continue;
     }
-    assertMediaNotDataUrl(raw);
+    assertMediaNotDataUrl(entry.value);
     if (!sandboxRoot) {
       continue;
     }
-    const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
-    if (normalized !== raw) {
-      params.args[key] = normalized;
+    const normalized = await resolveSandboxedMediaSource({ media: entry.value, sandboxRoot });
+    if (normalized !== entry.value) {
+      params.args[entry.key] = normalized;
     }
   }
 }

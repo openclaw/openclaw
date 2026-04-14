@@ -13,12 +13,7 @@ import {
 
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
-const matrixMediaSourceParamKeys = [
-  "avatarPath",
-  "avatar_path",
-  "avatarUrl",
-  "avatar_url",
-] as const;
+const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
 
 describe("message action media helpers", () => {
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
@@ -178,6 +173,36 @@ describe("message action media helpers", () => {
       expect(args).toMatchObject({
         avatar_path: path.join(sandboxRoot, "avatars", "profile.png"),
         avatar_url: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("prefers canonical Matrix media params over invalid snake_case aliases", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-canonical-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatar_url: "data:text/plain;base64,QQ==",
+        avatarPath: "/workspace/avatars/profile.png",
+        avatar_path: "data:text/plain;base64,QQ==",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
+        avatar_url: "data:text/plain;base64,QQ==",
+        avatar_path: "data:text/plain;base64,QQ==",
       });
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
