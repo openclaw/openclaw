@@ -401,11 +401,24 @@ function resolvePreferredOverIds(pluginId: string, env: NodeJS.ProcessEnv): stri
   return catalogEntry?.meta.preferOver ?? [];
 }
 
+function createPreferredOverResolver(env: NodeJS.ProcessEnv) {
+  const cache = new Map<string, string[]>();
+  return (pluginId: string): string[] => {
+    const cached = cache.get(pluginId);
+    if (cached) {
+      return cached;
+    }
+    const resolved = resolvePreferredOverIds(pluginId, env);
+    cache.set(pluginId, resolved);
+    return resolved;
+  };
+}
+
 function shouldSkipPreferredPluginAutoEnable(
   cfg: OpenClawConfig,
   entry: PluginEnableChange,
   configured: PluginEnableChange[],
-  env: NodeJS.ProcessEnv,
+  resolvePreferredOverIdsCached: (pluginId: string) => string[],
 ): boolean {
   for (const other of configured) {
     if (other.pluginId === entry.pluginId) {
@@ -417,7 +430,7 @@ function shouldSkipPreferredPluginAutoEnable(
     if (isPluginExplicitlyDisabled(cfg, other.pluginId)) {
       continue;
     }
-    const preferOver = resolvePreferredOverIds(other.pluginId, env);
+    const preferOver = resolvePreferredOverIdsCached(other.pluginId);
     if (preferOver.includes(entry.pluginId)) {
       return true;
     }
@@ -494,6 +507,8 @@ export function applyPluginAutoEnable(params: {
     return { config: next, changes };
   }
 
+  const resolvePreferredOverIdsCached = createPreferredOverResolver(env);
+
   for (const entry of configured) {
     const builtInChannelId = normalizeChatChannelId(entry.pluginId);
     if (isPluginDenied(next, entry.pluginId)) {
@@ -502,7 +517,9 @@ export function applyPluginAutoEnable(params: {
     if (isPluginExplicitlyDisabled(next, entry.pluginId)) {
       continue;
     }
-    if (shouldSkipPreferredPluginAutoEnable(next, entry, configured, env)) {
+    if (
+      shouldSkipPreferredPluginAutoEnable(next, entry, configured, resolvePreferredOverIdsCached)
+    ) {
       continue;
     }
     const allow = next.plugins?.allow;

@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import * as channelPluginCatalog from "../channels/plugins/catalog.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -294,6 +295,79 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["env-primary"]?.enabled).toBeUndefined();
+  });
+
+  it("memoizes external preferOver lookups within one auto-enable run", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    mkdirSafe(path.dirname(catalogPath));
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-primary",
+            openclaw: {
+              channel: {
+                id: "env-primary",
+                label: "Env Primary",
+                selectionLabel: "Env Primary",
+                docsPath: "/channels/env-primary",
+                blurb: "Env primary entry",
+              },
+              install: {
+                npmSpec: "@openclaw/env-primary",
+              },
+            },
+          },
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const getCatalogEntrySpy = vi.spyOn(channelPluginCatalog, "getChannelPluginCatalogEntry");
+
+    applyPluginAutoEnable({
+      config: {
+        channels: {
+          "env-primary": { enabled: true },
+          "env-secondary": { enabled: true },
+        },
+        agents: {
+          list: Array.from({ length: 20 }, (_, index) => ({
+            id: `agent-${index}`,
+            channel: index % 2 === 0 ? "env-primary" : "env-secondary",
+            model: {
+              primary: "openai/gpt-5",
+            },
+          })),
+        },
+      },
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+      },
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(getCatalogEntrySpy.mock.calls.filter(([id]) => id === "env-secondary")).toHaveLength(1);
   });
 
   it("auto-enables provider auth plugins when profiles exist", () => {
