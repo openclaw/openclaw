@@ -4,8 +4,8 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import yandexPlugin from "./index.js";
 
 describe("yandex provider plugin", () => {
-  it("registers Yandex with api-key auth wizard metadata", () => {
-    const provider = registerSingleProviderPlugin(yandexPlugin);
+  it("registers Yandex with api-key auth wizard metadata", async () => {
+    const provider = await registerSingleProviderPlugin(yandexPlugin);
     const resolved = resolveProviderPluginChoice({
       providers: [provider],
       choice: "yandex-api-key",
@@ -13,26 +13,15 @@ describe("yandex provider plugin", () => {
 
     expect(provider.id).toBe("yandex");
     expect(provider.label).toBe("Yandex");
-    expect(provider.auth).toHaveLength(2);
+    expect(provider.envVars).toEqual(["YANDEX_API_KEY", "YANDEX_FOLDER_ID"]);
+    expect(provider.auth).toHaveLength(1);
     expect(resolved).not.toBeNull();
     expect(resolved?.provider.id).toBe("yandex");
     expect(resolved?.method.id).toBe("api-key");
   });
 
-  it("registers Yandex with folder-id auth wizard metadata", () => {
-    const provider = registerSingleProviderPlugin(yandexPlugin);
-    const resolved = resolveProviderPluginChoice({
-      providers: [provider],
-      choice: "yandex-folder-id",
-    });
-
-    expect(resolved).not.toBeNull();
-    expect(resolved?.provider.id).toBe("yandex");
-    expect(resolved?.method.id).toBe("folder-id");
-  });
-
   it("builds the static Yandex model catalog", async () => {
-    const provider = registerSingleProviderPlugin(yandexPlugin);
+    const provider = await registerSingleProviderPlugin(yandexPlugin);
     expect(provider.catalog).toBeDefined();
 
     const catalog = await provider.catalog!.run({
@@ -62,7 +51,7 @@ describe("yandex provider plugin", () => {
   });
 
   it("marks all models as non-reasoning text-only", async () => {
-    const provider = registerSingleProviderPlugin(yandexPlugin);
+    const provider = await registerSingleProviderPlugin(yandexPlugin);
     const catalog = await provider.catalog!.run({
       config: {},
       env: {},
