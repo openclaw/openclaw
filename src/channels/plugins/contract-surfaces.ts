@@ -16,6 +16,9 @@ let cachedSurfaceEntries: Array<{
   pluginId: string;
   surface: unknown;
 }> | null = null;
+let contractSurfacesLoading = false;
+
+const EMPTY_CONTRACT_SURFACE_ENTRIES: Array<{ pluginId: string; surface: unknown }> = [];
 
 function createModuleLoader() {
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
@@ -40,10 +43,6 @@ function createModuleLoader() {
 }
 
 const loadModule = createModuleLoader();
-
-function loadBundledChannelContractSurfaces(): unknown[] {
-  return loadBundledChannelContractSurfaceEntries().map((entry) => entry.surface);
-}
 
 function loadBundledChannelContractSurfaceEntries(): Array<{
   pluginId: string;
@@ -77,15 +76,38 @@ function loadBundledChannelContractSurfaceEntries(): Array<{
   return surfaces;
 }
 
-export function getBundledChannelContractSurfaces(): unknown[] {
-  cachedSurfaces ??= loadBundledChannelContractSurfaces();
-  return cachedSurfaces;
-}
-
 export function getBundledChannelContractSurfaceEntries(): Array<{
   pluginId: string;
   surface: unknown;
 }> {
-  cachedSurfaceEntries ??= loadBundledChannelContractSurfaceEntries();
+  if (cachedSurfaceEntries) {
+    return cachedSurfaceEntries;
+  }
+  // Reentrancy guard: loading a contract-api.ts module (via jiti) may transitively
+  // call back into `listChannelSecretTargetRegistryEntries` -> `getBundledChannelContractSurfaces`
+  // -> `getBundledChannelContractSurfaceEntries` before the current load completes.
+  // Without this guard the re-entry restarts `loadBundledChannelContractSurfaceEntries()`
+  // from scratch and each subsequent channel load re-enters again, producing a
+  // `RangeError: Maximum call stack size exceeded`. Returning empty entries
+  // during the in-flight load is safe: the re-entrant probe sees no surfaces
+  // and proceeds without triggering further recursion.
+  if (contractSurfacesLoading) {
+    return EMPTY_CONTRACT_SURFACE_ENTRIES;
+  }
+
+  contractSurfacesLoading = true;
+  try {
+    cachedSurfaceEntries = loadBundledChannelContractSurfaceEntries();
+  } finally {
+    contractSurfacesLoading = false;
+  }
   return cachedSurfaceEntries;
+}
+
+export function getBundledChannelContractSurfaces(): unknown[] {
+  if (cachedSurfaces) {
+    return cachedSurfaces;
+  }
+  cachedSurfaces = getBundledChannelContractSurfaceEntries().map((entry) => entry.surface);
+  return cachedSurfaces;
 }
