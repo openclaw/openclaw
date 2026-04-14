@@ -2,7 +2,7 @@
  * JSON file-based fallback store for task registry when node:sqlite is unavailable.
  * This handles Homebrew Node.js builds that exclude experimental built-in modules.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTaskRegistryDir, resolveTaskRegistryJsonPath } from "./task-registry.paths.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.js";
@@ -32,6 +32,21 @@ function ensureDirectory() {
   }
 }
 
+function safeWriteJson(targetPath: string, contents: string, mode: number) {
+  // Reject symlink target
+  try {
+    const st = lstatSync(targetPath);
+    if (st.isSymbolicLink()) throw new Error("Refusing to write to symlink");
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") throw e;
+  }
+
+  const dir = resolveTaskRegistryDir(process.env);
+  const tmp = `${dir}/.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, contents, { mode, flag: "wx" });
+  renameSync(tmp, targetPath);
+}
+
 function writeJsonFile(tasks: Map<string, TaskRecord>, deliveryStates: Map<string, TaskDeliveryState>) {
   const path = getJsonPath();
   ensureDirectory();
@@ -41,7 +56,7 @@ function writeJsonFile(tasks: Map<string, TaskRecord>, deliveryStates: Map<strin
     version: 1,
     updatedAt: Date.now(),
   };
-  writeFileSync(path, JSON.stringify(data, null, 2), { mode: TASK_REGISTRY_FILE_MODE });
+  safeWriteJson(path, JSON.stringify(data, null, 2), TASK_REGISTRY_FILE_MODE);
 }
 
 function readJsonFile(): { tasks: TaskRecord[]; deliveryStates: TaskDeliveryState[] } | null {

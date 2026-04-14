@@ -1,7 +1,7 @@
 /**
  * JSON file-based fallback store for task flow registry when node:sqlite is unavailable.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveTaskFlowRegistryDir,
@@ -32,6 +32,21 @@ function ensureDirectory() {
   }
 }
 
+function safeWriteJson(targetPath: string, contents: string, mode: number) {
+  // Reject symlink target
+  try {
+    const st = lstatSync(targetPath);
+    if (st.isSymbolicLink()) throw new Error("Refusing to write to symlink");
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") throw e;
+  }
+
+  const dir = resolveTaskFlowRegistryDir(process.env);
+  const tmp = `${dir}/.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, contents, { mode, flag: "wx" });
+  renameSync(tmp, targetPath);
+}
+
 function writeJsonFile(flows: Map<string, TaskFlowRecord>) {
   const path = getJsonPath();
   ensureDirectory();
@@ -40,7 +55,7 @@ function writeJsonFile(flows: Map<string, TaskFlowRecord>) {
     version: 1,
     updatedAt: Date.now(),
   };
-  writeFileSync(path, JSON.stringify(data, null, 2), { mode: FLOW_REGISTRY_FILE_MODE });
+  safeWriteJson(path, JSON.stringify(data, null, 2), FLOW_REGISTRY_FILE_MODE);
 }
 
 function readJsonFile(): { flows: TaskFlowRecord[] } | null {
