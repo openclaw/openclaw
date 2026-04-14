@@ -7,7 +7,8 @@ require_env() {
   [ -n "${!1:-}" ] || die "Missing env: $1"
 }
 
-[[ "${CRYPTO_BOT_BINANCE_BASE_URL:-}" == https://* ]] || die "BASE_URL must be HTTPS"
+require_env CRYPTO_BOT_BINANCE_BASE_URL
+[[ "${CRYPTO_BOT_BINANCE_BASE_URL}" == https://* ]] || die "CRYPTO_BOT_BINANCE_BASE_URL must be HTTPS"
 
 BASE="${CRYPTO_BOT_BINANCE_BASE_URL%/}"
 PREFIX="${CRYPTO_BOT_BINANCE_API_PREFIX:-/api/openclaw}"
@@ -26,7 +27,11 @@ if [ -n "${CRYPTO_BOT_BINANCE_TOKEN:-}" ]; then
 fi
 
 get() {
-  curl -fsS "$(build_url "$1")" "${headers[@]}" --connect-timeout "$TIMEOUT" --max-time "$TIMEOUT"
+  curl -fsS \
+    "$(build_url "$1")" \
+    "${headers[@]}" \
+    --connect-timeout "$TIMEOUT" \
+    --max-time "$TIMEOUT"
 }
 
 post() {
@@ -34,9 +39,20 @@ post() {
   local body="${2:-}"
 
   if [ -n "$body" ]; then
-    curl -fsS -X POST "$(build_url "$path")" "${headers[@]}" -H "Content-Type: application/json" --data "$body" --connect-timeout "$TIMEOUT" --max-time "$TIMEOUT"
+    curl -fsS -X POST \
+      "$(build_url "$path")" \
+      "${headers[@]}" \
+      -H "Content-Type: application/json" \
+      --data "$body" \
+      --connect-timeout "$TIMEOUT" \
+      --max-time "$TIMEOUT"
   else
-    curl -fsS -X POST "$(build_url "$path")" "${headers[@]}" -H "Content-Type: application/json" --connect-timeout "$TIMEOUT" --max-time "$TIMEOUT"
+    curl -fsS -X POST \
+      "$(build_url "$path")" \
+      "${headers[@]}" \
+      -H "Content-Type: application/json" \
+      --connect-timeout "$TIMEOUT" \
+      --max-time "$TIMEOUT"
   fi
 }
 
@@ -59,16 +75,28 @@ case "$cmd" in
   test-connection) post "/test-connection" ;;
 
   save-settings)
+    [ "$#" -gt 0 ] || die "save-settings requires at least one flag"
+
     payload="{"
     first=1
 
     while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || die "Missing value for $1"
-      key="$1"; val="$2"; shift 2
+      key="$1"
+      val="$2"
+      shift 2
 
-      [[ "$val" == "true" || "$val" == "false" ]] || die "Invalid bool"
+      case "$key" in
+        --integration-enabled|--remote-control-enabled|--monitoring-enabled|--ui-badge-enabled)
+          ;;
+        *)
+          die "Unknown save-settings flag: $key"
+          ;;
+      esac
 
-      field="${key/--/}"
+      [[ "$val" == "true" || "$val" == "false" ]] || die "Invalid bool: $val"
+
+      field="${key#--}"
       field="${field//-/_}"
 
       [ "$first" -eq 0 ] && payload+=","
@@ -80,5 +108,11 @@ case "$cmd" in
     post "/save-settings" "$payload"
     ;;
 
-  *) die "Unknown command" ;;
+  "")
+    die "Missing command"
+    ;;
+
+  *)
+    die "Unknown command: $cmd"
+    ;;
 esac
