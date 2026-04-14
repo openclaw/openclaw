@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
+summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity/repo slots)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
 title: "agents"
@@ -27,6 +27,8 @@ openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 openclaw agents set-identity --agent main --avatar avatars/openclaw.png
+openclaw agents repo-slots ensure lane-a --repo ~/src/openclaw
+openclaw agents repo-slots reset lane-a --repo ~/src/openclaw
 openclaw agents delete work
 ```
 
@@ -137,6 +139,46 @@ Options:
 - `--bind <channel[:accountId]>` (repeatable)
 - `--all`
 - `--json`
+
+### `agents repo-slots`
+
+Manage reusable per-repo isolated work lanes for agent runs.
+
+Slots live under the OpenClaw state dir (`~/.openclaw/repo-slots/...` by default), not inside the canonical repo checkout. OpenClaw prefers a detached git worktree, and falls back to a lightweight local clone when worktrees are unavailable.
+
+#### `agents repo-slots list`
+
+Options:
+
+- `--json`
+
+#### `agents repo-slots ensure <slot>`
+
+Options:
+
+- `--repo <path>`
+- `--ref <git-ref>`
+- `--json`
+
+#### `agents repo-slots reset <slot>`
+
+Options:
+
+- `--repo <path>`
+- `--ref <git-ref>`
+- `--no-fetch`
+- `--json`
+
+This hard-resets and cleans the isolated slot without touching the canonical checkout.
+
+#### `agents repo-slots remove <slot>`
+
+Options:
+
+- `--repo <path>`
+- `--json`
+
+This removes the isolated lane and prunes its metadata. Remove only when the lane is no longer needed.
 
 ### `agents delete <id>`
 

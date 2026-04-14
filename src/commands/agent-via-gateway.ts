@@ -13,6 +13,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { agentCommand } from "./agent.js";
 import { resolveSessionKeyForRequest } from "./agent/session.js";
+import { resolveWorkspaceDirForAgentRun } from "./agents.commands.repo-slots.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -51,6 +52,9 @@ export type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  workspaceDir?: string;
+  repo?: string;
+  repoSlot?: string;
 };
 
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
@@ -119,6 +123,11 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
+  const workspaceDir = await resolveWorkspaceDirForAgentRun({
+    workspaceDir: opts.workspaceDir,
+    repo: opts.repo,
+    repoSlot: opts.repoSlot,
+  });
 
   const response: GatewayAgentResponse = await withProgress(
     {
@@ -145,6 +154,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           timeout: timeoutSeconds,
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
+          workspaceDir,
           idempotencyKey,
         },
         expectFinal: true,
@@ -178,10 +188,16 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+  const workspaceDir = await resolveWorkspaceDirForAgentRun({
+    workspaceDir: opts.workspaceDir,
+    repo: opts.repo,
+    repoSlot: opts.repoSlot,
+  });
   const localOpts = {
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    workspaceDir,
     cleanupBundleMcpOnRunEnd: opts.local === true,
   };
   if (opts.local === true) {

@@ -34,6 +34,9 @@ Related:
 - `--reply-account <id>`: delivery account override
 - `--local`: run the embedded agent directly (after plugin registry preload)
 - `--deliver`: send the reply back to the selected channel/target
+- `--workspace-dir <dir>`: override the workspace for this run explicitly
+- `--repo <path>`: canonical repo root/path used with `--repo-slot` (defaults to cwd)
+- `--repo-slot <name>`: run in a reusable isolated repo slot instead of the canonical checkout
 - `--timeout <seconds>`: override agent timeout (default 600 or config value)
 - `--json`: output JSON
 
@@ -46,6 +49,7 @@ openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
 openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
 openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
 openclaw agent --agent ops --message "Run locally" --local
+openclaw agent --agent ops --repo ~/src/openclaw --repo-slot lane-a --message "Fix issue 430"
 ```
 
 ## Notes
@@ -53,5 +57,6 @@ openclaw agent --agent ops --message "Run locally" --local
 - Gateway mode falls back to the embedded agent when the Gateway request fails. Use `--local` to force embedded execution up front.
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
+- `--repo-slot` creates or reuses a per-repo isolated lane under the OpenClaw state dir, then passes that workspace to the top-level run so spawned subagents inherit the same lane automatically.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
 - Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.

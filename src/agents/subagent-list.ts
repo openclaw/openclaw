@@ -12,6 +12,7 @@ import {
   truncateLine,
 } from "../shared/subagents-format.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
+import { resolveWorkspaceGitSummary } from "./subagent-operator-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "./subagent-registry-queries.js";
 import {
@@ -19,7 +20,7 @@ import {
   getSubagentSessionStartedAt,
 } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentOperatorState, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentListItem = {
   index: number;
@@ -37,6 +38,23 @@ export type SubagentListItem = {
   totalTokens?: number;
   startedAt?: number;
   endedAt?: number;
+  state?: {
+    stage?: string;
+    workspaceDir?: string;
+    workspaceSlot?: string;
+    repo?: string;
+    branch?: string;
+    lastToolName?: string;
+    lastToolAction?: string;
+    lastToolAt?: number;
+    blocker?: string;
+    waitingReason?: string;
+    filesTouched?: string[];
+    verificationStatus?: SubagentOperatorState["verificationStatus"];
+    verificationNote?: string;
+    progressNote?: string;
+    confidence?: SubagentOperatorState["confidence"];
+  };
 };
 
 export type BuiltSubagentList = {
@@ -235,7 +253,20 @@ export function buildSubagentList(params: {
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
-    const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const workspaceState = resolveWorkspaceGitSummary(
+      entry.workspaceDir ?? sessionEntry?.spawnedWorkspaceDir,
+    );
+    const operatorState = entry.operatorState ?? {};
+    const noteParts = [
+      operatorState.waitingReason ? `waiting: ${operatorState.waitingReason}` : null,
+      operatorState.blocker ? `blocker: ${operatorState.blocker}` : null,
+      operatorState.verificationStatus
+        ? `verify: ${operatorState.verificationStatus}${operatorState.verificationNote ? ` (${operatorState.verificationNote})` : ""}`
+        : null,
+      operatorState.filesTouched?.length ? `files: ${operatorState.filesTouched.length}` : null,
+      workspaceState.branch ? `branch: ${workspaceState.branch}` : null,
+    ].filter(Boolean);
+    const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}${noteParts.length > 0 ? ` [${noteParts.join(", ")}]` : ""}`;
     const view: SubagentListItem = {
       index,
       line,
@@ -252,6 +283,10 @@ export function buildSubagentList(params: {
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
+      state: {
+        ...workspaceState,
+        ...operatorState,
+      },
     };
     index += 1;
     return view;

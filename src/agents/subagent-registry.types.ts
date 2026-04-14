@@ -41,4 +41,19 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  operatorState?: SubagentOperatorState;
+};
+
+export type SubagentOperatorState = {
+  stage?: string;
+  lastToolName?: string;
+  lastToolAction?: string;
+  lastToolAt?: number;
+  blocker?: string;
+  waitingReason?: string;
+  filesTouched?: string[];
+  verificationStatus?: "pending" | "passed" | "failed";
+  verificationNote?: string;
+  progressNote?: string;
+  confidence?: "low" | "medium" | "high";
 };

@@ -15,6 +15,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { resolveWorkspaceGitSummary } from "./subagent-operator-state.js";
 import { emitSubagentEndedHookOnce, runOutcomesEqual } from "./subagent-registry-completion.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -300,6 +301,7 @@ export function createSubagentRunManager(params: {
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
+    const workspaceSummary = resolveWorkspaceGitSummary(registerParams.workspaceDir);
     const entry: SubagentRunRecord = {
       runId,
       childSessionKey,
@@ -326,6 +328,14 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
+      operatorState: {
+        stage: "queued",
+        progressNote: "Spawned and waiting for first tool activity",
+        confidence: "medium",
+        ...(workspaceSummary.branch
+          ? { progressNote: `Spawned on branch ${workspaceSummary.branch}` }
+          : {}),
+      },
     };
     params.runs.set(runId, entry);
     try {
