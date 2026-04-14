@@ -127,12 +127,27 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       | { card?: Record<string, unknown> }
       | undefined;
     if (teamsChannelData?.card) {
-      const result = await sendAdaptiveCardMSTeams({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        card: teamsChannelData.card,
-      });
-      return attachChannelToResult("msteams", result);
+      const mediaUrls = resolvePayloadMediaUrls(payload);
+      return attachChannelToResult(
+        "msteams",
+        await sendPayloadMediaSequenceAndFinalize({
+          text: "",
+          mediaUrls,
+          send: async ({ text, mediaUrl }) =>
+            await sendMessageMSTeams({
+              cfg: ctx.cfg,
+              to: ctx.to,
+              text,
+              mediaUrl,
+            }),
+          finalize: async () =>
+            await sendAdaptiveCardMSTeams({
+              cfg: ctx.cfg,
+              to: ctx.to,
+              card: teamsChannelData.card!,
+            }),
+        }),
+      );
     }
 
     // Map interactive buttons to an Adaptive Card.

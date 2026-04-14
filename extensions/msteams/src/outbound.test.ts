@@ -215,9 +215,15 @@ describe("msteamsOutbound cfg threading", () => {
       payload: {
         text: "",
         channelData: { msteams: { card: prebuiltCard } },
+        mediaUrls: ["https://example.com/image.png"],
       },
     });
 
+    // Media sent first, then card finalized
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledOnce();
+    expect(mocks.sendMessageMSTeams.mock.calls[0][0].mediaUrl).toBe(
+      "https://example.com/image.png",
+    );
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
       to: "conversation:abc",
