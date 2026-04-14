@@ -2378,12 +2378,24 @@ export async function runEmbeddedAttempt(
               lastAssistant,
               usage: attemptUsage,
               route: {
-                lane: inferRoutingLane({
+                requestedLane: inferRoutingLane({
+                  agentId: hookAgentId,
+                  model: params.modelId,
+                  provider: params.provider,
+                }),
+                selectedLane: inferRoutingLane({
+                  agentId: hookAgentId,
+                  model: params.modelId,
+                  provider: params.provider,
+                }),
+                actualLane: inferRoutingLane({
                   agentId: hookAgentId,
                   model: params.modelId,
                   provider: params.provider,
                 }),
                 selectedModel: `${params.provider}/${params.modelId}`,
+                actualModel: `${params.provider}/${params.modelId}`,
+                routeReason: "primary",
               },
             },
             {

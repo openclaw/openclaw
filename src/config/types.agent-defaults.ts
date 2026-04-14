@@ -372,6 +372,13 @@ export type AgentDefaultsConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
   };
+  /** Challenger lane configuration (explicit second-opinion escalation). */
+  challengerLane?: {
+    /** Enable the challenger lane. Default: false (disabled). */
+    enabled?: boolean;
+    /** Maximum challenger invocations per task. Default: 1. */
+    maxInvocationsPerTask?: number;
+  };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };

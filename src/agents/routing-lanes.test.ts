@@ -51,7 +51,9 @@ describe("routing-lanes", () => {
         selectedModel: "claude-opus-4-6",
       });
       expect(meta.routeReason).toBe("primary");
-      expect(meta.lane).toBe("orchestrator_high");
+      expect(meta.requestedLane).toBe("orchestrator_high");
+      expect(meta.selectedLane).toBe("orchestrator_high");
+      expect(meta.actualLane).toBe("orchestrator_high");
       expect(meta.requestedModel).toBe("anthropic/claude-opus-4-6");
       expect(meta.selectedModel).toBe("anthropic/claude-opus-4-6");
     });

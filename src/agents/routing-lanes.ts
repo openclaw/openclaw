@@ -38,8 +38,12 @@ export type EscalationReason =
 
 /** Full route metadata attached to model selection decisions. */
 export interface RouteMetadata {
-  /** Which lane this run belongs to. */
-  lane?: RoutingLane;
+  /** Policy/intended lane before any fallback. */
+  requestedLane?: RoutingLane;
+  /** Lane chosen after resolution (before availability fallback). */
+  selectedLane?: RoutingLane;
+  /** Lane that actually ran. */
+  actualLane?: RoutingLane;
   /** Why this model was selected. */
   routeReason?: RouteReason;
   /** Provider/model that was originally requested. */
@@ -133,16 +137,20 @@ export function buildRouteMetadata(params: {
 }): RouteMetadata {
   const requested = [params.requestedProvider, params.requestedModel].filter(Boolean).join("/");
   const selected = [params.selectedProvider, params.selectedModel].filter(Boolean).join("/");
+  const inferredLane = inferRoutingLane({
+    agentId: params.agentId,
+    model: params.selectedModel,
+    provider: params.selectedProvider,
+  });
 
   return {
-    lane: inferRoutingLane({
-      agentId: params.agentId,
-      model: params.selectedModel,
-      provider: params.selectedProvider,
-    }),
+    requestedLane: inferredLane,
+    selectedLane: inferredLane,
+    actualLane: inferredLane,
     routeReason: params.routeReason ?? (requested !== selected ? "failover" : "primary"),
     requestedModel: requested || undefined,
     selectedModel: selected || undefined,
+    actualModel: selected || undefined,
     failoverReason: params.failoverReason,
     escalationReason: params.escalationReason,
   };

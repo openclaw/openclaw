@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { inferRoutingLane } from "../agents/routing-lanes.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -15,6 +16,10 @@ export type AgentLocalStatus = {
   sessionsCount: number;
   lastUpdatedAt: number | null;
   lastActiveAgeMs: number | null;
+  /** Routing lane for this agent (inferred from config). */
+  routingLane?: string;
+  /** Primary model configured for this agent. */
+  configuredModel?: string;
 };
 
 type AgentLocalStatusesResult = {
@@ -63,7 +68,7 @@ export async function getAgentLocalStatuses(
     const resolvedLastUpdatedAt = lastUpdatedAt > 0 ? lastUpdatedAt : null;
     const lastActiveAgeMs = resolvedLastUpdatedAt ? now - resolvedLastUpdatedAt : null;
 
-    statuses.push({
+    const status: AgentLocalStatus = {
       id: agentId,
       name: agent.name,
       workspaceDir,
@@ -72,7 +77,12 @@ export async function getAgentLocalStatuses(
       sessionsCount,
       lastUpdatedAt: resolvedLastUpdatedAt,
       lastActiveAgeMs,
-    });
+    };
+    const agentModel = agent.model;
+    const primaryModel = typeof agentModel === "string" ? agentModel : agentModel?.primary;
+    status.routingLane = inferRoutingLane({ agentId, model: primaryModel });
+    status.configuredModel = primaryModel ?? undefined;
+    statuses.push(status);
   }
 
   const totalSessions = statuses.reduce((sum, s) => sum + s.sessionsCount, 0);

@@ -187,13 +187,28 @@ export type PluginHookLlmOutputEvent = {
   };
   /** Route metadata for observability — which lane, why this model, failover vs escalation. */
   route?: {
-    lane?: string;
-    routeReason?: string;
+    /** Policy/intended lane before any fallback. */
+    requestedLane?: string;
+    /** Lane chosen after resolution (before availability fallback). */
+    selectedLane?: string;
+    /** Lane that actually ran. */
+    actualLane?: string;
+    /** Provider/model originally requested by policy. */
     requestedModel?: string;
+    /** Provider/model chosen after resolution (before availability fallback). */
     selectedModel?: string;
+    /** Provider/model that actually handled the request. */
+    actualModel?: string;
+    /** Why this route was selected. */
+    routeReason?: string;
+    /** Availability-only fallback reason (rate_limit, auth, timeout, etc). */
     failoverReason?: string;
+    /** Quality/complexity/risk escalation reason (separate from failover). */
     escalationReason?: string;
+    /** Whether a challenger was invoked. */
     challengerInvoked?: boolean;
+    /** Why the challenger was invoked. */
+    challengerReason?: string;
   };
 };
 
