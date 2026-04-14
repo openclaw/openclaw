@@ -70,7 +70,9 @@ export async function fetchLitellmModels(
     });
     try {
       if (!response.ok) {
-        return { reachable: true, models: [] };
+        // Treat HTTP errors (401/403/5xx) as unreachable so transient auth or
+        // proxy failures don't collapse an existing catalog to the empty set.
+        return { reachable: false, models: [] };
       }
       const data = (await response.json()) as LitellmModelsResponse;
       const models = (data.data ?? []).map((m) => m.id).filter(Boolean);
@@ -107,12 +109,18 @@ function applyLitellmProviderWithModels(
   // longer discovered so stale models are not kept alive across re-runs.
   const existingById = new Map<string, ModelDefinitionConfig>();
   for (const m of existingProvider?.models ?? []) {
-    if (m?.id) existingById.set(m.id, m);
+    if (m?.id) {
+      existingById.set(m.id, m);
+    }
   }
   const models: ModelDefinitionConfig[] = discoveredModelIds.map((id) => {
-    if (id === defaultModel.id) return defaultModel;
+    if (id === defaultModel.id) {
+      return defaultModel;
+    }
     const prior = existingById.get(id);
-    return prior ? { ...defaultDiscoveredModel, ...prior, id, name: prior.name ?? id } : { ...defaultDiscoveredModel, id, name: id };
+    return prior
+      ? { ...defaultDiscoveredModel, ...prior, id, name: prior.name ?? id }
+      : { ...defaultDiscoveredModel, id, name: id };
   });
   // Always include the default model definition even if not discovered.
   if (!discoveredModelIds.includes(defaultModel.id)) {
@@ -161,19 +169,23 @@ export async function configureLitellmNonInteractive(ctx: ProviderAuthMethodNonI
     return null;
   }
 
-  // Store credential.
-  const credential = ctx.toApiKeyCredential({
-    provider: "litellm",
-    resolved,
-  });
-  if (!credential) {
-    return null;
+  // Store credential. Skip when the key came from an existing profile to avoid
+  // downgrading env-ref/keychain-backed profile semantics to plaintext — matches
+  // the default provider-api-key-auth behavior.
+  if (resolved.source !== "profile") {
+    const credential = ctx.toApiKeyCredential({
+      provider: "litellm",
+      resolved,
+    });
+    if (!credential) {
+      return null;
+    }
+    await upsertAuthProfileWithLock({
+      profileId: "litellm:default",
+      credential,
+      agentDir: ctx.agentDir,
+    });
   }
-  await upsertAuthProfileWithLock({
-    profileId: "litellm:default",
-    credential,
-    agentDir: ctx.agentDir,
-  });
 
   // Discover available models from the proxy.
   const { reachable, models: discoveredModelIds } = await fetchLitellmModels(baseUrl, resolved.key);
@@ -206,6 +218,30 @@ export async function configureLitellmNonInteractive(ctx: ProviderAuthMethodNonI
     });
     next = applyLitellmConfig(next);
     const fallbackModelId = customModelId ?? LITELLM_DEFAULT_MODEL_ID;
+    // Ensure customModelId is present in the provider model list so the primary
+    // ref resolves even when the proxy is offline and discovery was skipped.
+    if (customModelId && customModelId !== LITELLM_DEFAULT_MODEL_ID) {
+      const provider = next.models?.providers?.litellm;
+      const existingModels = provider?.models ?? [];
+      if (!existingModels.some((m) => m?.id === customModelId)) {
+        next = {
+          ...next,
+          models: {
+            ...next.models,
+            providers: {
+              ...next.models?.providers,
+              litellm: {
+                ...provider,
+                models: [
+                  ...existingModels,
+                  { ...buildLitellmModelDefinition(), id: customModelId, name: customModelId },
+                ],
+              } as ModelProviderConfig,
+            },
+          },
+        };
+      }
+    }
     return applyAgentDefaultModelPrimary(next, `litellm/${fallbackModelId}`);
   }
 
