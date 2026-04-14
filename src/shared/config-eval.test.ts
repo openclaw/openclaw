@@ -171,6 +171,24 @@ describe("evaluateRuntimeRequires", () => {
         isConfigPathTruthy: () => true,
       }),
     ).toBe(false);
+
+    expect(
+      evaluateRuntimeRequires({
+        requires: { anyConfig: ["channels.discord.token", "channels.discord.accounts"] },
+        hasBin: () => true,
+        hasEnv: () => true,
+        isConfigPathTruthy: () => false,
+      }),
+    ).toBe(false);
+
+    expect(
+      evaluateRuntimeRequires({
+        requires: { anyConfig: ["channels.discord.token", "channels.discord.accounts"] },
+        hasBin: () => true,
+        hasEnv: () => true,
+        isConfigPathTruthy: (path) => path === "channels.discord.accounts",
+      }),
+    ).toBe(true);
   });
 });
 

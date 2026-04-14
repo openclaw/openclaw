@@ -1,7 +1,7 @@
 ---
 name: discord
 description: "Discord ops via the message tool (channel=discord)."
-metadata: { "openclaw": { "emoji": "🎮", "requires": { "config": ["channels.discord.token"] } } }
+metadata: { "openclaw": { "emoji": "🎮", "requires": { "anyConfig": ["channels.discord.token", "channels.discord.accounts"] } } }
 allowed-tools: ["message"]
 ---
 

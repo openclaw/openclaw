@@ -74,6 +74,41 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(check).toEqual({ path: "channels.discord.token", satisfied: true });
     expect(check && "value" in check).toBe(false);
   });
+
+  it("treats multi-account Discord config as satisfying anyConfig requirements", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "discord",
+        description: "test",
+        filePath: "/tmp/discord/SKILL.md",
+        baseDir: "/tmp/discord",
+        source: "test",
+      }),
+      frontmatter: {},
+      metadata: {
+        requires: {
+          anyConfig: ["channels.discord.token", "channels.discord.accounts"],
+        },
+      },
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", {
+      entries: [entry],
+      config: {
+        channels: {
+          discord: {
+            enabled: true,
+            accounts: {
+              default: { token: "secret-token" }, // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    });
+
+    expect(report.skills[0]?.eligible).toBe(true);
+    expect(report.skills[0]?.missing.anyConfig ?? []).toEqual([]);
+  });
 });
 
 function createFixtureSkill(params: {

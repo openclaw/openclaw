@@ -75,7 +75,13 @@ describe("requirements helpers", () => {
     const res = evaluateRequirementsFromMetadata({
       always: false,
       metadata: {
-        requires: { bins: ["a"], anyBins: ["b"], env: ["E"], config: ["cfg.value"] },
+        requires: {
+          bins: ["a"],
+          anyBins: ["b"],
+          env: ["E"],
+          config: ["cfg.value"],
+          anyConfig: ["cfg.alt"],
+        },
         os: ["darwin"],
       },
       hasLocalBin: (bin) => bin === "a",
@@ -86,6 +92,7 @@ describe("requirements helpers", () => {
 
     expect(res.required.bins).toEqual(["a"]);
     expect(res.missing.config).toEqual(["cfg.value"]);
+    expect(res.missing.anyConfig).toEqual(["cfg.alt"]);
     expect(res.missing.os).toEqual(["darwin"]);
     expect(res.eligible).toBe(false);
   });
@@ -98,6 +105,7 @@ describe("requirements helpers", () => {
         anyBins: ["bun", "deno"],
         env: ["OPENAI_API_KEY"],
         config: ["browser.enabled", "gateway.enabled"],
+        anyConfig: ["channels.discord.token", "channels.discord.accounts"],
         os: ["darwin"],
       },
       hasLocalBin: () => false,
@@ -114,6 +122,7 @@ describe("requirements helpers", () => {
       anyBins: ["bun", "deno"],
       env: ["OPENAI_API_KEY"],
       config: ["browser.enabled"],
+      anyConfig: ["channels.discord.token", "channels.discord.accounts"],
       os: ["darwin"],
     });
     expect(res.configChecks).toEqual([
@@ -131,6 +140,7 @@ describe("requirements helpers", () => {
         anyBins: ["bun"],
         env: ["OPENAI_API_KEY"],
         config: ["browser.enabled"],
+        anyConfig: ["channels.discord.token"],
         os: ["darwin"],
       },
       hasLocalBin: () => false,
@@ -139,7 +149,14 @@ describe("requirements helpers", () => {
       isConfigSatisfied: () => false,
     });
 
-    expect(res.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
+    expect(res.missing).toEqual({
+      bins: [],
+      anyBins: [],
+      env: [],
+      config: [],
+      anyConfig: [],
+      os: [],
+    });
     expect(res.configChecks).toEqual([{ path: "browser.enabled", satisfied: false }]);
     expect(res.eligible).toBe(true);
   });
@@ -148,7 +165,12 @@ describe("requirements helpers", () => {
     const res = evaluateRequirementsFromMetadataWithRemote({
       always: false,
       metadata: {
-        requires: { bins: ["node"], anyBins: ["bun"], env: ["OPENAI_API_KEY"] },
+        requires: {
+          bins: ["node"],
+          anyBins: ["bun"],
+          env: ["OPENAI_API_KEY"],
+          anyConfig: ["channels.discord.token", "channels.discord.accounts"],
+        },
         os: ["darwin"],
       },
       remote: {
@@ -159,7 +181,7 @@ describe("requirements helpers", () => {
       hasLocalBin: () => false,
       localPlatform: "linux",
       isEnvSatisfied: (name) => name === "OPENAI_API_KEY",
-      isConfigSatisfied: () => true,
+      isConfigSatisfied: (path) => path === "channels.discord.accounts",
     });
 
     expect(res.required).toEqual({
@@ -167,9 +189,17 @@ describe("requirements helpers", () => {
       anyBins: ["bun"],
       env: ["OPENAI_API_KEY"],
       config: [],
+      anyConfig: ["channels.discord.token", "channels.discord.accounts"],
       os: ["darwin"],
     });
-    expect(res.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
+    expect(res.missing).toEqual({
+      bins: [],
+      anyBins: [],
+      env: [],
+      config: [],
+      anyConfig: [],
+      os: [],
+    });
     expect(res.eligible).toBe(true);
   });
 
@@ -187,6 +217,7 @@ describe("requirements helpers", () => {
       anyBins: [],
       env: [],
       config: [],
+      anyConfig: [],
       os: [],
     });
     expect(res.missing).toEqual({
@@ -194,6 +225,7 @@ describe("requirements helpers", () => {
       anyBins: [],
       env: [],
       config: [],
+      anyConfig: [],
       os: [],
     });
     expect(res.configChecks).toEqual([]);

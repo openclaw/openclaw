@@ -76,6 +76,7 @@ describe("shared/frontmatter", () => {
       anyBins: ["ffmpeg"],
       env: ["OPENCLAW_TOKEN", "OPENCLAW_URL"],
       config: [],
+      anyConfig: [],
     });
     expect(resolveOpenClawManifestRequires({})).toBeUndefined();
     expect(resolveOpenClawManifestOs({ os: [" darwin ", "linux", ""] })).toEqual([
