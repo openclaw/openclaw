@@ -114,10 +114,7 @@ const ERROR_PATTERNS = {
     /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
-    // OpenAI-compatible providers (e.g. Z.AI) surface transport-level errors as
-    // `finish_reason: network_error` in the stream body. The `\breason:` pattern
-    // above does NOT match `finish_reason:` because `_` is a word character so
-    // there is no word boundary before `reason` in `finish_reason` (#61281).
+    // `\breason:` does not match provider payloads like `finish_reason: network_error` (#61281).
     /\bfinish_reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     // AbortError messages from fetch/stream aborts (Ollama NDJSON stream
     // timeouts, signal aborts, etc.) — without these the flattened message
