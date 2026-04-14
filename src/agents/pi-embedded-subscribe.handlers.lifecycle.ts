@@ -134,6 +134,9 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         phase: "end",
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
+        // Add missing aborted and stopReason fields (issue #66534)
+        aborted: isAssistantMessage(lastAssistant) && lastAssistant.stopReason !== "end_turn" && lastAssistant.stopReason !== "stop_sequence",
+        stopReason: isAssistantMessage(lastAssistant) ? lastAssistant.stopReason : undefined,
         endedAt: Date.now(),
       },
     });
@@ -143,6 +146,9 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         phase: "end",
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
+        // Add missing aborted and stopReason fields (issue #66534)
+        aborted: isAssistantMessage(lastAssistant) && lastAssistant.stopReason !== "end_turn" && lastAssistant.stopReason !== "stop_sequence",
+        stopReason: isAssistantMessage(lastAssistant) ? lastAssistant.stopReason : undefined,
       },
     });
   };
