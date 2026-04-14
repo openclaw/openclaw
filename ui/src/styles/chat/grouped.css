@@ -498,10 +498,12 @@ img.chat-avatar {
 .chat-tool-msg-collapse > summary {
   margin: 0;
   padding: 4px 8px;
+  list-style: none; /* ✅ Hides marker in Firefox & modern engines */
 }
 
-summary::-webkit-details-marker {
-  display: none;
+.chat-bubble summary::-webkit-details-marker,
+.chat-tool-msg-collapse > summary::-webkit-details-marker {
+  display: none; /* ✅ Hides marker in Chromium-based browsers */
 }
 
 /* Light mode: restore borders */

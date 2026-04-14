@@ -448,7 +448,7 @@ export function createOpenClawReadTool(
             };
           }
           const mimeType = getImageMimeType(ext);
-          // FIXED: Use the correct working format for images with URL text
+          // FIXED: Use the correct working format for images
           return {
             toolCallId,
             content: [
