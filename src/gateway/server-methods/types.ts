@@ -64,9 +64,6 @@ export type GatewayRequestContext = {
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  /** Cancel a pending lifecycle-error timer for the given runId. Used by chat.send's
-   * .catch() handler to prevent a duplicate state:"error" event ~15s later. */
-  clearPendingChatLifecycleError?: (runId: string) => void;
   chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
@@ -109,6 +106,8 @@ export type GatewayRequestContext = {
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
   unavailableGatewayMethods?: ReadonlySet<string>;
+  /** Cancel a pending terminal lifecycle error timer for a run, called when .catch() handles the error directly. */
+  clearPendingChatLifecycleError?: (runId: string) => void;
 };
 
 export type GatewayRequestOptions = {
