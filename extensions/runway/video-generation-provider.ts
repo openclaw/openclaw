@@ -18,6 +18,7 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
   VideoGenerationResult,
+  VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 
 const DEFAULT_RUNWAY_BASE_URL = "https://api.dev.runwayml.com";
@@ -41,7 +42,7 @@ type RunwayTaskDetailResponse = {
   failure?: string | { message?: string } | null;
 };
 
-type RunwaySourceAsset = Pick<GeneratedVideoAsset, "buffer" | "mimeType" | "url">;
+type RunwaySourceAsset = Pick<VideoGenerationSourceAsset, "buffer" | "mimeType" | "url">;
 
 const TEXT_ONLY_MODELS = new Set(["gen4.5", "veo3.1", "veo3.1_fast", "veo3"]);
 const IMAGE_MODELS = new Set([
