@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -227,27 +228,41 @@ export function createOpenClawTools(
     sandboxRoot: options?.sandboxRoot,
     workspaceDir,
   });
+  const embedded = isEmbeddedMode();
   const tools: AnyAgentTool[] = [
-    createCanvasTool({ config: options?.config }),
-    nodesTool,
-    createCronTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
-    ...(messageTool ? [messageTool] : []),
-    createTtsTool({
-      agentChannel: options?.agentChannel,
-      config: options?.config,
-    }),
+    ...(embedded
+      ? []
+      : [
+          createCanvasTool({ config: options?.config }),
+          nodesTool,
+          createCronTool({
+            agentSessionKey: options?.agentSessionKey,
+          }),
+        ]),
+    ...(!embedded && messageTool ? [messageTool] : []),
+    ...(embedded
+      ? []
+      : [
+          createTtsTool({
+            agentChannel: options?.agentChannel,
+            config: options?.config,
+          }),
+        ]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
-    createGatewayTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
-    createAgentsListTool({
-      agentSessionKey: options?.agentSessionKey,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
-    }),
-    ...(isUpdatePlanToolEnabledForOpenClawTools({
+    ...(embedded
+      ? []
+      : [
+          createGatewayTool({
+            agentSessionKey: options?.agentSessionKey,
+            config: options?.config,
+          }),
+          createAgentsListTool({
+            agentSessionKey: options?.agentSessionKey,
+            requesterAgentIdOverride: options?.requesterAgentIdOverride,
+          }),
+        ]),
+    ...(!embedded &&
+    isUpdatePlanToolEnabledForOpenClawTools({
       config: resolvedConfig,
       agentSessionKey: options?.agentSessionKey,
       agentId: options?.requesterAgentIdOverride,
@@ -256,51 +271,55 @@ export function createOpenClawTools(
     })
       ? [createUpdatePlanTool()]
       : []),
-    createSessionsListTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: openClawToolsDeps.callGateway,
-    }),
-    createSessionsHistoryTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: openClawToolsDeps.callGateway,
-    }),
-    createSessionsSendTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: openClawToolsDeps.callGateway,
-    }),
-    createSessionsYieldTool({
-      sessionId: options?.sessionId,
-      onYield: options?.onYield,
-    }),
-    createSessionsSpawnTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      agentTo: options?.agentTo,
-      agentThreadId: options?.agentThreadId,
-      agentGroupId: options?.agentGroupId,
-      agentGroupChannel: options?.agentGroupChannel,
-      agentGroupSpace: options?.agentGroupSpace,
-      agentMemberRoleIds: options?.agentMemberRoleIds,
-      sandboxed: options?.sandboxed,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
-      workspaceDir: spawnWorkspaceDir,
-    }),
-    createSubagentsTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
-    createSessionStatusTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: resolvedConfig,
-      sandboxed: options?.sandboxed,
-    }),
+    ...(embedded
+      ? []
+      : [
+          createSessionsListTool({
+            agentSessionKey: options?.agentSessionKey,
+            sandboxed: options?.sandboxed,
+            config: resolvedConfig,
+            callGateway: openClawToolsDeps.callGateway,
+          }),
+          createSessionsHistoryTool({
+            agentSessionKey: options?.agentSessionKey,
+            sandboxed: options?.sandboxed,
+            config: resolvedConfig,
+            callGateway: openClawToolsDeps.callGateway,
+          }),
+          createSessionsSendTool({
+            agentSessionKey: options?.agentSessionKey,
+            agentChannel: options?.agentChannel,
+            sandboxed: options?.sandboxed,
+            config: resolvedConfig,
+            callGateway: openClawToolsDeps.callGateway,
+          }),
+          createSessionsYieldTool({
+            sessionId: options?.sessionId,
+            onYield: options?.onYield,
+          }),
+          createSessionsSpawnTool({
+            agentSessionKey: options?.agentSessionKey,
+            agentChannel: options?.agentChannel,
+            agentAccountId: options?.agentAccountId,
+            agentTo: options?.agentTo,
+            agentThreadId: options?.agentThreadId,
+            agentGroupId: options?.agentGroupId,
+            agentGroupChannel: options?.agentGroupChannel,
+            agentGroupSpace: options?.agentGroupSpace,
+            agentMemberRoleIds: options?.agentMemberRoleIds,
+            sandboxed: options?.sandboxed,
+            requesterAgentIdOverride: options?.requesterAgentIdOverride,
+            workspaceDir: spawnWorkspaceDir,
+          }),
+          createSubagentsTool({
+            agentSessionKey: options?.agentSessionKey,
+          }),
+          createSessionStatusTool({
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            sandboxed: options?.sandboxed,
+          }),
+        ]),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
 

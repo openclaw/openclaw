@@ -38,6 +38,7 @@ import {
 } from "../gateway/session-utils.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
+import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type {
@@ -166,6 +167,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (this.unsubscribe) {
       return;
     }
+    setEmbeddedMode(true);
     this.unsubscribe = onAgentEvent((evt) => {
       void this.handleAgentEvent(evt);
     });
