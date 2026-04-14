@@ -29,7 +29,7 @@ function mergeWhatsAppConfig(
   patch: Partial<WhatsAppAccountConfig>,
   options?: { unsetOnUndefined?: string[] },
 ): OpenClawConfig {
-  const channelConfig: WhatsAppConfig = { ...(cfg.channels?.whatsapp ?? {}) };
+  const channelConfig: WhatsAppConfig = { ...cfg.channels?.whatsapp };
   const mutableChannelConfig = channelConfig as Record<string, unknown>;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     for (const [key, value] of Object.entries(patch)) {
@@ -50,9 +50,9 @@ function mergeWhatsAppConfig(
     };
   }
   const accounts = {
-    ...((channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined) ?? {}),
+    ...(channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined),
   };
-  const nextAccount: WhatsAppAccountConfig = { ...(accounts[accountId] ?? {}) };
+  const nextAccount: WhatsAppAccountConfig = { ...accounts[accountId] };
   const mutableNextAccount = nextAccount as Record<string, unknown>;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
@@ -63,7 +63,7 @@ function mergeWhatsAppConfig(
     }
     mutableNextAccount[key] = value;
   }
-  accounts[accountId] = nextAccount as WhatsAppAccountConfig;
+  accounts[accountId] = nextAccount;
   return {
     ...cfg,
     channels: {
@@ -124,7 +124,7 @@ async function promptWhatsAppOwnerAllowFrom(params: {
     placeholder: "+15555550123",
     initialValue: existingAllowFrom[0],
     validate: (value) => {
-      const raw = String(value ?? "").trim();
+      const raw = value.trim();
       if (!raw) {
         return "Required";
       }
@@ -136,7 +136,7 @@ async function promptWhatsAppOwnerAllowFrom(params: {
     },
   });
 
-  const normalized = normalizeE164(String(entry).trim());
+  const normalized = normalizeE164(entry.trim());
   if (!normalized) {
     throw new Error("Invalid WhatsApp owner number (expected E.164 after validation).");
   }
@@ -311,7 +311,7 @@ async function promptWhatsAppDmAccess(params: {
     message: "Allowed sender numbers (comma-separated, E.164)",
     placeholder: "+15555550123, +447700900123",
     validate: (value) => {
-      const raw = String(value ?? "").trim();
+      const raw = value.trim();
       if (!raw) {
         return "Required";
       }
@@ -326,7 +326,7 @@ async function promptWhatsAppDmAccess(params: {
     },
   });
 
-  const parsed = parseWhatsAppAllowFromEntries(String(allowRaw));
+  const parsed = parseWhatsAppAllowFromEntries(allowRaw);
   return setWhatsAppAllowFrom(next, accountId, parsed.entries);
 }
 

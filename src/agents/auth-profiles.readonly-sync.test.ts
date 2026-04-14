@@ -22,6 +22,10 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   syncExternalCliCredentials: mocks.syncExternalCliCredentials,
 }));
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let loadAuthProfileStoreForRuntime: typeof import("./auth-profiles.js").loadAuthProfileStoreForRuntime;
 

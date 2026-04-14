@@ -80,11 +80,11 @@ function createApi(params?: {
     },
     pluginConfig: {
       publicUrl: "ws://51.79.175.165:18789",
-      ...(params?.pluginConfig ?? {}),
+      ...params?.pluginConfig,
     },
     runtime: (params?.runtime ?? {}) as OpenClawPluginApi["runtime"],
     registerCommand: params?.registerCommand,
-  }) as OpenClawPluginApi;
+  });
 }
 
 function registerPairCommand(params?: {
@@ -92,7 +92,7 @@ function registerPairCommand(params?: {
   pluginConfig?: Record<string, unknown>;
 }): OpenClawPluginCommandDefinition {
   let command: OpenClawPluginCommandDefinition | undefined;
-  registerDevicePair.register(
+  void registerDevicePair.register(
     createApi({
       ...params,
       registerCommand: (nextCommand) => {
@@ -722,7 +722,8 @@ describe("device-pair /pair approve", () => {
     });
     vi.mocked(approveDevicePairing).mockResolvedValueOnce({
       status: "forbidden",
-      missingScope: "operator.admin",
+      reason: "caller-missing-scope",
+      scope: "operator.admin",
     });
 
     const command = registerPairCommand();

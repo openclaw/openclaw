@@ -9,5 +9,5 @@ export const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-export const OLLAMA_DEFAULT_MODEL = "glm-4.7-flash";
+export const OLLAMA_DEFAULT_MODEL = "gemma4";
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";

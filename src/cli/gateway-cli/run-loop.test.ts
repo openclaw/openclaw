@@ -30,6 +30,13 @@ const abortEmbeddedPiRun = vi.fn(
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
+const loadConfig = vi.fn(() => ({
+  gateway: {
+    reload: {
+      deferralTimeoutMs: 90_000,
+    },
+  },
+}));
 const gatewayLog = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -64,6 +71,10 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
     abortEmbeddedPiRun(sessionId, opts),
   getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
   waitForActiveEmbeddedRuns: (timeoutMs: number) => waitForActiveEmbeddedRuns(timeoutMs),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  loadConfig: () => loadConfig(),
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -217,6 +228,13 @@ describe("runGatewayLoop", () => {
 
   it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
     vi.clearAllMocks();
+    loadConfig.mockReturnValue({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 1_234,
+        },
+      },
+    });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
@@ -280,8 +298,8 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
+      expect(waitForActiveTasks).toHaveBeenCalledWith(1_234);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(1_234);
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);

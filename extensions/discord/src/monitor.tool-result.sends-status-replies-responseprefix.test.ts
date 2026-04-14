@@ -70,12 +70,12 @@ describe("discord tool result dispatch", () => {
   });
 
   it("replies with pairing code and sender id when dmPolicy is pairing", async () => {
-    const cfg = {
+    const cfg: Config = {
       ...BASE_CFG,
       channels: {
         discord: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
       },
-    } as Config;
+    };
 
     const handler = await createDmHandler({ cfg });
     const client = createDmClient();

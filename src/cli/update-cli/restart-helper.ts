@@ -9,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -26,7 +27,7 @@ function isBatchSafe(value: string): boolean {
 }
 
 function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
-  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  const override = normalizeOptionalString(env.OPENCLAW_SYSTEMD_UNIT);
   if (override) {
     return override.endsWith(".service") ? override : `${override}.service`;
   }
@@ -34,7 +35,7 @@ function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
 }
 
 function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
-  const override = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const override = normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL);
   if (override) {
     return override;
   }
@@ -86,7 +87,7 @@ rm -f "$0"
       const uid = process.getuid ? process.getuid() : 501;
       // Resolve HOME at generation time via env/process.env to match launchd.ts,
       // and shell-escape the label in the plist filename to prevent injection.
-      const home = env.HOME?.trim() || process.env.HOME || os.homedir();
+      const home = normalizeOptionalString(env.HOME) || process.env.HOME || os.homedir();
       const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
       const escapedPlistPath = shellEscape(plistPath);
       filename = `openclaw-restart-${timestamp}.sh`;

@@ -21,7 +21,7 @@ function setupEnsureBrowserAvailableHarness() {
   const ctx = createBrowserRouteContext({ getState: () => state });
   const profile = ctx.forProfile("openclaw");
 
-  return { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile };
+  return { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state };
 }
 
 afterEach(() => {
@@ -62,9 +62,10 @@ describe("browser server-context ensureBrowserAvailable", () => {
   });
 
   it("reuses a pre-existing loopback browser after an initial short probe miss", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
     const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    state.resolved.ssrfPolicy = {};
 
     isChromeReachable.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     isChromeCdpReady.mockResolvedValueOnce(true);
@@ -75,17 +76,101 @@ describe("browser server-context ensureBrowserAvailable", () => {
       1,
       "http://127.0.0.1:18800",
       PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-      {
-        allowPrivateNetwork: true,
-      },
+      undefined,
     );
     expect(isChromeReachable).toHaveBeenNthCalledWith(
       2,
       "http://127.0.0.1:18800",
       PROFILE_ATTACH_RETRY_TIMEOUT_MS,
+      undefined,
+    );
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("retries remote CDP websocket reachability once before failing", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady } =
+      setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+
+    const state = makeBrowserServerState();
+    state.resolved.profiles.openclaw = {
+      cdpUrl: "ws://browserless:3001",
+      color: "#00AA00",
+    };
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profile = ctx.forProfile("openclaw");
+    const expectedRemoteHttpTimeoutMs = state.resolved.remoteCdpTimeoutMs;
+    const expectedRemoteWsTimeoutMs = state.resolved.remoteCdpHandshakeTimeoutMs;
+
+    isChromeReachable.mockResolvedValueOnce(true);
+    isChromeCdpReady.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+
+    expect(isChromeReachable).toHaveBeenCalledTimes(1);
+    expect(isChromeCdpReady).toHaveBeenCalledTimes(2);
+    expect(isChromeCdpReady).toHaveBeenNthCalledWith(
+      1,
+      "ws://browserless:3001",
+      expectedRemoteHttpTimeoutMs,
+      expectedRemoteWsTimeoutMs,
       {
         allowPrivateNetwork: true,
       },
+    );
+    expect(isChromeCdpReady).toHaveBeenNthCalledWith(
+      2,
+      "ws://browserless:3001",
+      expectedRemoteHttpTimeoutMs,
+      expectedRemoteWsTimeoutMs,
+      {
+        allowPrivateNetwork: true,
+      },
+    );
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("treats attachOnly loopback CDP as local control with remote-class probe timeouts", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome } = setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
+
+    const state = makeBrowserServerState({
+      profile: {
+        name: "manual-cdp",
+        cdpUrl: "http://127.0.0.1:9222",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cdpPort: 9222,
+        color: "#00AA00",
+        driver: "openclaw",
+        attachOnly: true,
+      },
+      resolvedOverrides: {
+        defaultProfile: "manual-cdp",
+        ssrfPolicy: {},
+      },
+    });
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profile = ctx.forProfile("manual-cdp");
+
+    isChromeReachable.mockResolvedValueOnce(true);
+    isChromeCdpReady.mockResolvedValueOnce(true);
+
+    await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+
+    expect(isChromeReachable).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222",
+      state.resolved.remoteCdpTimeoutMs,
+      undefined,
+    );
+    expect(isChromeCdpReady).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222",
+      state.resolved.remoteCdpTimeoutMs,
+      state.resolved.remoteCdpHandshakeTimeoutMs,
+      undefined,
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();

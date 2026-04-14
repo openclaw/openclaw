@@ -141,19 +141,32 @@ describe("exec approvals CLI", () => {
     expect(callGatewayFromCli).toHaveBeenNthCalledWith(
       1,
       "exec.approvals.get",
-      expect.anything(),
+      expect.objectContaining({ timeout: "60000" }),
       {},
     );
-    expect(callGatewayFromCli).toHaveBeenNthCalledWith(2, "config.get", expect.anything(), {});
+    expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "config.get",
+      expect.objectContaining({ timeout: "60000" }),
+      {},
+    );
     expect(runtimeErrors).toHaveLength(0);
     callGatewayFromCli.mockClear();
 
     await runApprovalsCommand(["approvals", "get", "--node", "macbook"]);
 
-    expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.node.get", expect.anything(), {
-      nodeId: "node-1",
-    });
-    expect(callGatewayFromCli).toHaveBeenCalledWith("config.get", expect.anything(), {});
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "exec.approvals.node.get",
+      expect.objectContaining({ timeout: "60000" }),
+      {
+        nodeId: "node-1",
+      },
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "config.get",
+      expect.objectContaining({ timeout: "60000" }),
+      {},
+    );
     expect(runtimeErrors).toHaveLength(0);
   });
 
@@ -346,6 +359,38 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it("reports gateway config timeout explicitly", async () => {
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "config.get") {
+          throw new Error("gateway timeout after 10000ms\u001b[2K\u0007\nRPC config.get");
+        }
+        if (method === "exec.approvals.get") {
+          return {
+            path: "/tmp/exec-approvals.json",
+            exists: true,
+            hash: "hash-1",
+            file: { version: 1, agents: {} },
+          };
+        }
+        return { method, params };
+      },
+    );
+
+    await runApprovalsCommand(["approvals", "get", "--gateway", "--timeout", "10000", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectivePolicy: {
+          note: "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy.",
+          scopes: [],
+        },
+      }),
+      0,
+    );
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("keeps node approvals output when gateway config is unavailable", async () => {
     callGatewayFromCli.mockImplementation(
       async (method: string, _opts: unknown, params?: unknown) => {
@@ -419,31 +464,50 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "get", "--json"]);
 
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        effectivePolicy: expect.objectContaining({
-          scopes: expect.arrayContaining([
-            expect.objectContaining({
-              scopeLabel: "agent:runner",
-              security: expect.objectContaining({
-                requested: "full",
-                requestedSource: "tools.exec.security",
-                effective: "allowlist",
-              }),
-              ask: expect.objectContaining({
-                requested: "off",
-                requestedSource: "tools.exec.ask",
-                effective: "always",
-              }),
-              askFallback: expect.objectContaining({
-                effective: "full",
-                source: "OpenClaw default (full)",
-              }),
-            }),
-          ]),
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.anything(), 0);
+
+    const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0] as {
+      effectivePolicy: { scopes: unknown[] };
+    };
+
+    expect(output.effectivePolicy.scopes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scopeLabel: "tools.exec",
+          security: expect.objectContaining({
+            requested: "full",
+            requestedSource: "tools.exec.security",
+            effective: "full",
+          }),
+          ask: expect.objectContaining({
+            requested: "off",
+            requestedSource: "tools.exec.ask",
+            effective: "off",
+          }),
+          askFallback: expect.objectContaining({
+            effective: "full",
+            source: "OpenClaw default (full)",
+          }),
         }),
-      }),
-      0,
+        expect.objectContaining({
+          scopeLabel: "agent:runner",
+          security: expect.objectContaining({
+            requested: "full",
+            requestedSource: "tools.exec.security",
+            effective: "allowlist",
+          }),
+          ask: expect.objectContaining({
+            requested: "off",
+            requestedSource: "tools.exec.ask",
+            effective: "always",
+          }),
+          askFallback: expect.objectContaining({
+            effective: "allowlist",
+            source: "OpenClaw default (full)",
+          }),
+        }),
+      ]),
     );
   });
 

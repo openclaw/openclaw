@@ -1,6 +1,8 @@
 import type { TSchema } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -9,7 +11,7 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
-} from "./types.js";
+} from "./types.public.js";
 
 export type ChannelMessageActionDiscoveryInput = {
   cfg?: OpenClawConfig;
@@ -23,6 +25,7 @@ export type ChannelMessageActionDiscoveryInput = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 };
 
 type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
@@ -30,12 +33,7 @@ type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin
 const loggedMessageActionErrors = new Set<string>();
 
 export function resolveMessageActionDiscoveryChannelId(raw?: string | null): string | undefined {
-  const normalized = normalizeAnyChannelId(raw);
-  if (normalized) {
-    return normalized;
-  }
-  const trimmed = raw?.trim();
-  return trimmed || undefined;
+  return normalizeAnyChannelId(raw) ?? normalizeOptionalString(raw);
 }
 
 export function createMessageActionDiscoveryContext(
@@ -55,6 +53,7 @@ export function createMessageActionDiscoveryContext(
     sessionId: params.sessionId,
     agentId: params.agentId,
     requesterSenderId: params.requesterSenderId,
+    senderIsOwner: params.senderIsOwner,
   };
 }
 
@@ -63,7 +62,7 @@ function logMessageActionError(params: {
   operation: "describeMessageTool";
   error: unknown;
 }) {
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = formatErrorMessage(params.error);
   const key = `${params.pluginId}:${params.operation}:${message}`;
   if (loggedMessageActionErrors.has(key)) {
     return;
@@ -109,12 +108,54 @@ type ResolvedChannelMessageActionDiscovery = {
   actions: ChannelMessageActionName[];
   capabilities: readonly ChannelMessageCapability[];
   schemaContributions: ChannelMessageToolSchemaContribution[];
+  mediaSourceParams: readonly string[];
 };
+
+type MessageToolMediaSourceParamMap = Partial<Record<ChannelMessageActionName, readonly string[]>>;
+
+function normalizeMessageToolMediaSourceParams(
+  mediaSourceParams: ChannelMessageToolDiscovery["mediaSourceParams"],
+  action?: ChannelMessageActionName,
+): readonly string[] {
+  if (Array.isArray(mediaSourceParams)) {
+    return mediaSourceParams;
+  }
+  if (!mediaSourceParams || typeof mediaSourceParams !== "object") {
+    return [];
+  }
+  const scopedMediaSourceParams = mediaSourceParams as MessageToolMediaSourceParamMap;
+  if (action) {
+    const scoped = scopedMediaSourceParams[action];
+    return Array.isArray(scoped) ? scoped : [];
+  }
+  return Object.values(scopedMediaSourceParams).flatMap((scoped) =>
+    Array.isArray(scoped) ? scoped : [],
+  );
+}
+
+function resolveCurrentChannelPluginActions(channel?: string): {
+  pluginId: string;
+  actions: ChannelActions;
+} | null {
+  const channelId = resolveMessageActionDiscoveryChannelId(channel);
+  if (!channelId) {
+    return null;
+  }
+  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
+  if (!plugin?.actions) {
+    return null;
+  }
+  return {
+    pluginId: plugin.id,
+    actions: plugin.actions,
+  };
+}
 
 export function resolveMessageActionDiscoveryForPlugin(params: {
   pluginId: string;
   actions?: ChannelActions;
   context: ChannelMessageActionDiscoveryContext;
+  action?: ChannelMessageActionName;
   includeActions?: boolean;
   includeCapabilities?: boolean;
   includeSchema?: boolean;
@@ -125,6 +166,7 @@ export function resolveMessageActionDiscoveryForPlugin(params: {
       actions: [],
       capabilities: [],
       schemaContributions: [],
+      mediaSourceParams: [],
     };
   }
 
@@ -143,6 +185,10 @@ export function resolveMessageActionDiscoveryForPlugin(params: {
     schemaContributions: params.includeSchema
       ? normalizeToolSchemaContributions(described?.schema)
       : [],
+    mediaSourceParams: normalizeMessageToolMediaSourceParams(
+      described?.mediaSourceParams,
+      params.action,
+    ),
   };
 }
 
@@ -187,22 +233,20 @@ export function listChannelMessageCapabilitiesForChannel(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): ChannelMessageCapability[] {
-  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
-  if (!channelId) {
+  const pluginActions = resolveCurrentChannelPluginActions(params.channel);
+  if (!pluginActions) {
     return [];
   }
-  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions
-    ? Array.from(
-        resolveMessageActionDiscoveryForPlugin({
-          pluginId: plugin.id,
-          actions: plugin.actions,
-          context: createMessageActionDiscoveryContext(params),
-          includeCapabilities: true,
-        }).capabilities,
-      )
-    : [];
+  return Array.from(
+    resolveMessageActionDiscoveryForPlugin({
+      pluginId: pluginActions.pluginId,
+      actions: pluginActions.actions,
+      context: createMessageActionDiscoveryContext(params),
+      includeCapabilities: true,
+    }).capabilities,
+  );
 }
 
 function mergeToolSchemaProperties(
@@ -230,6 +274,7 @@ export function resolveChannelMessageToolSchemaProperties(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
@@ -257,6 +302,34 @@ export function resolveChannelMessageToolSchemaProperties(params: {
   }
 
   return properties;
+}
+
+export function resolveChannelMessageToolMediaSourceParamKeys(params: {
+  cfg: OpenClawConfig;
+  action?: ChannelMessageActionName;
+  channel?: string;
+  currentChannelId?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
+}): string[] {
+  const pluginActions = resolveCurrentChannelPluginActions(params.channel);
+  if (!pluginActions) {
+    return [];
+  }
+  const described = resolveMessageActionDiscoveryForPlugin({
+    pluginId: pluginActions.pluginId,
+    actions: pluginActions.actions,
+    context: createMessageActionDiscoveryContext(params),
+    action: params.action,
+    includeSchema: false,
+  });
+  return Array.from(new Set(described.mediaSourceParams));
 }
 
 export function channelSupportsMessageCapability(

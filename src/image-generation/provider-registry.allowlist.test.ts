@@ -1,31 +1,15 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-
-const mocks = vi.hoisted(() => ({
-  resolveRuntimePluginRegistry: vi.fn<
-    (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
-  >(() => undefined),
-  loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
-  withBundledPluginEnablementCompat: vi.fn(({ config }) => config),
-  withBundledPluginVitestCompat: vi.fn(({ config }) => config),
-}));
-
-vi.mock("../plugins/loader.js", () => ({
-  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
-}));
-
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
-}));
-
-vi.mock("../plugins/bundled-compat.js", () => ({
-  withBundledPluginEnablementCompat: mocks.withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat: mocks.withBundledPluginVitestCompat,
-}));
+import {
+  createEmptyProviderRegistryAllowlistFallbackRegistry,
+  getProviderRegistryAllowlistMocks,
+  installProviderRegistryAllowlistMockDefaults,
+} from "../test-utils/provider-registry-allowlist.test-helpers.js";
 
 let getImageGenerationProvider: typeof import("./provider-registry.js").getImageGenerationProvider;
 let listImageGenerationProviders: typeof import("./provider-registry.js").listImageGenerationProviders;
+const mocks = getProviderRegistryAllowlistMocks();
+installProviderRegistryAllowlistMockDefaults();
 
 describe("image-generation provider registry allowlist fallback", () => {
   beforeAll(async () => {
@@ -33,22 +17,11 @@ describe("image-generation provider registry allowlist fallback", () => {
       await import("./provider-registry.js"));
   });
 
-  beforeEach(() => {
-    mocks.resolveRuntimePluginRegistry.mockReset();
-    mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
-    mocks.loadPluginManifestRegistry.mockReset();
-    mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
-    mocks.withBundledPluginEnablementCompat.mockReset();
-    mocks.withBundledPluginEnablementCompat.mockImplementation(({ config }) => config);
-    mocks.withBundledPluginVitestCompat.mockReset();
-    mocks.withBundledPluginVitestCompat.mockImplementation(({ config }) => config);
-  });
-
-  it("honors explicit allowlists when fallback loading bundled providers", () => {
+  it("adds bundled capability plugin ids to plugins.allow before fallback registry load", () => {
     const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
     const compatConfig = {
       plugins: {
-        allow: ["custom-plugin"],
+        allow: ["custom-plugin", "openai"],
         entries: { openai: { enabled: true } },
       },
     };
@@ -65,7 +38,9 @@ describe("image-generation provider registry allowlist fallback", () => {
     });
     mocks.withBundledPluginEnablementCompat.mockReturnValue(compatConfig);
     mocks.withBundledPluginVitestCompat.mockReturnValue(compatConfig);
-    mocks.resolveRuntimePluginRegistry.mockImplementation(() => createEmptyPluginRegistry());
+    mocks.resolveRuntimePluginRegistry.mockImplementation(() =>
+      createEmptyProviderRegistryAllowlistFallbackRegistry(),
+    );
 
     expect(listImageGenerationProviders(cfg)).toEqual([]);
     expect(getImageGenerationProvider("openai", cfg)).toBeUndefined();

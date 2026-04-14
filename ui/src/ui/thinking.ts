@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+
 export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
@@ -13,7 +15,7 @@ export function normalizeThinkingProviderId(provider?: string | null): string {
   if (!provider) {
     return "";
   }
-  const normalized = provider.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
@@ -31,7 +33,7 @@ export function normalizeThinkLevel(raw?: string | null): string | undefined {
   if (!raw) {
     return undefined;
   }
-  const key = raw.trim().toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   const collapsed = key.replace(/[\s_-]+/g, "");
   if (collapsed === "adaptive" || collapsed === "auto") {
     return "adaptive";

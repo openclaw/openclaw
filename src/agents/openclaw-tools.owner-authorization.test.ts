@@ -1,22 +1,18 @@
 import { describe, expect, it } from "vitest";
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
-
-function readToolByName() {
-  return new Map(createOpenClawTools().map((tool) => [tool.name, tool]));
-}
+import {
+  isOpenClawOwnerOnlyCoreToolName,
+  OPENCLAW_OWNER_ONLY_CORE_TOOL_NAMES,
+} from "./tools/owner-only-tools.js";
 
 describe("createOpenClawTools owner authorization", () => {
-  it("marks owner-only core tools in raw registration", () => {
-    const tools = readToolByName();
-    expect(tools.get("cron")?.ownerOnly).toBe(true);
-    expect(tools.get("gateway")?.ownerOnly).toBe(true);
-    expect(tools.get("nodes")?.ownerOnly).toBe(true);
+  it("marks owner-only core tool names", () => {
+    expect(OPENCLAW_OWNER_ONLY_CORE_TOOL_NAMES).toEqual(["cron", "gateway", "nodes"]);
+    expect(isOpenClawOwnerOnlyCoreToolName("cron")).toBe(true);
+    expect(isOpenClawOwnerOnlyCoreToolName("gateway")).toBe(true);
+    expect(isOpenClawOwnerOnlyCoreToolName("nodes")).toBe(true);
   });
 
-  it("keeps canvas non-owner-only in raw registration", () => {
-    const tools = readToolByName();
-    expect(tools.get("canvas")).toBeDefined();
-    expect(tools.get("canvas")?.ownerOnly).not.toBe(true);
+  it("keeps canvas non-owner-only", () => {
+    expect(isOpenClawOwnerOnlyCoreToolName("canvas")).toBe(false);
   });
 });

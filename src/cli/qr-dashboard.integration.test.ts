@@ -15,11 +15,15 @@ const {
 } = createCliRuntimeCapture();
 const runtimeExit = runtime.exit;
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: loadConfigMock,
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  resolveGatewayPort: resolveGatewayPortMock,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+    readConfigFileSnapshot: readConfigFileSnapshotMock,
+    resolveGatewayPort: resolveGatewayPortMock,
+  };
+});
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,

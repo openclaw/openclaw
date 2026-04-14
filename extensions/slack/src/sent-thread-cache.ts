@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/core";
+import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
 
 /**

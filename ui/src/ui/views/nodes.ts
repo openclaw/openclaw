@@ -1,51 +1,12 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import type {
-  DevicePairingList,
-  DeviceTokenSummary,
-  PairedDevice,
-  PendingDevice,
-} from "../controllers/devices.ts";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
+import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../controllers/devices.ts";
 import { formatRelativeTimestamp, formatList } from "../format.ts";
+import { normalizeOptionalString } from "../string-coerce.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./nodes-shared.ts";
-export type NodesProps = {
-  loading: boolean;
-  nodes: Array<Record<string, unknown>>;
-  devicesLoading: boolean;
-  devicesError: string | null;
-  devicesList: DevicePairingList | null;
-  configForm: Record<string, unknown> | null;
-  configLoading: boolean;
-  configSaving: boolean;
-  configDirty: boolean;
-  configFormMode: "form" | "raw";
-  execApprovalsLoading: boolean;
-  execApprovalsSaving: boolean;
-  execApprovalsDirty: boolean;
-  execApprovalsSnapshot: ExecApprovalsSnapshot | null;
-  execApprovalsForm: ExecApprovalsFile | null;
-  execApprovalsSelectedAgent: string | null;
-  execApprovalsTarget: "gateway" | "node";
-  execApprovalsTargetNodeId: string | null;
-  onRefresh: () => void;
-  onDevicesRefresh: () => void;
-  onDeviceApprove: (requestId: string) => void;
-  onDeviceReject: (requestId: string) => void;
-  onDeviceRotate: (deviceId: string, role: string, scopes?: string[]) => void;
-  onDeviceRevoke: (deviceId: string, role: string) => void;
-  onLoadConfig: () => void;
-  onLoadExecApprovals: () => void;
-  onBindDefault: (nodeId: string | null) => void;
-  onBindAgent: (agentIndex: number, nodeId: string | null) => void;
-  onSaveBindings: () => void;
-  onExecApprovalsTargetChange: (kind: "gateway" | "node", nodeId: string | null) => void;
-  onExecApprovalsSelectAgent: (agentId: string) => void;
-  onExecApprovalsPatch: (path: Array<string | number>, value: unknown) => void;
-  onExecApprovalsRemove: (path: Array<string | number>) => void;
-  onSaveExecApprovals: () => void;
-};
+export type { NodesProps } from "./nodes.types.ts";
+import type { NodesProps } from "./nodes.types.ts";
 
 export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
@@ -111,9 +72,9 @@ function renderDevices(props: NodesProps) {
 }
 
 function renderPendingDevice(req: PendingDevice, props: NodesProps) {
-  const name = req.displayName?.trim() || req.deviceId;
+  const name = normalizeOptionalString(req.displayName) || req.deviceId;
   const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
-  const roleValue = req.role?.trim() || formatList(req.roles);
+  const roleValue = normalizeOptionalString(req.role) || formatList(req.roles);
   const scopesValue = formatList(req.scopes);
   const repair = req.isRepair ? " · repair" : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
@@ -141,7 +102,7 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps) {
 }
 
 function renderPairedDevice(device: PairedDevice, props: NodesProps) {
-  const name = device.displayName?.trim() || device.deviceId;
+  const name = normalizeOptionalString(device.displayName) || device.deviceId;
   const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
   const roles = `roles: ${formatList(device.roles)}`;
   const scopes = `scopes: ${formatList(device.scopes)}`;

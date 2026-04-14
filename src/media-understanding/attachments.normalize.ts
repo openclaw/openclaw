@@ -1,10 +1,11 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import { getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { MediaAttachment } from "./types.js";
 
 export function normalizeAttachmentPath(raw?: string | null): string | undefined {
-  const value = raw?.trim();
+  const value = normalizeOptionalString(raw);
   if (!value) {
     return undefined;
   }
@@ -28,10 +29,9 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
   const urlsFromArray = Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : undefined;
   const typesFromArray = Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : undefined;
   const resolveMime = (count: number, index: number) => {
-    const typeHint = typesFromArray?.[index];
-    const trimmed = typeof typeHint === "string" ? typeHint.trim() : "";
-    if (trimmed) {
-      return trimmed;
+    const typeHint = normalizeOptionalString(typesFromArray?.[index]);
+    if (typeHint) {
+      return typeHint;
     }
     return count === 1 ? ctx.MediaType : undefined;
   };
@@ -41,12 +41,12 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
     const urls = urlsFromArray && urlsFromArray.length > 0 ? urlsFromArray : undefined;
     return pathsFromArray
       .map((value, index) => ({
-        path: value?.trim() || undefined,
+        path: normalizeOptionalString(value),
         url: urls?.[index] ?? ctx.MediaUrl,
         mime: resolveMime(count, index),
         index,
       }))
-      .filter((entry) => Boolean(entry.path?.trim() || entry.url?.trim()));
+      .filter((entry) => Boolean(entry.path ?? normalizeOptionalString(entry.url)));
   }
 
   if (urlsFromArray && urlsFromArray.length > 0) {
@@ -54,15 +54,15 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
     return urlsFromArray
       .map((value, index) => ({
         path: undefined,
-        url: value?.trim() || undefined,
+        url: normalizeOptionalString(value),
         mime: resolveMime(count, index),
         index,
       }))
-      .filter((entry) => Boolean(entry.url?.trim()));
+      .filter((entry) => Boolean(entry.url));
   }
 
-  const pathValue = ctx.MediaPath?.trim();
-  const url = ctx.MediaUrl?.trim();
+  const pathValue = normalizeOptionalString(ctx.MediaPath);
+  const url = normalizeOptionalString(ctx.MediaUrl);
   if (!pathValue && !url) {
     return [];
   }
