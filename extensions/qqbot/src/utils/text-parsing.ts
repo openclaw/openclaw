@@ -5,9 +5,9 @@ import type { RefAttachmentSummary } from "../ref-index-store.js";
 const MAX_FACE_EXT_BYTES = 64 * 1024;
 
 /** Replace QQ face tags with readable text labels. */
-export function parseFaceTags(text: string | undefined | null): string {
+export function parseFaceTags(text: string): string {
   if (!text) {
-    return "";
+    return text;
   }
 
   return text.replace(/<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g, (_match, ext: string) => {
@@ -26,9 +26,9 @@ export function parseFaceTags(text: string | undefined | null): string {
 }
 
 /** Remove internal framework markers before sending text outward. */
-export function filterInternalMarkers(text: string | undefined | null): string {
+export function filterInternalMarkers(text: string): string {
   if (!text) {
-    return "";
+    return text;
   }
 
   let result = text.replace(/\[\[[a-z_]+:\s*[^\]]*\]\]/gi, "");

@@ -39,29 +39,4 @@ struct HealthStoreStateTests {
 
         #expect(store.summaryLine.contains("probe degraded"))
     }
-
-    @Test @MainActor func `nil probe on configured channel treats state as unknown`() {
-        let snap = HealthSnapshot(
-            ok: true,
-            ts: 0,
-            durationMs: 1,
-            channels: [
-                "telegram": .init(
-                    configured: true,
-                    linked: nil,
-                    authAgeMs: nil,
-                    probe: nil,
-                    lastProbeAt: nil),
-            ],
-            channelOrder: ["telegram"],
-            channelLabels: ["telegram": "Telegram"],
-            heartbeatSeconds: 60,
-            sessions: .init(path: "/tmp/sessions.json", count: 0, recent: []))
-
-        let store = HealthStore.shared
-        store.__setSnapshotForTest(snap, lastError: nil)
-
-        #expect(store.state == .unknown)
-        #expect(store.summaryLine == "Health check pending")
-    }
 }

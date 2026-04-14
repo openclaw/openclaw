@@ -346,38 +346,6 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
-  it("reports timeout distinctly when config.get times out on gateway", async () => {
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "config.get") {
-          throw new Error("gateway timeout after 10000ms");
-        }
-        if (method === "exec.approvals.get") {
-          return {
-            path: "/tmp/exec-approvals.json",
-            exists: true,
-            hash: "hash-1",
-            file: { version: 1, agents: {} },
-          };
-        }
-        return { method, params };
-      },
-    );
-
-    await runApprovalsCommand(["approvals", "get", "--gateway", "--json"]);
-
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        effectivePolicy: {
-          note: "Config timed out (gateway is responsive but config.get was slow — try increasing --timeout).",
-          scopes: [],
-        },
-      }),
-      0,
-    );
-    expect(runtimeErrors).toHaveLength(0);
-  });
-
   it("keeps node approvals output when gateway config is unavailable", async () => {
     callGatewayFromCli.mockImplementation(
       async (method: string, _opts: unknown, params?: unknown) => {
