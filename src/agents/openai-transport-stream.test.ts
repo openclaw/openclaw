@@ -1727,4 +1727,212 @@ describe("openai transport stream", () => {
       false,
     );
   });
+
+  it("treats OpenRouter reasoning_details array as streamed thinking content", async () => {
+    const model = {
+      id: "qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [] as Array<Record<string, unknown>>,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const emittedEvents: Array<Record<string, unknown>> = [];
+    const stream = {
+      push: (event: unknown) => {
+        emittedEvents.push(event as Record<string, unknown>);
+      },
+    };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-reasoning-details",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: "assistant" as const,
+              reasoning_details: [
+                { type: "reasoning.text", text: "Thinking ", format: "unknown", index: 0 },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-reasoning-details",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "reasoning.text", text: "about it.", format: "unknown", index: 0 },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-reasoning-details",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Final answer." },
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output as never, model, stream);
+
+    const thinkingBlocks = output.content.filter(
+      (block) => (block as { type?: string }).type === "thinking",
+    );
+    const textBlocks = output.content.filter(
+      (block) => (block as { type?: string }).type === "text",
+    );
+    expect(thinkingBlocks).toHaveLength(1);
+    expect((thinkingBlocks[0] as { thinking: string }).thinking).toBe("Thinking about it.");
+    expect((thinkingBlocks[0] as { thinkingSignature?: string }).thinkingSignature).toBe(
+      "reasoning_details",
+    );
+    expect(textBlocks).toHaveLength(1);
+    expect((textBlocks[0] as { text: string }).text).toBe("Final answer.");
+    expect(output.stopReason).toBe("stop");
+    expect(
+      emittedEvents.some((event) => (event as { type?: string }).type === "thinking_start"),
+    ).toBe(true);
+    expect(
+      emittedEvents.filter((event) => (event as { type?: string }).type === "thinking_delta"),
+    ).toHaveLength(2);
+  });
+
+  it("ignores empty reasoning_details entries so streams with no reasoning text fall through", async () => {
+    const model = {
+      id: "qwen/qwen3-32b",
+      name: "Qwen3 32B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [] as Array<Record<string, unknown>>,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-empty-details",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "reasoning.text", text: "", format: "unknown", index: 0 },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-empty-details",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Hello." },
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output as never, model, stream);
+
+    expect(output.content.some((block) => (block as { type?: string }).type === "thinking")).toBe(
+      false,
+    );
+    const textBlock = output.content.find((block) => (block as { type?: string }).type === "text");
+    expect(textBlock).toBeDefined();
+    expect((textBlock as { text: string }).text).toBe("Hello.");
+  });
 });
