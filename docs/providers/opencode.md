@@ -101,10 +101,10 @@ as one OpenCode setup.
 
 ### Go
 
-| Property         | Value                                                                    |
-| ---------------- | ------------------------------------------------------------------------ |
-| Runtime provider | `opencode-go`                                                            |
-| Example models   | `opencode-go/kimi-k2.5`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
+| Property         | Value                                                                                           |
+| ---------------- | ----------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                                   |
+| Example models   | `opencode-go/kimi-k2.5`, `opencode-go/glm-5`, `opencode-go/glm-5.1`, `opencode-go/minimax-m2.5` |
 
 ## Advanced notes
 

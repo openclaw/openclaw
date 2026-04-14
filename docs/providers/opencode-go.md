@@ -24,6 +24,7 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 | -------------------------- | ------------ |
 | `opencode-go/kimi-k2.5`    | Kimi K2.5    |
 | `opencode-go/glm-5`        | GLM 5        |
+| `opencode-go/glm-5.1`      | GLM 5.1      |
 | `opencode-go/minimax-m2.5` | MiniMax M2.5 |
 
 ## Getting started
@@ -97,6 +98,12 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 See [OpenCode](/providers/opencode) for the shared onboarding overview and the full
 Zen + Go catalog reference.
 </Tip>
+
+<Note>
+`opencode-go/glm-5.1` is cataloged as a forward-compatible Go entry using the
+existing `opencode-go/glm-5` template so it appears in `models list` and model
+pickers before upstream registry metadata needs to change.
+</Note>
 
 ## Related
 
