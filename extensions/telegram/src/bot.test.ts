@@ -1051,6 +1051,75 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("marks the agent-level default model as current in the Telegram picker", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.4",
+          models: {
+            "openai-codex/gpt-5.4": {},
+            "venice/zai-org-glm-4.7": {},
+          },
+        },
+        list: [
+          {
+            id: "household",
+            default: true,
+            model: "venice/zai-org-glm-4.7",
+          },
+        ],
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    };
+
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({
+      token: "tok",
+      config,
+    });
+    const callbackHandler = onSpy.mock.calls.find(
+      (call) => call[0] === "callback_query",
+    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-model-agent-default-1",
+        data: "mdl_list_venice_1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 18,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const [, , , params] = editMessageTextSpy.mock.calls[0] ?? [];
+    expect(params).toEqual({
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "zai-org-glm-4.7 ✓", callback_data: "mdl_sel_venice/zai-org-glm-4.7" }],
+          [{ text: "<< Back", callback_data: "mdl_back" }],
+        ],
+      },
+    });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-agent-default-1");
+  });
+
   it("persists non-default model override using fresh config, not stale startup snapshot", async () => {
     // Regression: the callback handler used the startup `cfg` snapshot for
     // store path and default-model resolution.  If the config was reloaded

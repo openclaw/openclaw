@@ -374,12 +374,15 @@ export const registerTelegramHandlers = ({
         model: `${provider}/${model}`,
       };
     }
-    const modelCfg = runtimeCfg.agents?.defaults?.model;
+    const resolvedDefault = resolveDefaultModelForAgent({
+      cfg: runtimeCfg,
+      agentId: route.agentId,
+    });
     return {
       agentId: route.agentId,
       sessionEntry: entry,
       sessionKey,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+      model: `${resolvedDefault.provider}/${resolvedDefault.model}`,
     };
   };
 
