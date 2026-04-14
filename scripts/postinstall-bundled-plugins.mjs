@@ -94,7 +94,7 @@ const BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT = [
   "                    // `dispatcher` only works with Dispatcher-compatible implementations,",
   "                    // so only wire it through when the object actually implements",
   "                    // `dispatch`.",
-  "                    ...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+  "                    ...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
 ].join("\n");
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
@@ -311,7 +311,11 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       applied = true;
     }
 
-    if (!patchedText.includes("...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),")) {
+    if (
+      !patchedText.includes(
+        "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
+      )
+    ) {
       if (!patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE)) {
         return { applied: false, reason: "unexpected_content" };
       }

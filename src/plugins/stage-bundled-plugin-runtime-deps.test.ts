@@ -127,7 +127,7 @@ function createBaileysMessagesMediaSource(params?: {
         "                    // `dispatcher` only works with Dispatcher-compatible implementations,",
         "                    // so only wire it through when the object actually implements",
         "                    // `dispatch`.",
-        "                    ...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+        "                    ...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
         "                    duplex: 'half',",
         "                });",
       ]
@@ -317,7 +317,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       "await Promise.all([encFinishPromise, originalFinishPromise]);",
     );
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
-      "...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
     );
     expect(fs.readFileSync(targetPath, "utf8")).not.toContain("dispatcher: fetchAgent,");
   });
@@ -351,7 +351,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       "await Promise.all([encFinishPromise, originalFinishPromise]);",
     );
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
-      "...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
     );
   });
 
@@ -383,7 +383,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       targetPath,
     });
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
-      "...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
     );
     expect(fs.readFileSync(targetPath, "utf8")).toContain("await encFinishPromise;");
     expect(fs.readFileSync(targetPath, "utf8")).toContain("await originalFinishPromise;");
@@ -417,7 +417,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.readFileSync(targetPath, "utf8")).toContain("await encFinishPromise;");
     expect(fs.readFileSync(targetPath, "utf8")).toContain("await originalFinishPromise;");
     expect(fs.readFileSync(targetPath, "utf8")).toContain(
-      "...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),",
+      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
     );
   });
 

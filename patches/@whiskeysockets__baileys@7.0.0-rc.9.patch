@@ -40,7 +40,7 @@ index 0d32dfb4882dfe029ba8804772d7d89404b08e76..73809fcd1d52362aef0c35cb7416c29d
 +                    // `dispatcher` only works with Dispatcher-compatible implementations,
 +                    // so only wire it through when the object actually implements
 +                    // `dispatch`.
-+                    ...(fetchAgent?.dispatch ? { dispatcher: fetchAgent } : {}),
++                    ...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),
                      duplex: 'half',
                      // Note: custom agents/proxy require undici Agent; omitted here.
                      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
