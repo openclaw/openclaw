@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 - Agents/OpenAI: recover embedded GPT-style runs when reasoning-only or empty turns need bounded continuation, with replay-safe retry gating and incomplete-turn fallback when no visible answer arrives. (#66167) thanks @jalehman
 - Outbound/relay-status: suppress internal relay-status placeholder payloads (`No channel reply.`, `Replied in-thread.`, `Replied in #...`, wiki-update status variants ending in `No channel reply.`) before channel delivery so internal housekeeping text does not leak to users.
 - Slack/doctor: add a dedicated doctor-contract sidecar so config warmup paths such as `openclaw cron` no longer fall back to Slack's broader contract surface, which could trigger Slack-related config-read crashes on affected setups. (#63192) Thanks @shhtheonlyperson.
+- Hooks/session-memory: pass the resolved agent workspace into gateway `/new` and `/reset` session-memory hooks so reset snapshots stay scoped to the right agent workspace instead of leaking into the default workspace. (#64735) Thanks @suboss87 and @vincentkoc.
 
 ## 2026.4.12
 
@@ -145,6 +146,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.
 - Audio transcription: disable pinned DNS only for OpenAI-compatible multipart requests, while still validating hostnames, so OpenAI, Groq, and Mistral transcription works again without weakening other request paths. (#64766) Thanks @GodsBoy.
 - macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
+<<<<<<< HEAD
 - Control UI/webchat: persist agent-run TTS audio replies into webchat history and preserve interleaved tool card pairing so generated audio and mixed tool output stay attached to the right messages. (#63514) Thanks @bittoby.
 - WhatsApp: honor the configured default account when the active listener helper is used without an explicit account id, so named default accounts do not get registered under `default`. (#53918) Thanks @yhyatt.
 - ACP/agents: suppress commentary-phase child assistant relay text in ACP parent stream updates, so spawned child runs stop leaking internal progress chatter into the parent session. Thanks @vincentkoc.
@@ -159,6 +161,9 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: scope assistant-side fallback classification and surfaced provider errors to the current attempt instead of stale session history, so cross-provider fallback runs stop inheriting the previous provider's failure. (#62907) Thanks @stainlu.
 - MiniMax/OAuth: write `api: "anthropic-messages"` and `authHeader: true` into the `minimax-portal` config patch during `openclaw configure`, so re-authenticated portal setups keep Bearer auth routing working. (#64964) Thanks @ryanlee666.
 - Agents/tools: stop repeated unavailable-tool retries from escaping loop detection when the model changes arguments, and rewrite over-threshold unknown tool calls into plain assistant text before dispatch. (#65922) Thanks @dutifulbob.
+=======
+- Hooks/session-memory: pass the resolved agent workspace into gateway `/new` and `/reset` session-memory hooks so reset snapshots stay scoped to the right agent workspace instead of leaking into the default workspace. (#64735) Thanks @suboss87 and @vincentkoc.
+>>>>>>> 319150b205 (docs(changelog): add session-memory workspace reset note)
 
 ## 2026.4.10
 
