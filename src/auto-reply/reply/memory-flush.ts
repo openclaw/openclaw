@@ -108,9 +108,18 @@ export function shouldRunPreflightCompaction(params: {
 export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount">,
 ): boolean {
-  const compactionCount = entry.compactionCount ?? 0;
   const lastFlushAt = entry.memoryFlushCompactionCount;
-  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+  if (typeof lastFlushAt !== "number") {
+    return false;
+  }
+  // When compactionCount is undefined the session has never been compacted.
+  // A lastFlushAt of 0 in that state is ambiguous — it may stem from
+  // zero-initialization rather than an actual flush at cycle 0 — so we
+  // require compactionCount to be an explicit number before comparing.
+  if (typeof entry.compactionCount !== "number") {
+    return false;
+  }
+  return lastFlushAt === entry.compactionCount;
 }
 
 /**
