@@ -1,5 +1,16 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const runtimeMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    debug: runtimeMocks.debug,
+  }),
+}));
+
 import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
   readOpenAICodexCliOAuthProfile,
@@ -12,6 +23,10 @@ function buildJwt(payload: Record<string, unknown>) {
 }
 
 describe("readOpenAICodexCliOAuthProfile", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -79,5 +94,34 @@ describe("readOpenAICodexCliOAuthProfile", () => {
     });
 
     expect(parsed).toBeNull();
+  });
+
+  it("returns null without logging when the Codex CLI auth file is missing", () => {
+    const error = Object.assign(new Error("missing"), {
+      code: "ENOENT",
+    });
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw error;
+    });
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(parsed).toBeNull();
+    expect(runtimeMocks.debug).not.toHaveBeenCalled();
+  });
+
+  it("logs debug output through the runtime logger for other auth read failures", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue("{");
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(parsed).toBeNull();
+    expect(runtimeMocks.debug).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to read auth file:"),
+    );
   });
 });
