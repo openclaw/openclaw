@@ -93,6 +93,15 @@ const defaultStagedRuntimeDepPruneRules = new Map([
   ["matrix-widget-api", { paths: ["src"], suffixes: [".d.ts"] }],
   ["oidc-client-ts", { paths: ["README.md"], suffixes: [".d.ts"] }],
   ["music-metadata", { paths: ["README.md"], suffixes: [".d.ts"] }],
+  ["@cloudflare/workers-types", { paths: ["."] }],
+  ["gifwrap", { paths: ["test"] }],
+  ["playwright-core", { paths: ["types"], suffixes: [".d.ts"] }],
+  ["@jimp/plugin-blit", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-blur", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-color", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-print", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-quantize", { paths: ["src/__image_snapshots__"] }],
+  ["@jimp/plugin-threshold", { paths: ["src/__image_snapshots__"] }],
 ]);
 const runtimeDepsStagingVersion = 2;
 
