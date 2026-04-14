@@ -134,6 +134,42 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("resolves the legacy gpt-5.4-codex alias to canonical gpt-5.4", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-codex",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
+            return {
+              id: "gpt-5.3-codex",
+              name: "gpt-5.3-codex",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"] as const,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return undefined;
+        },
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("resolves gpt-5.4-mini from codex templates with codex-sized limits", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
@@ -200,5 +236,31 @@ describe("openai codex provider", () => {
         contextWindow: 272_000,
       }),
     );
+  });
+
+  it("canonicalizes legacy gpt-5.4-codex models during resolved-model normalization", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4-codex",
+        name: "gpt-5.4-codex",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+    });
   });
 });
