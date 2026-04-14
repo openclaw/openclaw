@@ -16,3 +16,5 @@ onlyBuiltDependencies:
   - '@firebase/util'
   - esbuild
   - protobufjs
+overrides:
+  handlebars@<=4.7.9: 4.7.9
