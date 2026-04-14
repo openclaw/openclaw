@@ -701,6 +701,55 @@ describe("stageSystemdService", () => {
       await fs.rm(tempHomeRoot, { recursive: true, force: true });
     }
   });
+
+  it("keeps inline overrides out of the generated env file", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-stage-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-stage-test",
+    };
+    const unitPath = resolveSystemdUserUnitPath(env);
+    const envFilePath = path.join(stateDir, "gateway.systemd.env");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, ".env"),
+      ["OPENCLAW_GATEWAY_TOKEN=stale-token", "LLM_API_KEY=dotenv-key"].join("\n"),
+      "utf8",
+    );
+
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+
+    try {
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_TOKEN: "fresh-token",
+          LLM_API_KEY: "dotenv-key",
+        },
+      });
+
+      const [unit, envFile] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+      ]);
+
+      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
+      expect(envFile).toBe("LLM_API_KEY=dotenv-key\n");
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("systemd service control", () => {

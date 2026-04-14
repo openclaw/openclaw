@@ -454,7 +454,15 @@ async function writeSystemdUnit({
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  const stateDirDotEnvVars = readStateDirDotEnvVarsFromStateDir(stateDir);
+  const stateDirDotEnvVars = Object.fromEntries(
+    Object.entries(readStateDirDotEnvVarsFromStateDir(stateDir)).filter(([key, value]) => {
+      const inlineValue = environment?.[key];
+      if (typeof inlineValue !== "string") {
+        return true;
+      }
+      return inlineValue.trim() === value.trim();
+    }),
+  );
   const environmentFiles = await writeSystemdGatewayEnvironmentFile({
     stateDir,
     dotenvVars: stateDirDotEnvVars,
