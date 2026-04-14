@@ -1,20 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import syncFs from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearTopicNameCache,
   getTopicEntry,
   getTopicName,
+  resetTopicNameCacheForTest,
   topicNameCacheSize,
   updateTopicName,
 } from "./topic-name-cache.js";
 
 describe("topic-name-cache", () => {
   beforeEach(() => {
-    vi.useRealTimers();
     clearTopicNameCache();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
+    resetTopicNameCacheForTest();
   });
 
   it("stores and retrieves a topic name", () => {
@@ -63,11 +64,9 @@ describe("topic-name-cache", () => {
   });
 
   it("updates timestamps on write", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-13T22:00:00.000Z"));
     updateTopicName(-100123, 42, { name: "A" });
     const t1 = getTopicEntry(-100123, 42)?.updatedAt ?? 0;
-    await vi.advanceTimersByTimeAsync(10);
+    await new Promise((r) => setTimeout(r, 10));
     updateTopicName(-100123, 42, { name: "B" });
     const t2 = getTopicEntry(-100123, 42)?.updatedAt ?? 0;
     expect(t2).toBeGreaterThan(t1);
@@ -88,10 +87,8 @@ describe("topic-name-cache", () => {
   });
 
   it("refreshes recency on read so active topics survive eviction", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-13T22:00:00.000Z"));
     updateTopicName(-100000, 1, { name: "Active" });
-    await vi.advanceTimersByTimeAsync(10);
+    await new Promise((r) => setTimeout(r, 10));
     for (let i = 2; i <= 2048; i++) {
       updateTopicName(-100000, i, { name: `Topic ${i}` });
     }
@@ -99,5 +96,38 @@ describe("topic-name-cache", () => {
     updateTopicName(-100000, 9999, { name: "Newcomer" });
     expect(getTopicName(-100000, 1)).toBe("Active");
     expect(topicNameCacheSize()).toBe(2048);
+  });
+
+  it("reloads persisted entries from disk", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-topic-cache-"));
+    const persistedPath = path.join(tempDir, "topic-names.json");
+    try {
+      updateTopicName(-100123, 42, { name: "Deployments" }, persistedPath);
+      resetTopicNameCacheForTest();
+      expect(getTopicName(-100123, 42, persistedPath)).toBe("Deployments");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      resetTopicNameCacheForTest();
+    }
+  });
+
+  it("keeps separate in-memory stores for separate persisted paths", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-topic-cache-"));
+    const firstPath = path.join(tempDir, "first-topic-names.json");
+    const secondPath = path.join(tempDir, "second-topic-names.json");
+    try {
+      updateTopicName(-100123, 42, { name: "Deployments" }, firstPath);
+      updateTopicName(-200456, 84, { name: "Incidents" }, secondPath);
+
+      const readFileSpy = vi.spyOn(syncFs, "readFileSync");
+
+      expect(getTopicName(-100123, 42, firstPath)).toBe("Deployments");
+      expect(getTopicName(-200456, 84, secondPath)).toBe("Incidents");
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempDir, { recursive: true, force: true });
+      resetTopicNameCacheForTest();
+    }
   });
 });
