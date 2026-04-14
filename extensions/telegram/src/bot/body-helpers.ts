@@ -92,14 +92,28 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
 
+// eslint-disable-next-line no-control-regex -- intentional binary detection
+const BINARY_CONTENT_RE = /[\x00-\x08\x0E-\x1F]/;
+
+/**
+ * Returns true when the string likely contains binary file content rather
+ * than human-readable text.  Telegram can leak raw binary bytes into
+ * `msg.caption` when a user sends a binary document (e.g. .mobi, .epub).
+ * Injecting that into the LLM prompt causes catastrophic token explosion.
+ */
+export function isBinaryContent(text: string): boolean {
+  return BINARY_CONTENT_RE.test(text);
+}
+
 export function getTelegramTextParts(
   msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
 ): {
   text: string;
   entities: TelegramTextEntity[];
 } {
-  const text = msg.text ?? msg.caption ?? "";
-  const entities = msg.entities ?? msg.caption_entities ?? [];
+  const raw = msg.text ?? msg.caption ?? "";
+  const text = isBinaryContent(raw) ? "" : raw;
+  const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
   return { text, entities };
 }
 
