@@ -157,35 +157,42 @@ function getJiti(tryNative) {
   return jitiLoader;
 }
 
-let monolithicSdkLoading = false;
-
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
-  // Guard against reentrant calls: if compat.ts evaluation triggers a transitive
-  // require back into root-alias (e.g. via the bluebubbles facade cycle), return
-  // null rather than recursing infinitely and overflowing the call stack.
-  if (monolithicSdkLoading) {
-    return null;
-  }
-  monolithicSdkLoading = true;
+  // Guard against reentrant calls using Node's own CJS circular-require strategy:
+  // assign a partial stub object to monolithicSdk BEFORE the jiti load begins so
+  // that any reentrant caller (e.g. bluebubbles/channel.ts → channel-status →
+  // root-alias during compat.ts evaluation) receives the in-progress stub rather
+  // than null.  Once the real module finishes loading, Object.assign() back-fills
+  // the stub so all references captured during the cycle see the final exports.
+  // Returning null was too blunt — it caused a V8 fatal "Check failed: has_exception()"
+  // because native addon / jiti internals tried to access properties on null while
+  // a JS exception was already pending.
+  monolithicSdk = {};
 
   try {
     const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
     if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
       try {
-        monolithicSdk = getJiti(true)(distCandidate);
+        const loaded = getJiti(true)(distCandidate);
+        Object.assign(monolithicSdk, loaded);
         return monolithicSdk;
       } catch {
         // Fall through to source alias if dist is unavailable or stale.
+        // Reset the stub so the source-graph path can try again cleanly.
+        monolithicSdk = {};
       }
     }
 
-    monolithicSdk = getJiti(false)(path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"));
+    const loaded = getJiti(false)(path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"));
+    Object.assign(monolithicSdk, loaded);
     return monolithicSdk;
-  } finally {
-    monolithicSdkLoading = false;
+  } catch (err) {
+    // If loading ultimately fails, clear the stub so the next call retries.
+    monolithicSdk = null;
+    throw err;
   }
 }
 
