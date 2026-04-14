@@ -368,6 +368,20 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result).toHaveLength(1);
     expect(result[0].replyToId).toBe("mm-post-abc123");
   });
+
+  it("does not block implicit replyToId when replyToCurrent is default false (issue #66540)", () => {
+    // Test for issue #66540: replyToCurrent: false (default value) should not
+    // block implicit replyToId assignment in followup/queued messages
+    const result = applyReplyThreading({
+      payloads: [{ text: "followup message", replyToCurrent: false }], // explicit false to simulate parsed directive
+      replyToMode: "first",
+      currentMessageId: "original-message-123",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("original-message-123"); // Should receive implicit replyToId
+    expect(result[0].replyToCurrent).toBe(false); // replyToCurrent should remain false
+  });
 });
 
 const baseRun: SubagentRunRecord = {

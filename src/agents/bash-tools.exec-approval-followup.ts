@@ -74,7 +74,7 @@ export function buildExecApprovalFollowupPrompt(resultText: string): string {
   ].join("\n");
 }
 
-function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
+function shouldSuppressExecFollowupForSubagents(sessionKey: string | undefined): boolean {
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
 }
 
@@ -194,10 +194,14 @@ export async function sendExecApprovalFollowup(
   if (!resultText) {
     return false;
   }
-  const isDenied = isExecDeniedResultText(resultText);
-  if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
+
+  // Suppress all exec approval followups for subagent sessions (issue #66519)
+  // Subagent completions should be handled by the main agent's subagent completion mechanism
+  if (shouldSuppressExecFollowupForSubagents(sessionKey)) {
     return false;
   }
+
+  const isDenied = isExecDeniedResultText(resultText);
 
   const deliveryTarget = resolveExternalBestEffortDeliveryTarget({
     channel: params.turnSourceChannel,

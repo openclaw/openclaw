@@ -210,6 +210,25 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("suppresses successful followups for subagent sessions (issue #66519)", async () => {
+    // Test for issue #66519: all exec approval followups should be suppressed for subagent sessions
+    // to prevent duplicate delivery with main agent's subagent completion mechanism
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-success-subagent",
+        sessionKey: "agent:main:subagent:test-completion",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        resultText:
+          "Exec finished (gateway id=req-success-subagent, session=sess_1, code 0)\nall good",
+      }),
+    ).resolves.toBe(false);
+
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     "Exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",
     "exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",

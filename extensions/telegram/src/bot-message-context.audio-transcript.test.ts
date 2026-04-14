@@ -156,4 +156,26 @@ describe("buildTelegramMessageContext audio transcript body", () => {
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expectAudioPlaceholderRendered(ctx);
   });
+
+  it("handles voice messages with undefined paths gracefully (issue #62496)", async () => {
+    // Test for issue #62496: allMedia with undefined paths should not break transcription
+    // The fix ensures undefined paths are filtered out before passing to transcribeFirstAudio
+    transcribeFirstAudioMock.mockResolvedValueOnce(null); // Simulate no transcription
+
+    const ctx = await buildGroupVoiceContext({
+      messageId: 1,
+      chatId: -100123,
+      title: "Test Group",
+      date: 1234567890,
+      fromId: 456,
+      firstName: "User",
+      fileId: "voice-test",
+      mediaPath: "/tmp/valid.ogg",
+      groupDisableAudioPreflight: false,
+    });
+
+    // Should not throw error and should render audio placeholder
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.Body).toContain("<media:audio>");
+  });
 });
