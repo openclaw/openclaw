@@ -9,7 +9,7 @@ export function formatDocsLink(
   label?: string,
   opts?: { fallback?: string; force?: boolean },
 ): string {
-  const trimmed = path.trim();
+  const trimmed = (path ?? "").trim();
   const docsRoot = resolveDocsRoot();
   const url = trimmed.startsWith("http")
     ? trimmed
