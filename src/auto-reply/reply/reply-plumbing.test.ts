@@ -368,6 +368,32 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result).toHaveLength(1);
     expect(result[0].replyToId).toBe("mm-post-abc123");
   });
+
+  it("preserves implicit threading when replyToCurrent defaults to false (no tag)", () => {
+    // Fix for #66540: When replyToCurrent is false but no reply tag was present,
+    // implicit threading should still work (this is the default case)
+    const result = applyReplyThreading({
+      payloads: [{ text: "hello", replyToCurrent: false }], // Default false, no replyToTag
+      replyToMode: "all",
+      currentMessageId: "42",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("42");
+  });
+
+  it("blocks implicit threading when replyToCurrent is explicitly false via tag", () => {
+    // When replyToCurrent is false AND replyToTag is true, it means an explicit opt-out
+    // (e.g., [[reply_to_none]] tag was parsed)
+    const result = applyReplyThreading({
+      payloads: [{ text: "hello", replyToCurrent: false, replyToTag: true }],
+      replyToMode: "all",
+      currentMessageId: "42",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBeUndefined();
+  });
 });
 
 const baseRun: SubagentRunRecord = {

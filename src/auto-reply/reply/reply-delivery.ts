@@ -75,14 +75,16 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
 
+    // Only skip implicit threading when replyToCurrent is explicitly false via a reply tag.
+    // When replyToCurrent defaults to false (no tag present), implicit threading should still work.
+    const explicitOptOut = payload.replyToCurrent === false && payload.replyToTag;
+
     const taggedPayload = applyReplyTagsToPayload(
       {
         ...payload,
         text,
         mediaUrl: payload.mediaUrl ?? payload.mediaUrls?.[0],
-        replyToId:
-          payload.replyToId ??
-          (payload.replyToCurrent === false ? undefined : params.currentMessageId),
+        replyToId: payload.replyToId ?? (explicitOptOut ? undefined : params.currentMessageId),
       },
       params.currentMessageId,
     );

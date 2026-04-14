@@ -36,9 +36,13 @@ function resolveReplyThreadingForPayload(params: {
     params.replyThreading,
   );
 
+  // Only skip implicit threading when replyToCurrent is explicitly false via a reply tag.
+  // When replyToCurrent defaults to false (no tag present), implicit threading should still work.
+  const explicitOptOut = params.payload.replyToCurrent === false && params.payload.replyToTag;
+
   let resolved: ReplyPayload =
     params.payload.replyToId ||
-    params.payload.replyToCurrent === false ||
+    explicitOptOut ||
     !implicitReplyToId ||
     !allowImplicitReplyToCurrentMessage
       ? params.payload
