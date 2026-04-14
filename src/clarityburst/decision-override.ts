@@ -429,7 +429,7 @@ export function applyToolDispatchOverrides(
   const caps: RuntimeCapabilities = createFullCapabilities();
   const allowedContractIds = deriveAllowedContracts(TOOL_DISPATCH_STAGE_ID, pack, caps);
   const mismatch = validateContractInAllowedList(routeResult, allowedContractIds, TOOL_DISPATCH_STAGE_ID, requestId);
-  if (mismatch) return mismatch;
+  if (mismatch) {return mismatch;}
 
   // ===== CRON PREFLIGHT GATE CHECK =====
   // Before any tool dispatch, check if in cron mode.
@@ -602,7 +602,7 @@ export function applyShellExecOverrides(
   const caps: RuntimeCapabilities = createFullCapabilities();
   const allowedContractIds = deriveAllowedContracts(SHELL_EXEC_STAGE_ID, pack, caps);
   const mismatch = validateContractInAllowedList(routeResult, allowedContractIds, SHELL_EXEC_STAGE_ID, requestId);
-  if (mismatch) return mismatch;
+  if (mismatch) {return mismatch;}
 
   // Check for router uncertainty before confirmation gating
   // Enforce ABSTAIN_CLARIFY on low confidence/dominance
@@ -1334,7 +1334,7 @@ function applyMemoryModifyOverridesImpl(
   if (mismatchValidation) {
     // For throwing functions, throw ClarityBurstAbstainError instead of returning
     if (mismatchValidation.outcome === "ABSTAIN_CLARIFY") {
-      const clarifyOutcome = mismatchValidation as AbstainClarifyOutcome;
+      const clarifyOutcome = mismatchValidation;
       throw new ClarityBurstAbstainError({
         stageId: MEMORY_MODIFY_STAGE_ID,
         outcome: clarifyOutcome.outcome,
@@ -1538,7 +1538,7 @@ async function applySubagentSpawnOverridesImpl(
   if (mismatchValidation) {
     // For throwing functions, throw ClarityBurstAbstainError instead of returning
     if (mismatchValidation.outcome === "ABSTAIN_CLARIFY") {
-      const clarifyOutcome = mismatchValidation as AbstainClarifyOutcome;
+      const clarifyOutcome = mismatchValidation;
       context.runMetrics && incOutcome(context.runMetrics, clarifyOutcome.outcome);
       throw new ClarityBurstAbstainError({
         stageId: SUBAGENT_SPAWN_STAGE_ID,
