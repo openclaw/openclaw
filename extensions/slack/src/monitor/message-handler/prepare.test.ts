@@ -8,6 +8,7 @@ import { expectChannelInboundContextContract as expectInboundContextContract } f
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
   createInboundSlackTestContext,
@@ -259,26 +260,21 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("skips mention resolution when the message contains no Slack mentions", async () => {
-    const slackCtx = createReplyToAllSlackCtx({
-      defaultRequireMention: false,
-      asChannel: true,
-    });
     const resolveUserName = vi.fn(async () => ({ name: "Bek" }) as any);
-    slackCtx.resolveUserName = resolveUserName;
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      defaultAccount,
-      createSlackMessage({
-        channel: "C123",
-        channel_type: "channel",
+    const resolved = await resolveSlackMessageContent({
+      message: createSlackMessage({
         text: "hi there",
       }),
-    );
+      isThreadReply: false,
+      threadStarter: null,
+      isBotMessage: false,
+      botToken: "token",
+      mediaMaxBytes: 1024,
+      resolveUserName,
+    });
 
-    expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.RawBody).toBe("hi there");
-    expect(prepared!.ctxPayload.BodyForAgent).toBe("hi there");
+    expect(resolved).toBeTruthy();
+    expect(resolved!.rawBody).toBe("hi there");
     expect(resolveUserName).not.toHaveBeenCalled();
   });
 
