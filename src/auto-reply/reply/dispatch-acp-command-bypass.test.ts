@@ -44,6 +44,28 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
+  it("returns true for /acp slash commands even when text commands are disabled", () => {
+    // /acp is a session-management command (close/cancel/status/…), mirroring
+    // /new and /reset. It must bypass the ACP dispatch even when the surface
+    // has commands.text = false — otherwise the user has no way to close a
+    // runaway ACP session short of hand-editing thread-bindings.json.
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/acp close",
+      BodyForCommands: "/acp close",
+      BodyForAgent: "/acp close",
+      CommandSource: "text",
+    });
+    const cfg = {
+      commands: {
+        text: false,
+      },
+    } as OpenClawConfig;
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(true);
+  });
+
   it("returns false for unrecognized slash commands", () => {
     const ctx = buildTestCtx({
       Provider: "discord",

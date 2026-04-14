@@ -53,13 +53,18 @@ export function shouldBypassAcpDispatchForCommand(
     return true;
   }
 
-  // `/acp ...` must bypass the ACP dispatch so that handleAcpCommand runs
-  // instead of the ACP session consuming the text as conversational input.
-  // Without this bypass, `/acp close` issued inside a bound Discord thread
-  // reaches the ACP agent and gets replied to with a hallucinated natural-
+  // `/acp ...` must bypass the ACP dispatch unconditionally, for the same
+  // reason `/new` and `/reset` do: these are session-management commands
+  // and the user needs them to work even when `commands.text: false` is
+  // set on the surface. In particular, `/acp close` is the escape hatch
+  // for a runaway ACP session — gating it on `allowTextCommands` would
+  // leave the user editing `thread-bindings.json` by hand to recover,
+  // which is exactly the workaround that motivated #66298. Without this
+  // bypass, `/acp close` issued inside a bound Discord thread reaches
+  // the ACP agent and gets replied to with a hallucinated natural-
   // language message while the session stays open.
   if (isAcpCommandCandidate(normalized)) {
-    return allowTextCommands;
+    return true;
   }
 
   if (!normalized.startsWith("!")) {
