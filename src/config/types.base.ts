@@ -221,7 +221,7 @@ export type SessionMaintenanceConfig = {
    * Maximum number of lines to keep per transcript `.jsonl` file after rotation.
    * The most recent N lines are preserved; older lines are archived.
    * Default: null (no line cap — entire file is archived on rotation,
-   * resulting in an empty replacement file with just the session header).
+   * resulting in a replacement file containing only the session header).
    */
   transcriptMaxLines?: number;
 };

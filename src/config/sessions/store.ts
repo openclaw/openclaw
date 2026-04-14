@@ -18,6 +18,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "./paths.js";
 import {
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
@@ -40,6 +41,7 @@ import {
   pruneStaleEntries,
   resolveMaintenanceConfig,
   rotateSessionFile,
+  rotateTranscriptFile,
   rotateTranscriptFiles,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
@@ -172,6 +174,7 @@ export {
   pruneStaleEntries,
   resolveMaintenanceConfig,
   rotateSessionFile,
+  rotateTranscriptFile,
   rotateTranscriptFiles,
 };
 export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
@@ -376,8 +379,26 @@ async function saveSessionStoreUnlocked(
       // Rotate the on-disk file if it exceeds the size threshold.
       await rotateSessionFile(storePath, maintenance.rotateBytes);
 
-      // Rotate oversized transcript .jsonl files.
-      await rotateTranscriptFiles({ storePath, maintenance });
+      // Rotate the active session's transcript if it exceeds the size threshold.
+      // Only check the active transcript on the hot path (per-write) to avoid
+      // an expensive full-directory walk. Use `rotateTranscriptFiles` (full walk)
+      // in CLI/cron scenarios instead.
+      const activeSessionKey = opts?.activeSessionKey?.trim();
+      if (
+        activeSessionKey &&
+        maintenance.transcriptRotateBytes != null &&
+        maintenance.transcriptRotateBytes > 0
+      ) {
+        const activeEntry = store[activeSessionKey];
+        if (activeEntry?.sessionId) {
+          const transcriptPath = resolveSessionFilePath(
+            activeEntry.sessionId,
+            activeEntry,
+            resolveSessionFilePathOptions({ storePath }),
+          );
+          await rotateTranscriptFile({ transcriptPath, maintenance });
+        }
+      }
 
       const diskBudget = await enforceSessionDiskBudget({
         store,

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -17,6 +18,7 @@ const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_ROTATE_BYTES = 10_485_760; // 10 MB
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "warn";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
+const MAX_ROTATION_BACKUPS = 3;
 
 export type SessionMaintenanceWarning = {
   activeSessionKey: string;
@@ -140,7 +142,8 @@ function resolveTranscriptRotateBytes(maintenance?: SessionMaintenanceConfig): n
     return null;
   }
   try {
-    return parseByteSize(normalized, { defaultUnit: "b" });
+    const parsed = parseByteSize(normalized, { defaultUnit: "b" });
+    return parsed > 0 ? parsed : null;
   } catch {
     return null;
   }
@@ -354,9 +357,8 @@ export async function rotateSessionFile(
       .toSorted()
       .toReversed();
 
-    const maxBackups = 3;
-    if (backups.length > maxBackups) {
-      const toDelete = backups.slice(maxBackups);
+    if (backups.length > MAX_ROTATION_BACKUPS) {
+      const toDelete = backups.slice(MAX_ROTATION_BACKUPS);
       for (const old of toDelete) {
         await fs.promises.unlink(path.join(dir, old)).catch(() => undefined);
       }
@@ -370,13 +372,119 @@ export async function rotateSessionFile(
 }
 
 /**
+ * Rotate a single transcript `.jsonl` file if it exceeds `transcriptRotateBytes`.
+ *
+ * This is the hot-path function called on every session store save for the
+ * currently active transcript only — avoiding an expensive full-directory walk
+ * per write. For bulk rotation (CLI / cron), use `rotateTranscriptFiles` instead.
+ *
+ * Returns `true` if the file was rotated, `false` otherwise.
+ */
+export async function rotateTranscriptFile(params: {
+  transcriptPath: string;
+  maintenance: ResolvedSessionMaintenanceConfig;
+}): Promise<boolean> {
+  const { transcriptPath, maintenance } = params;
+  const maxBytes = maintenance.transcriptRotateBytes;
+  if (maxBytes == null || maxBytes <= 0) {
+    return false;
+  }
+
+  // Check file size
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(transcriptPath);
+  } catch {
+    return false;
+  }
+  if (stat.size <= maxBytes) {
+    return false;
+  }
+
+  // Rotate: archive current file, write replacement with tail lines
+  const archiveTimestamp = formatSessionArchiveTimestamp();
+  const backupPath = `${transcriptPath}.bak.${archiveTimestamp}`;
+  try {
+    await fs.promises.rename(transcriptPath, backupPath);
+  } catch {
+    return false;
+  }
+
+  // Write replacement file with session header + most recent lines
+  const maxLines = maintenance.transcriptMaxLines;
+  try {
+    const { headerLine: archiveHeader, tailLines } = await readHeaderAndTailLines(
+      backupPath,
+      maxLines ?? 0,
+    );
+    const headerContent = archiveHeader ?? buildDefaultSessionHeader();
+    if (!archiveHeader) {
+      log.warn("transcript rotation: could not read original session header; using default", {
+        file: path.basename(transcriptPath),
+      });
+    }
+    let replacementLines: string[];
+    if (maxLines != null && maxLines > 0) {
+      replacementLines = [headerContent, ...tailLines];
+    } else {
+      // No maxLines — replacement contains only the session header
+      replacementLines = [headerContent];
+    }
+    // Use O_EXCL to avoid silently overwriting a concurrently recreated file
+    try {
+      const fd = await fs.promises.open(
+        transcriptPath,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+        0o600,
+      );
+      try {
+        await fd.writeFile(replacementLines.join("\n") + "\n", "utf-8");
+      } finally {
+        await fd.close();
+      }
+    } catch (exclErr) {
+      if ((exclErr as NodeJS.ErrnoException).code === "EEXIST") {
+        // A concurrent append already recreated the file — skip replacement write.
+        log.warn("transcript rotation skipped replacement: file recreated concurrently", {
+          file: path.basename(transcriptPath),
+        });
+      } else {
+        throw exclErr;
+      }
+    }
+  } catch {
+    // Best-effort; the archive is safe even if replacement write fails.
+    log.warn("transcript rotation: replacement file not written", {
+      file: path.basename(transcriptPath),
+    });
+  }
+
+  log.info("rotated transcript file", {
+    file: path.basename(transcriptPath),
+    sizeBytes: stat.size,
+    maxBytes,
+    archiveTimestamp,
+  });
+
+  // Clean up old backups for this transcript (keep 3 most recent)
+  await cleanupOldTranscriptBackups(path.dirname(transcriptPath), path.basename(transcriptPath));
+
+  return true;
+}
+
+/**
  * Scan the sessions directory for `.jsonl` transcript files that exceed
  * `transcriptRotateBytes` and rotate them. For each oversized file:
  *
  * 1. Archive the current file as `<name>.jsonl.bak.<timestamp>`
  * 2. Keep only the last `transcriptMaxLines` lines (if configured) in the
- *    replacement file; otherwise write an empty file with just the header line.
+ *    replacement file, prefixed with the session header; otherwise write a
+ *    replacement file containing only the session header.
  * 3. Clean up old `.bak.*` archives (keep 3 most recent per base name).
+ *
+ * This performs a full directory walk and is intended for CLI / cron use.
+ * The hot-path (per-write) rotation uses `rotateTranscriptFile` instead,
+ * which only checks the currently active transcript.
  *
  * Returns the number of transcript files rotated.
  */
@@ -392,7 +500,6 @@ export async function rotateTranscriptFiles(params: {
 
   const sessionsDir = path.dirname(path.resolve(storePath));
   let rotated = 0;
-  const maxBytesChecked = maxBytes; // Captured for closure (TS null narrowing)
 
   // Walk all subdirectories under sessionsDir to find .jsonl files
   async function walkDir(dir: string): Promise<void> {
@@ -416,51 +523,13 @@ export async function rotateTranscriptFiles(params: {
         continue;
       }
 
-      // Check file size
-      let stat: fs.Stats;
-      try {
-        stat = await fs.promises.stat(fullPath);
-      } catch {
-        continue;
-      }
-      if (stat.size <= maxBytesChecked) {
-        continue;
-      }
-
-      // Rotate: archive current file, write replacement with tail lines
-      const archiveTimestamp = formatSessionArchiveTimestamp();
-      const backupPath = `${fullPath}.bak.${archiveTimestamp}`;
-      try {
-        await fs.promises.rename(fullPath, backupPath);
-      } catch {
-        continue;
-      }
-
-      // Write replacement file with most recent lines (or empty if no maxLines)
-      const maxLines = maintenance.transcriptMaxLines;
-      try {
-        if (maxLines != null && maxLines > 0) {
-          // Read the last N lines from the archived file
-          const tailLines = await readLastNLines(backupPath, maxLines);
-          await fs.promises.writeFile(fullPath, tailLines.join("\n") + "\n", "utf-8");
-        } else {
-          // No maxLines configured — write empty replacement
-          await fs.promises.writeFile(fullPath, "", "utf-8");
-        }
-      } catch {
-        // Best-effort; the archive is safe even if replacement write fails.
-      }
-
-      log.info("rotated transcript file", {
-        file: path.relative(sessionsDir, fullPath),
-        sizeBytes: stat.size,
-        maxBytes: maxBytesChecked,
-        archiveTimestamp,
+      const wasRotated = await rotateTranscriptFile({
+        transcriptPath: fullPath,
+        maintenance,
       });
-      rotated++;
-
-      // Clean up old backups for this base name (keep 3 most recent)
-      await cleanupOldTranscriptBackups(fullPath, dir, entry.name);
+      if (wasRotated) {
+        rotated++;
+      }
     }
   }
 
@@ -469,31 +538,82 @@ export async function rotateTranscriptFiles(params: {
 }
 
 /**
- * Read the last N lines from a text file efficiently using readline.
- * Returns lines in original order (oldest to newest within the tail).
+ * Build a default session header line for cases where the original file
+ * had no parseable header (should not normally happen).
  */
-async function readLastNLines(filePath: string, n: number): Promise<string[]> {
-  const lines: string[] = [];
-  const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  for await (const line of rl) {
-    lines.push(line);
-    if (lines.length > n) {
-      lines.shift();
+function buildDefaultSessionHeader(): string {
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: "unknown",
+    timestamp: new Date().toISOString(),
+    cwd: process.cwd(),
+  };
+  return JSON.stringify(header);
+}
+
+/**
+ * Read the session header and the last N message lines from a transcript file
+ * in a single streaming pass. The first line is treated as the session header;
+ * the remaining lines are filtered through a circular buffer to keep only the
+ * most recent `maxTailLines` entries.
+ *
+ * Returns `{ headerLine, tailLines }` where `headerLine` may be null if the
+ * file is empty or unreadable, and `tailLines` is in original order (oldest
+ * to newest). If `maxTailLines` is 0 or negative, no tail lines are collected.
+ */
+async function readHeaderAndTailLines(
+  filePath: string,
+  maxTailLines: number,
+): Promise<{ headerLine: string | null; tailLines: string[] }> {
+  let headerLine: string | null = null;
+  let lineIndex = 0;
+  let head = 0;
+  let count = 0;
+  const shouldCollectTail = maxTailLines > 0;
+  const buf: string[] | null = shouldCollectTail
+    ? Array.from<string>({ length: maxTailLines })
+    : null;
+
+  try {
+    const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    try {
+      for await (const line of rl) {
+        if (lineIndex === 0) {
+          headerLine = line;
+        } else if (shouldCollectTail && buf) {
+          buf[head] = line;
+          head = (head + 1) % maxTailLines;
+          if (count < maxTailLines) {
+            count++;
+          }
+        }
+        lineIndex++;
+      }
+    } finally {
+      rl.close();
+      stream.destroy();
     }
+
+    if (!shouldCollectTail || !buf) {
+      return { headerLine, tailLines: [] };
+    }
+    if (count < maxTailLines) {
+      return { headerLine, tailLines: buf.slice(0, count) };
+    }
+    // Stitch circular buffer: [head..maxTailLines) + [0..head)
+    return { headerLine, tailLines: [...buf.slice(head), ...buf.slice(0, head)] };
+  } catch {
+    return { headerLine: null, tailLines: [] };
   }
-  return lines;
 }
 
 /**
  * Remove old `.bak.*` archives for a given transcript file, keeping only
  * the 3 most recent.
  */
-async function cleanupOldTranscriptBackups(
-  originalPath: string,
-  dir: string,
-  baseName: string,
-): Promise<void> {
+async function cleanupOldTranscriptBackups(dir: string, baseName: string): Promise<void> {
   try {
     const files = await fs.promises.readdir(dir);
     const backups = files
@@ -501,9 +621,8 @@ async function cleanupOldTranscriptBackups(
       .toSorted()
       .toReversed();
 
-    const maxBackups = 3;
-    if (backups.length > maxBackups) {
-      const toDelete = backups.slice(maxBackups);
+    if (backups.length > MAX_ROTATION_BACKUPS) {
+      const toDelete = backups.slice(MAX_ROTATION_BACKUPS);
       for (const old of toDelete) {
         await fs.promises.unlink(path.join(dir, old)).catch(() => undefined);
       }
