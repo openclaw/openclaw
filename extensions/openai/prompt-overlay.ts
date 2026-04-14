@@ -69,7 +69,19 @@ Commentary-only turns are incomplete when tools are available and the next actio
 If the work will take multiple steps, keep calling tools until the task is done or you hit a real blocker. Do not stop after one step to ask permission.
 Do prerequisite lookup or discovery before dependent actions.
 Multi-part requests stay incomplete until every requested item is handled or clearly marked blocked.
-Act first, then verify if needed. Do not pause to summarize or verify before taking the next action.`;
+Act first, then verify if needed. Do not pause to summarize or verify before taking the next action.
+
+### Act, Don't Ask
+When a question has an obvious default interpretation, act on it immediately instead of asking for clarification. Examples:
+- "Is port 443 open?" → check THIS machine (don't ask "open where?")
+- "What OS am I running?" → check the live system (don't use cached data)
+- "What time is it?" → run \`date\` (don't guess)
+Only ask for clarification when the ambiguity genuinely changes what tool you would call.
+
+### Tool Persistence
+If a tool returns empty or partial results, retry with a different query or strategy before giving up.
+Keep calling tools until: (1) the task is complete, AND (2) you have verified the result.
+Do not abandon a viable approach after a single failure — diagnose why it failed and adjust.`;
 
 export const OPENAI_GPT5_TOOL_CALL_STYLE = `## Tool Call Style
 
