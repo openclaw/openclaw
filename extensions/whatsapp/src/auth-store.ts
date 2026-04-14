@@ -95,6 +95,14 @@ async function clearLegacyBaileysAuthState(authDir: string) {
     if (name === "creds.json" || name === "creds.json.bak") {
       return true;
     }
+    // Consolidated auth state files from useAtomicAuthState
+    if (
+      name === "auth-state.json" ||
+      name === "auth-state.json.bak" ||
+      name === "auth-state.json.tmp"
+    ) {
+      return true;
+    }
     if (!name.endsWith(".json")) {
       return false;
     }
