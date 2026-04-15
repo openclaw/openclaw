@@ -214,35 +214,27 @@ describe("feishu_doc old version document read", () => {
     expect(result.details.hint).toContain("table");
   });
 
-  it("redirects to upgraded token when meta says is_upgraded=true", async () => {
-    // First meta call returns upgraded=true with upgraded_token
-    // Second meta call (for upgraded token) should fall through to docx API
-    let metaCallCount = 0;
-    requestMock.mockImplementation((opts: { url: string }) => {
-      if (opts.url.includes("/open-apis/doc/v2/meta/")) {
-        metaCallCount++;
-        if (metaCallCount === 1) {
-          // Old doc token → upgraded
-          return Promise.resolve({
-            code: 0,
-            data: { is_upgraded: true, upgraded_token: "new_docx_token" },
-          });
-        }
-        // New docx token meta → not an old doc, throw to fall through
-        return Promise.resolve({ code: 99999, msg: "not found" });
-      }
-      return Promise.resolve({ code: -1, msg: "Not mocked" });
+  it("reads upgraded document via docx API with upgraded token", async () => {
+    // Meta returns is_upgraded=true with upgraded_token
+    // No second meta call — the upgraded token goes directly to docx API
+    setupRequestMock({
+      "/open-apis/doc/v2/meta/": {
+        code: 0,
+        data: { is_upgraded: true, upgraded_token: "new_docx_token" },
+      },
     });
 
     const tool = resolveFeishuDocTool();
     const result = await executeRead(tool, "old_token");
 
-    // Should have redirected to the new docx token and used docx API
+    // Should use upgraded token directly with docx API (no recursion)
     expect(result.details.title).toBe("New Doc");
     expect(result.details.content).toBe("new doc text");
     expect(rawContentMock).toHaveBeenCalledWith(
       expect.objectContaining({ path: { document_id: "new_docx_token" } }),
     );
+    // Only one meta call (no recursive readDoc → fetchOldDocMeta)
+    expect(requestMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to docx API when meta API fails", async () => {

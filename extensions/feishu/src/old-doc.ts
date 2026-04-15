@@ -143,12 +143,18 @@ function countOldBlockTypes(blocks: OldDocBlock[]): {
 
 // ============ Main read function ============
 
+/** Pre-fetched meta result passed from readDoc to avoid redundant API calls. */
+export type OldDocMetaResult = {
+  is_upgraded: boolean;
+  upgraded_token?: string;
+  title?: string;
+};
+
 /** Read an old version Feishu document, returning a unified result shape. */
-export async function readOldDoc(client: Lark.Client, docToken: string) {
-  const [rawContentRes, contentRes, metaRes] = await Promise.all([
+export async function readOldDoc(client: Lark.Client, docToken: string, meta: OldDocMetaResult) {
+  const [rawContentRes, contentRes] = await Promise.all([
     fetchOldDocRawContent(client, docToken),
     fetchOldDocContent(client, docToken),
-    fetchOldDocMeta(client, docToken),
   ]);
 
   // Parse the rich content JSON string
@@ -166,8 +172,7 @@ export async function readOldDoc(client: Lark.Client, docToken: string) {
   const { blockCounts, structuredTypes } = countOldBlockTypes(blocks);
 
   // Extract title from content if meta didn't provide one
-  const title =
-    metaRes.title || (parsedContent ? extractTextFromParagraph(parsedContent.title) : "");
+  const title = meta.title || (parsedContent ? extractTextFromParagraph(parsedContent.title) : "");
 
   let hint: string | undefined;
   if (structuredTypes.length > 0) {
@@ -178,8 +183,8 @@ export async function readOldDoc(client: Lark.Client, docToken: string) {
     title,
     content: rawContentRes.data?.content ?? "",
     document_version: "old" as const,
-    is_upgraded: metaRes.is_upgraded,
-    upgraded_token: metaRes.upgraded_token,
+    is_upgraded: meta.is_upgraded,
+    upgraded_token: meta.upgraded_token,
     block_count: blocks.length,
     block_types: blockCounts,
     ...(hint && { hint }),

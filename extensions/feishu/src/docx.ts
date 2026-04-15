@@ -866,23 +866,31 @@ async function uploadFileBlock(
 const STRUCTURED_BLOCK_TYPES = new Set([14, 18, 21, 23, 27, 30, 31, 32]);
 
 async function readDoc(client: Lark.Client, docToken: string) {
-  // Version detection: check if this is an old-version document
+  // Version detection: check if this is an old-version document.
+  // Only the meta call is wrapped in try/catch; downstream read errors propagate.
+  let oldDocMeta: Awaited<ReturnType<typeof fetchOldDocMeta>> | undefined;
   try {
     const meta = await fetchOldDocMeta(client, docToken);
     if (!meta.is_upgraded) {
-      return await readOldDoc(client, docToken);
+      // Old version — read via legacy doc v2 API (meta passed to avoid redundant call)
+      return await readOldDoc(client, docToken, meta);
     }
+    // Document has been upgraded — use the upgraded token with the docx API path below.
+    // No recursion: we read the upgraded docx token directly in the parallel fetch below.
     if (meta.upgraded_token) {
-      return await readDoc(client, meta.upgraded_token);
+      oldDocMeta = meta;
     }
   } catch {
-    // Meta API unavailable — proceed with docx API
+    // Meta API unavailable (permissions, not an old doc, etc.) — proceed with docx API
   }
 
+  // Use upgraded token if available, otherwise use the original token
+  const resolvedToken = oldDocMeta?.upgraded_token ?? docToken;
+
   const [contentRes, infoRes, blocksRes] = await Promise.all([
-    client.docx.document.rawContent({ path: { document_id: docToken } }),
-    client.docx.document.get({ path: { document_id: docToken } }),
-    client.docx.documentBlock.list({ path: { document_id: docToken } }),
+    client.docx.document.rawContent({ path: { document_id: resolvedToken } }),
+    client.docx.document.get({ path: { document_id: resolvedToken } }),
+    client.docx.documentBlock.list({ path: { document_id: resolvedToken } }),
   ]);
 
   if (contentRes.code !== 0) {
