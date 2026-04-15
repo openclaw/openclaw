@@ -29,6 +29,13 @@ import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import {
+  resolveBootstrapMaxChars,
+  resolveBootstrapTotalMaxChars,
+} from "./pi-embedded-helpers.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { buildSystemPromptReport } from "./system-prompt-report.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
 
@@ -323,6 +330,29 @@ export async function runCliAgent(params: {
     const text = output.text?.trim();
     const payloads = text ? [{ text }] : undefined;
 
+    const sandboxRuntime = resolveSandboxRuntimeStatus({
+      cfg: params.config,
+      sessionKey: params.sessionKey ?? params.sessionId,
+    });
+
+    const systemPromptReport = buildSystemPromptReport({
+      source: "run",
+      generatedAt: Date.now(),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: modelId,
+      workspaceDir,
+      bootstrapMaxChars: resolveBootstrapMaxChars(params.config),
+      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+      sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
+      systemPrompt,
+      bootstrapFiles: [],
+      injectedFiles: contextFiles,
+      skillsPrompt: "",
+      tools: [] as AgentTool[],
+    });
+
     return {
       payloads,
       meta: {
@@ -333,6 +363,7 @@ export async function runCliAgent(params: {
           model: modelId,
           usage: output.usage,
         },
+        systemPromptReport,
       },
     };
   } catch (err) {
