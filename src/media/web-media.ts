@@ -91,24 +91,6 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
 const MB = 1024 * 1024;
 
-function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
-  if (!buffer || buffer.length < 2) {
-    return undefined;
-  }
-  const b0 = buffer[0];
-  const b1 = buffer[1];
-  // Only trust a BOM — the NUL-heavy heuristic cannot be used as a security gate
-  // because TextDecoder("utf-16le") never throws and all byte pairs produce printable
-  // code points, allowing opaque NUL-padded binaries to pass the text-stats check.
-  if (b0 === 0xff && b1 === 0xfe) {
-    return "utf-16le";
-  }
-  if (b0 === 0xfe && b1 === 0xff) {
-    return "utf-16be";
-  }
-  return undefined;
-}
-
 function getTextStats(text: string): { printableRatio: number } {
   if (!text) {
     return { printableRatio: 0 };
@@ -158,24 +140,13 @@ function decodeHostReadText(buffer: Buffer): string | undefined {
   if (buffer.length === 0) {
     return "";
   }
-  const utf16Charset = resolveUtf16Charset(buffer);
+  // UTF-16 decoding is intentionally omitted: TextDecoder("utf-16le/be") never throws on
+  // arbitrary byte pairs, so every byte pair is a valid (if meaningless) Unicode scalar —
+  // an attacker can prepend a BOM and pass getTextStats with printableRatio≈1.0 on pure
+  // binary garbage. The Latin-1 path below already covers the most common non-UTF-8
+  // real-world case (Excel CSV exports with accented chars like é, ñ) while remaining
+  // safe because hasSingleByteTextShape gates on byte shape *before* any decode.
   try {
-    if (utf16Charset === "utf-16be") {
-      const evenBuffer = buffer.length % 2 === 0 ? buffer : buffer.subarray(0, buffer.length - 1);
-      if (evenBuffer.length === 0) {
-        return "";
-      }
-      const swapped = Buffer.alloc(evenBuffer.length);
-      for (let i = 0; i + 1 < evenBuffer.length; i += 2) {
-        swapped[i] = evenBuffer[i + 1];
-        swapped[i + 1] = evenBuffer[i];
-      }
-      return new TextDecoder("utf-16le").decode(swapped);
-    }
-    if (utf16Charset === "utf-16le") {
-      const evenBuffer = buffer.length % 2 === 0 ? buffer : buffer.subarray(0, buffer.length - 1);
-      return new TextDecoder("utf-16le").decode(evenBuffer);
-    }
     return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
   } catch {
     if (!hasSingleByteTextShape(buffer)) {
