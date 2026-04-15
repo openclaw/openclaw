@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as schedule from "../schedule.js";
 import type { CronJob, CronStoreFile } from "../types.js";
-import { recomputeNextRuns } from "./jobs.js";
+import { recomputeNextRuns, recomputeNextRunsForMaintenance } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {
@@ -140,6 +141,57 @@ describe("cron schedule error isolation", () => {
     expect(changed).toBe(true);
     expect(job.state.nextRunAtMs).toBeDefined();
     expect(job.state.scheduleErrorCount).toBeUndefined();
+  });
+
+  it("keeps scheduleErrorCount when maintenance cron computation returns undefined", () => {
+    const job = createJob({
+      id: "undefined-next-run",
+      name: "Undefined Next Run",
+      state: { scheduleErrorCount: 1 },
+    });
+    const state = createMockState([job]);
+    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
+
+    try {
+      const changed = recomputeNextRunsForMaintenance(state);
+
+      expect(changed).toBe(true);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.state.lastError).toContain("schedule computation returned undefined");
+      expect(job.state.scheduleErrorCount).toBe(2);
+      expect(job.enabled).toBe(true);
+    } finally {
+      nextRunSpy.mockRestore();
+    }
+  });
+
+  it("auto-disables cron jobs after repeated undefined next-run computations", () => {
+    const job = createJob({
+      id: "undefined-next-run-threshold",
+      name: "Undefined Next Run Threshold",
+      state: { scheduleErrorCount: 2 },
+    });
+    const state = createMockState([job]);
+    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
+
+    try {
+      const changed = recomputeNextRunsForMaintenance(state);
+
+      expect(changed).toBe(true);
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.state.scheduleErrorCount).toBe(3);
+      expect(state.deps.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: "undefined-next-run-threshold",
+          name: "Undefined Next Run Threshold",
+          errorCount: 3,
+        }),
+        expect.stringContaining("auto-disabled job"),
+      );
+    } finally {
+      nextRunSpy.mockRestore();
+    }
   });
 
   it("does not modify disabled jobs", () => {

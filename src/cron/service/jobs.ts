@@ -442,6 +442,13 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
   let changed = false;
   try {
     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
+    if (params.job.schedule.kind === "cron" && newNext === undefined) {
+      return recordScheduleComputeError({
+        state: params.state,
+        job: params.job,
+        err: new Error("schedule computation returned undefined"),
+      });
+    }
     if (
       params.job.schedule.kind !== "at" &&
       params.job.state.lastStatus === "error" &&

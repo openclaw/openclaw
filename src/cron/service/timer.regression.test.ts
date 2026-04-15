@@ -1138,6 +1138,7 @@ describe("cron service timer regressions", () => {
       expect(job.state.runningAtMs).toBeUndefined();
       expect(job.state.lastRunAtMs).toBe(startedAt);
       expect(job.state.lastStatus).toBe("ok");
+      expect(job.state.scheduleErrorCount).toBe(1);
       expect(job.state.nextRunAtMs).toBeUndefined();
       expect(job.enabled).toBe(true);
     } finally {
@@ -1180,6 +1181,7 @@ describe("cron service timer regressions", () => {
       expect(job.state.lastRunAtMs).toBe(startedAt);
       expect(job.state.lastStatus).toBe("error");
       expect(job.state.consecutiveErrors).toBe(1);
+      expect(job.state.scheduleErrorCount).toBe(1);
       expect(job.state.nextRunAtMs).toBeUndefined();
       expect(job.enabled).toBe(true);
     } finally {
