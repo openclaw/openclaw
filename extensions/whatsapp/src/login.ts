@@ -10,40 +10,28 @@ import { waitForWhatsAppLoginResult } from "./connection-controller.js";
 type LoginSocketFactory = typeof createWaSocket;
 type LoginWaiter = typeof waitForWaConnection;
 
-type LoginWebResolvedArgs = {
-  runtime: RuntimeEnv;
-  accountId: string | undefined;
-  waitForConnection: LoginWaiter | undefined;
-  createSocket: LoginSocketFactory | undefined;
-};
-
-function isRuntimeEnvLike(value: unknown): value is RuntimeEnv {
-  return !!value && typeof value === "object" && "log" in value;
-}
-
 function resolveLoginWebArgs(
   arg2?: RuntimeEnv | LoginWaiter,
   arg3?: RuntimeEnv | string,
   arg4?: string | LoginSocketFactory,
   arg5?: LoginSocketFactory,
-): LoginWebResolvedArgs {
+) {
   if (typeof arg2 === "function") {
     return {
-      runtime: isRuntimeEnvLike(arg3) ? arg3 : defaultRuntime,
+      runtime: (arg3 as RuntimeEnv | undefined) ?? defaultRuntime,
       accountId: typeof arg4 === "string" ? arg4 : undefined,
       waitForConnection: arg2,
-      createSocket: arg5,
+      createSocket: arg5 as LoginSocketFactory | undefined,
     };
   }
-
   return {
     runtime: arg2 ?? defaultRuntime,
-    accountId: typeof arg3 === "string" ? arg3 : typeof arg4 === "string" ? arg4 : undefined,
+    accountId: typeof arg3 === "string" ? arg3 : undefined,
     waitForConnection: undefined,
     createSocket:
       typeof arg4 === "function"
-        ? arg4
-        : arg5,
+        ? (arg4 as LoginSocketFactory)
+        : (arg5 as LoginSocketFactory | undefined),
   };
 }
 
@@ -69,9 +57,9 @@ export async function loginWeb(
     verbose,
     runtime,
     waitForConnection,
-    createSocket: createSocket ?? (async (printQr, socketVerbose, opts) => {
-      const { createWaSocket } = await import("./session.js");
-      return createWaSocket(printQr, socketVerbose, opts);
+    createSocket: createSocket ?? (async () => {
+      const { createWaSocket: _c } = await import("./session.js");
+      return _c(true, verbose, { authDir: account.authDir });
     }),
   });
   try {

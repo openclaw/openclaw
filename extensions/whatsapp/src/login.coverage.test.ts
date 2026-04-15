@@ -12,6 +12,7 @@ import {
 const rmMock = vi.spyOn(fs, "rm");
 const testState = vi.hoisted(() => ({
   authDir: `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/openclaw-wa-creds-${process.pid}-${Math.random().toString(16).slice(2)}`,
+  createWaSocketCalls: 0 as number,
 }));
 
 function resolveTestAuthDir() {
@@ -42,7 +43,7 @@ vi.mock("./session.js", async () => {
   const authDir = resolveTestAuthDir();
   const sockA = { ws: { close: vi.fn() } };
   const sockB = { ws: { close: vi.fn() } };
-  const createWaSocket = vi.fn(async () => (createWaSocket.mock.calls.length <= 1 ? sockA : sockB));
+  const createWaSocket = vi.fn(async () => (testState.createWaSocketCalls++ <= 0 ? sockA : sockB));
   const waitForWaConnection = vi.fn();
   const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
   const getStatusCode = vi.fn(
@@ -108,18 +109,19 @@ describe("loginWeb coverage", () => {
       .mockResolvedValueOnce(undefined);
     waitForCredsSaveQueueWithTimeoutMock.mockReturnValueOnce(credsFlushGate);
 
+    testState.createWaSocketCalls = 0;
     const runtime = { log: vi.fn(), error: vi.fn() } as never;
-    const pendingLogin = loginWeb(false, runtime, undefined, createWaSocketMock);
+    const pendingLogin = loginWeb(false, runtime, waitForWaConnectionMock, createWaSocketMock);
     await flushTasks();
 
-    expect(createWaSocketMock).toHaveBeenCalledTimes(1);
+    expect(testState.createWaSocketCalls).toBe(1);
     expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledOnce();
     expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith(testState.authDir);
 
     releaseCredsFlush?.();
     await pendingLogin;
 
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    expect(testState.createWaSocketCalls).toBe(2);
     const firstSock = await createWaSocketMock.mock.results[0]?.value;
     expect(firstSock.ws.close).toHaveBeenCalled();
     vi.runAllTimers();

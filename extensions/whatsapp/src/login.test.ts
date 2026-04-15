@@ -21,7 +21,6 @@ vi.mock("./session.js", async () => {
   };
 });
 
-import type { waitForWaConnection } from "./session.js";
 let loginWeb: typeof import("./login.js").loginWeb;
 let createWaSocket: typeof import("./session.js").createWaSocket;
 
@@ -47,8 +46,7 @@ describe("web login", () => {
       createWaSocket as unknown as () => Promise<{ ws: { close: () => void } }>
     )();
     const close = vi.spyOn(sock.ws, "close");
-    const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
-    await loginWeb(false, waiter);
+    await loginWeb(false, undefined, undefined, async () => sock);
     expect(close).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(499);
