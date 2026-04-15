@@ -450,7 +450,7 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 ### [QQ](https://docs.openclaw.ai/channels/qqbot)
 
 - Go to the QQ Open Platform and scan the QR code with your phone QQ to register / log in.
-- Create Bot to create a new QQ bot. Find AppID and AppSecret on the bot’s settings page and copy them.
+- Click **Create Bot** to create a new QQ bot. Find **AppID** and **AppSecret** on the bot's settings page and copy them.
 
 ```json
 {
