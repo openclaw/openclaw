@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseBrowserMajorVersion,
+  resolveBrowserExecutableForPlatform,
   resolveGoogleChromeExecutableForPlatform,
 } from "./chrome.executables.js";
 
@@ -38,5 +40,35 @@ describe("chrome executables", () => {
       kind: "canary",
       path: "/usr/bin/google-chrome-unstable",
     });
+  });
+
+  it("expands tilde paths in browser.executablePath", () => {
+    const homeDir = os.homedir();
+    const tildePath = `/.local/chromium/chrome`;
+    const absolutePath = `${homeDir}${tildePath}`;
+
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return String(candidate) === absolutePath;
+    });
+
+    const result = resolveBrowserExecutableForPlatform(
+      { executablePath: `~${tildePath}` } as never,
+      "linux",
+    );
+    expect(result).toEqual({ kind: "custom", path: absolutePath });
+  });
+
+  it("passes through non-tilde executablePath unchanged", () => {
+    const absolutePath = "/opt/chromium/chrome";
+
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return String(candidate) === absolutePath;
+    });
+
+    const result = resolveBrowserExecutableForPlatform(
+      { executablePath: absolutePath } as never,
+      "linux",
+    );
+    expect(result).toEqual({ kind: "custom", path: absolutePath });
   });
 });

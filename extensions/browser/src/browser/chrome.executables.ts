@@ -705,10 +705,14 @@ export function resolveBrowserExecutableForPlatform(
   platform: NodeJS.Platform,
 ): BrowserExecutable | null {
   if (resolved.executablePath) {
-    if (!exists(resolved.executablePath)) {
+    // Expand tilde paths — Node.js fs/spawn do not resolve ~ automatically
+    const execPath = resolved.executablePath.startsWith("~/")
+      ? path.join(os.homedir(), resolved.executablePath.slice(2))
+      : resolved.executablePath;
+    if (!exists(execPath)) {
       throw new Error(`browser.executablePath not found: ${resolved.executablePath}`);
     }
-    return { kind: "custom", path: resolved.executablePath };
+    return { kind: "custom", path: execPath };
   }
 
   const detected = detectDefaultChromiumExecutable(platform);
