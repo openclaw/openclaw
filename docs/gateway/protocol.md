@@ -81,7 +81,7 @@ Gateway → Client:
     "snapshot": { "…": "…" },
     "policy": {
       "maxPayload": 26214400,
-      "maxBufferedBytes": 26214400,
+      "maxBufferedBytes": 52428800,
       "tickIntervalMs": 15000
     }
   }
