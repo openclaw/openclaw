@@ -82,7 +82,7 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   {
     id: "python-exec-encoded",
     description: "Python/Perl/Ruby with base64 or encoded execution",
-    regex: /(?:python[23]?|perl|ruby)\s+-[ec]\s+.*(?:base64|b64decode|decode|exec|system|eval)/i,
+    regex: /(?:python[23]?|perl|ruby)\s+-[ec]\s+.*(?:(?<![._])(?:base64|b64decode)\s*\.(?:b64decode|decode)\s*\(|exec\s*\(|eval\s*\(|system\s*\()/i,
   },
   {
     id: "curl-pipe-shell",
