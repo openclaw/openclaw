@@ -177,7 +177,7 @@ export function findClientToolNameConflicts(params: {
 }): string[] {
   const existingNormalized = new Set<string>();
   for (const name of params.existingToolNames ?? []) {
-    const trimmed = String(name).trim();
+    const trimmed = name.trim();
     if (trimmed) {
       existingNormalized.add(normalizeToolName(trimmed));
     }
@@ -186,7 +186,7 @@ export function findClientToolNameConflicts(params: {
   const conflicts = new Set<string>();
   const seenClientNames = new Map<string, string>();
   for (const tool of params.tools) {
-    const rawName = String(tool.function?.name ?? "").trim();
+    const rawName = (tool.function?.name ?? "").trim();
     if (!rawName) {
       continue;
     }

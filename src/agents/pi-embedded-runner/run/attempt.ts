@@ -973,7 +973,7 @@ export async function runEmbeddedAttempt(
       // emitted tool name must match an exact registration of this run.
       const builtinToolNames = new Set(
         effectiveTools.flatMap((tool) => {
-          const name = String(tool.name ?? "").trim();
+          const name = (tool.name ?? "").trim();
           return name ? [name] : [];
         }),
       );
@@ -984,7 +984,7 @@ export async function runEmbeddedAttempt(
       // tool cannot inherit the plugin's local-media trust.
       const coreBuiltinToolNames = new Set(
         effectiveTools.flatMap((tool) => {
-          const name = String(tool.name ?? "").trim();
+          const name = (tool.name ?? "").trim();
           if (!name || getPluginToolMeta(tool)) {
             return [];
           }
