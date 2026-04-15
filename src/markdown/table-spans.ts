@@ -76,7 +76,16 @@ export function parseTableSpans(
         lastEnd = lines[j].end;
         j += 1;
       }
-      spans.push({ start: tableStart, end: lastEnd });
+      // If no meaningful content follows the table, the input may be a
+      // streaming buffer where more rows have not yet arrived.  Extend the
+      // span to `text.length` so the chunker does not split on the trailing
+      // newline before additional rows can arrive.
+      const hasContentAfter =
+        j < lines.length && lines.slice(j).some((l) => l.line.trim() !== "");
+      spans.push({
+        start: tableStart,
+        end: hasContentAfter ? lastEnd : text.length,
+      });
       i = j;
       continue;
     }

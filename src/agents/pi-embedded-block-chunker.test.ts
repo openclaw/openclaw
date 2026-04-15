@@ -241,4 +241,20 @@ describe("EmbeddedBlockChunker", () => {
     // With maxChars=30 and a very long row the chunker must eventually break.
     expect(chunks.length).toBeGreaterThan(1);
   });
+
+  it("does not split a streaming table that arrives without trailing content", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 200,
+      breakPreference: "paragraph",
+    });
+
+    // Simulate streaming: header + separator arrive first, no data rows yet.
+    chunker.append("| Col A | Col B |\n|-------|-------|\n");
+    const chunks = drainChunks(chunker);
+
+    // The partial table must not be emitted — it should stay buffered.
+    expect(chunks).toEqual([]);
+    expect(chunker.bufferedText).toContain("| Col A");
+  });
 });
