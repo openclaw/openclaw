@@ -115,6 +115,7 @@ env:
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.32.1"
   OPENCLAW_REPOSITORY: openclaw/openclaw
+  TSX_VERSION: "4.21.0"
 
 jobs:
   prepare:
@@ -235,7 +236,7 @@ jobs:
         env:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
         run: |
-          node --import tsx workflow/scripts/openclaw-cross-os-release-checks.ts \
+          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
             --prepare-only \
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
@@ -319,7 +320,7 @@ jobs:
           VAR_WINDOWS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER }}
           VAR_MACOS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER }}
         run: |
-          MATRIX_JSON="$(node --import tsx workflow/scripts/openclaw-cross-os-release-checks.ts \
+          MATRIX_JSON="$(pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
             --resolve-matrix \
             --ref "${INPUT_REF}" \
             --mode "${INPUT_MODE}" \
@@ -386,7 +387,7 @@ jobs:
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          node --import tsx workflow/scripts/openclaw-cross-os-release-checks.ts \
+          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
             --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}" \
             --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
             --source-sha "${{ needs.prepare.outputs.source_sha }}" \
