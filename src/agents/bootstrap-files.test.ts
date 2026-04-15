@@ -117,7 +117,30 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files.length).toBeGreaterThan(0);
-    expect(files.every((file) => file.name === "HEARTBEAT.md")).toBe(true);
+    // Lightweight heartbeat mode keeps HEARTBEAT.md and SOUL.md (persona)
+    // so isolated heartbeat sessions preserve the agent's language/personality (#67030).
+    const fileNames = new Set(files.map((file) => file.name));
+    expect(fileNames.has("HEARTBEAT.md")).toBe(true);
+    expect(fileNames.has("SOUL.md")).toBe(true);
+    expect(files.every((file) => file.name === "HEARTBEAT.md" || file.name === "SOUL.md")).toBe(
+      true,
+    );
+  });
+
+  it("excludes missing SOUL.md in lightweight heartbeat mode to avoid [MISSING] markers", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-nosoul-");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+    // No SOUL.md written — file will have missing: true
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      contextMode: "lightweight",
+      runKind: "heartbeat",
+    });
+
+    const soulFiles = files.filter((file) => file.name === "SOUL.md");
+    expect(soulFiles).toHaveLength(0);
+    expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(true);
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {

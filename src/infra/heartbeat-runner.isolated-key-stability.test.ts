@@ -496,4 +496,55 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(legacyIsolatedKey);
     });
   });
+
+  it("embeds exec event content inline when isolated session handles base-session exec events (#67030)", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      await seedSessionStore(storePath, baseSessionKey, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
+
+      // Enqueue an exec completion event on the BASE session queue
+      enqueueSystemEvent("Exec finished (node=n1 id=run42, code 1)\nError: deploy failed", {
+        sessionKey: baseSessionKey,
+      });
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "Deploy failed, notifying user" });
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "exec-event",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const ctx = replySpy.mock.calls[0]?.[0] as {
+        Body?: string;
+        Provider?: string;
+        SessionKey?: string;
+      };
+
+      // The run should use the isolated session key
+      expect(ctx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(ctx.Provider).toBe("exec-event");
+      // The exec event content must be embedded inline in the prompt,
+      // NOT referenced as "system messages above" (which don't exist
+      // in the fresh isolated session).
+      expect(ctx.Body).toContain("Exec finished (node=n1 id=run42, code 1)");
+      expect(ctx.Body).toContain("Error: deploy failed");
+      expect(ctx.Body).not.toContain("system messages above");
+      expect(ctx.Body).toContain("untrusted command output");
+
+      // Base session events should be consumed
+      expect(peekSystemEventEntries(baseSessionKey)).toEqual([]);
+    });
+  });
 });

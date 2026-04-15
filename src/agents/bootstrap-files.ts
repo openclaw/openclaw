@@ -140,7 +140,14 @@ function applyContextModeFilter(params: {
     return params.files;
   }
   if (runKind === "heartbeat") {
-    return params.files.filter((file) => file.name === "HEARTBEAT.md");
+    // Keep SOUL.md alongside HEARTBEAT.md so heartbeat responses preserve
+    // the agent's configured persona/language even in lightweight mode.
+    // Without SOUL.md, isolated heartbeat sessions respond in generic
+    // English which confuses users when relayed to group chats (#67030).
+    return params.files.filter(
+      (file) =>
+        file.name === "HEARTBEAT.md" || (file.name === "SOUL.md" && !file.missing),
+    );
   }
   // cron/default lightweight mode keeps bootstrap context empty on purpose.
   return [];
