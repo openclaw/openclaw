@@ -8,7 +8,9 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
+import { resolveSecretInputString } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId, UsageWindow } from "../../infra/provider-usage.types.js";
@@ -201,6 +203,28 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
 } {
   const out = new Set<string>();
   const expectsOAuth = new Set<string>();
+  // Providers with a resolvable apiKey (inline or SecretRef pointing at a
+  // set env var) are treated as env-backed and skipped from the "missing"
+  // synthesis. Captured once up front so both the models.providers scan
+  // and the auth.profiles scan apply the escape hatch consistently.
+  const envBacked = new Set<string>();
+  for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
+    if (!id || provider?.apiKey === undefined || provider.apiKey === null) {
+      continue;
+    }
+    // `inspect` mode never throws; it tells us whether the SecretRef
+    // currently resolves to a real value. Only treat as env-backed when
+    // status is "available" — a configured-but-unset SecretRef should still
+    // flag as missing on the dashboard (that's a real broken config).
+    const resolved = resolveSecretInputString({
+      value: provider.apiKey,
+      path: `models.providers.${id}.apiKey`,
+      mode: "inspect",
+    });
+    if (resolved.status === "available") {
+      envBacked.add(normalizeProviderId(id));
+    }
+  }
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
     if (!id) {
       continue;
@@ -211,14 +235,15 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
     if (mode !== "oauth" && mode !== "token") {
       continue;
     }
-    // Env-backed credential escape hatch — see JSDoc.
-    const hasEnvCredential = provider?.apiKey !== undefined && provider?.apiKey !== null;
-    if (hasEnvCredential) {
+    if (envBacked.has(normalizeProviderId(id))) {
       continue;
     }
     out.add(id);
     if (mode === "oauth") {
-      expectsOAuth.add(id);
+      // Store normalized id so lookups against `AuthProviderHealth.provider`
+      // (which is already normalized by buildAuthHealthSummary) match even
+      // when the config uses an alias like `z.ai` that normalizes to `zai`.
+      expectsOAuth.add(normalizeProviderId(id));
     }
   }
   // auth.profiles entries explicitly opt into the refreshable set via
@@ -227,14 +252,18 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
     const provider = profile?.provider;
     const mode = profile?.mode;
     if (
-      typeof provider === "string" &&
-      provider.length > 0 &&
-      (mode === "oauth" || mode === "token")
+      typeof provider !== "string" ||
+      provider.length === 0 ||
+      (mode !== "oauth" && mode !== "token")
     ) {
-      out.add(provider);
-      if (mode === "oauth") {
-        expectsOAuth.add(provider);
-      }
+      continue;
+    }
+    if (envBacked.has(normalizeProviderId(provider))) {
+      continue;
+    }
+    out.add(provider);
+    if (mode === "oauth") {
+      expectsOAuth.add(normalizeProviderId(provider));
     }
   }
   return { providers: Array.from(out), expectsOAuth };
