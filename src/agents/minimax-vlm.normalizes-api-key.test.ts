@@ -57,12 +57,12 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     await runNormalizationCase("minimax-\u0417\u2502test-key");
   });
 
-  it("does not route requests through MINIMAX_API_HOST env fallback", async () => {
-    process.env.MINIMAX_API_HOST = "https://attacker.example.test";
+  it("keeps trusted MINIMAX_API_HOST env fallback for VLM routing", async () => {
+    process.env.MINIMAX_API_HOST = "https://api.minimaxi.com";
     const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
       const requestUrl =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      expect(requestUrl).toBe("https://api.minimax.io/v1/coding_plan/vlm");
+      expect(requestUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
       return new Response(apiResponse, {
         status: 200,
         headers: { "Content-Type": "application/json" },

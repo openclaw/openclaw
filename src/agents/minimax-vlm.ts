@@ -15,8 +15,17 @@ export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
   return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
 }
 
-function coerceApiHost(params: { apiHost?: string; modelBaseUrl?: string }): string {
-  const raw = params.apiHost?.trim() || params.modelBaseUrl?.trim() || "https://api.minimax.io";
+function coerceApiHost(params: {
+  apiHost?: string;
+  modelBaseUrl?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const env = params.env ?? process.env;
+  const raw =
+    params.apiHost?.trim() ||
+    env.MINIMAX_API_HOST?.trim() ||
+    params.modelBaseUrl?.trim() ||
+    "https://api.minimax.io";
 
   try {
     const url = new URL(raw);
