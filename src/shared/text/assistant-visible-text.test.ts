@@ -250,20 +250,12 @@ describe("stripAssistantInternalScaffolding", () => {
 
     it("preserves literal JSON tool-call examples at sentence end", () => {
       expectVisibleText(
-        'Use <tool_call>{"name":"exec"}</tool_call>',
-        'Use <tool_call>{"name":"exec"}</tool_call>',
-      );
-      expectVisibleText(
-        'Type <tool_call>{"name":"exec"}</tool_call>.',
-        'Type <tool_call>{"name":"exec"}</tool_call>.',
-      );
-      expectVisibleText(
         'Example: <tool_call>{"name":"exec"}</tool_call>',
         'Example: <tool_call>{"name":"exec"}</tool_call>',
       );
       expectVisibleText(
-        'Syntax: <tool_call>{"name":"exec"}</tool_call>',
-        'Syntax: <tool_call>{"name":"exec"}</tool_call>',
+        'Syntax: <tool_call>{"name":"exec"}</tool_call>.',
+        'Syntax: <tool_call>{"name":"exec"}</tool_call>.',
       );
       expectVisibleText(
         'Literal: <tool_call>{"name":"exec"}</tool_call>',
@@ -294,6 +286,10 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText(
         'Use <tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call> to check docs.',
         "Use  to check docs.",
+      );
+      expectVisibleText(
+        'Use <tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call>.',
+        "Use .",
       );
     });
 

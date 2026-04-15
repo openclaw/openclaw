@@ -404,11 +404,9 @@ describe("sanitizeUserFacingText", () => {
   });
 
   it("preserves literal JSON tool-call examples at sentence end", () => {
-    const text = 'Use <tool_call>{"name":"exec"}</tool_call>';
+    const text = 'Example: <tool_call>{"name":"exec"}</tool_call>';
     expect(sanitizeUserFacingText(text)).toBe(text);
-    const example = 'Example: <tool_call>{"name":"exec"}</tool_call>';
-    expect(sanitizeUserFacingText(example)).toBe(example);
-    const syntax = 'Syntax: <tool_call>{"name":"exec"}</tool_call>';
+    const syntax = 'Syntax: <tool_call>{"name":"exec"}</tool_call>.';
     expect(sanitizeUserFacingText(syntax)).toBe(syntax);
     const literal = 'Literal: <tool_call>{"name":"exec"}</tool_call>';
     expect(sanitizeUserFacingText(literal)).toBe(literal);
@@ -438,6 +436,11 @@ describe("sanitizeUserFacingText", () => {
         'Use <tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call> to check docs.',
       ),
     ).toBe("Use to check docs.");
+    expect(
+      sanitizeUserFacingText(
+        'Use <tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call>.',
+      ),
+    ).toBe("Use .");
   });
 
   it("does not preserve newline JSON tool-call payloads without a literal syntax cue", () => {

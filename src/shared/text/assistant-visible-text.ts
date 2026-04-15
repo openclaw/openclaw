@@ -215,7 +215,7 @@ const LITERAL_TOOL_PAYLOAD_AFTER_RE =
 const LITERAL_TOOL_PAYLOAD_INLINE_BEFORE_RE =
   /(?:^|[\n.!?]\s*)(?:example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
 const LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE =
-  /(?:^|[\n.!?]\s*)(?:use|type|write|include|document|example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
+  /(?:^|[\n.!?]\s*)(?:example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
 const LITERAL_TOOL_SENTENCE_END_AFTER_RE = /^[\s)"'`.,:;!?]*(?:$|\n)/;
 
 function looksLikeLiteralToolTagContext(text: string, start: number, end: number): boolean {
