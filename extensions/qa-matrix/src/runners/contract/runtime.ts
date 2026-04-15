@@ -14,7 +14,13 @@ import {
 } from "../../shared/live-lane-helpers.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
-import { buildMatrixQaConfig, type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import {
+  buildMatrixQaConfig,
+  buildMatrixQaConfigSnapshot,
+  summarizeMatrixQaConfigSnapshot,
+  type MatrixQaConfigOverrides,
+  type MatrixQaConfigSnapshot,
+} from "../../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
 import { resolveMatrixQaModels } from "./model-selection.js";
@@ -57,6 +63,14 @@ type MatrixQaScenarioResult = {
 
 type MatrixQaSummary = {
   checks: QaReportCheck[];
+  config: {
+    default: MatrixQaConfigSnapshot;
+    scenarios: Array<{
+      config: MatrixQaConfigSnapshot;
+      id: string;
+      title: string;
+    }>;
+  };
   counts: {
     failed: number;
     passed: number;
@@ -93,6 +107,20 @@ type MatrixQaArtifactPaths = {
   summary: string;
 };
 
+function countMatrixQaStatuses<T extends { status: "fail" | "pass" }>(entries: T[]) {
+  return {
+    failed: entries.filter((entry) => entry.status === "fail").length,
+    passed: entries.filter((entry) => entry.status === "pass").length,
+  };
+}
+
+function formatMatrixQaScenarioDetails(params: { details: string; configSummary?: string }) {
+  if (!params.configSummary) {
+    return params.details;
+  }
+  return [`effective config: ${params.configSummary}`, params.details].join("\n");
+}
+
 export type MatrixQaRunResult = {
   observedEventsPath: string;
   outputDir: string;
@@ -105,6 +133,7 @@ function buildMatrixQaSummary(params: {
   artifactPaths: MatrixQaArtifactPaths;
   canary?: MatrixQaCanaryArtifact;
   checks: QaReportCheck[];
+  config: MatrixQaSummary["config"];
   finishedAt: string;
   harness: MatrixQaSummary["harness"];
   observedEventCount: number;
@@ -113,16 +142,16 @@ function buildMatrixQaSummary(params: {
   sutAccountId: string;
   userIds: MatrixQaSummary["userIds"];
 }): MatrixQaSummary {
+  const checkCounts = countMatrixQaStatuses(params.checks);
+  const scenarioCounts = countMatrixQaStatuses(params.scenarios);
+
   return {
     checks: params.checks,
+    config: params.config,
     counts: {
       total: params.checks.length + params.scenarios.length,
-      passed:
-        params.checks.filter((check) => check.status === "pass").length +
-        params.scenarios.filter((scenario) => scenario.status === "pass").length,
-      failed:
-        params.checks.filter((check) => check.status === "fail").length +
-        params.scenarios.filter((scenario) => scenario.status === "fail").length,
+      passed: checkCounts.passed + scenarioCounts.passed,
+      failed: checkCounts.failed + scenarioCounts.failed,
     },
     finishedAt: params.finishedAt,
     harness: params.harness,
@@ -298,6 +327,8 @@ export async function runMatrixQaLive(params: {
     sutUserId: provisioning.sut.userId,
     topology: provisioning.topology,
   };
+  const defaultConfigSnapshot = buildMatrixQaConfigSnapshot(gatewayConfigParams);
+  const scenarioConfigSnapshots: MatrixQaSummary["config"]["scenarios"] = [];
 
   try {
     const ensureGatewayHarness = async (overrides?: MatrixQaConfigOverrides) => {
@@ -372,6 +403,19 @@ export async function runMatrixQaLive(params: {
 
     if (!canaryFailed) {
       for (const scenario of scenarios) {
+        const scenarioConfigSnapshot = buildMatrixQaConfigSnapshot({
+          ...gatewayConfigParams,
+          overrides: scenario.configOverrides,
+        });
+        const scenarioConfigSummary =
+          scenario.configOverrides === undefined
+            ? undefined
+            : summarizeMatrixQaConfigSnapshot(scenarioConfigSnapshot);
+        scenarioConfigSnapshots.push({
+          config: scenarioConfigSnapshot,
+          id: scenario.id,
+          title: scenario.title,
+        });
         try {
           const scenarioGateway = await ensureGatewayHarness(scenario.configOverrides);
           const result = await runMatrixQaScenario(scenario, {
@@ -407,14 +451,20 @@ export async function runMatrixQaLive(params: {
             id: scenario.id,
             title: scenario.title,
             status: "pass",
-            details: result.details,
+            details: formatMatrixQaScenarioDetails({
+              details: result.details,
+              configSummary: scenarioConfigSummary,
+            }),
           });
         } catch (error) {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
             status: "fail",
-            details: formatErrorMessage(error),
+            details: formatMatrixQaScenarioDetails({
+              details: formatErrorMessage(error),
+              configSummary: scenarioConfigSummary,
+            }),
           });
         }
       }
@@ -464,6 +514,7 @@ export async function runMatrixQaLive(params: {
     notes: [
       `roomId: ${provisioning.roomId}`,
       `roomIds: ${provisioning.topology.rooms.map((room) => room.roomId).join(", ")}`,
+      `default config: ${summarizeMatrixQaConfigSnapshot(defaultConfigSnapshot)}`,
       `driver: ${provisioning.driver.userId}`,
       `observer: ${provisioning.observer.userId}`,
       `sut: ${provisioning.sut.userId}`,
@@ -475,6 +526,10 @@ export async function runMatrixQaLive(params: {
     artifactPaths,
     canary: canaryArtifact,
     checks,
+    config: {
+      default: defaultConfigSnapshot,
+      scenarios: scenarioConfigSnapshots,
+    },
     finishedAt,
     harness: {
       baseUrl: harness.baseUrl,
@@ -556,7 +611,9 @@ export const __testing = {
   buildMatrixQaSummary,
   MATRIX_QA_SCENARIOS,
   buildMatrixQaConfig,
+  buildMatrixQaConfigSnapshot,
   isMatrixAccountReady,
   resolveMatrixQaModels,
+  summarizeMatrixQaConfigSnapshot,
   waitForMatrixChannelReady,
 };

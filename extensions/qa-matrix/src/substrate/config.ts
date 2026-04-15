@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
-type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
-type MatrixQaThreadRepliesMode = "off" | "inbound" | "always";
-type MatrixQaDmPolicy = "allowlist" | "disabled" | "open" | "pairing";
-type MatrixQaGroupPolicy = "allowlist" | "disabled" | "open";
+export type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
+export type MatrixQaThreadRepliesMode = "off" | "inbound" | "always";
+export type MatrixQaDmPolicy = "allowlist" | "disabled" | "open" | "pairing";
+export type MatrixQaGroupPolicy = "allowlist" | "disabled" | "open";
+export type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
+export type MatrixQaStreamingMode = "off" | "partial" | "quiet";
 
 export type MatrixQaGroupConfigOverrides = {
   enabled?: boolean;
@@ -20,7 +22,8 @@ export type MatrixQaDmConfigOverrides = {
 };
 
 export type MatrixQaConfigOverrides = {
-  autoJoin?: "allowlist" | "always" | "off";
+  autoJoin?: MatrixQaAutoJoinMode;
+  autoJoinAllowlist?: string[];
   blockStreaming?: boolean;
   dm?: MatrixQaDmConfigOverrides;
   encryption?: boolean;
@@ -32,7 +35,48 @@ export type MatrixQaConfigOverrides = {
   threadReplies?: MatrixQaThreadRepliesMode;
 };
 
-function resolveMatrixQaGroupEntries(params: {
+export type MatrixQaConfigSnapshot = {
+  autoJoin: MatrixQaAutoJoinMode;
+  autoJoinAllowlist: string[];
+  blockStreaming: boolean;
+  dm: {
+    allowFrom: string[];
+    enabled: boolean;
+    policy: MatrixQaDmPolicy;
+    sessionScope: "per-room" | "per-user";
+    threadReplies: MatrixQaThreadRepliesMode;
+  };
+  encryption: boolean;
+  groupAllowFrom: string[];
+  groupPolicy: MatrixQaGroupPolicy;
+  groupsByKey: Record<
+    string,
+    {
+      enabled: boolean;
+      requireMention: boolean;
+      roomId: string;
+    }
+  >;
+  replyToMode: MatrixQaReplyToMode;
+  streaming: MatrixQaStreamingMode;
+  threadReplies: MatrixQaThreadRepliesMode;
+};
+
+type MatrixQaAccountDmConfig =
+  | { enabled: false }
+  | {
+      allowFrom: string[];
+      enabled: true;
+      policy: MatrixQaDmPolicy;
+      sessionScope?: "per-room" | "per-user";
+      threadReplies?: MatrixQaThreadRepliesMode;
+    };
+
+function normalizeMatrixQaAllowlist(entries?: string[]) {
+  return [...new Set((entries ?? []).map((entry) => entry.trim()).filter(Boolean))];
+}
+
+function resolveMatrixQaGroupSnapshots(params: {
   overrides?: MatrixQaConfigOverrides;
   topology: MatrixQaProvisionedTopology;
 }) {
@@ -50,13 +94,28 @@ function resolveMatrixQaGroupEntries(params: {
     groupRooms.map((room) => {
       const override = groupsByKey[room.key];
       return [
-        room.roomId,
+        room.key,
         {
+          roomId: room.roomId,
           enabled: override?.enabled ?? true,
           requireMention: override?.requireMention ?? room.requireMention,
         },
       ];
     }),
+  );
+}
+
+function buildMatrixQaGroupEntries(
+  groupsByKey: MatrixQaConfigSnapshot["groupsByKey"],
+): Record<string, { enabled: boolean; requireMention: boolean }> {
+  return Object.fromEntries(
+    Object.values(groupsByKey).map((group) => [
+      group.roomId,
+      {
+        enabled: group.enabled,
+        requireMention: group.requireMention,
+      },
+    ]),
   );
 }
 
@@ -67,19 +126,16 @@ function resolveMatrixQaDmAllowFrom(params: {
   topology: MatrixQaProvisionedTopology;
 }) {
   if (params.overrides?.dm?.allowFrom) {
-    return [...params.overrides.dm.allowFrom];
+    return normalizeMatrixQaAllowlist(params.overrides.dm.allowFrom);
   }
-  const dmAllowFrom = [
-    ...new Set(
-      params.topology.rooms
-        .filter((room) => room.kind === "dm")
-        .flatMap((room) => room.memberUserIds.filter((userId) => userId !== params.sutUserId)),
-    ),
-  ];
+  const dmParticipantUserIds = params.topology.rooms
+    .filter((room) => room.kind === "dm")
+    .flatMap((room) => room.memberUserIds.filter((userId) => userId !== params.sutUserId));
+  const dmAllowFrom = [...new Set(dmParticipantUserIds)];
   return dmAllowFrom.length > 0 ? dmAllowFrom : [params.driverUserId];
 }
 
-function resolveMatrixQaDmConfig(params: {
+function resolveMatrixQaDmConfigSnapshot(params: {
   driverUserId: string;
   overrides?: MatrixQaConfigOverrides;
   sutUserId: string;
@@ -87,18 +143,97 @@ function resolveMatrixQaDmConfig(params: {
 }) {
   const hasDmRooms = params.topology.rooms.some((room) => room.kind === "dm");
   const dmOverrides = params.overrides?.dm;
+  const enabled = hasDmRooms || dmOverrides?.enabled === true;
+  return {
+    allowFrom: enabled ? resolveMatrixQaDmAllowFrom(params) : [],
+    enabled,
+    policy: dmOverrides?.policy ?? "allowlist",
+    sessionScope: dmOverrides?.sessionScope ?? "per-user",
+    threadReplies: dmOverrides?.threadReplies ?? params.overrides?.threadReplies ?? "inbound",
+  };
+}
 
-  if (!hasDmRooms && dmOverrides?.enabled !== true) {
+function resolveMatrixQaStreamingMode(
+  value: MatrixQaConfigOverrides["streaming"],
+): MatrixQaStreamingMode {
+  if (value === true || value === "partial") {
+    return "partial";
+  }
+  if (value === "quiet") {
+    return "quiet";
+  }
+  return "off";
+}
+
+function resolveMatrixQaAutoJoinAllowlist(params: { overrides?: MatrixQaConfigOverrides }) {
+  if (params.overrides?.autoJoin !== "allowlist") {
+    return [];
+  }
+  return normalizeMatrixQaAllowlist(params.overrides.autoJoinAllowlist);
+}
+
+function formatMatrixQaBoolean(value: boolean) {
+  return value ? "true" : "false";
+}
+
+function buildMatrixQaAccountDmConfig(params: {
+  dmOverrides?: MatrixQaConfigOverrides["dm"];
+  snapshot: MatrixQaConfigSnapshot;
+}): MatrixQaAccountDmConfig {
+  if (!params.snapshot.dm.enabled) {
     return { enabled: false };
   }
 
   return {
-    allowFrom: resolveMatrixQaDmAllowFrom(params),
-    enabled: dmOverrides?.enabled ?? true,
-    policy: dmOverrides?.policy ?? "allowlist",
-    ...(dmOverrides?.sessionScope ? { sessionScope: dmOverrides.sessionScope } : {}),
-    ...(dmOverrides?.threadReplies ? { threadReplies: dmOverrides.threadReplies } : {}),
+    allowFrom: params.snapshot.dm.allowFrom,
+    enabled: true,
+    policy: params.snapshot.dm.policy,
+    ...(params.dmOverrides?.sessionScope ? { sessionScope: params.snapshot.dm.sessionScope } : {}),
+    ...(params.dmOverrides?.threadReplies
+      ? { threadReplies: params.snapshot.dm.threadReplies }
+      : {}),
   };
+}
+
+export function buildMatrixQaConfigSnapshot(params: {
+  driverUserId: string;
+  overrides?: MatrixQaConfigOverrides;
+  sutUserId: string;
+  topology: MatrixQaProvisionedTopology;
+}): MatrixQaConfigSnapshot {
+  return {
+    autoJoin: params.overrides?.autoJoin ?? "off",
+    autoJoinAllowlist: resolveMatrixQaAutoJoinAllowlist(params),
+    blockStreaming: params.overrides?.blockStreaming ?? false,
+    dm: resolveMatrixQaDmConfigSnapshot(params),
+    encryption: params.overrides?.encryption ?? false,
+    groupAllowFrom: normalizeMatrixQaAllowlist(
+      params.overrides?.groupAllowFrom ?? [params.driverUserId],
+    ),
+    groupPolicy: params.overrides?.groupPolicy ?? "allowlist",
+    groupsByKey: resolveMatrixQaGroupSnapshots({
+      overrides: params.overrides,
+      topology: params.topology,
+    }),
+    replyToMode: params.overrides?.replyToMode ?? "off",
+    streaming: resolveMatrixQaStreamingMode(params.overrides?.streaming),
+    threadReplies: params.overrides?.threadReplies ?? "inbound",
+  };
+}
+
+export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot) {
+  return [
+    `replyToMode=${snapshot.replyToMode}`,
+    `threadReplies=${snapshot.threadReplies}`,
+    `dm.enabled=${formatMatrixQaBoolean(snapshot.dm.enabled)}`,
+    `dm.policy=${snapshot.dm.policy}`,
+    `dm.sessionScope=${snapshot.dm.sessionScope}`,
+    `dm.threadReplies=${snapshot.dm.threadReplies}`,
+    `streaming=${snapshot.streaming}`,
+    `blockStreaming=${formatMatrixQaBoolean(snapshot.blockStreaming)}`,
+    `autoJoin=${snapshot.autoJoin}`,
+    `encryption=${formatMatrixQaBoolean(snapshot.encryption)}`,
+  ].join(", ");
 }
 
 export function buildMatrixQaConfig(
@@ -115,9 +250,17 @@ export function buildMatrixQaConfig(
   },
 ): OpenClawConfig {
   const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "matrix"])];
-  const groups = resolveMatrixQaGroupEntries({
+  const snapshot = buildMatrixQaConfigSnapshot({
+    driverUserId: params.driverUserId,
     overrides: params.overrides,
+    sutUserId: params.sutUserId,
     topology: params.topology,
+  });
+  const groups = buildMatrixQaGroupEntries(snapshot.groupsByKey);
+  const dmOverrides = params.overrides?.dm;
+  const dm = buildMatrixQaAccountDmConfig({
+    dmOverrides,
+    snapshot,
   });
 
   return {
@@ -141,22 +284,25 @@ export function buildMatrixQaConfig(
           [params.sutAccountId]: {
             accessToken: params.sutAccessToken,
             ...(params.sutDeviceId ? { deviceId: params.sutDeviceId } : {}),
-            dm: resolveMatrixQaDmConfig(params),
+            dm,
             enabled: true,
-            encryption: params.overrides?.encryption ?? false,
-            groupAllowFrom: params.overrides?.groupAllowFrom ?? [params.driverUserId],
-            groupPolicy: params.overrides?.groupPolicy ?? "allowlist",
+            encryption: snapshot.encryption,
+            groupAllowFrom: snapshot.groupAllowFrom,
+            groupPolicy: snapshot.groupPolicy,
             ...(Object.keys(groups).length > 0 ? { groups } : {}),
             homeserver: params.homeserver,
             network: {
               dangerouslyAllowPrivateNetwork: true,
             },
-            replyToMode: params.overrides?.replyToMode ?? "off",
-            threadReplies: params.overrides?.threadReplies ?? "inbound",
+            replyToMode: snapshot.replyToMode,
+            threadReplies: snapshot.threadReplies,
             userId: params.sutUserId,
-            ...(params.overrides?.autoJoin ? { autoJoin: params.overrides.autoJoin } : {}),
+            ...(snapshot.autoJoin !== "off" ? { autoJoin: snapshot.autoJoin } : {}),
+            ...(snapshot.autoJoin === "allowlist" && snapshot.autoJoinAllowlist.length > 0
+              ? { autoJoinAllowlist: snapshot.autoJoinAllowlist }
+              : {}),
             ...(params.overrides?.blockStreaming !== undefined
-              ? { blockStreaming: params.overrides.blockStreaming }
+              ? { blockStreaming: snapshot.blockStreaming }
               : {}),
             ...(params.overrides?.streaming !== undefined
               ? { streaming: params.overrides.streaming }
