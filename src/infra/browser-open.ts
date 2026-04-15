@@ -47,7 +47,11 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
     Boolean(process.env.SSH_TTY) ||
     Boolean(process.env.SSH_CONNECTION);
 
-  if (isSsh && !hasDisplay && platform !== "win32") {
+  // SSH_CLIENT and SSH_TTY can linger after Tailscale SSH sessions end, so
+  // they alone don't prove an active remote session. On macOS, `open` works
+  // even over an SSH connection, so only apply the no-display guard on
+  // non-darwin platforms.
+  if (isSsh && !hasDisplay && platform !== "darwin" && platform !== "win32") {
     return { argv: null, reason: "ssh-no-display" };
   }
 
