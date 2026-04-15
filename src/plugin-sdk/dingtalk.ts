@@ -4,13 +4,13 @@
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { logTypingFailure } from "../channels/logging.js";
 export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
+  ChannelSetupWizardAdapter,
+  ChannelSetupDmPolicy,
+} from "../channels/plugins/setup-wizard-types.js";
 export {
   addWildcardAllowFrom,
   promptSingleChannelSecretInput,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
   BaseProbeResult,

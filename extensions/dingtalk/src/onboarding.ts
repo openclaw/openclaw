@@ -1,6 +1,6 @@
 import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
+  ChannelSetupWizardAdapter,
+  ChannelSetupDmPolicy,
   ClawdbotConfig,
   DmPolicy,
   SecretInput,
@@ -156,7 +156,7 @@ function setDingtalkGroupAllowFrom(cfg: ClawdbotConfig, groupAllowFrom: string[]
   };
 }
 
-const dmPolicy: ChannelOnboardingDmPolicy = {
+const dmPolicy: ChannelSetupDmPolicy = {
   label: "DingTalk",
   channel,
   policyKey: "channels.dingtalk.dmPolicy",
@@ -168,7 +168,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 };
 
 // 钉钉引导适配器 / DingTalk onboarding adapter
-export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
+export const dingtalkOnboardingAdapter: ChannelSetupWizardAdapter = {
   channel,
 
   getStatus: async ({ cfg }) => {
