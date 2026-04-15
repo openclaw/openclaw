@@ -15,13 +15,13 @@ import {
   resolveWebCredsPath,
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
-import {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  makeWASocket,
-  useMultiFileAuthState,
-} from "./session.runtime.js";
+type BaileysRuntime = typeof import("./session.runtime.js");
+let baileysRuntimePromise: Promise<BaileysRuntime> | null = null;
+
+function loadBaileysRuntime(): Promise<BaileysRuntime> {
+  baileysRuntimePromise ??= import("./session.runtime.js");
+  return baileysRuntimePromise;
+}
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
@@ -34,7 +34,7 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const LOGGED_OUT_STATUS = 401;
 
 async function loadQrTerminal() {
   const mod = await import("qrcode-terminal");
@@ -110,7 +110,7 @@ export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
   opts: { authDir?: string; onQr?: (qr: string) => void } = {},
-): Promise<ReturnType<typeof makeWASocket>> {
+): Promise<ReturnType<BaileysRuntime["makeWASocket"]>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
     {
@@ -122,6 +122,12 @@ export async function createWaSocket(
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
+  const {
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    makeWASocket,
+    useMultiFileAuthState,
+  } = await loadBaileysRuntime();
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
@@ -254,7 +260,7 @@ function normalizeEnvProxyValue(value: string | undefined): string | null | unde
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
+export async function waitForWaConnection(sock: Awaited<ReturnType<BaileysRuntime["makeWASocket"]>>) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
       off?: (event: string, listener: (...args: unknown[]) => void) => void;
