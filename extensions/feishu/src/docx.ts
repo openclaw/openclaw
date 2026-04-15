@@ -20,6 +20,7 @@ import {
   mergeTableCells,
 } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
+import { fetchOldDocMeta, readOldDoc } from "./old-doc.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   createFeishuToolClient,
@@ -865,6 +866,19 @@ async function uploadFileBlock(
 const STRUCTURED_BLOCK_TYPES = new Set([14, 18, 21, 23, 27, 30, 31, 32]);
 
 async function readDoc(client: Lark.Client, docToken: string) {
+  // Version detection: check if this is an old-version document
+  try {
+    const meta = await fetchOldDocMeta(client, docToken);
+    if (!meta.is_upgraded) {
+      return await readOldDoc(client, docToken);
+    }
+    if (meta.upgraded_token) {
+      return await readDoc(client, meta.upgraded_token);
+    }
+  } catch {
+    // Meta API unavailable — proceed with docx API
+  }
+
   const [contentRes, infoRes, blocksRes] = await Promise.all([
     client.docx.document.rawContent({ path: { document_id: docToken } }),
     client.docx.document.get({ path: { document_id: docToken } }),
