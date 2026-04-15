@@ -14,7 +14,7 @@
     "url": "git+https://github.com/openclaw/openclaw.git"
   },
   "bin": {
-    "openclaw": "openclaw.mjs"
+    "openclaw": "scripts/openclaw-runcli-launcher.mjs"
   },
   "directories": {
     "doc": "docs",
@@ -39,6 +39,7 @@
     "qa/scenarios/",
     "skills/",
     "scripts/npm-runner.mjs",
+    "scripts/openclaw-runcli-launcher.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
   ],
@@ -1316,6 +1317,7 @@
     "test:live:media:image": "node --import tsx scripts/test-live-media.ts image",
     "test:live:media:music": "node --import tsx scripts/test-live-media.ts music",
     "test:live:media:video": "node --import tsx scripts/test-live-media.ts video",
+    "test:live:memory-pro:host": "node scripts/test-live-memory-pro-cli-host.mjs",
     "test:live:models-profiles": "node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts",
     "test:macos:ci": "node scripts/test-projects.mjs src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts test/scripts/vitest-process-group.test.ts",
     "test:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/test-projects.mjs",
