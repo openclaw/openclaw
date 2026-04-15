@@ -1106,6 +1106,40 @@ async function processOpenAICompletionsStream(
       });
       continue;
     }
+    // Handle reasoning_details from OpenRouter/Qwen3 and other providers
+    const reasoningDetails = (choice.delta as Record<string, unknown>).reasoning_details;
+    if (reasoningDetails && Array.isArray(reasoningDetails)) {
+      const reasoningText = reasoningDetails
+        .filter((item: unknown) => {
+          const typed = item as { type?: string; text?: string };
+          return (
+            typed.type === "reasoning.text" &&
+            typeof typed.text === "string" &&
+            typed.text.length > 0
+          );
+        })
+        .map((item: unknown) => {
+          const typed = item as { text: string };
+          return typed.text;
+        })
+        .join("");
+      if (reasoningText) {
+        if (!currentBlock || currentBlock.type !== "thinking") {
+          finishCurrentBlock();
+          currentBlock = { type: "thinking", thinking: "", thinkingSignature: "reasoning_details" };
+          output.content.push(currentBlock);
+          stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+        }
+        currentBlock.thinking += reasoningText;
+        stream.push({
+          type: "thinking_delta",
+          contentIndex: blockIndex(),
+          delta: reasoningText,
+          partial: output,
+        });
+        continue;
+      }
+    }
     const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
     const reasoningField = reasoningFields.find((field) => {
       const value = (choice.delta as Record<string, unknown>)[field];

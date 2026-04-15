@@ -1727,4 +1727,109 @@ describe("openai transport stream", () => {
       false,
     );
   });
+
+  it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {
+    const model = {
+      id: "openrouter/qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream = {
+      push: (() => {}) as unknown as { push(event: unknown): void },
+    };
+
+    const mockChunks = [
+      // First chunk with reasoning_details
+      {
+        id: "chatcmpl-reasoning",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "reasoning.text", text: "I need to think about this." },
+                { type: "reasoning.text", text: " Let me analyze." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      // Second chunk with actual content
+      {
+        id: "chatcmpl-reasoning",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: " Hello! How can I help you?",
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      // Final chunk
+      {
+        id: "chatcmpl-reasoning",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    // Should have 2 content blocks: thinking and text
+    expect(output.content.length).toBe(2);
+    expect(output.content[0].type).toBe("thinking");
+    expect((output.content[0] as { type: string; thinking: string }).thinking).toBe(
+      "I need to think about this. Let me analyze.",
+    );
+    expect(output.content[1].type).toBe("text");
+    expect((output.content[1] as { type: string; text: string }).text).toBe(
+      " Hello! How can I help you?",
+    );
+  });
 });
