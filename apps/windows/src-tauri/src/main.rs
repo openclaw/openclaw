@@ -168,6 +168,7 @@ fn watchdog_thread(app: AppHandle, state: GatewayState) {
                     if let Err(e) = spawn_gateway(app.clone(), state.clone()) {
                         log::error!("Restart failed: {}", e);
                         show_notification(&app, "Restart Error", &format!("Failed to restart gateway: {}", e));
+                        continue;
                     }
                     break; 
                 }
