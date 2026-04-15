@@ -1,3 +1,4 @@
+// src/agents/pi-tools.read.ts
 // No top-level import needed - using dynamic import above to avoid circular deps
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,7 @@ import {
   appendFileWithinRoot,
   readFileWithinRoot,
   writeFileWithinRoot,
+  mkdirWithinRoot,
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
@@ -100,7 +102,11 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         mkdir: true,
       }),
     mkdir: (relativePath: string) => 
-      fs.mkdir(path.join(root, relativePath), { recursive: true }).then(() => {})
+      mkdirWithinRoot({
+        rootDir: root,
+        relativePath,
+        recursive: true,
+      }).then(() => {})
   };
 }
 

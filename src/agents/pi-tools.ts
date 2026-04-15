@@ -558,7 +558,8 @@ export function createOpenClawCodingTools(options?: {
       onYield: options?.onYield,
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
     }),
-    downloadVideoTool as AnyAgentTool,
+    // Only include downloadVideoTool when workspace writes are allowed
+    ...(allowWorkspaceWrites ? [downloadVideoTool as AnyAgentTool] : []),
   ];
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
