@@ -435,6 +435,8 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Ordered list of fallback model refs (provider/model) to try when the primary compaction model fails resolution or auth. */
+  modelFallbacks?: string[];
   /** Maximum time in seconds for a single compaction operation (default: 900). */
   timeoutSeconds?: number;
   /**

@@ -157,6 +157,7 @@ export const AgentDefaultsSchema = z
         postIndexSync: z.enum(["off", "async", "await"]).optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
+        modelFallbacks: z.array(z.string()).optional(),
         timeoutSeconds: z.number().int().positive().optional(),
         memoryFlush: z
           .object({

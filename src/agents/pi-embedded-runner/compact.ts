@@ -7,36 +7,27 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
-  captureCompactionCheckpointSnapshot,
-  cleanupCompactionCheckpointSnapshot,
-  persistSessionCompactionCheckpoint,
-  resolveSessionCompactionCheckpointReason,
-  type CapturedCompactionCheckpointSnapshot,
-} from "../../gateway/session-compaction-checkpoints.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
+  ensureContextEnginesInitialized,
+  resolveContextEngine,
+} from "../../context-engine/index.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import {
-  prepareProviderRuntimeAuth,
-  resolveProviderSystemPromptContribution,
-  resolveProviderTextTransforms,
-  transformProviderSystemPrompt,
-} from "../../plugins/provider-runtime.js";
+import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
+import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import {
   listChannelSupportedActions,
@@ -52,7 +43,6 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
@@ -65,14 +55,12 @@ import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
-import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import {
   consumeCompactionSafeguardCancelReason,
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
-import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -88,11 +76,10 @@ import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
+  type SkillSnapshot,
 } from "../skills.js";
-import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
-import type { CompactEmbeddedPiSessionParams, CompactionMessageMetrics } from "./compact.types.js";
 import {
   asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
@@ -101,31 +88,27 @@ import {
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
-import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import {
+  buildEmbeddedCompactionRuntimeContext,
+  resolveEmbeddedCompactionTarget,
+} from "./compaction-runtime-context.js";
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
-import { applyExtraParamsToAgent } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
+import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
-import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
-import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
-import {
-  resolveEmbeddedAgentApiKey,
-  resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
-} from "./stream-resolution.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -138,9 +121,67 @@ import {
 } from "./tool-schema-runtime.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
-import { mapThinkingLevel } from "./utils.js";
+import { describeUnknownError, mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
-export type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
+
+export type CompactEmbeddedPiSessionParams = {
+  sessionId: string;
+  runId?: string;
+  sessionKey?: string;
+  messageChannel?: string;
+  messageProvider?: string;
+  agentAccountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  /** Trusted sender id from inbound context for scoped message-tool discovery. */
+  senderId?: string;
+  authProfileId?: string;
+  /** Group id for channel-level tool policy resolution. */
+  groupId?: string | null;
+  /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
+  groupChannel?: string | null;
+  /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
+  groupSpace?: string | null;
+  /** Parent session key for subagent policy inheritance. */
+  spawnedBy?: string | null;
+  /** Whether the sender is an owner (required for owner-only tools). */
+  senderIsOwner?: boolean;
+  sessionFile: string;
+  /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
+  currentTokenCount?: number;
+  workspaceDir: string;
+  agentDir?: string;
+  config?: OpenClawConfig;
+  skillsSnapshot?: SkillSnapshot;
+  provider?: string;
+  model?: string;
+  thinkLevel?: ThinkLevel;
+  reasoningLevel?: ReasoningLevel;
+  bashElevated?: ExecElevatedDefaults;
+  customInstructions?: string;
+  tokenBudget?: number;
+  force?: boolean;
+  trigger?: "budget" | "overflow" | "manual";
+  diagId?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  lane?: string;
+  enqueue?: typeof enqueueCommand;
+  extraSystemPrompt?: string;
+  ownerNumbers?: string[];
+  abortSignal?: AbortSignal;
+  /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
+  allowGatewaySubagentBinding?: boolean;
+};
+
+type CompactionMessageMetrics = {
+  messages: number;
+  historyTextChars: number;
+  toolResultChars: number;
+  estTokens?: number;
+  contributors: Array<{ role: string; chars: number; tool?: string }>;
+};
 
 function hasRealConversationContent(
   msg: AgentMessage,
@@ -152,76 +193,6 @@ function hasRealConversationContent(
 
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
-}
-
-function prepareCompactionSessionAgent(params: {
-  session: { agent: { streamFn?: unknown } };
-  providerStreamFn: unknown;
-  shouldUseWebSocketTransport: boolean;
-  wsApiKey?: string;
-  sessionId: string;
-  signal: AbortSignal;
-  effectiveModel: ProviderRuntimeModel;
-  resolvedApiKey?: string;
-  authStorage: unknown;
-  config?: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  thinkLevel: ThinkLevel;
-  sessionAgentId: string;
-  effectiveWorkspace: string;
-  agentDir: string;
-}) {
-  params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
-    currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
-    providerStreamFn: params.providerStreamFn as never,
-    shouldUseWebSocketTransport: params.shouldUseWebSocketTransport,
-    wsApiKey: params.wsApiKey,
-    sessionId: params.sessionId,
-    signal: params.signal,
-    model: params.effectiveModel,
-    resolvedApiKey: params.resolvedApiKey,
-    authStorage: params.authStorage as never,
-  });
-  const providerTextTransforms = resolveProviderTextTransforms({
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: params.effectiveWorkspace,
-  });
-  if (providerTextTransforms) {
-    params.session.agent.streamFn = wrapStreamFnTextTransforms({
-      streamFn: params.session.agent.streamFn as never,
-      input: providerTextTransforms.input,
-      output: providerTextTransforms.output,
-      transformSystemPrompt: false,
-    }) as never;
-  }
-  return applyExtraParamsToAgent(
-    params.session.agent as never,
-    params.config,
-    params.provider,
-    params.modelId,
-    undefined,
-    params.thinkLevel,
-    params.sessionAgentId,
-    params.effectiveWorkspace,
-    params.effectiveModel,
-    params.agentDir,
-  );
-}
-
-function resolveCompactionProviderStream(params: {
-  effectiveModel: ProviderRuntimeModel;
-  config?: OpenClawConfig;
-  agentDir: string;
-  effectiveWorkspace: string;
-}) {
-  return registerProviderStreamForModel({
-    model: params.effectiveModel,
-    cfg: params.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.effectiveWorkspace,
-  });
 }
 
 function normalizeObservedTokenCount(value: unknown): number | undefined {
@@ -325,11 +296,9 @@ export async function compactEmbeddedPiSessionDirect(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
-  const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-  const authProfileId = resolvedCompactionTarget.authProfileId;
-  let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
-  const attemptedThinking = new Set<ThinkLevel>();
+  let provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  let modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  let authProfileId = resolvedCompactionTarget.authProfileId;
   const fail = (reason: string): EmbeddedPiCompactResult => {
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -345,36 +314,136 @@ export async function compactEmbeddedPiSessionDirect(
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
   await ensureOpenClawModelsJson(params.config, agentDir);
-  const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
-    provider,
-    modelId,
-    agentDir,
-    params.config,
-  );
+  const effectiveProvider = provider;
+
+  let primaryResult: Awaited<ReturnType<typeof resolveModelAsync>>;
+  try {
+    primaryResult = await resolveModelAsync(provider, modelId, agentDir, params.config);
+  } catch (err) {
+    log.warn(
+      `[compaction] Primary model ${provider}/${modelId} threw: ${describeUnknownError(err)}`,
+    );
+    // Resolve a default model just to obtain authStorage/modelRegistry for fallback iteration.
+    // Guard this call as well — if the provider is down entirely, we still need to proceed
+    // to the fallback loop with whatever we can construct.
+    let defaults: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+    try {
+      defaults = await resolveModelAsync(effectiveProvider, DEFAULT_MODEL, agentDir, params.config);
+    } catch {
+      log.warn("[compaction] Default model resolution also failed; proceeding with empty registry");
+    }
+    primaryResult = {
+      model: undefined,
+      error: describeUnknownError(err),
+      authStorage:
+        defaults?.authStorage ??
+        ({} as Awaited<ReturnType<typeof resolveModelAsync>>["authStorage"]),
+      modelRegistry:
+        defaults?.modelRegistry ??
+        ({} as Awaited<ReturnType<typeof resolveModelAsync>>["modelRegistry"]),
+    };
+  }
+
+  // If the primary compaction model failed to resolve, try configured fallbacks in order.
+  let finalModel = primaryResult.model;
+  let finalError = primaryResult.error;
+  let finalAuthStorage = primaryResult.authStorage;
+  let finalModelRegistry = primaryResult.modelRegistry;
+
+  if (!finalModel) {
+    const fallbacks = params.config?.agents?.defaults?.compaction?.modelFallbacks;
+    if (fallbacks && Array.isArray(fallbacks) && fallbacks.length > 0) {
+      const triedModels = [`${provider}/${modelId}`];
+      for (const fallbackSpec of fallbacks) {
+        const trimmed = fallbackSpec?.trim();
+        if (!trimmed) {
+          continue;
+        }
+        let fbProvider: string;
+        let fbModelId: string;
+        const slashIdx = trimmed.indexOf("/");
+        if (slashIdx > 0) {
+          fbProvider = trimmed.slice(0, slashIdx).trim();
+          fbModelId = trimmed.slice(slashIdx + 1).trim() || DEFAULT_MODEL;
+        } else {
+          fbProvider = effectiveProvider;
+          fbModelId = trimmed;
+        }
+        triedModels.push(`${fbProvider}/${fbModelId}`);
+        log.info(
+          `[compaction] Primary model ${provider}/${modelId} unavailable, trying fallback: ${fbProvider}/${fbModelId}`,
+        );
+        try {
+          const fbResult = await resolveModelAsync(fbProvider, fbModelId, agentDir, params.config);
+          if (fbResult.model) {
+            finalModel = fbResult.model;
+            finalError = fbResult.error;
+            finalAuthStorage = fbResult.authStorage;
+            finalModelRegistry = fbResult.modelRegistry;
+            provider = fbProvider;
+            modelId = fbModelId;
+            // Reset or restore auth profile based on whether fallback provider matches the original
+            if (fbProvider.toLowerCase() !== effectiveProvider.toLowerCase()) {
+              authProfileId = undefined;
+            } else {
+              authProfileId = params.authProfileId;
+            }
+            log.info(`[compaction] Using fallback model: ${fbProvider}/${fbModelId}`);
+            break;
+          }
+        } catch (fbErr) {
+          log.warn(
+            `[compaction] Fallback model ${fbProvider}/${fbModelId} threw: ${describeUnknownError(fbErr)}`,
+          );
+        }
+      }
+      // If all fallbacks also failed, surface all attempted models in the error
+      if (!finalModel) {
+        finalError = `All compaction models failed to resolve (tried: ${triedModels.join(", ")})`;
+      }
+    }
+  }
+
+  let model = finalModel;
+  const error = finalError;
+  let authStorage = finalAuthStorage;
+  let modelRegistry = finalModelRegistry;
   if (!model) {
     const reason = error ?? `Unknown model: ${provider}/${modelId}`;
     return fail(reason);
   }
-  let runtimeModel = model;
-  let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null = null;
-  let hasRuntimeAuthExchange = false;
-  try {
-    apiKeyInfo = await getApiKeyForModel({
-      model: runtimeModel,
+  // Re-bind as non-nullable after the null guard; required so tryAuthForModel's
+  // `typeof model` parameter resolves to Model<Api> rather than Model<Api> | undefined.
+  // eslint-disable-next-line prefer-const
+  let resolvedModel: NonNullable<typeof model> = model;
+  let runtimeModel = resolvedModel;
+
+  // Attempt auth resolution for a given model, returning the authenticated runtimeModel or throwing.
+  type KeyInfo = Awaited<ReturnType<typeof getApiKeyForModel>>;
+  const tryAuthForModel = async (
+    targetModel: typeof resolvedModel,
+    targetModelId: string,
+    targetAuthStorage: typeof authStorage,
+    targetAuthProfileId: string | undefined,
+  ): Promise<{ authModel: typeof resolvedModel; keyInfo: KeyInfo; hasExchange: boolean }> => {
+    let authModel = targetModel;
+    let hasExchange = false;
+    const keyInfo = await getApiKeyForModel({
+      model: authModel,
       cfg: params.config,
-      profileId: authProfileId,
+      profileId: targetAuthProfileId,
       agentDir,
     });
 
-    if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
+    if (!keyInfo.apiKey) {
+      if (keyInfo.mode !== "aws-sdk") {
         throw new Error(
-          `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
+          `No API key resolved for provider "${authModel.provider}" (auth mode: ${keyInfo.mode}).`,
         );
       }
     } else {
       const preparedAuth = await prepareProviderRuntimeAuth({
-        provider: runtimeModel.provider,
+        provider: authModel.provider,
         config: params.config,
         workspaceDir: resolvedWorkspace,
         env: process.env,
@@ -383,27 +452,111 @@ export async function compactEmbeddedPiSessionDirect(
           agentDir,
           workspaceDir: resolvedWorkspace,
           env: process.env,
-          provider: runtimeModel.provider,
-          modelId,
-          model: runtimeModel,
-          apiKey: apiKeyInfo.apiKey,
-          authMode: apiKeyInfo.mode,
-          profileId: apiKeyInfo.profileId,
+          provider: authModel.provider,
+          modelId: targetModelId,
+          model: authModel,
+          apiKey: keyInfo.apiKey,
+          authMode: keyInfo.mode,
+          profileId: keyInfo.profileId,
         },
       });
       if (preparedAuth?.baseUrl) {
-        runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
+        authModel = { ...authModel, baseUrl: preparedAuth.baseUrl };
       }
-      const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
-      hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
+      const runtimeApiKey = preparedAuth?.apiKey ?? keyInfo.apiKey;
+      hasExchange = Boolean(preparedAuth?.apiKey);
       if (!runtimeApiKey) {
-        throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
+        throw new Error(`Provider "${authModel.provider}" runtime auth returned no apiKey.`);
       }
-      authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
+      targetAuthStorage.setRuntimeApiKey(authModel.provider, runtimeApiKey);
     }
+    return { authModel, keyInfo, hasExchange };
+  };
+
+  let apiKeyInfo: KeyInfo | null = null;
+  let hasRuntimeAuthExchange = false;
+  try {
+    ({
+      authModel: runtimeModel,
+      keyInfo: apiKeyInfo,
+      hasExchange: hasRuntimeAuthExchange,
+    } = await tryAuthForModel(runtimeModel, modelId, authStorage, authProfileId));
   } catch (err) {
-    const reason = formatErrorMessage(err);
-    return fail(reason);
+    // If auth fails for the primary model, try configured fallbacks before giving up.
+    const fallbacks = params.config?.agents?.defaults?.compaction?.modelFallbacks;
+    if (fallbacks && Array.isArray(fallbacks) && fallbacks.length > 0) {
+      const triedModels = [`${provider}/${modelId}`];
+      let authResolved = false;
+      for (const fallbackSpec of fallbacks) {
+        const trimmed = fallbackSpec?.trim();
+        if (!trimmed) {
+          continue;
+        }
+        let fbProvider: string;
+        let fbModelId: string;
+        const slashIdx = trimmed.indexOf("/");
+        if (slashIdx > 0) {
+          fbProvider = trimmed.slice(0, slashIdx).trim();
+          fbModelId = trimmed.slice(slashIdx + 1).trim() || DEFAULT_MODEL;
+        } else {
+          fbProvider = effectiveProvider;
+          fbModelId = trimmed;
+        }
+        triedModels.push(`${fbProvider}/${fbModelId}`);
+        log.info(
+          `[compaction] Primary model auth failed, trying fallback: ${fbProvider}/${fbModelId}`,
+        );
+        try {
+          const fbResult = await resolveModelAsync(fbProvider, fbModelId, agentDir, params.config);
+          if (!fbResult.model) {
+            continue;
+          }
+          const fbAuthProfileId =
+            fbProvider.toLowerCase() !== effectiveProvider.toLowerCase()
+              ? undefined
+              : params.authProfileId;
+          const {
+            authModel: fbRuntimeModel,
+            keyInfo: fbKeyInfo,
+            hasExchange: fbHasExchange,
+          } = await tryAuthForModel(
+            fbResult.model,
+            fbModelId,
+            fbResult.authStorage,
+            fbAuthProfileId,
+          );
+          // Fallback succeeded — adopt its model and auth state.
+          // Update model so downstream logic (policy, tool wiring, API selection) uses fallback metadata.
+          model = fbResult.model;
+          resolvedModel = fbResult.model;
+          runtimeModel = fbRuntimeModel;
+          apiKeyInfo = fbKeyInfo;
+          hasRuntimeAuthExchange = fbHasExchange;
+          // Update active authStorage/modelRegistry so session creation uses fallback credentials.
+          authStorage = fbResult.authStorage;
+          modelRegistry = fbResult.modelRegistry;
+          finalAuthStorage = fbResult.authStorage;
+          finalModelRegistry = fbResult.modelRegistry;
+          provider = fbProvider;
+          modelId = fbModelId;
+          authResolved = true;
+          log.info(`[compaction] Using fallback model (auth): ${fbProvider}/${fbModelId}`);
+          break;
+        } catch (fbErr) {
+          log.warn(
+            `[compaction] Fallback model auth ${fbProvider}/${fbModelId} threw: ${describeUnknownError(fbErr)}`,
+          );
+        }
+      }
+      if (!authResolved) {
+        return fail(
+          `All compaction models failed auth (tried: ${triedModels.join(", ")}). Primary error: ${describeUnknownError(err)}`,
+        );
+      }
+    } else {
+      const reason = describeUnknownError(err);
+      return fail(reason);
+    }
   }
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -431,8 +584,6 @@ export async function compactEmbeddedPiSessionDirect(
 
   let restoreSkillEnv: (() => void) | undefined;
   let compactionSessionManager: unknown = null;
-  let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
-  let checkpointSnapshotRetained = false;
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
@@ -472,20 +623,18 @@ export async function compactEmbeddedPiSessionDirect(
     });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
-    const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
       provider,
       modelId,
-      modelContextTokens: readPiModelContextTokens(runtimeModel),
-      modelContextWindow: runtimeModelWithContext.contextWindow,
+      modelContextWindow: runtimeModel.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     const effectiveModel = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
-        ctxInfo.tokens < (runtimeModelWithContext.contextWindow ?? Infinity)
-          ? { ...runtimeModelWithContext, contextWindow: ctxInfo.tokens }
-          : runtimeModelWithContext,
+        ctxInfo.tokens < (runtimeModel.contextWindow ?? Infinity)
+          ? { ...runtimeModel, contextWindow: ctxInfo.tokens }
+          : runtimeModel,
         apiKeyInfo,
       ),
       // Skip header injection when runtime auth exchange produced a
@@ -510,10 +659,6 @@ export async function compactEmbeddedPiSessionDirect(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,
@@ -612,11 +757,9 @@ export async function compactEmbeddedPiSessionDirect(
         : [];
     if (promptCapabilities.length > 0) {
       runtimeCapabilities ??= [];
-      const seenCapabilities = new Set(
-        runtimeCapabilities.map((cap) => normalizeOptionalLowercaseString(cap)).filter(Boolean),
-      );
+      const seenCapabilities = new Set(runtimeCapabilities.map((cap) => cap.trim().toLowerCase()));
       for (const capability of promptCapabilities) {
-        const normalizedCapability = normalizeOptionalLowercaseString(capability);
+        const normalizedCapability = capability.trim().toLowerCase();
         if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
           continue;
         }
@@ -650,7 +793,6 @@ export async function compactEmbeddedPiSessionDirect(
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
-            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;
@@ -685,6 +827,7 @@ export async function compactEmbeddedPiSessionDirect(
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+    const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
         ? "minimal"
@@ -697,80 +840,36 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
-    const promptContribution = resolveProviderSystemPromptContribution({
-      provider,
-      config: params.config,
+    const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
-      context: {
-        config: params.config,
-        agentDir,
-        workspaceDir: effectiveWorkspace,
-        provider,
-        modelId,
-        promptMode,
-        runtimeChannel,
-        runtimeCapabilities,
-        agentId: sessionAgentId,
-      },
+      defaultThinkLevel: params.thinkLevel,
+      reasoningLevel: params.reasoningLevel ?? "off",
+      extraSystemPrompt: params.extraSystemPrompt,
+      ownerNumbers: params.ownerNumbers,
+      ownerDisplay: ownerDisplay.ownerDisplay,
+      ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+      reasoningTagHint,
+      heartbeatPrompt: isDefaultAgent
+        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+        : undefined,
+      skillsPrompt,
+      docsPath: docsPath ?? undefined,
+      ttsHint,
+      promptMode,
+      acpEnabled: params.config?.acp?.enabled !== false,
+      runtimeInfo,
+      reactionGuidance,
+      messageToolHints,
+      sandboxInfo,
+      tools: effectiveTools,
+      modelAliasLines: buildModelAliasLines(params.config),
+      userTimezone,
+      userTime,
+      userTimeFormat,
+      contextFiles,
+      memoryCitationsMode: params.config?.memory?.citations,
     });
-    const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) => {
-      const builtSystemPrompt =
-        resolveSystemPromptOverride({
-          config: params.config,
-          agentId: sessionAgentId,
-        }) ??
-        buildEmbeddedSystemPrompt({
-          workspaceDir: effectiveWorkspace,
-          defaultThinkLevel,
-          reasoningLevel: params.reasoningLevel ?? "off",
-          extraSystemPrompt: params.extraSystemPrompt,
-          ownerNumbers: params.ownerNumbers,
-          ownerDisplay: ownerDisplay.ownerDisplay,
-          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-          reasoningTagHint,
-          heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
-            config: params.config,
-            agentId: sessionAgentId,
-            defaultAgentId,
-          }),
-          skillsPrompt,
-          docsPath: docsPath ?? undefined,
-          ttsHint,
-          promptMode,
-          acpEnabled: params.config?.acp?.enabled !== false,
-          runtimeInfo,
-          reactionGuidance,
-          messageToolHints,
-          sandboxInfo,
-          tools: effectiveTools,
-          modelAliasLines: buildModelAliasLines(params.config),
-          userTimezone,
-          userTime,
-          userTimeFormat,
-          contextFiles,
-          memoryCitationsMode: params.config?.memory?.citations,
-          promptContribution,
-        });
-      return createSystemPromptOverride(
-        transformProviderSystemPrompt({
-          provider,
-          config: params.config,
-          workspaceDir: effectiveWorkspace,
-          context: {
-            config: params.config,
-            agentDir,
-            workspaceDir: effectiveWorkspace,
-            provider,
-            modelId,
-            promptMode,
-            runtimeChannel,
-            runtimeCapabilities,
-            agentId: sessionAgentId,
-            systemPrompt: builtSystemPrompt,
-          },
-        }),
-      );
-    };
+    const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
@@ -802,17 +901,12 @@ export async function compactEmbeddedPiSessionDirect(
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
       });
-      checkpointSnapshot = captureCompactionCheckpointSnapshot({
-        sessionManager,
-        sessionFile: params.sessionFile,
-      });
       compactionSessionManager = sessionManager;
       trackSessionManagerAccess(params.sessionFile);
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
-        contextTokenBudget: ctxInfo.tokens,
       });
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
@@ -841,381 +935,603 @@ export async function compactEmbeddedPiSessionDirect(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      const providerStreamFn = resolveCompactionProviderStream({
-        effectiveModel,
-        config: params.config,
+      const { session } = await createAgentSession({
+        cwd: effectiveWorkspace,
         agentDir,
-        effectiveWorkspace,
+        authStorage,
+        modelRegistry,
+        model: effectiveModel,
+        thinkingLevel: mapThinkingLevel(params.thinkLevel),
+        tools: builtInTools,
+        customTools,
+        sessionManager,
+        settingsManager,
+        resourceLoader,
       });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
-        provider,
-        modelApi: effectiveModel.api,
+      applySystemPromptOverrideToSession(session, systemPromptOverride());
+      const providerStreamFn = registerProviderStreamForModel({
+        model,
+        cfg: params.config,
+        agentDir,
+        workspaceDir: effectiveWorkspace,
       });
-      const wsApiKey = shouldUseWebSocketTransport
-        ? await resolveEmbeddedAgentApiKey({
-            provider,
-            resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
-            authStorage,
-          })
-        : undefined;
-      if (shouldUseWebSocketTransport && !wsApiKey) {
-        log.warn(
-          `[ws-stream] no API key for provider=${provider}; keeping compaction HTTP transport`,
-        );
+      if (providerStreamFn) {
+        session.agent.streamFn = providerStreamFn;
       }
-      while (true) {
-        // Rebuild the compaction session on retry so provider wrappers, payload
-        // shaping, and the embedded system prompt all reflect the fallback level.
-        attemptedThinking.add(thinkLevel);
-        let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+
+      try {
+        const prior = await sanitizeSessionHistory({
+          messages: session.messages,
+          modelApi: model.api,
+          modelId,
+          provider,
+          allowedToolNames,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+          env: process.env,
+          model,
+          sessionManager,
+          sessionId: params.sessionId,
+          policy: transcriptPolicy,
+        });
+        const validated = await validateReplayTurns({
+          messages: prior,
+          modelApi: model.api,
+          modelId,
+          provider,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+          env: process.env,
+          model,
+          sessionId: params.sessionId,
+          policy: transcriptPolicy,
+        });
+        // Apply validated transcript to the live session even when no history limit is configured,
+        // so compaction and hook metrics are based on the same message set.
+        session.agent.replaceMessages(validated);
+        // "Original" compaction metrics should describe the validated transcript that enters
+        // limiting/compaction, not the raw on-disk session snapshot.
+        const originalMessages = session.messages.slice();
+        const truncated = limitHistoryTurns(
+          session.messages,
+          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+        );
+        // Re-run tool_use/tool_result pairing repair after truncation, since
+        // limitHistoryTurns can orphan tool_result blocks by removing the
+        // assistant message that contained the matching tool_use.
+        const limited = transcriptPolicy.repairToolUseResultPairing
+          ? sanitizeToolUseResultPairing(truncated, {
+              erroredAssistantResultPolicy: "drop",
+            })
+          : truncated;
+        if (limited.length > 0) {
+          session.agent.replaceMessages(limited);
+        }
+        const hookRunner = asCompactionHookRunner(getGlobalHookRunner());
+        const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
+        const beforeHookMetrics = buildBeforeCompactionHookMetrics({
+          originalMessages,
+          currentMessages: session.messages,
+          observedTokenCount,
+          estimateTokensFn: estimateTokens,
+        });
+        const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
+          hookRunner,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionAgentId,
+          workspaceDir: effectiveWorkspace,
+          messageProvider: resolvedMessageProvider,
+          metrics: beforeHookMetrics,
+        });
+        const { messageCountOriginal } = beforeHookMetrics;
+        const diagEnabled = log.isEnabled("debug");
+        const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
+        if (diagEnabled && preMetrics) {
+          log.debug(
+            `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+              `attempt=${attempt} maxAttempts=${maxAttempts} ` +
+              `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
+              `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
+          );
+          log.debug(
+            `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
+          );
+        }
+
+        if (!containsRealConversationMessages(session.messages)) {
+          log.info(
+            `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: "no real conversation messages",
+          };
+        }
+
+        const compactStartedAt = Date.now();
+        // Measure compactedCount from the original pre-limiting transcript so compaction
+        // lifecycle metrics represent total reduction through the compaction pipeline.
+        const messageCountCompactionInput = messageCountOriginal;
+        // Estimate full session tokens BEFORE compaction (including system prompt,
+        // bootstrap context, workspace files, and all history). This is needed for
+        // a correct sanity check — result.tokensBefore only covers the summarizable
+        // history subset, not the full session.
+        let fullSessionTokensBefore = 0;
         try {
-          const createdSession = await createAgentSession({
+          fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+        } catch {
+          // If token estimation throws on a malformed message, fall back to 0 so
+          // the sanity check below becomes a no-op instead of crashing compaction.
+        }
+        // modelFallbacks covers runtime API failures: if session.compact() throws (e.g. provider
+        // endpoint unreachable), iterate through fallbacks with full model re-resolve + re-auth +
+        // re-create session before retrying compact.
+        let result: Awaited<ReturnType<typeof session.compact>>;
+        const compactFallbacks = params.config?.agents?.defaults?.compaction?.modelFallbacks;
+        const tryCompactWithModel = async (
+          compactAuthStorage: typeof authStorage,
+          compactModelRegistry: typeof modelRegistry,
+          compactEffectiveModel: typeof effectiveModel,
+          compactModel: typeof model,
+          compactProvider: string,
+          compactModelId: string,
+        ) => {
+          const { session: fbSession } = await createAgentSession({
             cwd: effectiveWorkspace,
             agentDir,
-            authStorage,
-            modelRegistry,
-            model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(thinkLevel),
+            authStorage: compactAuthStorage,
+            modelRegistry: compactModelRegistry,
+            model: compactEffectiveModel,
+            thinkingLevel: mapThinkingLevel(params.thinkLevel),
             tools: builtInTools,
             customTools,
             sessionManager,
             settingsManager,
             resourceLoader,
           });
-          session = createdSession.session;
-          applySystemPromptOverrideToSession(session, buildSystemPromptOverride(thinkLevel)());
-          // Compaction builds the same embedded system prompt, so it must flow
-          // through the same transport/payload shaping stack as normal turns.
-          prepareCompactionSessionAgent({
-            session,
-            providerStreamFn,
-            shouldUseWebSocketTransport,
-            wsApiKey,
-            sessionId: params.sessionId,
-            signal: runAbortController.signal,
-            effectiveModel,
-            resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
-            authStorage,
-            config: params.config,
-            provider,
-            modelId,
-            thinkLevel,
-            sessionAgentId,
-            effectiveWorkspace,
+          applySystemPromptOverrideToSession(fbSession, systemPromptOverride());
+          const fbProviderStreamFn = registerProviderStreamForModel({
+            model: compactModel,
+            cfg: params.config,
             agentDir,
-          });
-
-          const prior = await sanitizeSessionHistory({
-            messages: session.messages,
-            modelApi: model.api,
-            modelId,
-            provider,
-            allowedToolNames,
-            config: params.config,
             workspaceDir: effectiveWorkspace,
-            env: process.env,
-            model,
-            sessionManager,
-            sessionId: params.sessionId,
-            policy: transcriptPolicy,
           });
-          const validated = await validateReplayTurns({
-            messages: prior,
-            modelApi: model.api,
-            modelId,
-            provider,
-            config: params.config,
-            workspaceDir: effectiveWorkspace,
-            env: process.env,
-            model,
-            sessionId: params.sessionId,
-            policy: transcriptPolicy,
-          });
-          // Apply validated transcript to the live session even when no history limit is configured,
-          // so compaction and hook metrics are based on the same message set.
-          session.agent.state.messages = validated;
-          // "Original" compaction metrics should describe the validated transcript that enters
-          // limiting/compaction, not the raw on-disk session snapshot.
-          const originalMessages = session.messages.slice();
-          const truncated = limitHistoryTurns(
-            session.messages,
-            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
-          );
-          // Re-run tool_use/tool_result pairing repair after truncation, since
-          // limitHistoryTurns can orphan tool_result blocks by removing the
-          // assistant message that contained the matching tool_use.
-          const limited = transcriptPolicy.repairToolUseResultPairing
-            ? sanitizeToolUseResultPairing(truncated, {
-                erroredAssistantResultPolicy: "drop",
-              })
-            : truncated;
-          if (limited.length > 0) {
-            session.agent.state.messages = limited;
+          if (fbProviderStreamFn) {
+            fbSession.agent.streamFn = fbProviderStreamFn;
           }
-          const hookRunner = asCompactionHookRunner(getGlobalHookRunner());
-          const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
-          const beforeHookMetrics = buildBeforeCompactionHookMetrics({
-            originalMessages,
-            currentMessages: session.messages,
-            observedTokenCount,
-            estimateTokensFn: estimateTokens,
-          });
-          const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
-            hookRunner,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            sessionAgentId,
-            workspaceDir: effectiveWorkspace,
-            messageProvider: resolvedMessageProvider,
-            metrics: beforeHookMetrics,
-          });
-          const { messageCountOriginal } = beforeHookMetrics;
-          const diagEnabled = log.isEnabled("debug");
-          const preMetrics = diagEnabled
-            ? summarizeCompactionMessages(session.messages)
-            : undefined;
-          if (diagEnabled && preMetrics) {
-            log.debug(
-              `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-                `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-                `attempt=${attempt} maxAttempts=${maxAttempts} ` +
-                `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
-                `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
-            );
-            log.debug(
-              `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
-            );
-          }
-
-          if (!containsRealConversationMessages(session.messages)) {
-            log.info(
-              `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
-            );
-            return {
-              ok: true,
-              compacted: false,
-              reason: "no real conversation messages",
-            };
-          }
-
-          const compactStartedAt = Date.now();
-          // Measure compactedCount from the original pre-limiting transcript so compaction
-          // lifecycle metrics represent total reduction through the compaction pipeline.
-          const messageCountCompactionInput = messageCountOriginal;
-          // Estimate full session tokens BEFORE compaction (including system prompt,
-          // bootstrap context, workspace files, and all history). This is needed for
-          // a correct sanity check — result.tokensBefore only covers the summarizable
-          // history subset, not the full session.
-          let fullSessionTokensBefore = 0;
+          // Re-apply the validated/limited history to the new session.
+          fbSession.agent.state.messages = session.agent.state.messages.slice();
+          log.info(`[compaction] Attempting compact with ${compactProvider}/${compactModelId}`);
           try {
-            fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-          } catch {
-            // If token estimation throws on a malformed message, fall back to 0 so
-            // the sanity check below becomes a no-op instead of crashing compaction.
+            return await compactWithSafetyTimeout(
+              () => {
+                setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
+                return fbSession.compact(params.customInstructions);
+              },
+              compactionTimeoutMs,
+              {
+                abortSignal: params.abortSignal,
+                onCancel: () => fbSession.abortCompaction(),
+              },
+            );
+          } finally {
+            try {
+              fbSession.dispose();
+            } catch {
+              /* best-effort */
+            }
           }
-          const activeSession = session;
-          const result = await compactWithSafetyTimeout(
+        };
+        try {
+          result = await compactWithSafetyTimeout(
             () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-              return activeSession.compact(params.customInstructions);
+              return session.compact(params.customInstructions);
             },
             compactionTimeoutMs,
             {
               abortSignal: params.abortSignal,
               onCancel: () => {
-                activeSession.abortCompaction();
+                session.abortCompaction();
               },
             },
           );
+        } catch (compactErr) {
+          if (
+            !compactFallbacks ||
+            !Array.isArray(compactFallbacks) ||
+            compactFallbacks.length === 0
+          ) {
+            throw compactErr;
+          }
+          const triedModels = [`${provider}/${modelId}`];
+          let fbResult: typeof result | undefined;
+          for (const fallbackSpec of compactFallbacks) {
+            const trimmed = fallbackSpec?.trim();
+            if (!trimmed) {
+              continue;
+            }
+            let fbProvider: string;
+            let fbModelId: string;
+            const slashIdx = trimmed.indexOf("/");
+            if (slashIdx > 0) {
+              fbProvider = trimmed.slice(0, slashIdx).trim();
+              fbModelId = trimmed.slice(slashIdx + 1).trim() || DEFAULT_MODEL;
+            } else {
+              fbProvider = effectiveProvider;
+              fbModelId = trimmed;
+            }
+            triedModels.push(`${fbProvider}/${fbModelId}`);
+            log.info(
+              `[compaction] compact() failed for ${provider}/${modelId}, trying fallback: ${fbProvider}/${fbModelId}. Error: ${describeUnknownError(compactErr)}`,
+            );
+            try {
+              const fbResolved = await resolveModelAsync(
+                fbProvider,
+                fbModelId,
+                agentDir,
+                params.config,
+              );
+              if (!fbResolved.model) {
+                continue;
+              }
+              let fbRuntimeModel = fbResolved.model;
+              const fbAuthProfileId =
+                fbProvider.toLowerCase() !== effectiveProvider.toLowerCase()
+                  ? undefined
+                  : params.authProfileId;
+              const {
+                authModel: fbAuthModel,
+                keyInfo: fbKeyInfo,
+                hasExchange: fbHasExchange,
+              } = await tryAuthForModel(
+                fbRuntimeModel,
+                fbModelId,
+                fbResolved.authStorage,
+                fbAuthProfileId,
+              );
+              fbRuntimeModel = fbAuthModel;
+              const fbCtxInfo = resolveContextWindowInfo({
+                cfg: params.config,
+                provider: fbProvider,
+                modelId: fbModelId,
+                modelContextWindow: fbRuntimeModel.contextWindow,
+                defaultTokens: DEFAULT_CONTEXT_TOKENS,
+              });
+              const fbEffectiveModel = applyAuthHeaderOverride(
+                applyLocalNoAuthHeaderOverride(
+                  fbCtxInfo.tokens < (fbRuntimeModel.contextWindow ?? Infinity)
+                    ? { ...fbRuntimeModel, contextWindow: fbCtxInfo.tokens }
+                    : fbRuntimeModel,
+                  fbKeyInfo,
+                ),
+                fbHasExchange ? null : fbKeyInfo,
+                params.config,
+              );
+              fbResult = await tryCompactWithModel(
+                fbResolved.authStorage,
+                fbResolved.modelRegistry,
+                fbEffectiveModel,
+                fbResolved.model,
+                fbProvider,
+                fbModelId,
+              );
+              log.info(`[compaction] Fallback compact succeeded: ${fbProvider}/${fbModelId}`);
+              break;
+            } catch (fbErr) {
+              log.warn(
+                `[compaction] Fallback compact ${fbProvider}/${fbModelId} threw: ${describeUnknownError(fbErr)}`,
+              );
+            }
+          }
+          if (!fbResult) {
+            throw new Error(
+              `All compaction models failed (tried: ${triedModels.join(", ")}). Last error: ${describeUnknownError(compactErr)}`,
+              { cause: compactErr },
+            );
+          }
+          result = fbResult;
+        }
+        await runPostCompactionSideEffects({
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+        });
+        // Estimate tokens after compaction by summing token estimates for remaining messages
+        const tokensAfter = estimateTokensAfterCompaction({
+          messagesAfter: session.messages,
+          observedTokenCount,
+          fullSessionTokensBefore,
+          estimateTokensFn: estimateTokens,
+        });
+        const messageCountAfter = session.messages.length;
+        const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
+        const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
+        if (diagEnabled && preMetrics && postMetrics) {
+          log.debug(
+            `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
+              `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
+              `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
+              `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +
+              `delta.messages=${postMetrics.messages - preMetrics.messages} ` +
+              `delta.historyTextChars=${postMetrics.historyTextChars - preMetrics.historyTextChars} ` +
+              `delta.toolResultChars=${postMetrics.toolResultChars - preMetrics.toolResultChars} ` +
+              `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
+          );
+        }
+        await runAfterCompactionHooks({
+          hookRunner,
+          sessionId: params.sessionId,
+          sessionAgentId,
+          hookSessionKey,
+          missingSessionKey,
+          workspaceDir: effectiveWorkspace,
+          messageProvider: resolvedMessageProvider,
+          messageCountAfter,
+          tokensAfter,
+          compactedCount,
+          sessionFile: params.sessionFile,
+          summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
+          tokensBefore: result.tokensBefore,
+          firstKeptEntryId: result.firstKeptEntryId,
+        });
+        // Truncate session file to remove compacted entries (#39953)
+        if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
+          try {
+            const truncResult = await truncateSessionAfterCompaction({
+              sessionFile: params.sessionFile,
+            });
+            if (truncResult.truncated) {
+              log.info(
+                `[compaction] post-compaction truncation removed ${truncResult.entriesRemoved} entries ` +
+                  `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+              );
+            }
+          } catch (err) {
+            log.warn("[compaction] post-compaction truncation failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+              errorStack: err instanceof Error ? err.stack : undefined,
+            });
+          }
+        }
+        return {
+          ok: true,
+          compacted: true,
+          result: {
+            summary: result.summary,
+            firstKeptEntryId: result.firstKeptEntryId,
+            tokensBefore: observedTokenCount ?? result.tokensBefore,
+            tokensAfter,
+            details: result.details,
+          },
+        };
+      } finally {
+        try {
+          await flushPendingToolResultsAfterIdle({
+            agent: session?.agent,
+            sessionManager,
+            clearPendingOnTimeout: true,
+          });
+        } catch {
+          /* best-effort */
+        }
+        try {
+          session.dispose();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await bundleMcpRuntime?.dispose();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await bundleLspRuntime?.dispose();
+        } catch {
+          /* best-effort */
+        }
+      }
+    } finally {
+      await sessionLock.release();
+    }
+  } catch (err) {
+    const reason = resolveCompactionFailureReason({
+      reason: describeUnknownError(err),
+      safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
+    });
+    return fail(reason);
+  } finally {
+    restoreSkillEnv?.();
+  }
+}
+
+/**
+ * Compacts a session with lane queueing (session lane + global lane).
+ * Use this from outside a lane context. If already inside a lane, use
+ * `compactEmbeddedPiSessionDirect` to avoid deadlocks.
+ */
+export async function compactEmbeddedPiSession(
+  params: CompactEmbeddedPiSessionParams,
+): Promise<EmbeddedPiCompactResult> {
+  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
+  const globalLane = resolveGlobalLane(params.lane);
+  const enqueueGlobal =
+    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+  return enqueueCommandInLane(sessionLane, () =>
+    enqueueGlobal(async () => {
+      ensureRuntimePluginsLoaded({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+      });
+      ensureContextEnginesInitialized();
+      const contextEngine = await resolveContextEngine(params.config);
+      try {
+        const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+        const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+          config: params.config,
+          provider: params.provider,
+          modelId: params.model,
+          authProfileId: params.authProfileId,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+        });
+        // Resolve token budget from the effective compaction model so engine-
+        // owned /compact implementations see the same target as the runtime.
+        const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+        const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+        const { model: ceModel } = await resolveModelAsync(
+          ceProvider,
+          ceModelId,
+          agentDir,
+          params.config,
+        );
+        const ceCtxInfo = resolveContextWindowInfo({
+          cfg: params.config,
+          provider: ceProvider,
+          modelId: ceModelId,
+          modelContextWindow: ceModel?.contextWindow,
+          defaultTokens: DEFAULT_CONTEXT_TOKENS,
+        });
+        // When the context engine owns compaction, its compact() implementation
+        // bypasses compactEmbeddedPiSessionDirect (which fires the hooks internally).
+        // Fire before_compaction / after_compaction hooks here so plugin subscribers
+        // are notified regardless of which engine is active.
+        const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+        const hookRunner = engineOwnsCompaction
+          ? asCompactionHookRunner(getGlobalHookRunner())
+          : null;
+        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const { sessionAgentId } = resolveSessionAgentIds({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        });
+        const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+        const hookCtx = {
+          sessionId: params.sessionId,
+          agentId: sessionAgentId,
+          sessionKey: hookSessionKey,
+          workspaceDir: resolveUserPath(params.workspaceDir),
+          messageProvider: resolvedMessageProvider,
+        };
+        const runtimeContext = {
+          ...params,
+          ...buildEmbeddedCompactionRuntimeContext({
+            sessionKey: params.sessionKey,
+            messageChannel: params.messageChannel,
+            messageProvider: params.messageProvider,
+            agentAccountId: params.agentAccountId,
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            authProfileId: params.authProfileId,
+            workspaceDir: params.workspaceDir,
+            agentDir,
+            config: params.config,
+            skillsSnapshot: params.skillsSnapshot,
+            senderIsOwner: params.senderIsOwner,
+            senderId: params.senderId,
+            provider: params.provider,
+            modelId: params.model,
+            thinkLevel: params.thinkLevel,
+            reasoningLevel: params.reasoningLevel,
+            bashElevated: params.bashElevated,
+            extraSystemPrompt: params.extraSystemPrompt,
+            ownerNumbers: params.ownerNumbers,
+          }),
+        };
+        // Engine-owned compaction doesn't load the transcript at this level, so
+        // message counts are unavailable.  We pass sessionFile so hook subscribers
+        // can read the transcript themselves if they need exact counts.
+        if (hookRunner?.hasHooks?.("before_compaction") && hookRunner.runBeforeCompaction) {
+          try {
+            await hookRunner.runBeforeCompaction(
+              {
+                messageCount: -1,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn("before_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        const result = await contextEngine.compact({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          tokenBudget: ceCtxInfo.tokens,
+          currentTokenCount: params.currentTokenCount,
+          compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
+          customInstructions: params.customInstructions,
+          force: params.trigger === "manual",
+          runtimeContext,
+        });
+        if (result.ok && result.compacted) {
+          await runContextEngineMaintenance({
+            contextEngine,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            reason: "compaction",
+            runtimeContext,
+          });
+        }
+        if (engineOwnsCompaction && result.ok && result.compacted) {
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
           });
-          let effectiveFirstKeptEntryId = result.firstKeptEntryId;
-          let postCompactionLeafId =
-            typeof sessionManager.getLeafId === "function"
-              ? (sessionManager.getLeafId() ?? undefined)
-              : undefined;
-          if (params.trigger === "manual") {
-            try {
-              const hardenedBoundary = await hardenManualCompactionBoundary({
-                sessionFile: params.sessionFile,
-              });
-              if (hardenedBoundary.applied) {
-                effectiveFirstKeptEntryId =
-                  hardenedBoundary.firstKeptEntryId ?? effectiveFirstKeptEntryId;
-                postCompactionLeafId = hardenedBoundary.leafId ?? postCompactionLeafId;
-                session.agent.state.messages = hardenedBoundary.messages;
-              }
-            } catch (err) {
-              log.warn("[compaction] failed to harden manual compaction boundary", {
-                errorMessage: formatErrorMessage(err),
-              });
-            }
-          }
-          // Estimate tokens after compaction by summing token estimates for remaining messages
-          const tokensAfter = estimateTokensAfterCompaction({
-            messagesAfter: session.messages,
-            observedTokenCount,
-            fullSessionTokensBefore,
-            estimateTokensFn: estimateTokens,
-          });
-          const messageCountAfter = session.messages.length;
-          const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
-          if (params.config && params.sessionKey && checkpointSnapshot) {
-            try {
-              const storedCheckpoint = await persistSessionCompactionCheckpoint({
-                cfg: params.config,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                reason: resolveSessionCompactionCheckpointReason({
-                  trigger: params.trigger,
-                }),
-                snapshot: checkpointSnapshot,
-                summary: result.summary,
-                firstKeptEntryId: effectiveFirstKeptEntryId,
-                tokensBefore: observedTokenCount ?? result.tokensBefore,
-                tokensAfter,
-                postSessionFile: params.sessionFile,
-                postLeafId: postCompactionLeafId,
-                postEntryId: postCompactionLeafId,
-                createdAt: compactStartedAt,
-              });
-              checkpointSnapshotRetained = storedCheckpoint !== null;
-            } catch (err) {
-              log.warn("failed to persist compaction checkpoint", {
-                errorMessage: formatErrorMessage(err),
-              });
-            }
-          }
-          const postMetrics = diagEnabled
-            ? summarizeCompactionMessages(session.messages)
-            : undefined;
-          if (diagEnabled && preMetrics && postMetrics) {
-            log.debug(
-              `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-                `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-                `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
-                `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
-                `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
-                `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +
-                `delta.messages=${postMetrics.messages - preMetrics.messages} ` +
-                `delta.historyTextChars=${postMetrics.historyTextChars - preMetrics.historyTextChars} ` +
-                `delta.toolResultChars=${postMetrics.toolResultChars - preMetrics.toolResultChars} ` +
-                `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
-            );
-          }
-          await runAfterCompactionHooks({
-            hookRunner,
-            sessionId: params.sessionId,
-            sessionAgentId,
-            hookSessionKey,
-            missingSessionKey,
-            workspaceDir: effectiveWorkspace,
-            messageProvider: resolvedMessageProvider,
-            messageCountAfter,
-            tokensAfter,
-            compactedCount,
-            sessionFile: params.sessionFile,
-            summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
-            tokensBefore: result.tokensBefore,
-            firstKeptEntryId: effectiveFirstKeptEntryId,
-          });
-          // Truncate session file to remove compacted entries (#39953)
-          if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
-            try {
-              const heartbeatSummary = resolveHeartbeatSummaryForAgent(
-                params.config,
-                sessionAgentId,
-              );
-              const truncResult = await truncateSessionAfterCompaction({
-                sessionFile: params.sessionFile,
-                ackMaxChars: heartbeatSummary.ackMaxChars,
-                heartbeatPrompt: heartbeatSummary.prompt,
-              });
-              if (truncResult.truncated) {
-                log.info(
-                  `[compaction] post-compaction truncation removed ${truncResult.entriesRemoved} entries ` +
-                    `(sessionKey=${params.sessionKey ?? params.sessionId})`,
-                );
-              }
-            } catch (err) {
-              log.warn("[compaction] post-compaction truncation failed", {
-                errorMessage: formatErrorMessage(err),
-                errorStack: err instanceof Error ? err.stack : undefined,
-              });
-            }
-          }
-          return {
-            ok: true,
-            compacted: true,
-            result: {
-              summary: result.summary,
-              firstKeptEntryId: effectiveFirstKeptEntryId,
-              tokensBefore: observedTokenCount ?? result.tokensBefore,
-              tokensAfter,
-              details: result.details,
-            },
-          };
-        } catch (err) {
-          const fallbackThinking = pickFallbackThinkingLevel({
-            message: formatErrorMessage(err),
-            attempted: attemptedThinking,
-          });
-          if (fallbackThinking) {
-            // Near-term provider fix: when compaction hits a reasoning-mandatory
-            // endpoint with `off`, retry once with `minimal` instead of surfacing
-            // a user-visible failure.
-            log.warn(
-              `[compaction] request rejected for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
-            );
-            thinkLevel = fallbackThinking;
-            continue;
-          }
-          throw err;
-        } finally {
+        }
+        if (
+          result.ok &&
+          result.compacted &&
+          hookRunner?.hasHooks?.("after_compaction") &&
+          hookRunner.runAfterCompaction
+        ) {
           try {
-            await flushPendingToolResultsAfterIdle({
-              agent: session?.agent,
-              sessionManager,
-              clearPendingOnTimeout: true,
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: -1,
+                compactedCount: -1,
+                tokenCount: result.result?.tokensAfter,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn("after_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
             });
-          } catch {
-            /* best-effort */
-          }
-          try {
-            session?.dispose();
-          } catch {
-            /* best-effort */
           }
         }
+        return {
+          ok: result.ok,
+          compacted: result.compacted,
+          reason: result.reason,
+          result: result.result
+            ? {
+                summary: result.result.summary ?? "",
+                firstKeptEntryId: result.result.firstKeptEntryId ?? "",
+                tokensBefore: result.result.tokensBefore,
+                tokensAfter: result.result.tokensAfter,
+                details: result.result.details,
+              }
+            : undefined,
+        };
+      } finally {
+        await contextEngine.dispose?.();
       }
-    } finally {
-      try {
-        await bundleMcpRuntime?.dispose();
-      } catch {
-        /* best-effort */
-      }
-      try {
-        await bundleLspRuntime?.dispose();
-      } catch {
-        /* best-effort */
-      }
-      await sessionLock.release();
-    }
-  } catch (err) {
-    const reason = resolveCompactionFailureReason({
-      reason: formatErrorMessage(err),
-      safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
-    });
-    return fail(reason);
-  } finally {
-    if (!checkpointSnapshotRetained) {
-      await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
-    }
-    restoreSkillEnv?.();
-  }
+    }),
+  );
 }
 
 export const __testing = {
@@ -1224,9 +1540,6 @@ export const __testing = {
   containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
-  hardenManualCompactionBoundary,
-  resolveCompactionProviderStream,
-  prepareCompactionSessionAgent,
   runBeforeCompactionHooks,
   runAfterCompactionHooks,
   runPostCompactionSideEffects,
