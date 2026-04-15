@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const ZENMUX_BASE_URL = "https://zenmux.ai/api/v1";
 const ZENMUX_MODELS_URL = "https://zenmux.ai/api/v1/models";
