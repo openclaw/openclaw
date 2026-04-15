@@ -217,7 +217,7 @@ describe("google generative ai helpers", () => {
     expect(normalized).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
   });
 
-  it("rejects non-Google Gemini base URLs and ignores smuggled private-network flags", () => {
+  it("rejects non-Google Gemini base URLs and respects explicit allowPrivateNetwork opt-in", () => {
     expect(() =>
       resolveGoogleGenerativeAiHttpRequestConfig({
         apiKey: "api-key-123",
