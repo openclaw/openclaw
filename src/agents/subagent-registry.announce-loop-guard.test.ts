@@ -54,6 +54,7 @@ vi.mock("../infra/agent-events.js", () => ({
 }));
 
 vi.mock("./subagent-announce.js", () => ({
+  buildSubagentSystemPrompt: vi.fn(() => ""),
   runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
   captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
 }));

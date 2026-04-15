@@ -20,6 +20,8 @@ const hoisted = vi.hoisted(() => ({
 }));
 const { announceSpy } = hoisted;
 vi.mock("./subagent-announce.js", () => ({
+  buildSubagentSystemPrompt: vi.fn(() => ""),
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: announceSpy,
 }));
 
