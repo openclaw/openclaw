@@ -219,6 +219,13 @@ export function createProfileAvailability({
       try {
         await waitForCdpReadyAfterLaunch();
       } catch (err) {
+        // Some local Chrome launches come up far enough to spawn a healthy process
+        // even when the immediate CDP readiness probe is still flaky. Keep the
+        // browser running so callers can perform their own follow-up readiness wait
+        // instead of tearing Chrome down and forcing a relaunch loop.
+        if (!launched.proc.killed && launched.proc.exitCode == null) {
+          return;
+        }
         await stopOpenClawChrome(launched).catch(() => {});
         setProfileRunning(null);
         throw err;

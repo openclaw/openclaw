@@ -32,11 +32,15 @@ function createPageDownloadWaiter(page: Page, timeoutMs: number) {
   let timer: NodeJS.Timeout | undefined;
   let handler: ((download: unknown) => void) | undefined;
 
+  const state = ensurePageState(page);
+  state.downloadWaiterActive = true;
+
   const cleanup = () => {
     if (timer) {
       clearTimeout(timer);
     }
     timer = undefined;
+    state.downloadWaiterActive = false;
     if (handler) {
       page.off("download", handler as never);
       handler = undefined;

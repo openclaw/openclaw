@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   Browser,
@@ -30,7 +32,9 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -85,6 +89,7 @@ type PageState = {
   armIdUpload: number;
   armIdDialog: number;
   armIdDownload: number;
+  downloadWaiterActive: boolean;
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
    * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
@@ -319,6 +324,7 @@ export function ensurePageState(page: Page): PageState {
     armIdUpload: 0,
     armIdDialog: 0,
     armIdDownload: 0,
+    downloadWaiterActive: false,
   };
   pageStates.set(page, state);
 
@@ -386,6 +392,24 @@ export function ensurePageState(page: Page): PageState {
       }
       rec.failureText = req.failure()?.errorText;
       rec.ok = false;
+    });
+    page.on("download", (download) => {
+      if (state.downloadWaiterActive) {
+        return;
+      }
+      const suggested = sanitizeUntrustedFileName(
+        download.suggestedFilename?.() || "download.bin",
+        "download.bin",
+      );
+      const managedPath = path.join(DEFAULT_DOWNLOAD_DIR, suggested);
+      const managedSave = (async () => {
+        await fs.mkdir(DEFAULT_DOWNLOAD_DIR, { recursive: true });
+        await fs.rm(managedPath, { force: true });
+        await download.saveAs(managedPath);
+        return managedPath;
+      })();
+      const patched = download as typeof download & { path?: () => Promise<string> };
+      patched.path = async () => await managedSave;
     });
     page.on("close", () => {
       pageStates.delete(page);

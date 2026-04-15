@@ -2,10 +2,10 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
-import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
-import { resolveBrowserControlAuth } from "./control-auth.js";
+import type { BrowserControlAuth } from "./control-auth.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
 // Application-level error from the browser control service (service is reachable
@@ -18,8 +18,8 @@ class BrowserServiceError extends Error {
 }
 
 type LoopbackBrowserAuthDeps = {
-  loadConfig: typeof loadConfig;
-  resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
+  loadConfig: typeof import("../config/config.js").loadConfig;
+  resolveBrowserControlAuth: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => BrowserControlAuth;
   getBridgeAuthForPort: typeof getBridgeAuthForPort;
 };
 
@@ -86,15 +86,27 @@ function withLoopbackBrowserAuthImpl(
   return { ...init, headers };
 }
 
-function withLoopbackBrowserAuth(
+let loopbackBrowserAuthDepsPromise: Promise<LoopbackBrowserAuthDeps> | null = null;
+
+async function resolveLoopbackBrowserAuthDeps(): Promise<LoopbackBrowserAuthDeps> {
+  if (!loopbackBrowserAuthDepsPromise) {
+    loopbackBrowserAuthDepsPromise = Promise.all([
+      import("../config/config.js"),
+      import("./control-auth.js"),
+    ]).then(([configModule, authModule]) => ({
+      loadConfig: configModule.loadConfig,
+      resolveBrowserControlAuth: authModule.resolveBrowserControlAuth,
+      getBridgeAuthForPort,
+    }));
+  }
+  return await loopbackBrowserAuthDepsPromise;
+}
+
+async function withLoopbackBrowserAuth(
   url: string,
   init: (RequestInit & { timeoutMs?: number }) | undefined,
-): RequestInit & { timeoutMs?: number } {
-  return withLoopbackBrowserAuthImpl(url, init, {
-    loadConfig,
-    resolveBrowserControlAuth,
-    getBridgeAuthForPort,
-  });
+): Promise<RequestInit & { timeoutMs?: number }> {
+  return withLoopbackBrowserAuthImpl(url, init, await resolveLoopbackBrowserAuthDeps());
 }
 
 const BROWSER_TOOL_MODEL_HINT =
@@ -224,7 +236,7 @@ export async function fetchBrowserJson<T>(
   let isDispatcherPath = false;
   try {
     if (isAbsoluteHttp(url)) {
-      const httpInit = withLoopbackBrowserAuth(url, init);
+      const httpInit = await withLoopbackBrowserAuth(url, init);
       return await fetchHttpJson<T>(url, { ...httpInit, timeoutMs });
     }
     isDispatcherPath = true;
