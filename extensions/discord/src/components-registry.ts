@@ -8,6 +8,7 @@ import {
   realpathSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -23,20 +24,6 @@ const REGISTRY_FILE_VERSION = 1;
 const MAX_REGISTRY_BYTES = 1_000_000; // 1 MB — prevents unbounded read/parse DoS
 const MAX_ENTRIES_PER_TYPE = 10_000; // cap total entries per registry type
 const MAX_STRING_ARRAY_LEN = 1_000; // cap for options / allowedUsers arrays
-
-// Fields stripped from persisted entries. Routing fields (sessionKey/agentId/
-// accountId) and authorization fields (allowedUsers) are ephemeral by design
-// and must not be written to disk — an attacker reading the cache must not be
-// able to impersonate sessions or bypass allowlists after a gateway restart.
-const SENSITIVE_ENTRY_FIELDS = ["sessionKey", "agentId", "accountId", "allowedUsers"] as const;
-
-function stripSensitiveFields<T extends object>(entry: T): T {
-  const clone: Record<string, unknown> = { ...entry };
-  for (const key of SENSITIVE_ENTRY_FIELDS) {
-    delete clone[key];
-  }
-  return clone as T;
-}
 
 // --- Path hardening: validate env-var path stays under the safe base directory ---
 function resolveRegistryPath(): string {
@@ -173,11 +160,6 @@ function isModalEntryRecord(entry: unknown): entry is DiscordModalEntry {
   return true;
 }
 
-function clampExpiresAt(createdAt: number, expiresAt: number, maxAgeMs: number): number {
-  const maxAllowed = createdAt + maxAgeMs;
-  return expiresAt > maxAllowed ? maxAllowed : expiresAt;
-}
-
 function loadPersistedEntries<T extends { id: string; createdAt?: number; expiresAt?: number }>(
   rawEntries: unknown,
   store: Map<string, T>,
@@ -198,18 +180,7 @@ function loadPersistedEntries<T extends { id: string; createdAt?: number; expire
       changed = true;
       continue;
     }
-    // Clamp expiresAt to prevent far-future tampering (issue #3)
-    let normalized = normalizeEntryTimestamps(rawEntry, now, DEFAULT_COMPONENT_TTL_MS);
-    if (normalized.expiresAt) {
-      normalized = {
-        ...normalized,
-        expiresAt: clampExpiresAt(
-          normalized.createdAt ?? now,
-          normalized.expiresAt,
-          DEFAULT_COMPONENT_TTL_MS,
-        ),
-      };
-    }
+    const normalized = normalizeEntryTimestamps(rawEntry, now, DEFAULT_COMPONENT_TTL_MS);
     if (isExpired(normalized, now)) {
       changed = true;
       continue;
@@ -254,21 +225,26 @@ function assertSafeRegistryDestination(filePath: string): void {
 }
 
 function persistComponentRegistry(): void {
-  const filePath = getRegistryPath();
   let tmp: string | undefined;
   let fd: number | undefined;
   try {
+    const filePath = getRegistryPath();
     assertSafeRegistryDestination(filePath);
     const payload: PersistedRegistryFile = {
       version: REGISTRY_FILE_VERSION,
-      components: [...getComponentEntriesStore().values()].map(stripSensitiveFields),
-      modals: [...getModalEntriesStore().values()].map(stripSensitiveFields),
+      components: [...getComponentEntriesStore().values()],
+      modals: [...getModalEntriesStore().values()],
     };
+    const serialized = `${JSON.stringify(payload)}\n`;
+    if (Buffer.byteLength(serialized, "utf8") > MAX_REGISTRY_BYTES) {
+      console.warn("discord component registry snapshot exceeds size limit; skipping persist");
+      return;
+    }
     // Random tmp name + `wx` open prevents clobbering an attacker-prepared
     // file (CWE-59/CWE-362). `wx` fails if the path already exists.
     tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`;
     fd = openSync(tmp, "wx", 0o600);
-    writeSync(fd, `${JSON.stringify(payload)}\n`);
+    writeSync(fd, serialized);
     closeSync(fd);
     fd = undefined;
     renameSync(tmp, filePath);
@@ -286,7 +262,6 @@ function persistComponentRegistry(): void {
     }
     if (tmp !== undefined) {
       try {
-        const { unlinkSync } = require("node:fs") as typeof import("node:fs");
         unlinkSync(tmp);
       } catch {
         // best-effort
@@ -300,11 +275,11 @@ function loadPersistedComponentRegistry(): void {
     return;
   }
   componentRegistryLoaded = true;
-  const filePath = getRegistryPath();
-  if (!existsSync(filePath)) {
-    return;
-  }
   try {
+    const filePath = getRegistryPath();
+    if (!existsSync(filePath)) {
+      return;
+    }
     // Refuse to read through a symlink — an attacker who can stage a symlink
     // inside the cache dir could redirect this read to an arbitrary file.
     const lst = lstatSync(filePath);
