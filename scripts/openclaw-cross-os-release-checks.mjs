@@ -1317,13 +1317,16 @@ if ($content -is [byte[]]) {
   });
 }
 
-async function verifyFreshShellCommand(params) {
-  if (process.platform === "win32") {
-    const script = `
+export function buildWindowsPathBootstrapScript(options = {}) {
+  const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
+  const pathCandidates = includeCurrentProcessPath
+    ? "@($userPath, $machinePath, $env:Path)"
+    : "@($userPath, $machinePath)";
+  return `
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $segments = New-Object System.Collections.Generic.List[string]
-foreach ($candidate in @($userPath, $machinePath, $env:Path)) {
+foreach ($candidate in ${pathCandidates}) {
   foreach ($segment in ($candidate -split ';')) {
     if ([string]::IsNullOrWhiteSpace($segment)) {
       continue
@@ -1334,6 +1337,13 @@ foreach ($candidate in @($userPath, $machinePath, $env:Path)) {
   }
 }
 $env:Path = [string]::Join(';', $segments)
+`.trim();
+}
+
+async function verifyFreshShellCommand(params) {
+  if (process.platform === "win32") {
+    const script = `
+${buildWindowsPathBootstrapScript()}
 $cmd = Get-Command openclaw -ErrorAction Stop
 $commandPath = $cmd.Source
 if ($commandPath -match '(?i)\\.ps1$') {
@@ -1760,20 +1770,7 @@ export function shouldRepairDevUpdateInstall(stdout, options = {}) {
 
 async function verifyWindowsDevUpdateToolchain(params) {
   const script = `
-$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-$segments = New-Object System.Collections.Generic.List[string]
-foreach ($candidate in @($userPath, $machinePath, $env:Path)) {
-  foreach ($segment in ($candidate -split ';')) {
-    if ([string]::IsNullOrWhiteSpace($segment)) {
-      continue
-    }
-    if (-not $segments.Contains($segment)) {
-      $segments.Add($segment)
-    }
-  }
-}
-$env:Path = [string]::Join(';', $segments)
+${buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false })}
 $pnpmCommand = Get-Command pnpm -ErrorAction Stop
 $pnpmPath = $pnpmCommand.Source
 if ($pnpmPath -match '(?i)\\.ps1$') {

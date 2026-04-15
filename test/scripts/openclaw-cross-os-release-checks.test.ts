@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildWindowsPathBootstrapScript,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
   isImmutableReleaseRef,
@@ -104,6 +105,15 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         lane: "fresh",
       }),
     );
+  });
+
+  it("keeps the Windows dev-update toolchain check isolated from runner PATH shims", () => {
+    expect(buildWindowsPathBootstrapScript()).toContain("@($userPath, $machinePath, $env:Path)");
+    const persistedOnlyScript = buildWindowsPathBootstrapScript({
+      includeCurrentProcessPath: false,
+    });
+    expect(persistedOnlyScript).toContain("@($userPath, $machinePath)");
+    expect(persistedOnlyScript).not.toContain("@($userPath, $machinePath, $env:Path)");
   });
 
   it("prefers workflow-injected runner override env names over legacy ones", () => {
