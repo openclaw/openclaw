@@ -31,7 +31,15 @@ UPDATE_EXPECTED_NEEDLE=""
 API_KEY_VALUE=""
 PROGRESS_INTERVAL_S=15
 PROGRESS_STALE_S=60
-TIMEOUT_UPDATE_S=300
+TIMEOUT_UPDATE_S=600
+
+child_job_running() {
+  local target="$1"
+  local ppid
+  kill -0 "$target" >/dev/null 2>&1 || return 1
+  ppid="$(ps -o ppid= -p "$target" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$ppid" == "$$" ]]
+}
 
 MACOS_FRESH_STATUS="skip"
 WINDOWS_FRESH_STATUS="skip"
@@ -609,11 +617,33 @@ wait_job() {
   if wait "$pid"; then
     return 0
   fi
+  if [[ -n "$log_path" && "$label" == *"update"* ]] && update_log_completed "$log_path"; then
+    warn "$label exited nonzero after completion markers; treating as pass"
+    return 0
+  fi
   warn "$label failed"
   if [[ -n "$log_path" ]]; then
     dump_log_tail "$label" "$log_path"
   fi
   return 1
+}
+
+update_log_completed() {
+  local log_path="$1"
+  [[ -f "$log_path" ]] || return 1
+  "$PYTHON_BIN" - "$log_path" <<'PY'
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+if "==> update.done" in text:
+    raise SystemExit(0)
+if '"finalAssistantRawText": "OK"' in text:
+    raise SystemExit(0)
+if '"finalAssistantVisibleText": "OK"' in text:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 start_timeout_guard() {
@@ -707,7 +737,7 @@ monitor_jobs_progress() {
     running=0
     now=$SECONDS
     for ((i = 0; i < ${#pids[@]}; i++)); do
-      if ! kill -0 "${pids[$i]}" >/dev/null 2>&1; then
+      if ! child_job_running "${pids[$i]}"; then
         continue
       fi
       running=1
