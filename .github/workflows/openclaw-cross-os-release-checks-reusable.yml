@@ -163,6 +163,31 @@ jobs:
           WORKFLOW_REPOSITORY: ${{ env.OPENCLAW_REPOSITORY }}
         run: |
           set -euo pipefail
+          resolve_unique_remote_ref() {
+            local remote_url="$1"
+            shift
+            local -a refs=("$@")
+            local -a matches=()
+            local ref=""
+
+            for ref in "${refs[@]}"; do
+              [[ -n "${ref}" ]] || continue
+              mapfile -t matches < <(
+                git ls-remote "${remote_url}" "${ref}" | awk '{print $1}' | awk '!seen[$0]++'
+              )
+              if [[ "${#matches[@]}" -eq 0 ]]; then
+                continue
+              fi
+              if [[ "${#matches[@]}" -ne 1 ]]; then
+                return 2
+              fi
+
+              printf '%s\n' "${matches[0]}"
+              return 0
+            done
+            return 1
+          }
+
           if [[ -n "${INPUT_WORKFLOW_REF}" ]]; then
             TARGET_REF="${INPUT_WORKFLOW_REF}"
           elif [[ "${CALLER_REPOSITORY}" == "${WORKFLOW_REPOSITORY}" ]]; then
@@ -181,9 +206,34 @@ jobs:
 
           REMOTE_URL="https://github.com/${WORKFLOW_REPOSITORY}.git"
           if [[ "${TARGET_REF}" == refs/* ]]; then
-            mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
+            if [[ "${TARGET_REF}" == refs/tags/* ]]; then
+              mapfile -t MATCHES < <(
+                resolve_unique_remote_ref "${REMOTE_URL}" "${TARGET_REF}^{}" "${TARGET_REF}" || true
+              )
+            else
+              mapfile -t MATCHES < <(resolve_unique_remote_ref "${REMOTE_URL}" "${TARGET_REF}" || true)
+            fi
           else
-            mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "refs/heads/${TARGET_REF}" "refs/tags/${TARGET_REF}" "${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
+            mapfile -t BRANCH_MATCHES < <(
+              resolve_unique_remote_ref "${REMOTE_URL}" "refs/heads/${TARGET_REF}" || true
+            )
+            mapfile -t TAG_MATCHES < <(
+              resolve_unique_remote_ref "${REMOTE_URL}" "refs/tags/${TARGET_REF}^{}" "refs/tags/${TARGET_REF}" || true
+            )
+
+            MATCH_COUNT=$(( ${#BRANCH_MATCHES[@]} + ${#TAG_MATCHES[@]} ))
+            if [[ "${MATCH_COUNT}" -eq 1 ]]; then
+              if [[ "${#BRANCH_MATCHES[@]}" -eq 1 ]]; then
+                MATCHES=("${BRANCH_MATCHES[0]}")
+              else
+                MATCHES=("${TAG_MATCHES[0]}")
+              fi
+            elif [[ "${MATCH_COUNT}" -eq 0 ]]; then
+              MATCHES=()
+            else
+              echo "Workflow ref resolved ambiguously: ${TARGET_REF}" >&2
+              exit 1
+            fi
           fi
 
           case "${#MATCHES[@]}" in
