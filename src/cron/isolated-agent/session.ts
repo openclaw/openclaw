@@ -78,15 +78,6 @@ export function resolveCronSession(params: {
     // replies instead of channel top-level messages.
     // deliveryContext must also be cleared because normalizeSessionEntryDelivery
     // repopulates lastThreadId from deliveryContext.threadId on store writes.
-    // sessionFile must ALSO be cleared so the downstream transcript resolver
-    // (resolveSessionFilePath) falls through to computing a fresh path from
-    // the new sessionId instead of reusing the inherited path. Without this,
-    // every forceNew / stale rotation silently appends to the same physical
-    // file forever — defeating isolatedSession and poisoning each run with
-    // the in-context history of all prior runs. The prior transcript file
-    // is orphaned by this rotation and must be archived by the caller via
-    // `capturePriorIsolatedEntryForArchival` +
-    // `archivePriorIsolatedEntryAfterRotation` (see below).
     ...(isNewSession && {
       lastChannel: undefined,
       lastTo: undefined,
@@ -110,22 +101,10 @@ export type PriorIsolatedEntryForArchival = {
 };
 
 /**
- * Capture the identity of the prior session entry at `sessionKey` so its
- * transcript file can be archived after `resolveCronSession` rotates to a
- * fresh session.
- *
- * Must be called BEFORE the caller writes `cronSession.sessionEntry` back to
- * the store — at that point, `store[sessionKey]` still reflects the prior
- * entry (its sessionId + sessionFile), which is exactly what needs to be
- * archived once the overwrite happens.
- *
- * Returns `undefined` when no rotation is in progress (either `isNewSession`
- * is false, or the store had no prior entry at the key). In both cases the
- * caller has nothing to archive.
- *
- * Paired with `archivePriorIsolatedEntryAfterRotation` — this function is
- * intentionally pure/sync so it can run inline in any caller without adding
- * async dependencies at capture time.
+ * Snapshot the prior entry's sessionId + sessionFile so the transcript can be
+ * archived after rotation. Call BEFORE writing the new entry — once the store
+ * is overwritten, the prior identity is gone. Returns undefined when there's
+ * no rotation (non-`isNewSession` or no prior entry), making archival a no-op.
  */
 export function capturePriorIsolatedEntryForArchival(params: {
   store: Record<string, SessionEntry>;
@@ -143,28 +122,14 @@ export function capturePriorIsolatedEntryForArchival(params: {
 }
 
 /**
- * Archive the transcript file captured by `capturePriorIsolatedEntryForArchival`,
- * renaming it to `<file>.reset.<ts>` via `archiveRemovedSessionTranscripts`.
- * Safe to call with `priorEntryForArchival === undefined` (no-op).
- *
- * Must be called AFTER the new session entry has been persisted to the
- * store, so that `referencedSessionIds` (computed inside
- * `archiveRemovedSessionTranscripts`) contains the NEW sessionId and not
- * the old one. `archiveRemovedSessionTranscripts` skips any sessionId that
- * is still referenced elsewhere in the store, so passing the post-update
- * store guarantees the prior file is only archived when no other entry
- * still points at its sessionId.
- *
- * Uses `reason: "reset"` because the session entry persists at the same
- * key; only the transcript file is being rolled. `"reset"` archives get
- * cleaned up by `cleanupArchivedSessionTranscripts` after
- * `maintenance.resetArchiveRetentionMs` has elapsed — a separate retention
- * class from `"deleted"` archives (which are for genuinely-removed entries
- * and honour `maintenance.pruneAfterMs`).
- *
- * Errors from the underlying archival path are NOT caught here — the caller
- * decides whether to log/swallow them, because logger dependencies differ
- * by call site.
+ * Rename the captured prior transcript to `<file>.reset.<ts>`. Call AFTER
+ * the new entry is persisted: `archiveRemovedSessionTranscripts` skips any
+ * sessionId still referenced in the store, so a post-update store ensures
+ * the prior file is archived only when genuinely orphaned. No-op on
+ * undefined. Uses `reason: "reset"` (retention via
+ * `maintenance.resetArchiveRetentionMs`) rather than `"deleted"` because
+ * the store entry persists — only the transcript is rolling. Errors are
+ * not caught; callers wrap in try/catch with their own logger.
  */
 export async function archivePriorIsolatedEntryAfterRotation(params: {
   priorEntryForArchival: PriorIsolatedEntryForArchival | undefined;

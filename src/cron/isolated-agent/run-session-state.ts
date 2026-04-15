@@ -36,27 +36,10 @@ export function createPersistCronSessionEntry(params: {
   updateSessionStore: UpdateSessionStore;
   log?: PersistCronSessionLogger;
 }): PersistCronSessionEntry {
-  // Capture the prior entry identity at the agent-session key BEFORE any
-  // persist writes happen. If resolveCronSession rotated to a fresh session
-  // (isNewSession: true), the prior transcript file at the agent-session
-  // key is about to be orphaned by the impending overwrite and needs
-  // archival.
-  //
-  // This applies to BOTH run-key shapes:
-  // - hook-style (runSessionKey === agentSessionKey): the prior entry is
-  //   overwritten in place; nothing else in the store references the prior
-  //   sessionId after the write.
-  // - cron: prefix (runSessionKey is `...:run:<id>`): the new entry is
-  //   written to both agentSessionKey and runSessionKey, so the prior
-  //   agentSessionKey entry's sessionId is also unreferenced after the
-  //   write. The session-reaper eventually cleans up the `:run:<id>` entry
-  //   on retention expiry, but that path archives the NEW entry's file, not
-  //   the prior one — the prior transcript would otherwise sit on disk
-  //   until disk-budget enforcement kicks in.
-  //
-  // `capturePriorIsolatedEntryForArchival` returns undefined when there's
-  // nothing to archive (first-ever run, no prior entry, or not a rotation),
-  // so the later archival call is a cheap no-op on the common path.
+  // Capture before persist. In the cron: prefix case (runSessionKey is
+  // `...:run:<id>`), the session-reaper only archives the run-key entry's
+  // file on retention — this is the only path that reaches the prior
+  // agentSessionKey transcript.
   const priorEntryForArchival: PriorIsolatedEntryForArchival | undefined =
     capturePriorIsolatedEntryForArchival({
       store: params.cronSession.store,
@@ -80,11 +63,8 @@ export function createPersistCronSessionEntry(params: {
       }
     });
 
-    // Archive the rotated transcript exactly once, after the first successful
-    // store persist. `persistSessionEntry` is sometimes called multiple times
-    // during a single run (e.g. pre-run pass, skills snapshot refresh, post-run
-    // finalize) — the once-flag prevents redundant archive attempts on the
-    // second+ calls, which would look up a file that no longer exists.
+    // Once-flag: persist is called multiple times per run (pre-run, skills
+    // refresh, finalize); only the first call should attempt the archive.
     if (!archivedPrior) {
       archivedPrior = true;
       try {

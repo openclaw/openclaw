@@ -858,23 +858,19 @@ export async function runHeartbeatOnce(opts: {
       forceNew: true,
     });
 
-    // Capture the prior entry's identity BEFORE the store is updated, so we
-    // can archive its transcript file after the rotation. Returns undefined
-    // when isNewSession is false or no prior entry exists, in which case the
-    // later archival call is a no-op. This is the "reset" archival path —
-    // the entry persists at the same key, only the transcript is rolling.
+    // Rotation archival (reason: "reset") — entry persists at this key,
+    // only the transcript file is rolling. Capture before store save; archive
+    // after (see below).
     const rotatedIsolatedEntry = capturePriorIsolatedEntryForArchival({
       store: cronSession.store,
       sessionKey: isolatedSessionKey,
       isNewSession: cronSession.isNewSession,
     });
 
-    // The "delete" archival path: a stale `:heartbeat:heartbeat` suffix-collapse
-    // entry is being removed from the store entirely (a different concept
-    // from rotation — the entry is genuinely going away). Tracked separately
-    // so the two archival calls use semantically-correct retention classes:
-    // `reason: "deleted"` honours `maintenance.pruneAfterMs`, while
-    // `reason: "reset"` (rotation) honours `maintenance.resetArchiveRetentionMs`.
+    // Suffix-collapse archival (reason: "deleted") — a stale
+    // `:heartbeat:heartbeat` entry is being removed outright, not rotated.
+    // Tracked separately from the rotation path above so each archival call
+    // uses its correct retention class (pruneAfterMs vs resetArchiveRetentionMs).
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
@@ -893,9 +889,6 @@ export async function runHeartbeatOnce(opts: {
     cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
 
-    // Rotation archival: rename the prior run's transcript to
-    // `<file>.reset.<ts>`. Runs after the store save so the archival's
-    // internal `referencedSessionIds` computation reflects the rotation.
     try {
       await archivePriorIsolatedEntryAfterRotation({
         priorEntryForArchival: rotatedIsolatedEntry,
@@ -910,7 +903,6 @@ export async function runHeartbeatOnce(opts: {
       });
     }
 
-    // Suffix-collapse archival: file from a genuinely-removed entry.
     if (deletedSessionFiles.size > 0) {
       try {
         const referencedSessionIds = new Set(

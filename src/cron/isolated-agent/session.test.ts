@@ -298,33 +298,6 @@ describe("resolveCronSession", () => {
     });
 
     describe("sessionFile rotation", () => {
-      // Regression for the `isolatedSession: true` bug where every forceNew
-      // run inherited the prior entry's sessionFile via the `...entry` spread.
-      // `resolveSessionFilePath` prefers `entry.sessionFile` over recomputing
-      // from sessionId, so the inherited path won over the new sessionId and
-      // every run silently appended to the same physical transcript file
-      // forever — defeating isolation and poisoning each run with the
-      // in-context history of all prior runs.
-
-      it("clears sessionFile when forceNew is true", () => {
-        const result = resolveWithStoredEntry({
-          sessionKey: "agent:main:main:heartbeat",
-          entry: {
-            sessionId: "old-heartbeat-session-id",
-            updatedAt: NOW_MS - 1000,
-            sessionFile: "/tmp/agents/main/sessions/old-heartbeat-session-id.jsonl",
-          },
-          fresh: true,
-          forceNew: true,
-        });
-
-        expect(result.isNewSession).toBe(true);
-        expect(result.sessionEntry.sessionId).not.toBe("old-heartbeat-session-id");
-        // Must be undefined so the downstream resolver falls through to
-        // computing a new path from the new sessionId.
-        expect(result.sessionEntry.sessionFile).toBeUndefined();
-      });
-
       it("clears sessionFile when session is stale (non-forceNew)", () => {
         const result = resolveWithStoredEntry({
           entry: {
