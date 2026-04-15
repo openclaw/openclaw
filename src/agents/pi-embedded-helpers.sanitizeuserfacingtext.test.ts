@@ -375,6 +375,16 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe("Hello world");
   });
 
+  it("preserves non-tool XML examples that mention tool_call tags", () => {
+    const text = "Use <tool_call>payload</tool_call> in XML examples.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("does not collapse unrelated formatting when no tool tags are stripped", () => {
+    const text = "Code:\n    indented\nA  B\t\tC";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("strips self-closing tool tags without removing visible trailing text", () => {
     expect(sanitizeUserFacingText("Before <tool_call /> after")).toBe("Before after");
     expect(sanitizeUserFacingText("Before <tool_result data-id='x'/> after")).toBe("Before after");
@@ -383,6 +393,19 @@ describe("sanitizeUserFacingText", () => {
   it("strips orphaned tool tags through the end of text", () => {
     expect(sanitizeUserFacingText('Visible <tool_call>{"name": "exec"}')).toBe("Visible ");
     expect(sanitizeUserFacingText("Visible <tool_result>partial output")).toBe("Visible ");
+  });
+
+  it("does not leak embedded closing-tag text from tool payloads", () => {
+    expect(
+      sanitizeUserFacingText(
+        'Before <tool_call>{"arguments":{"cmd":"echo </tool_call> hi"}}</tool_call> after',
+      ),
+    ).toBe("Before after");
+    expect(
+      sanitizeUserFacingText(
+        'Before <tool_result>{"output":"literal </tool_result> text"}</tool_result> after',
+      ),
+    ).toBe("Before after");
   });
 });
 

@@ -196,7 +196,28 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
   };
 }
 
-export function stripToolCallXmlTags(text: string): string {
+interface StripToolCallXmlTagsOptions {
+  collapseRemovedInlineWhitespace?: boolean;
+  stripPlainToolResultPayload?: boolean;
+}
+
+function appendVisibleToolText(
+  result: string,
+  segment: string,
+  options: StripToolCallXmlTagsOptions | undefined,
+): string {
+  if (!options?.collapseRemovedInlineWhitespace || !result || !segment) {
+    return result + segment;
+  }
+  const resultLast = result[result.length - 1];
+  const segmentFirst = segment[0];
+  if (!/[ \t]/.test(resultLast) || !/[ \t]/.test(segmentFirst)) {
+    return result + segment;
+  }
+  return result + segment.replace(/^[ \t]+/, "");
+}
+
+export function stripToolCallXmlTags(text: string, options?: StripToolCallXmlTagsOptions): string {
   if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
     return text;
   }
@@ -225,18 +246,18 @@ export function stripToolCallXmlTags(text: string): string {
     }
 
     if (!inToolCallBlock) {
-      result += text.slice(lastIndex, idx);
+      result = appendVisibleToolText(result, text.slice(lastIndex, idx), options);
       if (tag.isClose) {
         if (tag.isTruncated) {
           const preserveEnd = tag.contentStart;
-          result += text.slice(idx, preserveEnd);
+          result = appendVisibleToolText(result, text.slice(idx, preserveEnd), options);
           lastIndex = preserveEnd;
           idx = Math.max(idx, preserveEnd - 1);
           continue;
         }
         const balance = visibleTagBalance.get(tag.tagName) ?? 0;
         if (balance > 0) {
-          result += text.slice(idx, tag.end);
+          result = appendVisibleToolText(result, text.slice(idx, tag.end), options);
           visibleTagBalance.set(tag.tagName, balance - 1);
         }
         lastIndex = tag.end;
@@ -255,9 +276,15 @@ export function stripToolCallXmlTags(text: string): string {
           : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
             ? "json"
             : null;
+      const shouldStripPlainToolResult =
+        options?.stripPlainToolResultPayload === true && tag.tagName === "tool_result";
       const shouldStripStandaloneFunction =
         tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
-      if (!tag.isClose && payloadKind && shouldStripStandaloneFunction) {
+      if (
+        !tag.isClose &&
+        (payloadKind || shouldStripPlainToolResult) &&
+        shouldStripStandaloneFunction
+      ) {
         inToolCallBlock = true;
         toolCallBlockContentStart = tag.end;
         toolCallBlockNeedsQuoteBalance = payloadKind === "json";
@@ -269,7 +296,7 @@ export function stripToolCallXmlTags(text: string): string {
         }
       } else {
         const preserveEnd = tag.isTruncated ? tag.contentStart : tag.end;
-        result += text.slice(idx, preserveEnd);
+        result = appendVisibleToolText(result, text.slice(idx, preserveEnd), options);
         if (!tag.isTruncated) {
           visibleTagBalance.set(tag.tagName, (visibleTagBalance.get(tag.tagName) ?? 0) + 1);
         }
@@ -294,7 +321,7 @@ export function stripToolCallXmlTags(text: string): string {
   }
 
   if (!inToolCallBlock) {
-    result += text.slice(lastIndex);
+    result = appendVisibleToolText(result, text.slice(lastIndex), options);
   } else if (toolCallBlockTagName === "function") {
     result += text.slice(toolCallBlockStart);
   }

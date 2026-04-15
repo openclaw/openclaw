@@ -11,6 +11,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
+import { stripToolCallXmlTags } from "../../shared/text/assistant-visible-text.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -40,16 +41,6 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
-
-// Strip tool_call / tool_result XML tags that may leak into user-facing text when
-// streaming is disabled (streamMode: block). Orphaned opening tags consume the
-// rest of the text because truncated tool payloads are not user-facing content.
-const TOOL_CALL_TAG_RE = /<\s*tool_call\b[^>]*>[\s\S]*?<\s*\/\s*tool_call\s*>/gi;
-const TOOL_RESULT_TAG_RE = /<\s*tool_result\b[^>]*>[\s\S]*?<\s*\/\s*tool_result\s*>/gi;
-const TOOL_CALL_SELF_CLOSING_RE = /<\s*tool_call\b[^>]*\/\s*>/gi;
-const TOOL_RESULT_SELF_CLOSING_RE = /<\s*tool_result\b[^>]*\/\s*>/gi;
-const TOOL_CALL_OPEN_RE = /<\s*tool_call\b[^>]*>[\s\S]*/gi;
-const TOOL_RESULT_OPEN_RE = /<\s*tool_result\b[^>]*>[\s\S]*/gi;
 
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
@@ -331,14 +322,10 @@ function stripToolCallTagsFromText(text: string): string {
   if (!text) {
     return text;
   }
-  return text
-    .replace(TOOL_CALL_TAG_RE, "")
-    .replace(TOOL_RESULT_TAG_RE, "")
-    .replace(TOOL_CALL_SELF_CLOSING_RE, "")
-    .replace(TOOL_RESULT_SELF_CLOSING_RE, "")
-    .replace(TOOL_CALL_OPEN_RE, "")
-    .replace(TOOL_RESULT_OPEN_RE, "")
-    .replace(/[ \t]{2,}/g, " ");
+  return stripToolCallXmlTags(text, {
+    collapseRemovedInlineWhitespace: true,
+    stripPlainToolResultPayload: true,
+  });
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
