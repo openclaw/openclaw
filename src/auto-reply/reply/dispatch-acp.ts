@@ -429,7 +429,8 @@ export async function tryDispatchAcpReply(params: {
     // captured at the top of tryDispatchAcpReply (before media work and before
     // runTurn acquires the session actor). If the session was updated in that window,
     // this ensures dispatch and AcpSessionManager.runTurn share the same budget.
-    const liveAcpMeta = readAcpSessionEntry({ cfg: params.cfg, sessionKey })?.acp ?? undefined;
+    const { readAcpSessionEntry: readLiveAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
+    const liveAcpMeta = readLiveAcpSessionEntry({ cfg: params.cfg, sessionKey })?.acp ?? undefined;
     const liveTimeoutSeconds = liveAcpMeta
       ? resolveRuntimeOptionsFromMeta(liveAcpMeta).timeoutSeconds
       : undefined;
