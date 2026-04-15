@@ -403,6 +403,12 @@ guest_exec() {
   prlctl exec "$VM_NAME" /usr/bin/env HOME=/root "$@"
 }
 
+guest_bash_script() {
+  local encoded
+  encoded="$(base64 | tr -d '\n')"
+  guest_exec bash -lc "printf '%s' '$encoded' | base64 -d | bash"
+}
+
 wait_for_vm_status() {
   local expected="$1"
   local deadline status
@@ -625,7 +631,7 @@ run_ref_onboard() {
 }
 
 inject_bad_plugin_fixture() {
-  guest_exec bash -lc "$(cat <<'EOF'
+  guest_bash_script <<'EOF'
 set -euo pipefail
 plugin_dir=/root/.openclaw/test-bad-plugin
 mkdir -p "$plugin_dir"
@@ -684,7 +690,6 @@ if isinstance(allow, list) and "test-bad-plugin" not in allow:
 config_path.write_text(json.dumps(config, indent=2) + "\n")
 PY
 EOF
-)"
 }
 
 verify_bad_plugin_diagnostic() {

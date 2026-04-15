@@ -39,6 +39,7 @@ export type MatrixQaHarnessFiles = {
 
 export type MatrixQaHarness = MatrixQaHarnessFiles & {
   baseUrl: string;
+  restartService(): Promise<void>;
   stopCommand: string;
   stop(): Promise<void>;
 };
@@ -248,9 +249,34 @@ export async function startMatrixQaHarness(
     sleepImpl,
   });
 
+  const waitForReady = async () => {
+    await sleepImpl(1_000);
+    await waitForDockerServiceHealth(
+      MATRIX_QA_SERVICE,
+      files.composeFile,
+      repoRoot,
+      runCommand,
+      sleepImpl,
+    );
+    await waitForHealth(buildVersionsUrl(baseUrl), {
+      label: "Matrix homeserver",
+      composeFile: files.composeFile,
+      fetchImpl,
+      sleepImpl,
+    });
+  };
+
   return {
     ...files,
     baseUrl,
+    async restartService() {
+      await runCommand(
+        "docker",
+        ["compose", "-f", files.composeFile, "restart", MATRIX_QA_SERVICE],
+        repoRoot,
+      );
+      await waitForReady();
+    },
     stopCommand: `docker compose -f ${files.composeFile} down --remove-orphans`,
     async stop() {
       await runCommand(

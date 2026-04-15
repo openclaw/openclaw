@@ -421,7 +421,7 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Build dist
-        run: pnpm build
+        run: pnpm build:ci-artifacts
 
       - name: Build Control UI
         run: pnpm ui:build
