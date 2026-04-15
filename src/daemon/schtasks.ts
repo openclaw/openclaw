@@ -213,6 +213,7 @@ function normalizeTaskResultCode(value?: string): string | null {
 }
 
 const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+const NOT_YET_RUN_RESULT_CODES = new Set(["0x41303"]);
 const UNKNOWN_STATUS_DETAIL =
   "Task status is locale-dependent and no numeric Last Run Result was available.";
 
@@ -602,7 +603,11 @@ async function updateExistingScheduledTask(params: {
   if (change.code !== 0) {
     return false;
   }
-  await runScheduledTaskOrThrow(params.taskName);
+  await runScheduledTaskOrThrow({
+    taskName: params.taskName,
+    env: params.env,
+    scriptPath: params.scriptPath,
+  });
   writeFormattedLines(
     params.stdout,
     [
@@ -614,11 +619,48 @@ async function updateExistingScheduledTask(params: {
   return true;
 }
 
-async function runScheduledTaskOrThrow(taskName: string): Promise<void> {
-  const run = await execSchtasks(["/Run", "/TN", taskName]);
+async function shouldFallbackScheduledTaskLaunch(params: {
+  env: GatewayServiceEnv;
+}): Promise<boolean> {
+  const readLaunchState = async (): Promise<"running" | "not-yet-run" | "other"> => {
+    const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
+    if (runtime?.status === "running") {
+      return "running";
+    }
+    const normalizedResult = normalizeTaskResultCode(runtime?.lastRunResult);
+    if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
+      return "not-yet-run";
+    }
+    return "other";
+  };
+
+  if ((await readLaunchState()) !== "not-yet-run") {
+    return false;
+  }
+
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    await sleep(250);
+    if ((await readLaunchState()) !== "not-yet-run") {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function runScheduledTaskOrThrow(params: {
+  taskName: string;
+  env: GatewayServiceEnv;
+  scriptPath: string;
+}): Promise<void> {
+  const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
+  if (!(await shouldFallbackScheduledTaskLaunch({ env: params.env }))) {
+    return;
+  }
+  launchFallbackTaskScript(params.scriptPath);
 }
 
 async function activateScheduledTask(params: {
@@ -679,7 +721,11 @@ async function activateScheduledTask(params: {
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await runScheduledTaskOrThrow(taskName);
+  await runScheduledTaskOrThrow({
+    taskName,
+    env: params.env,
+    scriptPath: params.scriptPath,
+  });
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     params.stdout,
@@ -806,7 +852,11 @@ export async function restartScheduledTask({
       }
     }
   }
-  await runScheduledTaskOrThrow(taskName);
+  await runScheduledTaskOrThrow({
+    taskName,
+    env: effectiveEnv,
+    scriptPath: resolveTaskScriptPath(effectiveEnv),
+  });
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }

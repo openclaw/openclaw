@@ -101,6 +101,16 @@ function addStartupFallbackMissingResponses(
     ...extraResponses,
   );
 }
+
+function notYetRunTaskQueryOutput() {
+  return [
+    "Status: Ready",
+    "Last Run Time: 11/30/1999 12:00:00 AM",
+    "Last Run Result: 267011",
+    "",
+  ].join("\r\n");
+}
+
 beforeEach(() => {
   resetSchtasksBaseMocks();
   spawn.mockClear();
@@ -176,6 +186,33 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("launches the task script directly when schtasks /Run is accepted but never starts the task", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      sleepMock.mockImplementationOnce(async () => {
+        timeState.now += 2_000;
+      });
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+      );
+
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js", "--port", "18789"],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      expectStartupFallbackSpawn(env);
+    });
+  });
+
   it("treats an installed Startup-folder launcher as loaded", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();
@@ -222,6 +259,37 @@ describe("Windows startup fallback", () => {
         outcome: "completed",
       });
       expectGatewayTermination(5151);
+      expectStartupFallbackSpawn(env);
+    });
+  });
+
+  it("relaunches the task script when restart sees a scheduled-task run no-op", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await writeGatewayScript(env);
+      sleepMock.mockImplementationOnce(async () => {
+        timeState.now += 2_000;
+      });
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "free",
+        listeners: [],
+        hints: [],
+      });
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+      );
+
+      await expect(restartScheduledTask({ env, stdout: new PassThrough() })).resolves.toEqual({
+        outcome: "completed",
+      });
+
       expectStartupFallbackSpawn(env);
     });
   });

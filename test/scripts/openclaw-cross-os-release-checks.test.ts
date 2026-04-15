@@ -242,17 +242,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldRunMainChannelDevUpdate("v2026.4.14")).toBe(false);
   });
 
-  it("pins main dev-update verification to the prepared source sha", () => {
+  it("keeps dev-update verification aligned to the requested ref", () => {
     expect(resolveDevUpdateVerificationRef("main")).toBe("main");
     expect(
       resolveDevUpdateVerificationRef("main", "08753a1d793c040b101c8a26c43445dbbab14995"),
-    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
+    ).toBe("main");
     expect(
       resolveDevUpdateVerificationRef(
         "refs/heads/main",
         "08753a1d793c040b101c8a26c43445dbbab14995",
       ),
-    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
+    ).toBe("main");
     expect(resolveDevUpdateVerificationRef("codex/cross-os-release-checks-full-native-e2e")).toBe(
       "codex/cross-os-release-checks-full-native-e2e",
     );

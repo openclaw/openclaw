@@ -1137,11 +1137,8 @@ function resolveExpectedDevUpdateRef(ref) {
 }
 
 export function resolveDevUpdateVerificationRef(ref, sourceSha) {
-  const expectedRef = resolveExpectedDevUpdateRef(ref);
-  if (expectedRef === "main" && looksLikeCommitSha(sourceSha ?? "")) {
-    return sourceSha.trim();
-  }
-  return expectedRef;
+  void sourceSha;
+  return resolveExpectedDevUpdateRef(ref);
 }
 
 export function shouldRunMainChannelDevUpdate(ref) {
