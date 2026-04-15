@@ -126,4 +126,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { loadPlugins: "never" },
   },
+  {
+    commandPath: ["cron"],
+    policy: { loadPlugins: "never" },
+  },
 ];
