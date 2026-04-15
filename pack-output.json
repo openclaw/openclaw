@@ -1,0 +1,22 @@
+
+> openclaw@2026.4.15-beta.1 build /workspaces/openclaw
+> node scripts/build-all.mjs
+
+
+> openclaw@2026.4.15-beta.1 canvas:a2ui:bundle /workspaces/openclaw
+> node scripts/bundle-a2ui.mjs
+
+A2UI bundle up to date; skipping.
+{
+  "error": {
+    "code": "ELIFECYCLE",
+    "message": "openclaw@2026.4.15-beta.1 build: `node scripts/build-all.mjs`\nExit status 1"
+  }
+}
+{
+  "error": {
+    "code": 1,
+    "summary": "command failed",
+    "detail": "sh -c node --import tsx scripts/openclaw-prepack.ts"
+  }
+}
