@@ -133,7 +133,7 @@ describe("describeImageWithModel", () => {
     });
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
     expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
-    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(getApiKeyForModelMock).toHaveBeenCalled();
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
     expect(fetchMock).toHaveBeenCalledWith(
@@ -431,6 +431,7 @@ describe("describeImageWithModel", () => {
         id: "custom-image-model",
       }),
     );
+    expect(getApiKeyForModelMock).toHaveBeenCalled();
     expect(completeMock).toHaveBeenCalledWith(
       expect.any(Object),
       expect.any(Object),
@@ -442,6 +443,74 @@ describe("describeImageWithModel", () => {
         },
       }),
     );
+  });
+
+  it("prefers profile-selected api key when registry returns api key and headers", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "profile-key", // pragma: allowlist secret
+      source: "test-profile",
+      mode: "oauth",
+    });
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai-compatible",
+        id: "custom-image-model",
+        input: ["text", "image"],
+        baseUrl: "https://example.com/v1",
+      })),
+      getApiKeyAndHeaders: getApiKeyAndHeadersMock.mockResolvedValueOnce({
+        ok: true,
+        apiKey: "registry-key", // pragma: allowlist secret
+        headers: {
+          "User-Agent": "OpenClaw-Test",
+          "X-Custom-Header": "from-model-registry",
+        },
+      }),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai-compatible",
+      model: "custom-image-model",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "profile auth ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai-compatible",
+      model: "custom-image-model",
+      profile: "openai-compatible:work",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "profile auth ok",
+      model: "custom-image-model",
+    });
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "openai-compatible:work",
+      }),
+    );
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        apiKey: "profile-key",
+        headers: {
+          "User-Agent": "OpenClaw-Test",
+          "X-Custom-Header": "from-model-registry",
+        },
+      }),
+    );
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("openai-compatible", "profile-key");
   });
 
   it("falls back to getApiKeyForModel when registry auth lookup is unavailable", async () => {

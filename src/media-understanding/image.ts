@@ -5,7 +5,6 @@ import {
   getApiKeyForModel,
   requireApiKey,
   resolveApiKeyForProvider,
-  type ResolvedProviderAuth,
 } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
@@ -132,41 +131,27 @@ async function resolveImageRuntime(params: {
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
   }
-  const modelRegistryWithRequestAuthLookup = modelRegistry as ModelRegistryWithRequestAuthLookup;
-  const requestAuth =
-    typeof modelRegistryWithRequestAuthLookup.getApiKeyAndHeaders === "function"
-      ? await modelRegistryWithRequestAuthLookup.getApiKeyAndHeaders(model)
-      : null;
-
-  const fallbackAuth = async () =>
-    await getApiKeyForModel({
-      model,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-      profileId: params.profile,
-      preferredProfile: params.preferredProfile,
-      store: params.authStore,
-    });
-
-  let auth: ResolvedProviderAuth;
-  let headers: Record<string, string> | undefined;
-  if (requestAuth && requestAuth.ok) {
-    headers = requestAuth.headers;
-    if (requestAuth.apiKey) {
-      auth = {
-        apiKey: requestAuth.apiKey,
-        source: "model-registry",
-        mode: "api-key",
-      };
-    } else {
-      auth = await fallbackAuth();
-    }
-  } else {
-    auth = await fallbackAuth();
-  }
-
-  const apiKey = requireApiKey(auth, model.provider);
+  const resolvedAuth = await getApiKeyForModel({
+    model,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    profileId: params.profile,
+    preferredProfile: params.preferredProfile,
+  });
+  const apiKey = requireApiKey(resolvedAuth, model.provider);
   authStorage.setRuntimeApiKey(model.provider, apiKey);
+
+  const modelRegistryWithRequestAuthLookup = modelRegistry as ModelRegistryWithRequestAuthLookup;
+  let requestAuth: ResolvedRequestAuth | null = null;
+  if (typeof modelRegistryWithRequestAuthLookup.getApiKeyAndHeaders === "function") {
+    try {
+      requestAuth = await modelRegistryWithRequestAuthLookup.getApiKeyAndHeaders(model);
+    } catch {
+      requestAuth = null;
+    }
+  }
+  const headers = requestAuth?.ok ? requestAuth.headers : undefined;
+
   return { apiKey, model, headers };
 }
 
