@@ -40,7 +40,6 @@ export {
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
-const FILTERED_TELEGRAM_REPLY_TEXT = "[unsafe reply text omitted]";
 
 function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
   return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
@@ -336,7 +335,7 @@ export type TelegramReplyTarget = {
   sender: string;
   senderId?: string;
   senderUsername?: string;
-  body: string;
+  body?: string;
   kind: "reply" | "quote";
   /** Forward context if the reply target was itself a forwarded message (issue #9619). */
   forwardedFrom?: TelegramForwardedContext;
@@ -397,7 +396,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     sender: senderLabel,
     senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
     senderUsername: replyLike?.from?.username ?? undefined,
-    body: body || FILTERED_TELEGRAM_REPLY_TEXT,
+    body: body || undefined,
     kind,
     forwardedFrom,
   };

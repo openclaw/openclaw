@@ -1280,7 +1280,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToSender).toBe("Ada");
   });
 
-  it("filters binary reply captions from ReplyToBody", async () => {
+  it("keeps reply linkage while omitting filtered binary reply captions", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
     replySpy.mockClear();
@@ -1307,7 +1307,8 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("[Replying to Ada id:9001]");
     expect(payload.Body).not.toContain("PK");
-    expect(payload.ReplyToBody).toBe("[unsafe reply text omitted]");
+    expect(payload.Body).not.toContain("unsafe reply text omitted");
+    expect(payload.ReplyToBody).toBeUndefined();
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToSender).toBe("Ada");
   });

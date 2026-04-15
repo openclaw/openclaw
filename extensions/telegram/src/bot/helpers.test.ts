@@ -361,7 +361,7 @@ describe("describeReplyTarget", () => {
     } as any);
     expect(result?.id).toBe("1");
     expect(result?.sender).toBe("Alice");
-    expect(result?.body).toBe("[unsafe reply text omitted]");
+    expect(result?.body).toBeUndefined();
   });
 
   it("falls back to reply text when quote text is binary", () => {
