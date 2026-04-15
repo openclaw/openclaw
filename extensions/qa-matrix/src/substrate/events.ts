@@ -15,6 +15,12 @@ export type MatrixQaObservedEventKind =
   | "reaction"
   | "room-event";
 
+export type MatrixQaObservedEventAttachment = {
+  caption?: string;
+  filename?: string;
+  kind: "audio" | "file" | "image" | "sticker" | "video";
+};
+
 export type MatrixQaObservedEvent = {
   kind: MatrixQaObservedEventKind;
   roomId: string;
@@ -41,6 +47,7 @@ export type MatrixQaObservedEvent = {
     eventId?: string;
     key?: string;
   };
+  attachment?: MatrixQaObservedEventAttachment;
 };
 
 function normalizeMentionUserIds(value: unknown) {
@@ -80,6 +87,41 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
   return "room-event" as const;
 }
 
+function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
+  switch (msgtype) {
+    case "m.audio":
+      return "audio" as const;
+    case "m.file":
+      return "file" as const;
+    case "m.image":
+      return "image" as const;
+    case "m.sticker":
+      return "sticker" as const;
+    case "m.video":
+      return "video" as const;
+    default:
+      return undefined;
+  }
+}
+
+function resolveMatrixQaAttachmentSummary(params: {
+  body?: string;
+  filename?: string;
+  msgtype?: string;
+}): MatrixQaObservedEventAttachment | undefined {
+  const kind = resolveMatrixQaAttachmentKind(params.msgtype);
+  if (!kind) {
+    return undefined;
+  }
+  const body = params.body?.trim() ?? "";
+  const filename = params.filename?.trim() ?? "";
+  return {
+    kind,
+    ...(body && body !== filename ? { caption: body } : {}),
+    ...(filename ? { filename } : {}),
+  };
+}
+
 export function normalizeMatrixQaObservedEvent(
   roomId: string,
   event: MatrixQaRoomEvent,
@@ -104,6 +146,12 @@ export function normalizeMatrixQaObservedEvent(
   const messageContent = resolveMatrixQaMessageContent(content, relatesTo);
   const normalizedMsgtype =
     typeof messageContent.msgtype === "string" ? messageContent.msgtype : msgtype;
+  const normalizedFilename =
+    typeof messageContent.filename === "string"
+      ? messageContent.filename
+      : typeof content.filename === "string"
+        ? content.filename
+        : undefined;
   const mentionsRaw = messageContent["m.mentions"] ?? content["m.mentions"];
   const mentions =
     typeof mentionsRaw === "object" && mentionsRaw !== null
@@ -158,6 +206,19 @@ export function normalizeMatrixQaObservedEvent(
             ...(reactionEventId ? { eventId: reactionEventId } : {}),
             ...(reactionKey ? { key: reactionKey } : {}),
           },
+        }
+      : {}),
+    ...(resolveMatrixQaAttachmentSummary({
+      body: typeof messageContent.body === "string" ? messageContent.body : undefined,
+      filename: normalizedFilename,
+      msgtype: normalizedMsgtype,
+    })
+      ? {
+          attachment: resolveMatrixQaAttachmentSummary({
+            body: typeof messageContent.body === "string" ? messageContent.body : undefined,
+            filename: normalizedFilename,
+            msgtype: normalizedMsgtype,
+          }),
         }
       : {}),
   };
