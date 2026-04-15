@@ -511,6 +511,11 @@ describe("describeImageWithModel", () => {
       }),
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("openai-compatible", "profile-key");
+    const setRuntimeCallOrder = setRuntimeApiKeyMock.mock.invocationCallOrder[0];
+    const requestAuthCallOrder = getApiKeyAndHeadersMock.mock.invocationCallOrder[0];
+    expect(setRuntimeCallOrder).toBeDefined();
+    expect(requestAuthCallOrder).toBeDefined();
+    expect(setRuntimeCallOrder).toBeLessThan(requestAuthCallOrder);
   });
 
   it("falls back to getApiKeyForModel when registry auth lookup is unavailable", async () => {

@@ -147,6 +147,7 @@ async function resolveImageRuntime(params: {
     try {
       requestAuth = await modelRegistryWithRequestAuthLookup.getApiKeyAndHeaders(model);
     } catch {
+      // Keep the legacy auth path available when registry request-auth lookup fails.
       requestAuth = null;
     }
   }
