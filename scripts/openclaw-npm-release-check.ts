@@ -105,8 +105,40 @@ const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
   "qa-lab/runtime-api.js",
 ] as const;
 const FORBIDDEN_PRIVATE_QA_CONTENT_SCAN_PREFIXES = ["dist/"] as const;
+const PACKED_TEST_CARGO_DIRECTORY_SEGMENTS = new Set([
+  "__snapshots__",
+  "__tests__",
+  "test",
+  "tests",
+]);
+const PACKED_TEST_CARGO_FILE_RE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
+
+function normalizePackedPath(packedPath: string): string {
+  return packedPath.replace(/\\/g, "/");
+}
+
+function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
+  const parent = segments[index - 1];
+  if (parent === "node_modules") {
+    return true;
+  }
+  return parent?.startsWith("@") && segments[index - 2] === "node_modules";
+}
+
+function pathContainsPackedTestCargo(packedPath: string): boolean {
+  const normalizedPath = normalizePackedPath(packedPath);
+  if (PACKED_TEST_CARGO_FILE_RE.test(normalizedPath)) {
+    return true;
+  }
+  const segments = normalizedPath.split("/").filter(Boolean);
+  return segments.some(
+    (segment, index) =>
+      PACKED_TEST_CARGO_DIRECTORY_SEGMENTS.has(segment) &&
+      !isNodeModulesPackageRoot(segments, index),
+  );
+}
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -489,7 +521,11 @@ function collectPackedTarballErrors(): string[] {
   return [
     ...collectControlUiPackErrors(packedPaths),
     ...collectForbiddenPackedPathErrors(packedPaths),
+<<<<<<< HEAD
     ...collectForbiddenPackedContentErrors(packedPaths),
+=======
+    ...collectPackedTestCargoErrors(packedPaths),
+>>>>>>> caafdea0bb (Build: prune packaged runtime test cargo)
   ];
 }
 
@@ -544,7 +580,22 @@ export function collectForbiddenPackedContentErrors(
   return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
+export function collectPackedTestCargoErrors(paths: Iterable<string>): string[] {
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    if (!pathContainsPackedTestCargo(packedPath)) {
+      continue;
+    }
+    errors.push(`npm package must not include test cargo "${packedPath}".`);
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+<<<<<<< HEAD
 async function main(): Promise<number> {
+=======
+function main(): number {
+>>>>>>> caafdea0bb (Build: prune packaged runtime test cargo)
   const pkg = loadPackageJson();
   const now = new Date();
   const skipPackValidation = shouldSkipPackedTarballValidation();

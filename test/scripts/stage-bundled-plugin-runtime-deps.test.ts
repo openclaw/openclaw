@@ -362,6 +362,59 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.existsSync(path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"))).toBe(true);
   });
 
+  it("prunes staged test cargo from copied runtime dependencies", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(path.join(directDir, "test"), { recursive: true });
+    fs.mkdirSync(path.join(directDir, "__snapshots__"), { recursive: true });
+    fs.mkdirSync(path.join(directDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'runtime';\n", "utf8");
+    fs.writeFileSync(
+      path.join(directDir, "test", "index.test.js"),
+      "module.exports = 'remove';\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(directDir, "__snapshots__", "index.test.ts.snap"),
+      "snapshot\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(directDir, "src", "runtime.spec.js"),
+      "module.exports = 'remove';\n",
+      "utf8",
+    );
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'runtime';\n");
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "direct", "test", "index.test.js")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(
+        path.join(pluginDir, "node_modules", "direct", "__snapshots__", "index.test.ts.snap"),
+      ),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "direct", "src", "runtime.spec.js")),
+    ).toBe(false);
+  });
+
   it("stages hoisted transitive runtime deps from the root node_modules", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
