@@ -28,12 +28,21 @@ function buildCatalogEntry(packageJson) {
   const release = manifest && isRecord(manifest.release) ? manifest.release : null;
   const channel = manifest && isRecord(manifest.channel) ? manifest.channel : null;
   if (!packageName || !channel || release?.publishToNpm !== true) {
-    return null;
+    if (!packageName || !channel) {
+      return null;
+    }
+    const version = trimString(packageJson.version);
+    const description = trimString(packageJson.description);
+    return {
+      name: packageName,
+      ...(version ? { version } : {}),
+      ...(description ? { description } : {}),
+      openclaw: {
+        channel,
+      },
+    };
   }
   const install = toCatalogInstall(manifest.install, packageName);
-  if (!install) {
-    return null;
-  }
   const version = trimString(packageJson.version);
   const description = trimString(packageJson.description);
   return {

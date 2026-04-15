@@ -7,7 +7,7 @@ export function buildOfficialChannelCatalog(params?: { repoRoot?: string; cwd?: 
     description?: string;
     openclaw: {
       channel: Record<string, unknown>;
-      install: {
+      install?: {
         npmSpec: string;
         localPath?: string;
         defaultChoice?: "npm" | "local";

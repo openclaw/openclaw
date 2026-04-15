@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe("buildOfficialChannelCatalog", () => {
-  it("includes publishable official channel plugins and skips non-publishable entries", () => {
+  it("includes all bundled channel metadata and only keeps install metadata for publishable entries", () => {
     const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-");
     writeJson(path.join(repoRoot, "extensions", "whatsapp", "package.json"), {
       name: "@openclaw/whatsapp",
@@ -70,6 +70,18 @@ describe("buildOfficialChannelCatalog", () => {
 
     expect(buildOfficialChannelCatalog({ repoRoot })).toEqual({
       entries: [
+        {
+          name: "@openclaw/local-only",
+          openclaw: {
+            channel: {
+              id: "local-only",
+              label: "Local Only",
+              selectionLabel: "Local Only",
+              docsPath: "/channels/local-only",
+              blurb: "dev only",
+            },
+          },
+        },
         {
           name: "@openclaw/whatsapp",
           version: "2026.3.23",
@@ -132,6 +144,46 @@ describe("buildOfficialChannelCatalog", () => {
             },
             install: {
               npmSpec: "@openclaw/whatsapp",
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("preserves non-publishable bundled channel metadata without advertising an install target", () => {
+    const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-private-");
+    writeJson(path.join(repoRoot, "extensions", "telegram", "package.json"), {
+      name: "@openclaw/telegram",
+      version: "2026.4.12",
+      description: "OpenClaw Telegram channel plugin",
+      openclaw: {
+        channel: {
+          id: "telegram",
+          label: "Telegram",
+          selectionLabel: "Telegram (Bot API)",
+          docsPath: "/channels/telegram",
+          blurb: "simplest way to get started",
+        },
+        install: {
+          npmSpec: "@openclaw/telegram",
+        },
+      },
+    });
+
+    expect(buildOfficialChannelCatalog({ repoRoot })).toEqual({
+      entries: [
+        {
+          name: "@openclaw/telegram",
+          version: "2026.4.12",
+          description: "OpenClaw Telegram channel plugin",
+          openclaw: {
+            channel: {
+              id: "telegram",
+              label: "Telegram",
+              selectionLabel: "Telegram (Bot API)",
+              docsPath: "/channels/telegram",
+              blurb: "simplest way to get started",
             },
           },
         },
