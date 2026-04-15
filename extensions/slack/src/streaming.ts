@@ -55,6 +55,16 @@ export type AppendSlackStreamParams = {
   text: string;
 };
 
+export type AppendSlackStreamTaskParams = {
+  session: SlackStreamSession;
+  /** Stable identifier for this task (used to update the same card). */
+  taskId: string;
+  /** Display title shown on the task card. */
+  title: string;
+  /** "in_progress" while the task is running, "complete" when done. */
+  status: "in_progress" | "complete";
+};
+
 export type StopSlackStreamParams = {
   session: SlackStreamSession;
   /** Optional final markdown text to append before stopping. */
@@ -123,6 +133,34 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
 
   await session.streamer.append({ markdown_text: text });
   logVerbose(`slack-stream: appended ${text.length} chars`);
+}
+
+/**
+ * Append a task-update card to an active Slack stream.
+ *
+ * Task cards render as a collapsible "plan" item in the Slack UI, matching
+ * the native Slack AI Apps streaming UX for showing tool progress.
+ *
+ * @see https://docs.slack.dev/ai/developing-ai-apps#streaming-tasks
+ */
+export async function appendSlackStreamTask(params: AppendSlackStreamTaskParams): Promise<void> {
+  const { session, taskId, title, status } = params;
+
+  if (session.stopped) {
+    logVerbose("slack-stream: attempted to append task to a stopped stream, ignoring");
+    return;
+  }
+
+  // The Slack SDK ChatStreamer.append() accepts task_update alongside markdown_text.
+  // We cast to any since the SDK types don't expose the full union yet.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (session.streamer as any).append({
+    type: "task_update",
+    task_id: taskId,
+    title,
+    status,
+  });
+  logVerbose(`slack-stream: task_update taskId=${taskId} status=${status} title="${title}"`);
 }
 
 /**

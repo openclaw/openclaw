@@ -34,7 +34,12 @@ import {
   resolveSlackStreamingConfig,
 } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
-import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
+import {
+  appendSlackStream,
+  appendSlackStreamTask,
+  startSlackStream,
+  stopSlackStream,
+} from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
@@ -686,6 +691,61 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }
       };
 
+  // ---------------------------------------------------------------------------
+  // Progress streaming — start the native stream early so thinking text and
+  // tool events appear in real time before the final reply lands.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Start the native Slack stream for progress output (thinking/tools) if it
+   * hasn't been started yet. Returns the session, or null on failure.
+   *
+   * The stream is started against `streamThreadHint` (the thread that the
+   * incoming message lives in / that replies should target). Once started,
+   * `streamSession` is set so that `deliverWithStreaming` will append to it
+   * rather than opening a second stream.
+   */
+  const startProgressStream = async (): Promise<SlackStreamSession | null> => {
+    if (streamSession || streamFailed || !streamThreadHint) {
+      return streamSession;
+    }
+    try {
+      const session = await startSlackStream({
+        client: ctx.app.client,
+        channel: message.channel,
+        threadTs: streamThreadHint,
+        teamId: ctx.teamId,
+        userId: message.user,
+      });
+      streamSession = session;
+      // Mark that we have opened a Slack message so the status-reaction
+      // finalization and thread-participation recording work correctly.
+      observedReplyDelivery = true;
+      usedReplyThreadTs ??= streamThreadHint;
+      replyPlan.markSent();
+      return session;
+    } catch (err) {
+      logVerbose(`slack-stream: failed to start progress stream: ${String(err)}`);
+      return null;
+    }
+  };
+
+  /**
+   * Safely append markdown text to the active stream (or the progress stream
+   * if it needs to be started now). Swallows errors so a streaming hiccup
+   * never blocks the final reply.
+   */
+  const appendToProgressStream = async (text: string): Promise<void> => {
+    try {
+      const session = streamSession ?? (await startProgressStream());
+      if (session && !session.stopped) {
+        await appendSlackStream({ session, text });
+      }
+    } catch (err) {
+      logVerbose(`slack-stream: progress append failed: ${String(err)}`);
+    }
+  };
+
   let dispatchError: unknown;
   let queuedFinal = false;
   let counts: { final?: number; block?: number } = {};
@@ -712,17 +772,70 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                 updateDraftFromPartial(payload.text);
               },
         onAssistantMessageStart: onDraftBoundary,
-        onReasoningEnd: onDraftBoundary,
-        onReasoningStream: statusReactionsEnabled
+        onReasoningEnd: useStreaming
           ? async () => {
-              await statusReactions.setThinking();
+              // Separate thinking from the reply text with a blank line.
+              await appendToProgressStream("\n");
             }
-          : undefined,
-        onToolStart: statusReactionsEnabled
-          ? async (payload) => {
-              await statusReactions.setTool(payload.name);
+          : onDraftBoundary,
+        onReasoningStream: async (payload) => {
+          // Always update the emoji reaction so the user knows thinking is live.
+          if (statusReactionsEnabled) {
+            await statusReactions.setThinking();
+          }
+          // Stream the actual thinking text when native streaming is active.
+          if (useStreaming && payload.text) {
+            await appendToProgressStream(payload.text);
+          } else if (!useStreaming && previewStreamingEnabled) {
+            // Fallback: show a generic thinking indicator in the draft stream.
+            updateDraftFromPartial("_Thinking..._");
+          }
+        },
+        onToolStart: async (payload) => {
+          // Emoji reaction for non-streaming setups.
+          if (statusReactionsEnabled) {
+            await statusReactions.setTool(payload.name);
+          }
+          if (useStreaming && payload.name) {
+            const name = payload.name;
+            // Try a task_update card first; fall back to inline markdown on error.
+            try {
+              const session = streamSession ?? (await startProgressStream());
+              if (session && !session.stopped) {
+                await appendSlackStreamTask({
+                  session,
+                  taskId: `tool-${name}`,
+                  title: name,
+                  status: "in_progress",
+                });
+              }
+            } catch {
+              // task_update not supported or stream not ready — use inline text.
+              await appendToProgressStream(`\n_⎿ ${name}_`);
             }
-          : undefined,
+          } else if (!useStreaming && previewStreamingEnabled && payload.name) {
+            updateDraftFromPartial(`_⎿ ${payload.name}_`);
+          }
+        },
+        onItemEvent: async (payload) => {
+          if (!useStreaming) return;
+          // Show completion of tool tasks when status transitions to "complete".
+          if (payload.status === "complete" && payload.name) {
+            try {
+              const session = streamSession;
+              if (session && !session.stopped) {
+                await appendSlackStreamTask({
+                  session,
+                  taskId: `tool-${payload.name}`,
+                  title: payload.summary ?? payload.name,
+                  status: "complete",
+                });
+              }
+            } catch {
+              // Ignore — task card completion is best-effort.
+            }
+          }
+        },
       },
     });
     queuedFinal = result.queuedFinal;
