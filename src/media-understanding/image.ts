@@ -5,6 +5,7 @@ import {
   getApiKeyForModel,
   requireApiKey,
   resolveApiKeyForProvider,
+  type ResolvedProviderAuth,
 } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
@@ -20,6 +21,21 @@ import type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
 } from "./types.js";
+
+type ResolvedRequestAuth =
+  | {
+      ok: true;
+      apiKey?: string;
+      headers?: Record<string, string>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+type ModelRegistryWithRequestAuthLookup = {
+  getApiKeyAndHeaders?: (model: Model<Api>) => Promise<ResolvedRequestAuth>;
+};
 
 let piModelDiscoveryRuntimePromise: Promise<
   typeof import("../agents/pi-model-discovery-runtime.js")
@@ -103,7 +119,7 @@ async function resolveImageRuntime(params: {
   profile?: string;
   preferredProfile?: string;
   authStore?: ImageDescriptionRequest["authStore"];
-}): Promise<{ apiKey: string; model: Model<Api> }> {
+}): Promise<{ apiKey: string; model: Model<Api>; headers?: Record<string, string> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
   const authStorage = discoverAuthStorage(params.agentDir);
@@ -116,17 +132,42 @@ async function resolveImageRuntime(params: {
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
   }
-  const apiKeyInfo = await getApiKeyForModel({
-    model,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileId: params.profile,
-    preferredProfile: params.preferredProfile,
-    store: params.authStore,
-  });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  const modelRegistryWithRequestAuthLookup = modelRegistry as ModelRegistryWithRequestAuthLookup;
+  const requestAuth =
+    typeof modelRegistryWithRequestAuthLookup.getApiKeyAndHeaders === "function"
+      ? await modelRegistryWithRequestAuthLookup.getApiKeyAndHeaders(model)
+      : null;
+
+  const fallbackAuth = async () =>
+    await getApiKeyForModel({
+      model,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      profileId: params.profile,
+      preferredProfile: params.preferredProfile,
+      store: params.authStore,
+    });
+
+  let auth: ResolvedProviderAuth;
+  let headers: Record<string, string> | undefined;
+  if (requestAuth && requestAuth.ok) {
+    headers = requestAuth.headers;
+    if (requestAuth.apiKey) {
+      auth = {
+        apiKey: requestAuth.apiKey,
+        source: "model-registry",
+        mode: "api-key",
+      };
+    } else {
+      auth = await fallbackAuth();
+    }
+  } else {
+    auth = await fallbackAuth();
+  }
+
+  const apiKey = requireApiKey(auth, model.provider);
   authStorage.setRuntimeApiKey(model.provider, apiKey);
-  return { apiKey, model };
+  return { apiKey, model, headers };
 }
 
 function buildImageContext(
@@ -216,11 +257,13 @@ export async function describeImagesWithModel(
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
   let apiKey: string;
+  let headers: Record<string, string> | undefined;
   let model: Model<Api> | undefined;
 
   try {
     const resolved = await resolveImageRuntime(params);
     apiKey = resolved.apiKey;
+    headers = resolved.headers;
     model = resolved.model;
   } catch (err) {
     if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
@@ -265,6 +308,7 @@ export async function describeImagesWithModel(
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) =>
     await complete(model, context, {
       apiKey,
+      ...(headers ? { headers } : {}),
       maxTokens,
       signal: controller.signal,
       ...(onPayload ? { onPayload } : {}),

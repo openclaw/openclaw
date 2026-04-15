@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+type RequestAuthResult =
+  | {
+      ok: true;
+      apiKey?: string;
+      headers?: Record<string, string>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
   ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
@@ -18,6 +29,10 @@ const hoisted = vi.hoisted(() => ({
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
+  getApiKeyAndHeadersMock: vi.fn<(model: unknown) => Promise<RequestAuthResult>>(async () => ({
+    ok: true,
+    apiKey: "oauth-test", // pragma: allowlist secret
+  })),
 }));
 const {
   completeMock,
@@ -29,6 +44,7 @@ const {
   discoverModelsMock,
   fetchMock,
   registerProviderStreamForModelMock,
+  getApiKeyAndHeadersMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -92,6 +108,7 @@ describe("describeImageWithModel", () => {
         input: ["text", "image"],
         baseUrl: "https://api.minimax.io/anthropic",
       })),
+      getApiKeyAndHeaders: getApiKeyAndHeadersMock,
     });
   });
 
@@ -115,9 +132,8 @@ describe("describeImageWithModel", () => {
       model: "MiniMax-VL-01",
     });
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
-    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({ store: authStore }),
-    );
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
     expect(fetchMock).toHaveBeenCalledWith(
@@ -365,6 +381,120 @@ describe("describeImageWithModel", () => {
       expect(retryPayload).toEqual(expectedRetryPayload);
     },
   );
+
+  it("forwards provider headers from model registry auth to complete", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai-compatible",
+        id: "custom-image-model",
+        input: ["text", "image"],
+        baseUrl: "https://example.com/v1",
+      })),
+      getApiKeyAndHeaders: getApiKeyAndHeadersMock.mockResolvedValueOnce({
+        ok: true,
+        apiKey: "oauth-test", // pragma: allowlist secret
+        headers: {
+          "User-Agent": "OpenClaw-Test",
+          "X-Custom-Header": "from-model-registry",
+        },
+      }),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai-compatible",
+      model: "custom-image-model",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "headers ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai-compatible",
+      model: "custom-image-model",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "headers ok",
+      model: "custom-image-model",
+    });
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-compatible",
+        id: "custom-image-model",
+      }),
+    );
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        apiKey: "oauth-test",
+        headers: {
+          "User-Agent": "OpenClaw-Test",
+          "X-Custom-Header": "from-model-registry",
+        },
+      }),
+    );
+  });
+
+  it("falls back to getApiKeyForModel when registry auth lookup is unavailable", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai-compatible",
+        id: "custom-image-model",
+        input: ["text", "image"],
+        baseUrl: "https://example.com/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai-compatible",
+      model: "custom-image-model",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "fallback ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai-compatible",
+      model: "custom-image-model",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "fallback ok",
+      model: "custom-image-model",
+    });
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "openai-compatible",
+          id: "custom-image-model",
+        }),
+      }),
+    );
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.not.objectContaining({
+        headers: expect.anything(),
+      }),
+    );
+  });
 
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
