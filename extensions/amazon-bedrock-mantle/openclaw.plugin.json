@@ -4,7 +4,28 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "discovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "When false, skip implicit Mantle discovery on startup. Defaults to undefined (auto-detect from credentials)."
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "discovery": {
+      "label": "Model Discovery",
+      "help": "Plugin-owned controls for Amazon Bedrock Mantle model auto-discovery."
+    },
+    "discovery.enabled": {
+      "label": "Enable Discovery",
+      "help": "When false, OpenClaw keeps the Amazon Bedrock Mantle plugin available but skips implicit startup discovery. When true, discovery can run even without AWS auth env markers."
+    }
   },
   "providers": ["amazon-bedrock-mantle"]
 }
