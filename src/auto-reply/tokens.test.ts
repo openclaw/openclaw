@@ -84,6 +84,36 @@ describe("isSilentReplyText", () => {
       const text = "<think>Reasoning</think> HEARTBEAT_OK";
       expect(isSilentReplyText(text, "HEARTBEAT_OK")).toBe(true);
     });
+
+    // Codex P1 review on PR #66755: a model that prefixes a substantive
+    // reply with a reasoning block must NOT have its reply suppressed
+    // just because it happens to end with NO_REPLY. Verify the predicate
+    // rejects any case where there's prose between the reasoning preamble
+    // and the trailing silent token.
+    it("does NOT classify as silent when substantive prose follows the reasoning block", () => {
+      const text = [
+        "<think>Internal reasoning here.</think>",
+        "Here is the answer you should send to the user.",
+        "NO_REPLY",
+      ].join("\n");
+      expect(isSilentReplyText(text)).toBe(false);
+    });
+
+    it("does NOT classify as silent when bare-think preamble is followed by an answer", () => {
+      const text = [
+        "think",
+        "Reasoning about the request.",
+        "",
+        "Hi there, here is what I found.",
+        "NO_REPLY",
+      ].join("\n");
+      expect(isSilentReplyText(text)).toBe(false);
+    });
+
+    it("still classifies pure reasoning + NO_REPLY as silent (no prose between)", () => {
+      const text = "<think>Just thinking, nothing to say.</think>\nNO_REPLY";
+      expect(isSilentReplyText(text)).toBe(true);
+    });
   });
 });
 

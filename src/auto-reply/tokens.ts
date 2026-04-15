@@ -60,16 +60,63 @@ function getSilentReasoningTrailRegex(token: string): RegExp {
 // exact-match detection required the entire response to be `NO_REPLY`, so
 // these reasoning-wrapped outputs leaked the thought process into the chat
 // (see #66701).
+//
+// IMPORTANT: this function MUST NOT classify a message as silent when the
+// model emitted a substantive *user-facing* reply alongside the reasoning
+// block. The two shapes we recognise have different conventions for where
+// "user-facing" begins, so each gets its own predicate (see Codex P1
+// review on #66755):
+//
+//   - <think>...</think> form: anything that lives OUTSIDE the tags
+//     before the trailing token is user-facing. If non-empty, NOT silent.
+//   - `think\n` form: the entire post-marker block is reasoning unless
+//     there is a blank-line separator. After the first blank line,
+//     non-empty content is user-facing. If non-empty, NOT silent.
 function isReasoningWrappedSilentReply(text: string, token: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
     return false;
   }
-  const startsWithReasoning = /^<think\b[^>]*>/i.test(trimmed) || /^think\s*\r?\n/i.test(trimmed);
-  if (!startsWithReasoning) {
-    return false;
+  const trailRegex = getSilentReasoningTrailRegex(token);
+
+  // Tagged form: <think ...>...</think>. Tolerate an unclosed tag
+  // (some models truncate it when streaming) by treating the body as
+  // running to end-of-string when no closing tag is present.
+  const tagged = trimmed.match(/^<think\b[^>]*>([\s\S]*?)(<\/think>|$)/i);
+  if (tagged) {
+    const afterTag = trimmed.slice(tagged[0].length).trim();
+    if (!trailRegex.test(afterTag)) {
+      return false;
+    }
+    // Whatever lives between </think> and the trailing token is
+    // user-facing; only classify silent when it's empty.
+    const remainderAfterToken = afterTag.replace(trailRegex, "").trim();
+    return remainderAfterToken === "";
   }
-  return getSilentReasoningTrailRegex(token).test(trimmed);
+
+  // Bare form: a literal "think" line followed by reasoning lines.
+  const bareStart = trimmed.match(/^think\s*\r?\n/i);
+  if (bareStart) {
+    const afterMarker = trimmed.slice(bareStart[0].length);
+    if (!trailRegex.test(afterMarker)) {
+      return false;
+    }
+    // A blank-line separator marks the end of the reasoning block.
+    // Anything after it (and before the trailing token) is user-facing.
+    const blankBoundary = afterMarker.search(/\r?\n\s*\r?\n/);
+    if (blankBoundary !== -1) {
+      const tailRegion = afterMarker.slice(blankBoundary);
+      const remainderAfterToken = tailRegion.replace(trailRegex, "").trim();
+      return remainderAfterToken === "";
+    }
+    // No blank-line separator: by convention the entire post-marker
+    // block is one continuous reasoning region (the original issue
+    // shape — the model's last reasoning line is something like
+    // "I will stay quiet here.NO_REPLY"). Treat as silent.
+    return true;
+  }
+
+  return false;
 }
 
 export function isSilentReplyText(
