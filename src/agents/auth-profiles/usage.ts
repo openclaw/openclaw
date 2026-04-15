@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
+import { log } from "./constants.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
@@ -334,30 +335,45 @@ export async function markAuthProfileUsed(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, profileId, agentDir } = params;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
-    agentDir,
-    updater: (freshStore) => {
-      if (!freshStore.profiles[profileId]) {
-        return false;
-      }
-      updateUsageStatsEntry(freshStore, profileId, (existing) =>
-        resetUsageStats(existing, { lastUsed: Date.now() }),
-      );
-      return true;
-    },
-  });
-  if (updated) {
-    store.usageStats = updated.usageStats;
-    return;
-  }
-  if (!store.profiles[profileId]) {
-    return;
-  }
+  // Post-success bookkeeping. Save failures (e.g. Windows EPERM on a ReadOnly
+  // auth-profiles.json during concurrent hot-reload) must not propagate and
+  // fail an LLM request that has already completed.
+  try {
+    const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+      agentDir,
+      updater: (freshStore) => {
+        if (!freshStore.profiles[profileId]) {
+          return false;
+        }
+        updateUsageStatsEntry(freshStore, profileId, (existing) =>
+          resetUsageStats(existing, { lastUsed: Date.now() }),
+        );
+        return true;
+      },
+    });
+    if (updated) {
+      store.usageStats = updated.usageStats;
+      return;
+    }
+    if (!store.profiles[profileId]) {
+      return;
+    }
 
-  updateUsageStatsEntry(store, profileId, (existing) =>
-    resetUsageStats(existing, { lastUsed: Date.now() }),
-  );
-  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
+    updateUsageStatsEntry(store, profileId, (existing) =>
+      resetUsageStats(existing, { lastUsed: Date.now() }),
+    );
+    authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
+  } catch (err) {
+    const errorCode = (err as NodeJS.ErrnoException | null)?.code ?? "UNKNOWN";
+    log.warn("markAuthProfileUsed: failed to persist usage stats; continuing", {
+      profileId,
+      code: errorCode,
+    });
+    log.debug("markAuthProfileUsed: persist error detail", {
+      profileId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export function calculateAuthProfileCooldownMs(errorCount: number): number {
@@ -668,96 +684,113 @@ export async function markAuthProfileFailure(params: {
   let nextStats: ProfileUsageStats | undefined;
   let previousStats: ProfileUsageStats | undefined;
   let updateTime = 0;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
-    agentDir,
-    updater: (freshStore) => {
-      const profile = freshStore.profiles[profileId];
-      if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
-        return false;
-      }
-      const now = Date.now();
-      const providerKey = normalizeProviderId(profile.provider);
-      const cfgResolved = resolveAuthCooldownConfig({
-        cfg,
-        providerId: providerKey,
-      });
+  // Post-event bookkeeping. Save failures (e.g. Windows EPERM on a ReadOnly
+  // auth-profiles.json during concurrent hot-reload) must not propagate and
+  // turn a transient provider failure into an unrecoverable gateway cascade.
+  try {
+    const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+      agentDir,
+      updater: (freshStore) => {
+        const profile = freshStore.profiles[profileId];
+        if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+          return false;
+        }
+        const now = Date.now();
+        const providerKey = normalizeProviderId(profile.provider);
+        const cfgResolved = resolveAuthCooldownConfig({
+          cfg,
+          providerId: providerKey,
+        });
 
-      previousStats = freshStore.usageStats?.[profileId];
-      updateTime = now;
-      const computed = computeNextProfileUsageStats({
-        existing: previousStats ?? {},
-        now,
-        reason,
-        cfgResolved,
-        modelId,
-      });
-      nextStats =
-        whamResult && shouldProbeWhamForFailure(profile.provider, reason)
-          ? applyWhamCooldownResult({
-              existing: previousStats ?? {},
-              computed,
-              now,
-              whamResult,
-            })
-          : computed;
-      updateUsageStatsEntry(freshStore, profileId, () => nextStats ?? computed);
-      return true;
-    },
-  });
-  if (updated) {
-    store.usageStats = updated.usageStats;
-    if (nextStats) {
-      logAuthProfileFailureStateChange({
-        runId,
-        profileId,
-        provider: profile.provider,
-        reason,
-        previous: previousStats,
-        next: nextStats,
-        now: updateTime,
-      });
-    }
-    return;
-  }
-  if (!store.profiles[profileId]) {
-    return;
-  }
-
-  const now = Date.now();
-  const providerKey = normalizeProviderId(store.profiles[profileId]?.provider ?? "");
-  const cfgResolved = resolveAuthCooldownConfig({
-    cfg,
-    providerId: providerKey,
-  });
-
-  previousStats = store.usageStats?.[profileId];
-  const computed = computeNextProfileUsageStats({
-    existing: previousStats ?? {},
-    now,
-    reason,
-    cfgResolved,
-    modelId,
-  });
-  nextStats =
-    whamResult && shouldProbeWhamForFailure(store.profiles[profileId]?.provider, reason)
-      ? applyWhamCooldownResult({
+        previousStats = freshStore.usageStats?.[profileId];
+        updateTime = now;
+        const computed = computeNextProfileUsageStats({
           existing: previousStats ?? {},
-          computed,
           now,
-          whamResult,
-        })
-      : computed;
-  updateUsageStatsEntry(store, profileId, () => nextStats ?? computed);
-  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
-  logAuthProfileFailureStateChange({
-    runId,
-    profileId,
-    provider: store.profiles[profileId]?.provider ?? profile.provider,
-    reason,
-    previous: previousStats,
-    next: nextStats,
-    now,
-  });
+          reason,
+          cfgResolved,
+          modelId,
+        });
+        nextStats =
+          whamResult && shouldProbeWhamForFailure(profile.provider, reason)
+            ? applyWhamCooldownResult({
+                existing: previousStats ?? {},
+                computed,
+                now,
+                whamResult,
+              })
+            : computed;
+        updateUsageStatsEntry(freshStore, profileId, () => nextStats ?? computed);
+        return true;
+      },
+    });
+    if (updated) {
+      store.usageStats = updated.usageStats;
+      if (nextStats) {
+        logAuthProfileFailureStateChange({
+          runId,
+          profileId,
+          provider: profile.provider,
+          reason,
+          previous: previousStats,
+          next: nextStats,
+          now: updateTime,
+        });
+      }
+      return;
+    }
+    if (!store.profiles[profileId]) {
+      return;
+    }
+
+    const now = Date.now();
+    const providerKey = normalizeProviderId(store.profiles[profileId]?.provider ?? "");
+    const cfgResolved = resolveAuthCooldownConfig({
+      cfg,
+      providerId: providerKey,
+    });
+
+    previousStats = store.usageStats?.[profileId];
+    const computed = computeNextProfileUsageStats({
+      existing: previousStats ?? {},
+      now,
+      reason,
+      cfgResolved,
+      modelId,
+    });
+    nextStats =
+      whamResult && shouldProbeWhamForFailure(store.profiles[profileId]?.provider, reason)
+        ? applyWhamCooldownResult({
+            existing: previousStats ?? {},
+            computed,
+            now,
+            whamResult,
+          })
+        : computed;
+    updateUsageStatsEntry(store, profileId, () => nextStats ?? computed);
+    authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
+    logAuthProfileFailureStateChange({
+      runId,
+      profileId,
+      provider: store.profiles[profileId]?.provider ?? profile.provider,
+      reason,
+      previous: previousStats,
+      next: nextStats,
+      now,
+    });
+  } catch (err) {
+    const errorCode = (err as NodeJS.ErrnoException | null)?.code ?? "UNKNOWN";
+    log.warn("markAuthProfileFailure: failed to persist failure state; continuing", {
+      profileId,
+      reason,
+      code: errorCode,
+    });
+    log.debug("markAuthProfileFailure: persist error detail", {
+      profileId,
+      reason,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
