@@ -143,13 +143,13 @@ function assertHostReadMediaAllowed(params: {
   // plain-text buffers that have no binary magic bytes. Allow these formats when:
   // - sniffedMime is undefined (no binary signature detected by file-type)
   // - The extension-derived MIME is text/csv or text/markdown (operator intent)
-  // - The buffer contains no null bytes (rules out binary data with no known signature)
+  // - The full buffer contains no null bytes (rules out binary data with no known signature)
   if (
     !sniffedMime &&
     normalizedMime &&
     HOST_READ_TEXT_PLAIN_ALIASES.has(normalizedMime) &&
     params.buffer &&
-    !params.buffer.subarray(0, 8192).includes(0x00)
+    !params.buffer.includes(0x00)
   ) {
     return;
   }
