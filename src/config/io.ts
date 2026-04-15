@@ -1114,9 +1114,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // On mismatch, REJECT the external modification and keep the last known-good config.
       const hmacResult = verifyConfigHmac(configPath, raw);
       let configIntegrityWarning: string | undefined;
-      if (hmacResult.status === "mismatch") {
+      if (hmacResult.status === "mismatch" ||
+          (hmacResult.status === "no-sig" && hmacResult.suspicious)) {
+        const reason = hmacResult.status === "mismatch"
+          ? "config file was modified outside the gateway process"
+          : "config signature file is missing (possible deletion to bypass integrity check)";
         const warning =
-          "[security] CONFIG REJECTED: config file was modified outside the gateway process. " +
+          `[security] CONFIG REJECTED: ${reason}. ` +
           "External config injection is blocked for security. " +
           "To modify config, connect as an authenticated node using the gateway API (config.patch). " +
           "See: openclaw devices list / openclaw security audit";
@@ -1279,9 +1283,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // HMAC integrity check for async read path (hot-reload uses this).
       const asyncHmacResult = verifyConfigHmac(configPath, raw);
       let asyncIntegrityWarning: string | undefined;
-      if (asyncHmacResult.status === "mismatch") {
+      if (asyncHmacResult.status === "mismatch" ||
+          (asyncHmacResult.status === "no-sig" && asyncHmacResult.suspicious)) {
+        const reason = asyncHmacResult.status === "mismatch"
+          ? "config file was modified outside the gateway process"
+          : "config signature file is missing (possible deletion to bypass integrity check)";
         const warning =
-          "[security] CONFIG REJECTED: config file was modified outside the gateway process. " +
+          `[security] CONFIG REJECTED: ${reason}. ` +
           "External config injection is blocked for security. " +
           "To modify config, connect as an authenticated node using the gateway API (config.patch). " +
           "See: openclaw devices list / openclaw security audit";

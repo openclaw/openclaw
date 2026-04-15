@@ -442,7 +442,12 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "config.set": async ({ params, respond, context }) => {
+  "config.set": async ({ params, respond, client, context }) => {
+    const setCallerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (!setCallerScopes.includes(ADMIN_SCOPE)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "config.set requires operator.admin scope"));
+      return;
+    }
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -637,6 +642,11 @@ export const configHandlers: GatewayRequestHandlers = {
     queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.apply": async ({ params, respond, client, context }) => {
+    const applyCallerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (!applyCallerScopes.includes(ADMIN_SCOPE)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "config.apply requires operator.admin scope"));
+      return;
+    }
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }
