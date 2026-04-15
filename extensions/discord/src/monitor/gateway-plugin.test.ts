@@ -75,6 +75,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 describe("SafeGatewayPlugin.connect()", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
+  type GatewayWithFirstHeartbeatTimeout = ReturnType<typeof createDiscordGatewayPlugin> & {
+    firstHeartbeatTimeout?: ReturnType<typeof setTimeout>;
+  };
 
   beforeAll(async () => {
     ({ createDiscordGatewayPlugin } = await import("./gateway-plugin.js"));
@@ -118,7 +121,7 @@ describe("SafeGatewayPlugin.connect()", () => {
   });
 
   it("clears stale firstHeartbeatTimeout before delegating to super when isConnecting=true", () => {
-    const plugin = createPlugin();
+    const plugin = createPlugin() as GatewayWithFirstHeartbeatTimeout;
 
     const staleTimeout = setTimeout(() => {}, 99_999);
     try {

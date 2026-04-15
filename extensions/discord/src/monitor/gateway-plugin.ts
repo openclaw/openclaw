@@ -37,6 +37,7 @@ type DiscordGatewayWebSocketCtor = new (url: string, options?: { agent?: unknown
 const registrationPromises = new WeakMap<carbonGateway.GatewayPlugin, Promise<void>>();
 type CarbonGatewayRegistrationState = {
   client?: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0];
+  firstHeartbeatTimeout?: ReturnType<typeof setTimeout>;
   ws?: unknown;
   isConnecting?: boolean;
 };
@@ -303,9 +304,10 @@ function createGatewayPlugin(params: {
         clearInterval(this.heartbeatInterval);
         this.heartbeatInterval = undefined;
       }
-      if (this.firstHeartbeatTimeout !== undefined) {
-        clearTimeout(this.firstHeartbeatTimeout);
-        this.firstHeartbeatTimeout = undefined;
+      const heartbeatState = this as CarbonGatewayRegistrationState;
+      if (heartbeatState.firstHeartbeatTimeout !== undefined) {
+        clearTimeout(heartbeatState.firstHeartbeatTimeout);
+        heartbeatState.firstHeartbeatTimeout = undefined;
       }
       super.connect(resume);
     }
