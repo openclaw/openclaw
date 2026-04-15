@@ -132,6 +132,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         resolveGoogleGenerativeAiHttpRequestConfig({
           apiKey: auth.apiKey,
           baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
+          request: req.cfg?.models?.providers?.google?.request,
           capability: "image",
           transport: "http",
         });
