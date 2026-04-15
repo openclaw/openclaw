@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  clearRecoveredAutoModelOverride,
+} from "./model-overrides.js";
 
 function applyOpenAiSelection(entry: SessionEntry) {
   return applyModelOverrideToSessionEntry({
@@ -171,5 +174,128 @@ describe("applyModelOverrideToSessionEntry", () => {
     });
     expect(withFlag.updated).toBe(true);
     expect(withFlagEntry.liveModelSwitchPending).toBe(true);
+  });
+});
+
+describe("clearRecoveredAutoModelOverride", () => {
+  it("clears auto overrides once the run succeeds on the configured default model", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-auto-recovered",
+      updatedAt: before,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "auto",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 200_000,
+      fallbackNoticeSelectedModel: "openai/gpt-5.4",
+      fallbackNoticeActiveModel: "anthropic/claude-opus-4-6",
+      fallbackNoticeReason: "rate_limit",
+    };
+
+    const result = clearRecoveredAutoModelOverride({
+      entry,
+      selectedProvider: "openai",
+      selectedModel: "gpt-5.4",
+      activeProvider: "openai",
+      activeModel: "gpt-5.4",
+      now: before + 1_000,
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.modelProvider).toBe("anthropic");
+    expect(entry.model).toBe("claude-opus-4-6");
+    expect(entry.contextTokens).toBe(200_000);
+    expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(entry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect(entry.updatedAt).toBe(before + 1_000);
+  });
+
+  it("does not clear auto overrides while the run is still on the fallback model", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-auto-still-fallback",
+      updatedAt: before,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "auto",
+      fallbackNoticeSelectedModel: "openai/gpt-5.4",
+      fallbackNoticeActiveModel: "anthropic/claude-opus-4-6",
+      fallbackNoticeReason: "rate_limit",
+    };
+
+    const result = clearRecoveredAutoModelOverride({
+      entry,
+      selectedProvider: "openai",
+      selectedModel: "gpt-5.4",
+      activeProvider: "anthropic",
+      activeModel: "claude-opus-4-6",
+      now: before + 1_000,
+    });
+
+    expect(result.updated).toBe(false);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-opus-4-6");
+    expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.updatedAt).toBe(before);
+  });
+
+  it("preserves explicit user overrides even when the active model matches the default", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-user-override",
+      updatedAt: before,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "user",
+    };
+
+    const result = clearRecoveredAutoModelOverride({
+      entry,
+      selectedProvider: "openai",
+      selectedModel: "gpt-5.4",
+      activeProvider: "openai",
+      activeModel: "gpt-5.4",
+      now: before + 1_000,
+    });
+
+    expect(result.updated).toBe(false);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-opus-4-6");
+    expect(entry.modelOverrideSource).toBe("user");
+    expect(entry.updatedAt).toBe(before);
+  });
+
+  it("ignores stale auto markers when no override or fallback notice state remains", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-stale-auto-marker",
+      updatedAt: before,
+      modelOverrideSource: "auto",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 200_000,
+    };
+
+    const result = clearRecoveredAutoModelOverride({
+      entry,
+      selectedProvider: "openai",
+      selectedModel: "gpt-5.4",
+      activeProvider: "openai",
+      activeModel: "gpt-5.4",
+      now: before + 1_000,
+    });
+
+    expect(result.updated).toBe(false);
+    expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.modelProvider).toBe("openai");
+    expect(entry.model).toBe("gpt-5.4");
+    expect(entry.contextTokens).toBe(200_000);
+    expect(entry.updatedAt).toBe(before);
   });
 });

@@ -291,6 +291,290 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 });
 
+describe("runReplyAgent auto-fallback recovery", () => {
+  async function seedSessionStore(params: {
+    storePath: string;
+    sessionKey: string;
+    entry: Record<string, unknown>;
+  }) {
+    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+    await fs.writeFile(
+      params.storePath,
+      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
+      "utf-8",
+    );
+  }
+
+  function createBaseRun(params: {
+    storePath: string;
+    config?: Record<string, unknown>;
+    sessionFile?: string;
+    workspaceDir?: string;
+  }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "whatsapp",
+      OriginatingTo: "+155****1111",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "whatsapp",
+        sessionFile: params.sessionFile ?? "/tmp/session.jsonl",
+        workspaceDir: params.workspaceDir ?? "/tmp",
+        config: params.config ?? {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        thinkLevel: "low",
+        reasoningLevel: "on",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+    return { typing, sessionCtx, resolvedQueue, followupRun };
+  }
+
+  it("clears auto fallback overrides after a successful run returns to the effective default model", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-recover-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "auto",
+      fallbackNoticeSelectedModel: "openai/gpt-5.4",
+      fallbackNoticeActiveModel: "anthropic/claude-opus-4-6",
+      fallbackNoticeReason: "rate_limit",
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 100, output: 20, total: 120 },
+        },
+      },
+    });
+
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+      },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      config,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultProvider: "openai",
+      defaultModel: "openai/gpt-5.4",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].providerOverride).toBeUndefined();
+    expect(stored[sessionKey].modelOverride).toBeUndefined();
+    expect(stored[sessionKey].modelOverrideSource).toBeUndefined();
+    expect(stored[sessionKey].modelProvider).toBe("openai");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+    expect(stored[sessionKey].contextTokens).toBe(200_000);
+    expect(stored[sessionKey].fallbackNoticeSelectedModel).toBeUndefined();
+    expect(stored[sessionKey].fallbackNoticeActiveModel).toBeUndefined();
+    expect(stored[sessionKey].fallbackNoticeReason).toBeUndefined();
+    expect(stored[sessionKey].updatedAt).toBeGreaterThanOrEqual(sessionEntry.updatedAt);
+  });
+
+  it("uses the effective defaultProvider/defaultModel arguments instead of recomputing from config", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-recover-effective-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "auto",
+      fallbackNoticeSelectedModel: "openai/gpt-5.4",
+      fallbackNoticeActiveModel: "anthropic/claude-opus-4-6",
+      fallbackNoticeReason: "rate_limit",
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 100, output: 20, total: 120 },
+        },
+      },
+    });
+
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+        main: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      config,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].providerOverride).toBeUndefined();
+    expect(stored[sessionKey].modelOverride).toBeUndefined();
+    expect(stored[sessionKey].modelOverrideSource).toBeUndefined();
+  });
+
+  it("can clear recovered auto overrides from sessionStore even without a hydrated sessionEntry", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-recover-store-only-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "auto",
+      fallbackNoticeSelectedModel: "openai/gpt-5.4",
+      fallbackNoticeActiveModel: "anthropic/claude-opus-4-6",
+      fallbackNoticeReason: "rate_limit",
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 100, output: 20, total: 120 },
+        },
+      },
+    });
+
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+      },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      config,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionStore: { [sessionKey]: { ...sessionEntry } },
+      sessionKey,
+      storePath,
+      defaultProvider: "openai",
+      defaultModel: "openai/gpt-5.4",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].providerOverride).toBeUndefined();
+    expect(stored[sessionKey].modelOverride).toBeUndefined();
+    expect(stored[sessionKey].modelOverrideSource).toBeUndefined();
+    expect(stored[sessionKey].modelProvider).toBe("openai");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+  });
+});
+
 describe("runReplyAgent block streaming", () => {
   it("coalesces duplicate text_end block replies", async () => {
     const onBlockReply = vi.fn();

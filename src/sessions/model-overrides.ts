@@ -7,6 +7,71 @@ export type ModelOverrideSelection = {
   isDefault?: boolean;
 };
 
+function clearRecoveredAutoOverrideState(params: { entry: SessionEntry; now?: number }): {
+  updated: boolean;
+} {
+  const { entry } = params;
+  const hasAutoSelectionState =
+    entry.providerOverride !== undefined ||
+    entry.modelOverride !== undefined ||
+    entry.fallbackNoticeSelectedModel !== undefined ||
+    entry.fallbackNoticeActiveModel !== undefined ||
+    entry.fallbackNoticeReason !== undefined;
+  if (!hasAutoSelectionState) {
+    return { updated: false };
+  }
+  let updated = false;
+  if (entry.providerOverride !== undefined) {
+    delete entry.providerOverride;
+    updated = true;
+  }
+  if (entry.modelOverride !== undefined) {
+    delete entry.modelOverride;
+    updated = true;
+  }
+  if (entry.modelOverrideSource !== undefined) {
+    delete entry.modelOverrideSource;
+    updated = true;
+  }
+  if (entry.fallbackNoticeSelectedModel !== undefined) {
+    delete entry.fallbackNoticeSelectedModel;
+    updated = true;
+  }
+  if (entry.fallbackNoticeActiveModel !== undefined) {
+    delete entry.fallbackNoticeActiveModel;
+    updated = true;
+  }
+  if (entry.fallbackNoticeReason !== undefined) {
+    delete entry.fallbackNoticeReason;
+    updated = true;
+  }
+  if (updated) {
+    entry.updatedAt = params.now ?? Date.now();
+  }
+  return { updated };
+}
+
+export function clearRecoveredAutoModelOverride(params: {
+  entry: SessionEntry;
+  selectedProvider: string;
+  selectedModel: string;
+  activeProvider: string;
+  activeModel: string;
+  now?: number;
+}): { updated: boolean } {
+  const { entry } = params;
+  if (entry.modelOverrideSource !== "auto") {
+    return { updated: false };
+  }
+  if (
+    params.activeProvider !== params.selectedProvider ||
+    params.activeModel !== params.selectedModel
+  ) {
+    return { updated: false };
+  }
+  return clearRecoveredAutoOverrideState({ entry, now: params.now });
+}
+
 export function applyModelOverrideToSessionEntry(params: {
   entry: SessionEntry;
   selection: ModelOverrideSelection;
