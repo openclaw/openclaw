@@ -30,7 +30,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
-const DIST_INVENTORY_PATH = join("dist", "postinstall-inventory.json");
+const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
