@@ -9,7 +9,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
-import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import {
+  normalizeClientToolDefinitions,
+  normalizeClientToolName,
+  type ClientToolDefinition,
+} from "../agents/pi-embedded-runner/run/params.js";
 import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -263,15 +267,19 @@ function resolveResponsesLimits(
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
   // Normalize from Responses API flat format to the internal wrapped format.
-  return (body.tools ?? []).map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      strict: tool.strict,
-    },
-  }));
+  return (
+    normalizeClientToolDefinitions(
+      (body.tools ?? []).map((tool) => ({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+          strict: tool.strict,
+        },
+      })),
+    ) ?? []
+  );
 }
 
 function applyToolChoice(params: {
@@ -298,13 +306,16 @@ function applyToolChoice(params: {
   }
 
   if (typeof toolChoice === "object" && toolChoice.type === "function") {
-    const targetName = toolChoice.function?.name?.trim();
+    const targetName = normalizeClientToolName(toolChoice.function?.name ?? "");
     if (!targetName) {
       throw new Error("tool_choice.function.name is required");
     }
     const matched = tools.filter((tool) => tool.function?.name === targetName);
     if (matched.length === 0) {
       throw new Error(`tool_choice requested unknown tool: ${targetName}`);
+    }
+    if (matched.length > 1) {
+      throw new Error(`tool_choice requested ambiguous tool: ${targetName}`);
     }
     return {
       tools: matched,
@@ -602,10 +613,11 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  const clientTools = extractClientTools(payload);
   let toolChoicePrompt: string | undefined;
-  let resolvedClientTools = clientTools;
+  let resolvedClientTools: ClientToolDefinition[] = [];
   try {
+    const clientTools = extractClientTools(payload);
+    resolvedClientTools = clientTools;
     const toolChoiceResult = applyToolChoice({
       tools: clientTools,
       toolChoice: payload.tool_choice,

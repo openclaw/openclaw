@@ -1,7 +1,9 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
+import { normalizeClientToolName, type ClientToolDefinition } from "./command/shared-types.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function extractBetween(
@@ -66,6 +68,53 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
   });
 }
 
+function buildClientToolEntries(
+  tools: ClientToolDefinition[],
+): SessionSystemPromptReport["tools"]["entries"] {
+  const sanitizeClientToolSummary = (value: string) =>
+    sanitizeForPromptLiteral(value.replace(/\s+/g, " ")).trim();
+  return tools.flatMap((tool) => {
+    const name = normalizeClientToolName(tool.function?.name ?? "");
+    if (!name) {
+      return [];
+    }
+    const summary = sanitizeClientToolSummary(tool.function?.description?.trim() ?? "");
+    const summaryChars = summary.length;
+    const parameters = tool.function?.parameters;
+    const schemaChars = (() => {
+      if (!parameters || typeof parameters !== "object") {
+        return 0;
+      }
+      try {
+        return JSON.stringify(parameters).length;
+      } catch {
+        return 0;
+      }
+    })();
+    const props =
+      parameters && typeof parameters === "object" && typeof parameters.properties === "object"
+        ? parameters.properties
+        : null;
+    return [
+      {
+        name,
+        summaryChars,
+        schemaChars,
+        propertiesCount: props ? Object.keys(props as Record<string, unknown>).length : null,
+      },
+    ];
+  });
+}
+
+function mergeVisibleToolEntries(params: {
+  tools: AgentTool[];
+  clientTools: ClientToolDefinition[];
+}): SessionSystemPromptReport["tools"]["entries"] {
+  const builtInEntries = buildToolsEntries(params.tools);
+  const clientEntries = buildClientToolEntries(params.clientTools);
+  return [...builtInEntries, ...clientEntries];
+}
+
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;
@@ -83,6 +132,7 @@ export function buildSystemPromptReport(params: {
   injectedFiles: EmbeddedContextFile[];
   skillsPrompt: string;
   tools: AgentTool[];
+  clientTools?: ClientToolDefinition[];
 }): SessionSystemPromptReport {
   const systemPrompt = params.systemPrompt.trim();
   const projectContext = extractBetween(
@@ -91,7 +141,10 @@ export function buildSystemPromptReport(params: {
     "\n## Silent Replies\n",
   );
   const projectContextChars = projectContext.text.length;
-  const toolsEntries = buildToolsEntries(params.tools);
+  const toolsEntries = mergeVisibleToolEntries({
+    tools: params.tools,
+    clientTools: params.clientTools ?? [],
+  });
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
 

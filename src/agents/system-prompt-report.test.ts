@@ -1,5 +1,8 @@
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { jsonResult } from "./tools/common.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile {
@@ -122,5 +125,175 @@ describe("buildSystemPromptReport", () => {
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
+
+  it("reports zero tool-list chars for explicit empty-tool sessions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: [],
+      explicitEmptyToolListMeansNoTools: true,
+    });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: prompt,
+      bootstrapFiles: [],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.tools.entries).toEqual([]);
+    expect(report.tools.listChars).toBe(0);
+  });
+
+  it("includes prompt-visible client tools in the structured report", () => {
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [],
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "get_time",
+            description: "Return the current time.",
+            parameters: {
+              type: "object",
+              properties: {
+                timezone: { type: "string" },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(report.tools.entries).toEqual([
+      {
+        name: "get_time",
+        summaryChars: "Return the current time.".length,
+        schemaChars: JSON.stringify({
+          type: "object",
+          properties: {
+            timezone: { type: "string" },
+          },
+        }).length,
+        propertiesCount: 1,
+      },
+    ]);
+    expect(report.tools.listChars).toBe(0);
+  });
+
+  it("keeps built-in and hosted tool entries separate", () => {
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        {
+          name: "exec",
+          label: "Exec",
+          description: "Run shell commands",
+          parameters: Type.Object({
+            cmd: Type.String(),
+          }),
+          execute: async () => jsonResult({ ok: true }),
+        },
+      ],
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "FetchTime",
+            description: "Fetch the current exchange rate.",
+            parameters: {
+              type: "object",
+              properties: {
+                base: { type: "string" },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(report.tools.entries).toEqual([
+      {
+        name: "exec",
+        summaryChars: "Run shell commands".length,
+        schemaChars: JSON.stringify(
+          Type.Object({
+            cmd: Type.String(),
+          }),
+        ).length,
+        propertiesCount: 1,
+      },
+      {
+        name: "FetchTime",
+        summaryChars: "Fetch the current exchange rate.".length,
+        schemaChars: JSON.stringify({
+          type: "object",
+          properties: {
+            base: { type: "string" },
+          },
+        }).length,
+        propertiesCount: 1,
+      },
+    ]);
+    expect(report.tools.schemaChars).toBe(
+      JSON.stringify(
+        Type.Object({
+          cmd: Type.String(),
+        }),
+      ).length +
+        JSON.stringify({
+          type: "object",
+          properties: {
+            base: { type: "string" },
+          },
+        }).length,
+    );
+  });
+
+  it("preserves hosted tool casing in report entries", () => {
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [],
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "Foo",
+            description: "Return the uppercase tool result.",
+          },
+        },
+      ],
+    });
+
+    expect(report.tools.entries).toEqual([
+      {
+        name: "Foo",
+        summaryChars: "Return the uppercase tool result.".length,
+        schemaChars: 0,
+        propertiesCount: null,
+      },
+    ]);
   });
 });
