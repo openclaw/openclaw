@@ -379,10 +379,22 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  const reserveTokensFloor =
+  // Use the user-configured reserveTokens (the actual reserve budget) when available,
+  // falling back to reserveTokensFloor (the safety minimum). This keeps the flush
+  // threshold consistent with shouldPreemptivelyCompactBeforePrompt which reads
+  // settingsManager.getCompactionReserveTokens() — i.e. the resolved reserve budget.
+  const configuredReserveTokens =
+    typeof params.cfg.agents?.defaults?.compaction?.reserveTokens === "number" &&
+    Number.isFinite(params.cfg.agents.defaults.compaction.reserveTokens) &&
+    params.cfg.agents.defaults.compaction.reserveTokens > 0
+      ? params.cfg.agents.defaults.compaction.reserveTokens
+      : undefined;
+  const reserveTokensFloor = Math.max(
+    configuredReserveTokens ?? 0,
     memoryFlushPlan?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
-    20_000;
+      params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
+      20_000,
+  );
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
@@ -563,8 +575,18 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
+  // Use the configured reserveTokens (actual reserve budget) when it exceeds the floor,
+  // consistent with the preflight path and shouldPreemptivelyCompactBeforePrompt.
+  const effectiveReserveTokensForFlush = Math.max(
+    typeof params.cfg.agents?.defaults?.compaction?.reserveTokens === "number" &&
+      Number.isFinite(params.cfg.agents.defaults.compaction.reserveTokens) &&
+      params.cfg.agents.defaults.compaction.reserveTokens > 0
+      ? params.cfg.agents.defaults.compaction.reserveTokens
+      : 0,
+    memoryFlushPlan.reserveTokensFloor,
+  );
   const flushThreshold =
-    contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
+    contextWindowTokens - effectiveReserveTokensForFlush - memoryFlushPlan.softThresholdTokens;
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -691,7 +713,7 @@ export async function runMemoryFlushIfNeeded(params: {
         entry,
         tokenCount: tokenCountForFlush,
         contextWindowTokens,
-        reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+        reserveTokensFloor: effectiveReserveTokensForFlush,
         softThresholdTokens: memoryFlushPlan.softThresholdTokens,
       })) ||
     (shouldForceFlushByTranscriptSize &&
