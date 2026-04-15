@@ -98,7 +98,7 @@ const MB = 1024 * 1024;
 // Windows-1252 encoded files all pass.
 function looksLikeText(buffer: Buffer): boolean {
   for (let i = 0; i < buffer.length; i++) {
-    const b = buffer[i]!;
+    const b = buffer[i];
     // Reject null (0x00–0x08) and remaining C0 controls (0x0E–0x1F) and DEL (0x7F).
     if (b < 0x09 || (b >= 0x0e && b <= 0x1f) || b === 0x7f) {
       return false;
