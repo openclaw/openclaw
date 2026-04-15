@@ -473,4 +473,31 @@ describe("qa suite failure reply handling", () => {
 
     await expect(pending).resolves.toMatchObject({ text: "done" });
   });
+
+  it("summarizes mock request deltas when no new provider call happened", () => {
+    expect(qaSuiteTesting.formatQaMockRequestDeltaSummary(2, [{}, {}])).toBe(
+      "mock requests since run start: 0",
+    );
+  });
+
+  it("summarizes the latest mock request with normalized snippets", () => {
+    expect(
+      qaSuiteTesting.formatQaMockRequestDeltaSummary(1, [
+        { plannedToolName: "memory_search", allInputText: "old" },
+        {
+          plannedToolName: "read",
+          allInputText:
+            "ok do it\n\nRead the single file you would start with and summarize the baseline.",
+          toolOutput: "  MEDIA:/tmp/out.png  ",
+        },
+      ]),
+    ).toBe(
+      [
+        "mock requests since run start: 1",
+        "latest plannedToolName: read",
+        "latest input snippet: ok do it Read the single file you would start with and summarize the baseline.",
+        "latest tool output snippet: MEDIA:/tmp/out.png",
+      ].join("\n"),
+    );
+  });
 });

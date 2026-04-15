@@ -568,6 +568,12 @@ async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteS
   };
 }
 
+type QaMockDebugRequest = {
+  plannedToolName?: string;
+  allInputText?: string;
+  toolOutput?: string;
+};
+
 async function fetchJson<T>(url: string): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url,
@@ -582,6 +588,44 @@ async function fetchJson<T>(url: string): Promise<T> {
   } finally {
     await release();
   }
+}
+
+async function readQaMockDebugRequests(env: QaSuiteEnvironment) {
+  if (!env.mock) {
+    return null;
+  }
+  return await fetchJson<QaMockDebugRequest[]>(`${env.mock.baseUrl}/debug/requests`);
+}
+
+function formatQaMockDebugSnippet(text: string | undefined, maxLength = 160) {
+  const normalized = text?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length <= maxLength
+    ? normalized
+    : `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function formatQaMockRequestDeltaSummary(beforeCount: number, requests: QaMockDebugRequest[]) {
+  const newRequests = requests.slice(Math.max(0, beforeCount));
+  if (newRequests.length === 0) {
+    return "mock requests since run start: 0";
+  }
+  const latest = newRequests.at(-1);
+  const summary = [`mock requests since run start: ${newRequests.length}`];
+  if (latest?.plannedToolName) {
+    summary.push(`latest plannedToolName: ${latest.plannedToolName}`);
+  }
+  const inputSnippet = formatQaMockDebugSnippet(latest?.allInputText);
+  if (inputSnippet) {
+    summary.push(`latest input snippet: ${inputSnippet}`);
+  }
+  const toolOutputSnippet = formatQaMockDebugSnippet(latest?.toolOutput);
+  if (toolOutputSnippet) {
+    summary.push(`latest tool output snippet: ${toolOutputSnippet}`);
+  }
+  return summary.join("\n");
 }
 
 async function waitForGatewayHealthy(env: QaSuiteEnvironment, timeoutMs = 45_000) {
@@ -1155,11 +1199,23 @@ async function runAgentPrompt(
     }>;
   },
 ) {
+  const initialMockRequestCount = (await readQaMockDebugRequests(env))?.length ?? null;
   const started = await startAgentRun(env, params);
   const waited = await waitForAgentRun(env, started.runId!, params.timeoutMs ?? 30_000);
   if (waited.status !== "ok") {
+    let detailSuffix = "";
+    if (typeof initialMockRequestCount === "number") {
+      try {
+        const requests = await readQaMockDebugRequests(env);
+        if (requests) {
+          detailSuffix = `\n${formatQaMockRequestDeltaSummary(initialMockRequestCount, requests)}`;
+        }
+      } catch (error) {
+        detailSuffix = `\nmock debug request read failed: ${formatErrorMessage(error)}`;
+      }
+    }
     throw new Error(
-      `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
+      `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}${detailSuffix}`,
     );
   }
   return {
@@ -1336,6 +1392,8 @@ export const qaSuiteTesting = {
   collectQaSuitePluginIds,
   createScenarioWaitForCondition,
   findFailureOutboundMessage,
+  formatQaMockDebugSnippet,
+  formatQaMockRequestDeltaSummary,
   getGatewayRetryAfterMs,
   isConfigHashConflict,
   mapQaSuiteWithConcurrency,
