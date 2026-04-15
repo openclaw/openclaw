@@ -1648,4 +1648,94 @@ describe("memory-core dreaming phases", () => {
       "The traces braided themselves into a map.",
     );
   });
+
+  it("increments dailyCount when the same daily file is re-ingested on a later day", async () => {
+    // Regression test for #67061: dayBucket used the file date instead of the
+    // ingestion date, so re-ingesting the same file on a different day was
+    // treated as a duplicate and dailyCount stayed at 1.
+    const workspaceDir = await createDreamingWorkspace();
+    // Write a daily note dated 2026-04-03 (two days before the base test time).
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      ["# 2026-04-03", "", "- Move backups to S3 Glacier.", "- Keep retention at 365 days."].join(
+        "\n",
+      ),
+      "utf-8",
+    );
+
+    const configForTest: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 20,
+                    lookbackDays: 7,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    // First ingestion on 2026-04-05.
+    const day1Ms = Date.parse("2026-04-05T10:00:00.000Z");
+    const { beforeAgentReply: reply1 } = createHarness(configForTest, workspaceDir);
+    await withDreamingTestClock(async () => {
+      vi.setSystemTime(new Date(day1Ms));
+      await reply1(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    });
+
+    const after1 = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: day1Ms,
+    });
+    expect(after1).toHaveLength(1);
+    expect(after1[0]?.dailyCount).toBe(1);
+
+    // Clear the daily ingestion checkpoint so the file is re-read on the second
+    // sweep (simulating a new day where the same lookback window still covers
+    // this file).
+    const dailyStatePath = path.join(workspaceDir, "memory", ".dreams", "daily-ingestion.json");
+    try {
+      await fs.unlink(dailyStatePath);
+    } catch {
+      // ignore if not created
+    }
+
+    // Second ingestion on 2026-04-06 (next day).
+    const day2Ms = Date.parse("2026-04-06T10:00:00.000Z");
+    const { beforeAgentReply: reply2 } = createHarness(configForTest, workspaceDir);
+    await withDreamingTestClock(async () => {
+      vi.setSystemTime(new Date(day2Ms));
+      await reply2(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    });
+
+    const after2 = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: day2Ms,
+    });
+    expect(after2).toHaveLength(1);
+    // With the fix, dailyCount should be 2 because the ingestion date changed.
+    // Before the fix, it stayed at 1 because dayBucket was the file date.
+    expect(after2[0]?.dailyCount).toBe(2);
+  });
 });
