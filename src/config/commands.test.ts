@@ -115,6 +115,15 @@ describe("resolveNativeSkillsEnabled", () => {
       }),
     ).toBe(false);
   });
+
+  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
+    expect(
+      resolveNativeSkillsEnabled({
+        providerId: "demo-channel",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("resolveNativeCommandsEnabled", () => {
@@ -133,12 +142,6 @@ describe("resolveNativeCommandsEnabled", () => {
   it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
     expect(
       resolveNativeCommandsEnabled({
-        providerId: "demo-channel",
-        globalSetting: "auto",
-      }),
-    ).toBe(true);
-    expect(
-      resolveNativeSkillsEnabled({
         providerId: "demo-channel",
         globalSetting: "auto",
       }),
