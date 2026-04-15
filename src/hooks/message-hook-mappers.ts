@@ -292,6 +292,10 @@ export function toPluginMessageReceivedEvent(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
+      mediaPath: canonical.mediaPath,
+      mediaType: canonical.mediaType,
+      mediaPaths: canonical.mediaPaths,
+      mediaTypes: canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -321,6 +325,10 @@ export function toInternalMessageReceivedContext(
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
     messageId: canonical.messageId,
+    mediaPath: canonical.mediaPath,
+    mediaType: canonical.mediaType,
+    mediaPaths: canonical.mediaPaths,
+    mediaTypes: canonical.mediaTypes,
     metadata: {
       to: canonical.to,
       provider: canonical.provider,
@@ -330,6 +338,10 @@ export function toInternalMessageReceivedContext(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
+      mediaPath: canonical.mediaPath,
+      mediaType: canonical.mediaType,
+      mediaPaths: canonical.mediaPaths,
+      mediaTypes: canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -380,6 +392,8 @@ function toInternalInboundMessageHookContextBase(canonical: CanonicalInboundMess
     surface: canonical.surface,
     mediaPath: canonical.mediaPath,
     mediaType: canonical.mediaType,
+    mediaPaths: canonical.mediaPaths,
+    mediaTypes: canonical.mediaTypes,
   };
 }
 

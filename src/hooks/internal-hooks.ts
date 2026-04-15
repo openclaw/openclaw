@@ -66,6 +66,14 @@ export type MessageReceivedHookContext = {
   conversationId?: string;
   /** Message ID from the provider */
   messageId?: string;
+  /** Path to the first inbound media file, if present */
+  mediaPath?: string;
+  /** MIME type of the first inbound media file, if present */
+  mediaType?: string;
+  /** Paths to all inbound media files, if present */
+  mediaPaths?: string[];
+  /** MIME types aligned with `mediaPaths`, if present */
+  mediaTypes?: string[];
   /** Additional provider-specific metadata */
   metadata?: Record<string, unknown>;
 };
@@ -136,6 +144,10 @@ type MessageEnrichedBodyHookContext = {
   mediaPath?: string;
   /** MIME type of the media */
   mediaType?: string;
+  /** Paths to all inbound media files, if present */
+  mediaPaths?: string[];
+  /** MIME types aligned with `mediaPaths`, if present */
+  mediaTypes?: string[];
 };
 
 export type MessageTranscribedHookContext = MessageEnrichedBodyHookContext & {

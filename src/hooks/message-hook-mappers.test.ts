@@ -132,7 +132,15 @@ describe("message hook mappers", () => {
   });
 
   it("maps canonical inbound context to plugin/internal received payloads", () => {
-    const canonical = deriveInboundMessageHookContext(makeInboundCtx({ TopicName: "Deployments" }));
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        TopicName: "Deployments",
+        MediaPath: undefined,
+        MediaType: undefined,
+        MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        MediaTypes: ["image/jpeg", "image/jpeg"],
+      }),
+    );
 
     expect(toPluginMessageContext(canonical)).toEqual({
       channelId: "demo-chat",
@@ -147,6 +155,10 @@ describe("message hook mappers", () => {
         messageId: "msg-1",
         senderName: "User One",
         threadId: 42,
+        mediaPath: "/tmp/tree.jpg",
+        mediaType: "image/jpeg",
+        mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        mediaTypes: ["image/jpeg", "image/jpeg"],
         topicName: "Deployments",
       }),
     });
@@ -158,9 +170,17 @@ describe("message hook mappers", () => {
       accountId: "acc-1",
       conversationId: "demo-chat:chat:456",
       messageId: "msg-1",
+      mediaPath: "/tmp/tree.jpg",
+      mediaType: "image/jpeg",
+      mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+      mediaTypes: ["image/jpeg", "image/jpeg"],
       metadata: expect.objectContaining({
         senderUsername: "userone",
         senderE164: "+15551234567",
+        mediaPath: "/tmp/tree.jpg",
+        mediaType: "image/jpeg",
+        mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        mediaTypes: ["image/jpeg", "image/jpeg"],
         topicName: "Deployments",
       }),
     });
@@ -215,7 +235,15 @@ describe("message hook mappers", () => {
 
   it("maps transcribed and preprocessed internal payloads", () => {
     const cfg = {} as OpenClawConfig;
-    const canonical = deriveInboundMessageHookContext(makeInboundCtx({ Transcript: undefined }));
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Transcript: undefined,
+        MediaPath: undefined,
+        MediaType: undefined,
+        MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        MediaTypes: ["image/jpeg", "image/jpeg"],
+      }),
+    );
 
     const transcribed = toInternalMessageTranscribedContext(canonical, cfg);
     expect(transcribed.transcript).toBe("");
@@ -225,6 +253,10 @@ describe("message hook mappers", () => {
     expect(preprocessed.transcript).toBeUndefined();
     expect(preprocessed.isGroup).toBe(true);
     expect(preprocessed.groupId).toBe("demo-chat:chat:456");
+    expect(preprocessed.mediaPath).toBe("/tmp/tree.jpg");
+    expect(preprocessed.mediaType).toBe("image/jpeg");
+    expect(preprocessed.mediaPaths).toEqual(["/tmp/tree.jpg", "/tmp/ramp.jpg"]);
+    expect(preprocessed.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
     expect(preprocessed.cfg).toBe(cfg);
   });
 
