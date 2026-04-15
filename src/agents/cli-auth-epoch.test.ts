@@ -30,7 +30,7 @@ describe("resolveCliAuthEpoch", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("changes when claude cli credentials change", async () => {
+  it("does not change when OAuth access token rotates (stable session)", async () => {
     let access = "access-a";
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => ({
@@ -48,10 +48,32 @@ describe("resolveCliAuthEpoch", () => {
 
     expect(first).toBeDefined();
     expect(second).toBeDefined();
+    // OAuth access token rotation must NOT invalidate session
+    expect(second).toBe(first);
+  });
+
+  it("changes when OAuth refresh token rotates", async () => {
+    let refresh = "refresh-a";
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "anthropic",
+        access: "access",
+        refresh,
+        expires: 1,
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({ provider: "claude-cli" });
+    refresh = "refresh-b";
+    const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
     expect(second).not.toBe(first);
   });
 
-  it("changes when auth profile credentials change", async () => {
+  it("does not change when OAuth access token rotates in auth profile", async () => {
     let store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -91,18 +113,63 @@ describe("resolveCliAuthEpoch", () => {
 
     expect(first).toBeDefined();
     expect(second).toBeDefined();
+    // OAuth access token rotation must NOT invalidate session
+    expect(second).toBe(first);
+  });
+
+  it("changes when OAuth refresh token rotates in auth profile", async () => {
+    let store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access",
+          refresh: "refresh-a",
+          expires: 1,
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+    store = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access",
+          refresh: "refresh-b",
+          expires: 1,
+        },
+      },
+    };
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
     expect(second).not.toBe(first);
   });
 
   it("mixes local codex and auth-profile state", async () => {
-    let access = "local-access-a";
-    let refresh = "profile-refresh-a";
+    let localAccess = "local-access-a";
+    let localRefresh = "local-refresh-a";
+    let profileRefresh = "profile-refresh-a";
     setCliAuthEpochTestDeps({
       readCodexCliCredentialsCached: () => ({
         type: "oauth",
         provider: "openai-codex",
-        access,
-        refresh: "local-refresh",
+        access: localAccess,
+        refresh: localRefresh,
         expires: 1,
         accountId: "acct-1",
       }),
@@ -113,7 +180,7 @@ describe("resolveCliAuthEpoch", () => {
             type: "oauth",
             provider: "openai",
             access: "profile-access",
-            refresh,
+            refresh: profileRefresh,
             expires: 1,
           },
         },
@@ -124,12 +191,14 @@ describe("resolveCliAuthEpoch", () => {
       provider: "codex-cli",
       authProfileId: "openai:work",
     });
-    access = "local-access-b";
+    // Local OAuth access token rotation must NOT invalidate session
+    localAccess = "local-access-b";
     const second = await resolveCliAuthEpoch({
       provider: "codex-cli",
       authProfileId: "openai:work",
     });
-    refresh = "profile-refresh-b";
+    // Profile refresh token rotation MUST invalidate session
+    profileRefresh = "profile-refresh-b";
     const third = await resolveCliAuthEpoch({
       provider: "codex-cli",
       authProfileId: "openai:work",
@@ -138,7 +207,9 @@ describe("resolveCliAuthEpoch", () => {
     expect(first).toBeDefined();
     expect(second).toBeDefined();
     expect(third).toBeDefined();
-    expect(second).not.toBe(first);
+    // Local access token rotation must NOT change epoch
+    expect(second).toBe(first);
+    // Profile refresh token rotation MUST change epoch
     expect(third).not.toBe(second);
   });
 });

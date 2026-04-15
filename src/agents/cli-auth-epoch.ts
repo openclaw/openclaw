@@ -41,18 +41,24 @@ function encodeUnknown(value: unknown): string {
 
 function encodeClaudeCredential(credential: ClaudeCliCredential): string {
   if (credential.type === "oauth") {
-    return JSON.stringify([
-      "oauth",
-      credential.provider,
-      credential.access,
-      credential.refresh,
-      credential.expires,
-    ]);
+    // Only hash refresh (stable identity); access and expires rotate on token refresh
+    // and should not invalidate the session.
+    return JSON.stringify(["oauth", credential.provider, credential.refresh]);
   }
   return JSON.stringify(["token", credential.provider, credential.token, credential.expires]);
 }
 
 function encodeCodexCredential(credential: CodexCliCredential): string {
+  if (credential.type === "oauth") {
+    // Only hash refresh (stable identity); access and expires rotate on token refresh
+    // and should not invalidate the session.
+    return JSON.stringify([
+      credential.type,
+      credential.provider,
+      credential.refresh,
+      credential.accountId ?? null,
+    ]);
+  }
   return JSON.stringify([
     credential.type,
     credential.provider,
@@ -86,12 +92,12 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         credential.displayName ?? null,
       ]);
     case "oauth":
+      // Only hash refresh (stable identity); access and expires rotate on token refresh
+      // and should not invalidate the session.
       return JSON.stringify([
         "oauth",
         credential.provider,
-        credential.access,
         credential.refresh,
-        credential.expires,
         credential.clientId ?? null,
         credential.email ?? null,
         credential.displayName ?? null,
