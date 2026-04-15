@@ -370,9 +370,8 @@ async function main(argv) {
 
 async function prepareCandidate(params) {
   logPhase("prepare", "resolve-source-sha");
-  const packageJsonPath = join(params.sourceDir, "package.json");
-  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-  const hasUiBuildScript = typeof packageJson.scripts?.["ui:build"] === "string";
+  const packageJson = readPackageJson(params.sourceDir);
+  const hasUiBuildScript = packageJsonHasScript(packageJson, "ui:build");
   const controlUiIndexPath = join(params.sourceDir, "dist", "control-ui", "index.html");
   const controlUiAssetsPath = join(params.sourceDir, "dist", "control-ui", "assets");
   const sourceSha = (
@@ -798,6 +797,19 @@ async function runInstallerFreshSuite(params) {
       // onboarding, but use a manual gateway for the runtime checks. The packaged
       // Windows lanes already cover the managed Scheduled Task lifecycle and this
       // avoids duplicating a flaky surface in the installer-only validation.
+      if (shouldStopManagedGatewayBeforeManualFallback()) {
+        logLanePhase(lane, "gateway-stop-managed");
+        await runInstalledCli({
+          cliPath: freshShell.cliPath,
+          args: ["gateway", "stop"],
+          env,
+          cwd: lane.homeDir,
+          logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed.log"),
+          timeoutMs: 2 * 60 * 1000,
+          check: false,
+        });
+        await sleep(2_000);
+      }
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
         lane,
@@ -1150,6 +1162,10 @@ export function shouldUseManagedGatewayService(platform = process.platform) {
   return platform === "win32";
 }
 
+export function shouldStopManagedGatewayBeforeManualFallback(platform = process.platform) {
+  return shouldUseManagedGatewayService(platform);
+}
+
 function shouldRestoreBundledPluginRuntimeDeps() {
   return true;
 }
@@ -1214,6 +1230,22 @@ async function resolveInstallerTargetVersion(params) {
 
 function powerShellSingleQuote(value) {
   return value.replace(/'/gu, "''");
+}
+
+function readPackageJson(packageRoot) {
+  return JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+}
+
+function packageJsonHasScript(packageJson, scriptName) {
+  return typeof packageJson?.scripts?.[scriptName] === "string";
+}
+
+export function packageHasScript(packageRoot, scriptName) {
+  try {
+    return packageJsonHasScript(readPackageJson(packageRoot), scriptName);
+  } catch {
+    return false;
+  }
 }
 
 function parseMarkerLine(output, marker) {
@@ -1507,12 +1539,14 @@ async function repairLegacyDevUpdateInstall(params) {
     logPath: join(params.logsDir, "dev-update-repair-build.log"),
     timeoutMs: updateTimeoutMs(),
   });
-  await runCommand(pnpmCommand(), ["ui:build"], {
-    cwd: gitRoot,
-    env: params.env,
-    logPath: join(params.logsDir, "dev-update-repair-ui-build.log"),
-    timeoutMs: updateTimeoutMs(),
-  });
+  if (packageHasScript(gitRoot, "ui:build")) {
+    await runCommand(pnpmCommand(), ["ui:build"], {
+      cwd: gitRoot,
+      env: params.env,
+      logPath: join(params.logsDir, "dev-update-repair-ui-build.log"),
+      timeoutMs: updateTimeoutMs(),
+    });
+  }
   await runCommand(npmCommand(), resolveRepairGlobalInstallArgs(process.platform, gitRoot), {
     cwd: gitRoot,
     env: params.env,

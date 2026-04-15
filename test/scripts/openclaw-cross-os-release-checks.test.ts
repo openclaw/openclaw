@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildWindowsPathBootstrapScript,
@@ -9,6 +12,7 @@ import {
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
   parseArgs,
+  packageHasScript,
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
   resolveDevUpdateVerificationRef,
@@ -20,6 +24,7 @@ import {
   resolveStaticFileContentType,
   shouldRepairDevUpdateInstall,
   shouldSkipInstallerDaemonHealthCheck,
+  shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
@@ -151,6 +156,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldUseManagedGatewayService("linux")).toBe(false);
   });
 
+  it("stops the managed gateway before the manual fallback only on Windows", () => {
+    expect(shouldStopManagedGatewayBeforeManualFallback("win32")).toBe(true);
+    expect(shouldStopManagedGatewayBeforeManualFallback("darwin")).toBe(false);
+    expect(shouldStopManagedGatewayBeforeManualFallback("linux")).toBe(false);
+  });
+
   it("skips daemon health during installed onboarding only on native Windows", () => {
     expect(shouldSkipInstallerDaemonHealthCheck("win32")).toBe(true);
     expect(shouldSkipInstallerDaemonHealthCheck("darwin")).toBe(false);
@@ -251,6 +262,27 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveExplicitBaselineVersion("openclaw@latest")).toBe("");
     expect(resolveExplicitBaselineVersion("openclaw@2026.4.10")).toBe("2026.4.10");
     expect(resolveExplicitBaselineVersion("2026.4.10")).toBe("2026.4.10");
+  });
+
+  it("treats missing package scripts as optional in older refs", () => {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-scripts-"));
+    try {
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          scripts: {
+            build: "pnpm build",
+          },
+        }),
+        "utf8",
+      );
+
+      expect(packageHasScript(packageRoot, "build")).toBe(true);
+      expect(packageHasScript(packageRoot, "ui:build")).toBe(false);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 
   it("accepts a git main dev-channel update status payload", () => {
