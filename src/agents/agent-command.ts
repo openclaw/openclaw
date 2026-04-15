@@ -38,6 +38,7 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -781,17 +782,20 @@ async function agentCommandInternal(
     }
 
     if (!resolvedThinkLevel) {
+      const agentThinkingDefault = resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault;
       let catalogForThinking = modelCatalog ?? allowedModelCatalog;
       if (!catalogForThinking || catalogForThinking.length === 0) {
         modelCatalog = await loadModelCatalog({ config: cfg });
         catalogForThinking = modelCatalog;
       }
-      resolvedThinkLevel = resolveThinkingDefault({
-        cfg,
-        provider,
-        model,
-        catalog: catalogForThinking,
-      });
+      resolvedThinkLevel =
+        agentThinkingDefault ??
+        resolveThinkingDefault({
+          cfg,
+          provider,
+          model,
+          catalog: catalogForThinking,
+        });
     }
     if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
