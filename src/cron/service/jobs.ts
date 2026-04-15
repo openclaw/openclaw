@@ -38,6 +38,12 @@ import type { CronServiceState } from "./state.js";
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
+/**
+ * Minimum gap between consecutive fires of the same cron job. This prevents
+ * spin-loops when schedule computation lands in the same second as the just
+ * completed run.
+ */
+export const MIN_CRON_REFIRE_GAP_MS = 2_000;
 export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
   30_000,
   60_000,
@@ -478,6 +484,9 @@ function recomputeJobNextRunAtMs(params: {
       if (newNext !== undefined) {
         newNext = Math.max(newNext, backoffFloor);
       }
+    }
+    if (params.job.schedule.kind === "cron" && newNext !== undefined) {
+      newNext = Math.max(newNext, params.nowMs + MIN_CRON_REFIRE_GAP_MS);
     }
     if (params.job.state.nextRunAtMs !== newNext) {
       params.job.state.nextRunAtMs = newNext;

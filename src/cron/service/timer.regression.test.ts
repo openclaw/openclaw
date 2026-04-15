@@ -14,7 +14,7 @@ import {
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import * as schedule from "../schedule.js";
 import type { CronJob } from "../types.js";
-import { computeJobNextRunAtMs } from "./jobs.js";
+import { MIN_CRON_REFIRE_GAP_MS, computeJobNextRunAtMs } from "./jobs.js";
 import { start, stop } from "./ops.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
 import {
@@ -1279,7 +1279,8 @@ describe("cron service timer regressions", () => {
   it("clears schedule error count when completion maintenance recompute recovers (#66019)", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-04-13T16:15:00.000Z");
-    const recoveredNextRunAtMs = scheduledAt + 24 * 60 * 60 * 1_000;
+    const recoveredTooSoonNextRunAtMs = scheduledAt + 1_000;
+    const recoveredRefireFloorMs = scheduledAt + 25 + MIN_CRON_REFIRE_GAP_MS;
     const cronJob = createIsolatedRegressionJob({
       id: "cron-66019-completion-recovered",
       name: "cron-66019-completion-recovered",
@@ -1307,7 +1308,7 @@ describe("cron service timer regressions", () => {
     let computeCalls = 0;
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockImplementation(() => {
       computeCalls += 1;
-      return computeCalls === 1 ? undefined : recoveredNextRunAtMs;
+      return computeCalls === 1 ? undefined : recoveredTooSoonNextRunAtMs;
     });
 
     try {
@@ -1317,7 +1318,7 @@ describe("cron service timer regressions", () => {
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
       expect(computeCalls).toBeGreaterThanOrEqual(2);
       expect(job?.state.scheduleErrorCount).toBeUndefined();
-      expect(job?.state.nextRunAtMs).toBe(recoveredNextRunAtMs);
+      expect(job?.state.nextRunAtMs).toBe(recoveredRefireFloorMs);
       expect(job?.enabled).toBe(true);
     } finally {
       nextRunSpy.mockRestore();
@@ -1370,7 +1371,8 @@ describe("cron service timer regressions", () => {
   it("clears startup catch-up schedule error count when recompute recovers (#66019)", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-04-13T16:15:00.000Z");
-    const recoveredNextRunAtMs = scheduledAt + 24 * 60 * 60 * 1_000;
+    const recoveredTooSoonNextRunAtMs = scheduledAt + 1_000;
+    const recoveredRefireFloorMs = scheduledAt + 25 + MIN_CRON_REFIRE_GAP_MS;
     const cronJob = createIsolatedRegressionJob({
       id: "cron-66019-startup-recovered",
       name: "cron-66019-startup-recovered",
@@ -1398,7 +1400,7 @@ describe("cron service timer regressions", () => {
     let computeCalls = 0;
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockImplementation(() => {
       computeCalls += 1;
-      return computeCalls === 1 ? undefined : recoveredNextRunAtMs;
+      return computeCalls === 1 ? undefined : recoveredTooSoonNextRunAtMs;
     });
 
     try {
@@ -1408,7 +1410,7 @@ describe("cron service timer regressions", () => {
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
       expect(computeCalls).toBeGreaterThanOrEqual(2);
       expect(job?.state.scheduleErrorCount).toBeUndefined();
-      expect(job?.state.nextRunAtMs).toBe(recoveredNextRunAtMs);
+      expect(job?.state.nextRunAtMs).toBe(recoveredRefireFloorMs);
       expect(job?.enabled).toBe(true);
     } finally {
       nextRunSpy.mockRestore();

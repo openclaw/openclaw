@@ -23,6 +23,7 @@ import type {
 } from "../types.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+  MIN_CRON_REFIRE_GAP_MS,
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
   errorBackoffMs,
@@ -49,7 +50,7 @@ const MAX_TIMER_DELAY_MS = 60_000;
  * is intentionally generous (2 s) so it never masks a legitimate schedule
  * but always breaks an infinite re-trigger cycle.  (See #17821)
  */
-const MIN_REFIRE_GAP_MS = 2_000;
+const MIN_REFIRE_GAP_MS = MIN_CRON_REFIRE_GAP_MS;
 
 const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
 const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
