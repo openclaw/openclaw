@@ -3,13 +3,23 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { NativeCommandsSetting } from "./types.js";
 export { isCommandFlagEnabled, isRestartEnabled, type CommandFlagKey } from "./commands.flags.js";
 
+// Bundled channels with auto-enabled native commands/skills.
+// Used as fallback during startup when plugin registry not yet populated.
+const BUNDLED_AUTO_ENABLED = {
+  telegram: { native: true, nativeSkills: true },
+  discord: { native: true, nativeSkills: true },
+} as const;
+
 function resolveAutoDefault(
   providerId: ChannelId | undefined,
   kind: "native" | "nativeSkills",
 ): boolean {
   const id = normalizeChannelId(providerId);
   if (!id) {
-    return false;
+    // Fallback for startup race: registry not yet populated when config loads.
+    // Check against known bundled channels until registry initializes.
+    const bundled = providerId ? BUNDLED_AUTO_ENABLED[providerId as keyof typeof BUNDLED_AUTO_ENABLED] : undefined;
+    return bundled?.[kind] ?? false;
   }
   const plugin = getChannelPlugin(id);
   if (!plugin) {

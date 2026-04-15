@@ -214,3 +214,25 @@ describe("isCommandFlagEnabled", () => {
     ).toBe(false);
   });
 });
+
+describe("resolveNativeCommandsEnabled / resolveNativeSkillsEnabled — empty registry (startup timing)", () => {
+  it("returns true for telegram native commands when channel registry is empty", () => {
+    // Simulate startup race: channel registry not yet populated
+    setActivePluginRegistry(createTestRegistry([]));
+
+    expect(
+      resolveNativeCommandsEnabled({ providerId: "telegram", globalSetting: "auto" }),
+    ).toBe(true);
+    expect(
+      resolveNativeSkillsEnabled({ providerId: "telegram", globalSetting: "auto" }),
+    ).toBe(true);
+  });
+
+  it("returns false for unknown provider when registry is empty", () => {
+    setActivePluginRegistry(createTestRegistry([]));
+
+    expect(
+      resolveNativeCommandsEnabled({ providerId: "unknown-channel" as never, globalSetting: "auto" }),
+    ).toBe(false);
+  });
+});
