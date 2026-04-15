@@ -189,19 +189,7 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
     const b = block as Record<string, unknown>;
 
     if (b.type === "audio") {
-      // Handle base64 source format from webchat
-      const source = b.source as Record<string, unknown> | undefined;
-      if (source?.type === "base64" && typeof source.data === "string") {
-        const mediaType = (source.media_type as string) || "audio/ogg";
-        const raw = source.data;
-        const dataUrl = raw.startsWith("data:") ? raw : `data:${mediaType};base64,${raw}`;
-        audio.push({
-          type: "audio",
-          data: dataUrl,
-          mimeType: mediaType,
-          filename: typeof b.filename === "string" ? b.filename : undefined,
-        });
-      } else if (typeof b.url === "string") {
+      if (typeof b.url === "string") {
         audio.push({
           type: "audio",
           data: b.url,
@@ -223,19 +211,7 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
     }
 
     if (b.type === "video") {
-      // Handle base64 source format from webchat
-      const source = b.source as Record<string, unknown> | undefined;
-      if (source?.type === "base64" && typeof source.data === "string") {
-        const mediaType = (source.media_type as string) || "video/mp4";
-        const raw = source.data;
-        const dataUrl = raw.startsWith("data:") ? raw : `data:${mediaType};base64,${raw}`;
-        video.push({
-          type: "video",
-          data: dataUrl,
-          mimeType: mediaType,
-          filename: typeof b.filename === "string" ? b.filename : undefined,
-        });
-      } else if (typeof b.url === "string") {
+      if (typeof b.url === "string") {
         video.push({
           type: "video",
           data: b.url,
@@ -256,6 +232,7 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
       }
     }
   }
+
   return { audio, video };
 }
 
@@ -359,6 +336,15 @@ export function renderMessageGroup(
   });
 
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
+  console.log('=== GROUP MESSAGES ===', group.messages.map((item, i) => ({
+    index: i,
+    role: (item.message as any).role,
+    contentTypes: Array.isArray((item.message as any).content) 
+      ? (item.message as any).content.map((c: any) => c.type)
+      : 'not array',
+    hasAudio: JSON.stringify(item.message).includes('audio'),
+    key: item.key
+  })));
 
   return html`
     <div class="chat-group ${roleClass}">
