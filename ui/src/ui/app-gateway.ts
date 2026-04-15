@@ -422,6 +422,14 @@ function handleSessionMessageGatewayEvent(
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
+  // Skip history reload while a chat run is active. The chat event handler
+  // manages streaming state and appends the final assistant message. Reloading
+  // history mid-run races with the optimistic user-message update and resets
+  // chatStream, which delays the user message card from appearing until the
+  // first LLM delta arrives.
+  if (host.chatRunId) {
+    return;
+  }
   void loadChatHistory(host as unknown as ChatState);
 }
 
