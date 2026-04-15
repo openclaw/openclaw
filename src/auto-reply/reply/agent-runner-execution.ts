@@ -11,6 +11,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -376,6 +377,53 @@ function buildExternalRunFailureText(message: string): string {
     return `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`;
   }
   return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+}
+
+/**
+ * Build a context-overflow hint that detects when a heartbeat model override
+ * has bled into the main session.  `isHeartbeat` is only true during the
+ * heartbeat turn itself, so by the time overflow hits a subsequent user
+ * message we must compare the actual running model against the primary.
+ */
+function buildContextOverflowHint(params: {
+  primaryModel: string;
+  currentModel: string;
+  provider?: string;
+  cfg: Parameters<typeof resolveContextTokensForModel>[0]["cfg"];
+}): string {
+  const { primaryModel, currentModel, provider, cfg } = params;
+  const modelMismatch = currentModel !== primaryModel;
+  const currentWindow = resolveContextTokensForModel({
+    cfg,
+    provider,
+    model: currentModel,
+    allowAsyncLoad: false,
+  });
+
+  const isSmallModel = typeof currentWindow === "number" && currentWindow <= 65_536;
+
+  if (isSmallModel && modelMismatch) {
+    const windowLabel = Math.round(currentWindow / 1024);
+    return (
+      `\n\nThe session is using ${currentModel} (${windowLabel}k context) ` +
+      `instead of ${primaryModel}. This may be caused by a heartbeat model ` +
+      `override bleeding into your session. Consider setting ` +
+      `heartbeat.isolatedSession: true or heartbeat.lightContext: true.`
+    );
+  }
+  if (isSmallModel) {
+    const windowLabel = Math.round(currentWindow / 1024);
+    return (
+      `\n\nThe current model (${currentModel}) has a ${windowLabel}k ` +
+      `context window, which may be too small for this conversation. ` +
+      `Consider using a model with a larger context window.`
+    );
+  }
+  return (
+    "\n\nTo prevent this, increase your compaction buffer by setting " +
+    "`agents.defaults.compaction.reserveTokensFloor` to 20000 or " +
+    "higher in your config."
+  );
 }
 
 function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {
@@ -1281,7 +1329,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            text: `⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.${buildContextOverflowHint({ primaryModel: params.followupRun.run.model ?? "unknown", currentModel: fallbackModel ?? params.followupRun.run.model ?? "unknown", provider: params.followupRun.run.provider, cfg: runtimeConfig })}`,
           },
         };
       }
@@ -1395,7 +1443,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            text: `⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.${buildContextOverflowHint({ primaryModel: params.followupRun.run.model ?? "unknown", currentModel: fallbackModel ?? params.followupRun.run.model ?? "unknown", provider: params.followupRun.run.provider, cfg: runtimeConfig })}`,
           },
         };
       }
