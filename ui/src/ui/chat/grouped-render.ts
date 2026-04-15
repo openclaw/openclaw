@@ -189,7 +189,19 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
     const b = block as Record<string, unknown>;
 
     if (b.type === "audio") {
-      if (typeof b.url === "string") {
+      // Handle base64 source format from webchat
+      const source = b.source as Record<string, unknown> | undefined;
+      if (source?.type === "base64" && typeof source.data === "string") {
+        const mediaType = (source.media_type as string) || "audio/ogg";
+        const raw = source.data;
+        const dataUrl = raw.startsWith("data:") ? raw : `data:${mediaType};base64,${raw}`;
+        audio.push({
+          type: "audio",
+          data: dataUrl,
+          mimeType: mediaType,
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
+      } else if (typeof b.url === "string") {
         audio.push({
           type: "audio",
           data: b.url,
@@ -211,7 +223,19 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
     }
 
     if (b.type === "video") {
-      if (typeof b.url === "string") {
+      // Handle base64 source format from webchat
+      const source = b.source as Record<string, unknown> | undefined;
+      if (source?.type === "base64" && typeof source.data === "string") {
+        const mediaType = (source.media_type as string) || "video/mp4";
+        const raw = source.data;
+        const dataUrl = raw.startsWith("data:") ? raw : `data:${mediaType};base64,${raw}`;
+        video.push({
+          type: "video",
+          data: dataUrl,
+          mimeType: mediaType,
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
+      } else if (typeof b.url === "string") {
         video.push({
           type: "video",
           data: b.url,
@@ -232,7 +256,6 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
       }
     }
   }
-
   return { audio, video };
 }
 
@@ -1007,8 +1030,17 @@ function isLocalAttachmentPreviewAllowed(
   source: string,
   localMediaPreviewRoots: readonly string[],
 ): boolean {
-  // Decode the source if it's percent-encoded
-  const decodedSource = source.startsWith('%2F') ? decodeURIComponent(source) : source;
+  // Decode the source if it's percent-encoded, with error handling
+  let decodedSource = source;
+  if (source.startsWith('%2F')) {
+    try {
+      decodedSource = decodeURIComponent(source);
+    } catch {
+      // If decoding fails, fall back to the original source
+      decodedSource = source;
+    }
+  }
+  
   const sourceToCheck = decodedSource !== source ? decodedSource : source;
   
   const normalizedSource = normalizeLocalAttachmentPath(sourceToCheck);
