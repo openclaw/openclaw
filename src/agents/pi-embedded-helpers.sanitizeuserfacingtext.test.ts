@@ -362,17 +362,27 @@ describe("sanitizeUserFacingText", () => {
   it("strips multiple tool_call tags", () => {
     const text =
       'Before <tool_call>{"name": "read"}</tool_call> middle <tool_call>{"name": "write"}</tool_call> after';
-    expect(sanitizeUserFacingText(text)).toBe("Before  middle  after");
+    expect(sanitizeUserFacingText(text)).toBe("Before middle after");
   });
 
   it("strips tool_result XML tags from text", () => {
     const text = "Response <tool_result>some output</tool_result> continues";
-    expect(sanitizeUserFacingText(text)).toBe("Response  continues");
+    expect(sanitizeUserFacingText(text)).toBe("Response continues");
   });
 
   it("strips multiline tool_call tags", () => {
     const text = 'Hello <tool_call>\n{"name": "exec",\n"arguments": {}}\n</tool_call> world';
-    expect(sanitizeUserFacingText(text)).toBe("Hello  world");
+    expect(sanitizeUserFacingText(text)).toBe("Hello world");
+  });
+
+  it("strips self-closing tool tags without removing visible trailing text", () => {
+    expect(sanitizeUserFacingText("Before <tool_call /> after")).toBe("Before after");
+    expect(sanitizeUserFacingText("Before <tool_result data-id='x'/> after")).toBe("Before after");
+  });
+
+  it("strips orphaned tool tags through the end of text", () => {
+    expect(sanitizeUserFacingText('Visible <tool_call>{"name": "exec"}')).toBe("Visible ");
+    expect(sanitizeUserFacingText("Visible <tool_result>partial output")).toBe("Visible ");
   });
 });
 
