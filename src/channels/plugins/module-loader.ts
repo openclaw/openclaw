@@ -1,44 +1,36 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  shouldPreferNativeJiti,
-} from "../../plugins/sdk-alias.js";
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+} from "../../plugins/jiti-loader-cache.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const nodeRequire = createRequire(import.meta.url);
 
 function createModuleLoader() {
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+  const jitiLoaders: PluginJitiLoaderCache = new Map();
 
   return (modulePath: string) => {
-    const tryNative =
-      shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+    return getCachedPluginJitiLoader({
+      cache: jitiLoaders,
+      modulePath,
+      importerUrl: import.meta.url,
+      argvEntry: process.argv[1],
+      preferBuiltDist: true,
+      jitiFilename: import.meta.url,
     });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
-      tryNative,
-    });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
   };
 }
 
 let loadModule = createModuleLoader();
 
 export function isJavaScriptModulePath(modulePath: string): boolean {
-  return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
+  return [".js", ".mjs", ".cjs"].includes(
+    normalizeLowercaseStringOrEmpty(path.extname(modulePath)),
+  );
 }
 
 export function resolveCompiledBundledModulePath(modulePath: string): string {
@@ -61,8 +53,10 @@ export function resolvePluginModuleCandidates(rootDir: string, specifier: string
   return [
     resolvedPath,
     `${resolvedPath}.ts`,
+    `${resolvedPath}.mts`,
     `${resolvedPath}.js`,
     `${resolvedPath}.mjs`,
+    `${resolvedPath}.cts`,
     `${resolvedPath}.cjs`,
   ];
 }

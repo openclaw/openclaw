@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "../config/config.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
   buildBootstrapContextFiles,
@@ -115,7 +117,7 @@ function sanitizeBootstrapFiles(
 ): WorkspaceBootstrapFile[] {
   const sanitized: WorkspaceBootstrapFile[] = [];
   for (const file of files) {
-    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    const pathValue = normalizeOptionalString(file.path) ?? "";
     if (!pathValue) {
       warn?.(
         `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
@@ -162,10 +164,11 @@ function shouldExcludeHeartbeatBootstrapFile(params: {
   if (sessionAgentId !== defaultAgentId) {
     return false;
   }
-  const defaults = params.config.agents?.defaults?.heartbeat;
-  const overrides = resolveAgentConfig(params.config, sessionAgentId)?.heartbeat;
-  const merged = !defaults && !overrides ? overrides : { ...defaults, ...overrides };
-  return merged?.includeSystemPromptSection === false;
+  return !shouldIncludeHeartbeatGuidanceForSystemPrompt({
+    config: params.config,
+    agentId: sessionAgentId,
+    defaultAgentId,
+  });
 }
 
 function filterHeartbeatBootstrapFile(

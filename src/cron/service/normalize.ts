@@ -14,10 +14,6 @@ export function normalizeRequiredName(raw: unknown) {
   return name;
 }
 
-export function normalizeOptionalText(raw: unknown) {
-  return normalizeOptionalString(raw);
-}
-
 function truncateText(input: string, maxLen: number) {
   if (input.length <= maxLen) {
     return input;
@@ -31,10 +27,6 @@ export function normalizeOptionalAgentId(raw: unknown) {
     return undefined;
   }
   return normalizeAgentId(trimmed);
-}
-
-export function normalizeOptionalSessionKey(raw: unknown) {
-  return normalizeOptionalString(raw);
 }
 
 export function inferLegacyName(job: {

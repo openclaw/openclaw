@@ -1,6 +1,7 @@
 import { type ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeCompatibilityConfig as normalizeDiscordCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
@@ -241,7 +242,7 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
       return;
     }
     for (const entry of list) {
-      const text = String(entry).trim();
+      const text = normalizeOptionalString(String(entry)) ?? "";
       if (!text || text === "*" || !isDiscordMutableAllowEntry(text)) {
         continue;
       }

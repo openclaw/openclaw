@@ -203,6 +203,56 @@ describe("createMatrixDraftStream", () => {
     expect(eventId).toBe("$evt1");
   });
 
+  it("stop does not finalize live drafts on its own", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "partial",
+    });
+
+    stream.update("Hello");
+    await stream.stop();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[1]).toHaveProperty("org.matrix.msc4357.live");
+  });
+
+  it("finalizeLive clears the live marker at most once", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "partial",
+    });
+
+    stream.update("Hello");
+    await stream.stop();
+
+    await stream.finalizeLive();
+    await stream.finalizeLive();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageMock.mock.calls[1]?.[1]).not.toHaveProperty("org.matrix.msc4357.live");
+  });
+
+  it("marks live finalize failures for normal final delivery fallback", async () => {
+    sendMessageMock.mockResolvedValueOnce("$evt1").mockRejectedValueOnce(new Error("rate limited"));
+
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "partial",
+    });
+
+    stream.update("Hello");
+    await stream.stop();
+
+    await expect(stream.finalizeLive()).resolves.toBe(false);
+    expect(stream.mustDeliverFinalNormally()).toBe(true);
+  });
+
   it("reset allows reuse for next block", async () => {
     sendMessageMock.mockResolvedValueOnce("$first").mockResolvedValueOnce("$second");
 

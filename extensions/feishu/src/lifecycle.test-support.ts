@@ -18,7 +18,7 @@ type DispatchReplyContext = Record<string, unknown> & {
   SessionKey?: string;
 };
 type DispatchReplyDispatcher = {
-  sendFinalReply: (payload: { text: string }) => unknown | Promise<unknown>;
+  sendFinalReply: (payload: { text: string }) => unknown;
 };
 type DispatchReplyFromConfigMock = Mock<
   (params: {
@@ -26,9 +26,7 @@ type DispatchReplyFromConfigMock = Mock<
     dispatcher: DispatchReplyDispatcher;
   }) => Promise<{ queuedFinal: boolean; counts: DispatchReplyCounts }>
 >;
-type WithReplyDispatcherMock = Mock<
-  (params: { run: () => unknown | Promise<unknown> }) => Promise<unknown>
->;
+type WithReplyDispatcherMock = Mock<(params: { run: () => unknown }) => Promise<unknown>>;
 type FeishuLifecycleTestMocks = {
   createEventDispatcherMock: UnknownMock;
   monitorWebSocketMock: AsyncUnknownMock;

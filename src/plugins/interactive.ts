@@ -1,23 +1,13 @@
-import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  normalizePluginInteractiveNamespace,
-  resolvePluginInteractiveMatch,
-  toPluginInteractiveRegistryKey,
-  validatePluginInteractiveNamespace,
-} from "./interactive-shared.js";
-import type { PluginInteractiveHandlerRegistration } from "./types.js";
-
-type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot?: string;
-};
-
-type InteractiveRegistrationResult = {
-  ok: boolean;
-  error?: string;
-};
+  resolvePluginInteractiveNamespaceMatch,
+  type InteractiveRegistrationResult,
+} from "./interactive-registry.js";
+import {
+  claimPluginInteractiveCallbackDedupe,
+  commitPluginInteractiveCallbackDedupe,
+  releasePluginInteractiveCallbackDedupe,
+  type RegisteredInteractiveHandler,
+} from "./interactive-state.js";
 
 type InteractiveDispatchResult =
   | { matched: false; handled: false; duplicate: false }
@@ -34,83 +24,12 @@ export type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispat
   payload: string;
 };
 
-type InteractiveState = {
-  interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
-  callbackDedupe: ReturnType<typeof createDedupeCache>;
-};
-
-const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState");
-
-const getState = () =>
-  resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
-    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
-    callbackDedupe: resolveGlobalDedupeCache(
-      Symbol.for("openclaw.pluginInteractiveCallbackDedupe"),
-      {
-        ttlMs: 5 * 60_000,
-        maxSize: 4096,
-      },
-    ),
-  }));
-
-const getInteractiveHandlers = () => getState().interactiveHandlers;
-const getCallbackDedupe = () => getState().callbackDedupe;
-
-function resolveNamespaceMatch(
-  channel: string,
-  data: string,
-): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
-  return resolvePluginInteractiveMatch({
-    interactiveHandlers: getInteractiveHandlers(),
-    channel,
-    data,
-  });
-}
-
-export function registerPluginInteractiveHandler(
-  pluginId: string,
-  registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
-): InteractiveRegistrationResult {
-  const interactiveHandlers = getInteractiveHandlers();
-  const namespace = normalizePluginInteractiveNamespace(registration.namespace);
-  const validationError = validatePluginInteractiveNamespace(namespace);
-  if (validationError) {
-    return { ok: false, error: validationError };
-  }
-  const key = toPluginInteractiveRegistryKey(registration.channel, namespace);
-  const existing = interactiveHandlers.get(key);
-  if (existing) {
-    return {
-      ok: false,
-      error: `Interactive handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
-    };
-  }
-  interactiveHandlers.set(key, {
-    ...registration,
-    namespace,
-    pluginId,
-    pluginName: opts?.pluginName,
-    pluginRoot: opts?.pluginRoot,
-  });
-  return { ok: true };
-}
-
-export function clearPluginInteractiveHandlers(): void {
-  const interactiveHandlers = getInteractiveHandlers();
-  const callbackDedupe = getCallbackDedupe();
-  interactiveHandlers.clear();
-  callbackDedupe.clear();
-}
-
-export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
-  const interactiveHandlers = getInteractiveHandlers();
-  for (const [key, value] of interactiveHandlers.entries()) {
-    if (value.pluginId === pluginId) {
-      interactiveHandlers.delete(key);
-    }
-  }
-}
+export {
+  clearPluginInteractiveHandlers,
+  clearPluginInteractiveHandlersForPlugin,
+  registerPluginInteractiveHandler,
+} from "./interactive-registry.js";
+export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
 export async function dispatchPluginInteractiveHandler<
   TRegistration extends PluginInteractiveDispatchRegistration,
@@ -123,27 +42,32 @@ export async function dispatchPluginInteractiveHandler<
     match: PluginInteractiveMatch<TRegistration>,
   ) => Promise<{ handled?: boolean } | void> | { handled?: boolean } | void;
 }): Promise<InteractiveDispatchResult> {
-  const callbackDedupe = getCallbackDedupe();
-  const match = resolveNamespaceMatch(params.channel, params.data);
+  const match = resolvePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
 
   const dedupeKey = params.dedupeId?.trim();
-  if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
+  if (dedupeKey && !claimPluginInteractiveCallbackDedupe(dedupeKey)) {
     return { matched: true, handled: true, duplicate: true };
   }
 
-  await params.onMatched?.();
+  try {
+    await params.onMatched?.();
+    const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    if (dedupeKey) {
+      commitPluginInteractiveCallbackDedupe(dedupeKey);
+    }
 
-  const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
-  if (dedupeKey) {
-    callbackDedupe.check(dedupeKey);
+    return {
+      matched: true,
+      handled: resolved?.handled ?? true,
+      duplicate: false,
+    };
+  } catch (error) {
+    if (dedupeKey) {
+      releasePluginInteractiveCallbackDedupe(dedupeKey);
+    }
+    throw error;
   }
-
-  return {
-    matched: true,
-    handled: resolved?.handled ?? true,
-    duplicate: false,
-  };
 }

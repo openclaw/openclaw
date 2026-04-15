@@ -1,30 +1,19 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import type { GatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
+import {
+  resolveOpenClawPluginToolInputs,
+  type OpenClawPluginToolOptions,
+} from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-type ResolveOpenClawPluginToolsOptions = {
-  config?: OpenClawConfig;
+type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   pluginToolAllowlist?: string[];
-  agentChannel?: GatewayMessageChannel;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
-  allowGatewaySubagentBinding?: boolean;
-  sandboxed?: boolean;
-  agentSessionKey?: string;
-  sessionId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  workspaceDir?: string;
-  agentDir?: string;
   sandboxRoot?: string;
   modelHasVision?: boolean;
   modelProvider?: string;

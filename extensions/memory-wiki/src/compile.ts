@@ -4,6 +4,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -288,6 +289,7 @@ function formatFreshnessLabel(freshness: WikiFreshness): string {
     case "unknown":
       return freshness.reason;
   }
+  throw new Error("Unsupported wiki freshness level");
 }
 
 function formatClaimIdentity(claim: WikiClaimHealth): string {
@@ -342,13 +344,14 @@ function formatClaimContradictionClusterLine(
 }
 
 function normalizeComparableTarget(value: string): string {
-  return value
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/\.md$/i, "")
-    .replace(/^\.\/+/, "")
-    .replace(/\/+$/, "")
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(
+    value
+      .trim()
+      .replace(/\\/g, "/")
+      .replace(/\.md$/i, "")
+      .replace(/^\.\/+/, "")
+      .replace(/\/+$/, ""),
+  );
 }
 
 function uniquePages(pages: WikiPageSummary[]): WikiPageSummary[] {
@@ -669,7 +672,7 @@ function buildRootIndexBody(params: {
       renderSectionList({
         config: params.config,
         pages: params.pages.filter((page) => page.kind === group.kind),
-        emptyText: `No ${group.heading.toLowerCase()} yet.`,
+        emptyText: `No ${normalizeLowercaseStringOrEmpty(group.heading)} yet.`,
       }),
     );
   }
@@ -685,7 +688,7 @@ function buildDirectoryIndexBody(params: {
   return renderSectionList({
     config: params.config,
     pages: params.pages.filter((page) => page.kind === params.group.kind),
-    emptyText: `No ${params.group.heading.toLowerCase()} yet.`,
+    emptyText: `No ${normalizeLowercaseStringOrEmpty(params.group.heading)} yet.`,
   });
 }
 
@@ -759,6 +762,7 @@ function rankFreshnessLevel(level: WikiFreshnessLevel): number {
     case "unknown":
       return 0;
   }
+  throw new Error("Unsupported wiki freshness level");
 }
 
 function sortClaims(page: WikiPageSummary): WikiClaim[] {

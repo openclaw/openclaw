@@ -4,20 +4,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface-runtime.js";
 import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
-} from "../plugins/sdk-alias.js";
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+  type PluginJitiLoaderFactory,
+} from "../plugins/jiti-loader-cache.js";
+import {
+  resolveBundledPluginSourcePublicSurfacePath,
+  resolveBundledPluginPublicSurfacePath,
+} from "../plugins/public-surface-runtime.js";
+import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
-type JitiLoader = ReturnType<(typeof import("jiti"))["createJiti"]>;
 
 const nodeRequire = createRequire(import.meta.url);
-const jitiLoaders = new Map<string, JitiLoader>();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
 const cachedFacadeModuleLocationsByKey = new Map<
@@ -27,9 +28,7 @@ const cachedFacadeModuleLocationsByKey = new Map<
     boundaryRoot: string;
   } | null
 >();
-let facadeLoaderJitiFactory:
-  | ((...args: Parameters<(typeof import("jiti"))["createJiti"]>) => JitiLoader)
-  | undefined;
+let facadeLoaderJitiFactory: PluginJitiLoaderFactory | undefined;
 let cachedOpenClawPackageRoot: string | undefined;
 
 function getJitiFactory() {
@@ -58,23 +57,6 @@ function createFacadeResolutionKey(params: { dirName: string; artifactBasename: 
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
 }
 
-function resolveSourceFirstPublicSurfacePath(params: {
-  bundledPluginsDir?: string;
-  dirName: string;
-  artifactBasename: string;
-}): string | null {
-  const sourceBaseName = params.artifactBasename.replace(/\.js$/u, "");
-  const sourceRoot =
-    params.bundledPluginsDir ?? path.resolve(getOpenClawPackageRoot(), "extensions");
-  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-    const candidate = path.resolve(sourceRoot, params.dirName, `${sourceBaseName}${ext}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 function resolveFacadeModuleLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
@@ -83,11 +65,10 @@ function resolveFacadeModuleLocationUncached(params: {
   const preferSource = !CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`);
   if (preferSource) {
     const modulePath =
-      resolveSourceFirstPublicSurfacePath({
+      resolveBundledPluginSourcePublicSurfacePath({
         ...params,
-        ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+        sourceRoot: bundledPluginsDir ?? path.resolve(getOpenClawPackageRoot(), "extensions"),
       }) ??
-      resolveSourceFirstPublicSurfacePath(params) ??
       resolveBundledPluginPublicSurfacePath({
         rootDir: getOpenClawPackageRoot(),
         ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
@@ -137,23 +118,14 @@ function resolveFacadeModuleLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  return getCachedPluginJitiLoader({
+    cache: jitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    preferBuiltDist: true,
+    jitiFilename: import.meta.url,
+    createLoader: getJitiFactory(),
   });
-  const cached = jitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const loader = getJitiFactory()(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  jitiLoaders.set(cacheKey, loader);
-  return loader;
 }
 
 function createLazyFacadeValueLoader<T>(load: () => T): () => T {
@@ -305,4 +277,10 @@ export function resetFacadeLoaderStateForTest(): void {
   cachedFacadeModuleLocationsByKey.clear();
   facadeLoaderJitiFactory = undefined;
   cachedOpenClawPackageRoot = undefined;
+}
+
+export function setFacadeLoaderJitiFactoryForTest(
+  factory: PluginJitiLoaderFactory | undefined,
+): void {
+  facadeLoaderJitiFactory = factory;
 }

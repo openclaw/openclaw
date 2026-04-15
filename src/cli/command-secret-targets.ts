@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
 import {
   discoverConfigSecretTargetsByIds,
@@ -31,6 +31,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "tools.web.search.apiKey",
   "plugins.entries.brave.config.webSearch.apiKey",
   "plugins.entries.google.config.webSearch.apiKey",
+  "plugins.entries.exa.config.webSearch.apiKey",
   "plugins.entries.xai.config.webSearch.apiKey",
   "plugins.entries.moonshot.config.webSearch.apiKey",
   "plugins.entries.perplexity.config.webSearch.apiKey",
@@ -91,10 +92,6 @@ function toTargetIdSet(values: readonly string[]): Set<string> {
   return new Set(values);
 }
 
-function normalizeScopedChannelId(value?: string | null): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function selectChannelTargetIds(channel?: string): Set<string> {
   const commandSecretTargets = getCommandSecretTargets();
   if (!channel) {
@@ -128,7 +125,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
 } {
-  const channel = normalizeScopedChannelId(params.channel);
+  const channel = normalizeOptionalString(params.channel);
   const targetIds = selectChannelTargetIds(channel);
   const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
   if (!channel || !normalizedAccountId) {

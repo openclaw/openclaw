@@ -7,6 +7,7 @@ import {
   MAX_IMAGE_BYTES,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { getDefaultSsrFPolicy } from "../urbit/context.js";
 
 const MAX_IMAGES_PER_MESSAGE = 8;
@@ -136,7 +137,7 @@ function getExtensionFromUrl(url: string): string | null {
   try {
     const pathname = new URL(url).pathname;
     const match = pathname.match(/\.([a-z0-9]+)$/i);
-    return match ? match[1].toLowerCase() : null;
+    return match ? normalizeLowercaseStringOrEmpty(match[1]) : null;
   } catch {
     return null;
   }

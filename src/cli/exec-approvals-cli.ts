@@ -15,6 +15,8 @@ import {
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -32,11 +34,16 @@ type ExecApprovalsSnapshot = {
 type ConfigSnapshotLike = {
   config?: OpenClawConfig;
 };
+type ConfigLoadResult = {
+  config: OpenClawConfig | null;
+  timedOut: boolean;
+};
 type ApprovalsTargetSource = "gateway" | "node" | "local";
 type EffectivePolicyReport = {
   scopes: ExecPolicyScopeSnapshot[];
   note?: string;
 };
+const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
   node?: string;
@@ -58,7 +65,7 @@ async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string |
   if (opts.gateway) {
     return null;
   }
-  const raw = opts.node?.trim() ?? "";
+  const raw = normalizeOptionalString(opts.node) ?? "";
   if (!raw) {
     return null;
   }
@@ -158,59 +165,73 @@ async function saveSnapshotTargeted(params: {
 
 function formatCliError(err: unknown): string {
   const msg = formatErrorMessage(err);
-  return msg.includes("\n") ? msg.split("\n")[0] : msg;
+  const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
+  const safe = sanitizeForLog(firstLine);
+  return safe.length > 300 ? `${safe.slice(0, 300)}...` : safe;
 }
 
 async function loadConfigForApprovalsTarget(params: {
   opts: ExecApprovalsCliOpts;
   source: ApprovalsTargetSource;
-}): Promise<OpenClawConfig | null> {
+}): Promise<ConfigLoadResult> {
   try {
     if (params.source === "local") {
-      return await readBestEffortConfig();
+      return { config: await readBestEffortConfig(), timedOut: false };
     }
     const snapshot = (await callGatewayFromCli(
       "config.get",
       params.opts,
       {},
     )) as ConfigSnapshotLike;
-    return snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null;
-  } catch {
-    return null;
+    return {
+      config: snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null,
+      timedOut: false,
+    };
+  } catch (err) {
+    return {
+      config: null,
+      timedOut: /^gateway timeout after \d+ms\b/i.test(formatCliError(err)),
+    };
   }
 }
 
 function buildEffectivePolicyReport(params: {
-  cfg: OpenClawConfig | null;
+  configLoad: ConfigLoadResult;
   source: ApprovalsTargetSource;
   approvals: ExecApprovalsFile;
   hostPath: string;
 }): EffectivePolicyReport {
+  const cfg = params.configLoad.config;
+  const timeoutNote = params.configLoad.timedOut
+    ? "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy."
+    : null;
   if (params.source === "node") {
-    if (!params.cfg) {
+    if (!cfg) {
       return {
         scopes: [],
-        note: "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
+        note:
+          timeoutNote ??
+          "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
       };
     }
     return {
       scopes: collectExecPolicyScopeSnapshots({
-        cfg: params.cfg,
+        cfg,
         approvals: params.approvals,
         hostPath: params.hostPath,
       }),
       note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
     };
   }
-  if (!params.cfg) {
+  if (!cfg) {
     return {
       scopes: [],
-      note: "Config unavailable.",
+      note: timeoutNote ?? "Config unavailable.",
     };
   }
   return {
     scopes: collectExecPolicyScopeSnapshots({
-      cfg: params.cfg,
+      cfg,
       approvals: params.approvals,
       hostPath: params.hostPath,
     }),
@@ -278,7 +299,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
     for (const entry of allowlist) {
-      const pattern = entry?.pattern?.trim() ?? "";
+      const pattern = normalizeOptionalString(entry?.pattern) ?? "";
       if (!pattern) {
         continue;
       }
@@ -351,12 +372,12 @@ async function saveSnapshot(
 }
 
 function resolveAgentKey(value?: string | null): string {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed ? trimmed : "*";
 }
 
 function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
-  const pattern = entry?.pattern?.trim() ?? "";
+  const pattern = normalizeOptionalString(entry?.pattern) ?? "";
   return pattern ? pattern : null;
 }
 
@@ -472,9 +493,9 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts) => {
       try {
         const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
-        const cfg = await loadConfigForApprovalsTarget({ opts, source });
+        const configLoad = await loadConfigForApprovalsTarget({ opts, source });
         const effectivePolicy = buildEffectivePolicyReport({
-          cfg,
+          configLoad,
           source,
           approvals: snapshot.file,
           hostPath: snapshot.path,
@@ -497,7 +518,7 @@ export function registerExecApprovalsCli(program: Command) {
         defaultRuntime.exit(1);
       }
     });
-  nodesCallOpts(getCmd);
+  nodesCallOpts(getCmd, { timeoutMs: APPROVALS_GET_DEFAULT_TIMEOUT_MS });
 
   const setCmd = approvals
     .command("set")

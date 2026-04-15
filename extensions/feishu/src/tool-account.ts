@@ -12,15 +12,6 @@ import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
 
-function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): string | undefined {
-  const value = (config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
-    ?.defaultAccount;
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return normalizeOptionalString(value);
-}
-
 function resolveImplicitToolAccountId(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
@@ -45,7 +36,10 @@ function resolveImplicitToolAccountId(params: {
     }
   }
 
-  const configuredDefaultAccountId = readConfiguredDefaultAccountId(params.api.config);
+  const configuredDefaultAccountId = normalizeOptionalString(
+    (params.api.config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
+      ?.defaultAccount,
+  );
   if (configuredDefaultAccountId) {
     return configuredDefaultAccountId;
   }

@@ -8,11 +8,14 @@ import {
 import {
   type AttemptContextEngine,
   assembleAttemptContextEngine,
+  buildContextEnginePromptCacheInfo,
+  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
   cleanupTempPaths,
+  createContextEngineAttemptRunner,
   createContextEngineBootstrapAndAssemble,
   expectCalledWithSessionKey,
   getHoisted,
@@ -28,6 +31,7 @@ const embeddedSessionId = "embedded-session";
 const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
+type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
@@ -108,7 +112,6 @@ async function finalizeTurn(
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:discord:channel:test-ctx-engine";
   const tempPaths: string[] = [];
-
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
@@ -116,8 +119,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   afterEach(async () => {
-    clearMemoryPluginState();
     await cleanupTempPaths(tempPaths);
+    clearMemoryPluginState();
+    vi.restoreAllMocks();
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
@@ -303,6 +307,148 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(hoisted.runContextEngineMaintenanceMock).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "bootstrap" }),
+    );
+  });
+
+  it("builds prompt-cache retention, last-call usage, and cache-touch metadata", () => {
+    expect(
+      buildContextEnginePromptCacheInfo({
+        retention: "short",
+        lastCallUsage: {
+          input: 10,
+          output: 5,
+          cacheRead: 40,
+          cacheWrite: 2,
+          total: 57,
+        },
+        lastCacheTouchAt: 123,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        retention: "short",
+        lastCallUsage: {
+          input: 10,
+          output: 5,
+          cacheRead: 40,
+          cacheWrite: 2,
+          total: 57,
+        },
+        lastCacheTouchAt: 123,
+      }),
+    );
+  });
+
+  it("omits prompt-cache metadata when no cache data is available", () => {
+    expect(buildContextEnginePromptCacheInfo({})).toBeUndefined();
+  });
+
+  it("does not reuse a prior turn's usage when the current attempt has no assistant", () => {
+    const priorAssistant = {
+      role: "assistant",
+      content: "prior turn",
+      timestamp: 2,
+      usage: {
+        input: 99,
+        output: 7,
+        cacheRead: 1234,
+        total: 1340,
+      },
+    } as unknown as AgentMessage;
+    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+      messagesSnapshot: [seedMessage, priorAssistant],
+      prePromptMessageCount: 2,
+    });
+    const promptCache = buildContextEnginePromptCacheInfo({
+      retention: "short",
+      lastCallUsage: (currentAttemptAssistant as { usage?: undefined } | undefined)?.usage,
+    });
+
+    expect(currentAttemptAssistant).toBeUndefined();
+    expect(promptCache).toEqual({ retention: "short" });
+  });
+
+  it("threads prompt-cache break observations into afterTurn", async () => {
+    const afterTurn = vi.fn(async (_params: AfterTurnPromptCacheCall) => {});
+
+    await finalizeTurn(sessionKey, createTestContextEngine({ afterTurn }), {
+      runtimeContext: {
+        promptCache: {
+          observation: {
+            broke: true,
+            previousCacheRead: 5000,
+            cacheRead: 2000,
+            changes: [{ code: "systemPrompt", detail: "system prompt digest changed" }],
+          },
+        },
+      },
+    });
+
+    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
+    const runtimeContext = afterTurnCall?.runtimeContext;
+    const observation = runtimeContext?.promptCache?.observation as
+      | { broke?: boolean; previousCacheRead?: number; cacheRead?: number; changes?: unknown[] }
+      | undefined;
+
+    expect(observation).toEqual(
+      expect.objectContaining({
+        broke: true,
+        previousCacheRead: 5000,
+        cacheRead: 2000,
+        changes: expect.arrayContaining([expect.objectContaining({ code: "systemPrompt" })]),
+      }),
+    );
+  });
+
+  it("derives deferred maintenance currentTokenCount from prompt-only usage", async () => {
+    const afterTurn = vi.fn(
+      async (_params: {
+        runtimeContext?: {
+          currentTokenCount?: number;
+          promptCache?: { lastCallUsage?: { total?: number } };
+        };
+      }) => {},
+    );
+
+    await createContextEngineAttemptRunner({
+      sessionKey,
+      tempPaths,
+      contextEngine: {
+        assemble: async ({ messages }) => ({
+          messages,
+          estimatedTokens: 1,
+        }),
+        afterTurn,
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          {
+            role: "assistant",
+            content: "done",
+            timestamp: 2,
+            usage: {
+              input: 10,
+              output: 5,
+              cacheRead: 40,
+              cacheWrite: 2,
+              total: 57,
+            },
+          } as unknown as AgentMessage,
+        ];
+      },
+    });
+
+    expect(afterTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          currentTokenCount: 52,
+          promptCache: expect.objectContaining({
+            lastCallUsage: expect.objectContaining({
+              total: 57,
+            }),
+          }),
+        }),
+      }),
     );
   });
 

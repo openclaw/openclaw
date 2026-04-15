@@ -38,11 +38,8 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
 }
 
 export function toStringOrEmpty(value: unknown) {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value).trim();
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return normalizeOptionalString(String(value)) ?? "";
   }
   return "";
 }
@@ -51,8 +48,9 @@ export function toNumber(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
+  const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+  if (normalized) {
+    const parsed = Number(normalized);
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;

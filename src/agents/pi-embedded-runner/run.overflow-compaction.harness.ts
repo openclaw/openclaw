@@ -7,6 +7,7 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { FailoverReason } from "../pi-embedded-helpers/types.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -144,7 +145,7 @@ export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn(() => false);
 export const mockedIsFailoverErrorMessage = vi.fn(() => false);
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
-  const lower = (msg ?? "").toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
   return (
     lower.includes("request_too_large") ||
     lower.includes("context window exceeded") ||
@@ -168,6 +169,14 @@ export const mockedResolveContextWindowInfo = vi.fn(() => ({
   tokens: 200000,
   source: "model",
 }));
+export const mockedFormatContextWindowWarningMessage = vi.fn(
+  (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
+    `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
+);
+export const mockedFormatContextWindowBlockMessage = vi.fn(
+  (params: { guard: { tokens: number; source: string } }) =>
+    `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
+);
 export const mockedGetApiKeyForModel = vi.fn(
   async ({ profileId }: { profileId?: string } = {}) => ({
     apiKey: "test-key",
@@ -270,7 +279,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsFailoverErrorMessage.mockReturnValue(false);
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
-    const lower = (msg ?? "").toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
     return (
       lower.includes("request_too_large") ||
       lower.includes("context window exceeded") ||
@@ -299,6 +308,16 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     tokens: 200000,
     source: "model",
   });
+  mockedFormatContextWindowWarningMessage.mockReset();
+  mockedFormatContextWindowWarningMessage.mockImplementation(
+    (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
+      `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
+  );
+  mockedFormatContextWindowBlockMessage.mockReset();
+  mockedFormatContextWindowBlockMessage.mockImplementation(
+    (params: { guard: { tokens: number; source: string } }) =>
+      `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
+  );
   mockedGetApiKeyForModel.mockReset();
   mockedGetApiKeyForModel.mockImplementation(
     async ({ profileId }: { profileId?: string } = {}) => ({
@@ -326,8 +345,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
   }));
 
-  vi.doMock("../../context-engine/index.js", () => ({
+  vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: vi.fn(async () => mockedContextEngine),
   }));
 
@@ -391,6 +412,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,
     isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
     pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
+    sanitizeUserFacingText: vi.fn((text: unknown) => (typeof text === "string" ? text : "")),
   }));
 
   vi.doMock("./run/attempt.js", () => ({
@@ -439,6 +461,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
     CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
+    formatContextWindowBlockMessage: mockedFormatContextWindowBlockMessage,
+    formatContextWindowWarningMessage: mockedFormatContextWindowWarningMessage,
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
@@ -480,7 +504,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     buildEmbeddedRunPayloads: vi.fn(() => []),
   }));
 
-  vi.doMock("./compact.js", () => ({
+  vi.doMock("./compaction-hooks.js", () => ({
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 

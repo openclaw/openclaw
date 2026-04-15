@@ -207,5 +207,47 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
         );
       });
     });
+
+    it(`preserves multi-payload text-only announce delivery for ${testCase.name} even when final assistant text exists`, async () => {
+      await withTempCronHome(async (home) => {
+        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+        const deps = createCliDeps();
+        mockAgentPayloads([{ text: "Working on it..." }, { text: "Final weather summary" }], {
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+            finalAssistantVisibleText: "Final weather summary",
+          },
+        });
+
+        const res = await runExplicitAnnounceTurn({
+          home,
+          storePath,
+          deps,
+          channel: testCase.channel,
+          to: testCase.to,
+        });
+
+        expect(res.status).toBe("ok");
+        expect(res.delivered).toBe(true);
+        expect(res.deliveryAttempted).toBe(true);
+        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+
+        const sendFn = deps[testCase.sendKey];
+        expect(sendFn).toHaveBeenCalledTimes(2);
+        expect(sendFn).toHaveBeenNthCalledWith(
+          1,
+          testCase.expectedTo,
+          "Working on it...",
+          expect.any(Object),
+        );
+        expect(sendFn).toHaveBeenNthCalledWith(
+          2,
+          testCase.expectedTo,
+          "Final weather summary",
+          expect.any(Object),
+        );
+      });
+    });
   }
 });

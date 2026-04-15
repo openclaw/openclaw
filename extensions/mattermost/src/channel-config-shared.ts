@@ -4,6 +4,7 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
@@ -25,11 +26,12 @@ export const mattermostMeta = {
 } as const;
 
 export function normalizeMattermostAllowEntry(entry: string): string {
-  return entry
-    .trim()
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(
+    entry
+      .trim()
+      .replace(/^(mattermost|user):/i, "")
+      .replace(/^@/, ""),
+  );
 }
 
 export function formatMattermostAllowEntry(entry: string): string {
@@ -39,9 +41,9 @@ export function formatMattermostAllowEntry(entry: string): string {
   }
   if (trimmed.startsWith("@")) {
     const username = trimmed.slice(1).trim();
-    return username ? `@${username.toLowerCase()}` : "";
+    return username ? `@${normalizeLowercaseStringOrEmpty(username)}` : "";
   }
-  return trimmed.replace(/^(mattermost|user):/i, "").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed.replace(/^(mattermost|user):/i, ""));
 }
 
 export const mattermostConfigAdapter = createScopedChannelConfigAdapter<ResolvedMattermostAccount>({

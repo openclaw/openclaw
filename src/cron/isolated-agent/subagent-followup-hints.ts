@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 const SUBAGENT_FOLLOWUP_HINTS = [
   "subagent spawned",
   "spawned a subagent",
@@ -25,7 +27,7 @@ const INTERIM_CRON_HINTS = [
 ] as const;
 
 function normalizeHintText(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalizeLowercaseStringOrEmpty(value).replace(/\s+/g, " ");
 }
 
 export function isLikelyInterimCronMessage(value: string): boolean {

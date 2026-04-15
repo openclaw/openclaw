@@ -4,11 +4,19 @@ import {
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
+import {
+  claimBlueBubblesInboundMessage,
+  resolveBlueBubblesInboundDedupeKey,
+} from "./inbound-dedupe.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import {
   buildMessagePlaceholder,
@@ -92,12 +100,8 @@ type PendingOutboundMessageId = {
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
 
-function trimOrUndefined(value?: string | null): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function normalizeSnippet(value: string): string {
-  return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
+  return normalizeOptionalLowercaseString(stripMarkdown(value).replace(/\s+/g, " ")) ?? "";
 }
 
 type BlueBubblesChatRecord = Record<string, unknown>;
@@ -268,12 +272,12 @@ function rememberPendingOutboundMessageId(entry: {
     accountId: entry.accountId,
     sessionKey: entry.sessionKey,
     outboundTarget: entry.outboundTarget,
-    chatGuid: trimOrUndefined(entry.chatGuid),
-    chatIdentifier: trimOrUndefined(entry.chatIdentifier),
+    chatGuid: normalizeOptionalString(entry.chatGuid),
+    chatIdentifier: normalizeOptionalString(entry.chatIdentifier),
     chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
     snippetRaw,
     snippetNorm,
-    isMediaSnippet: snippetRaw.toLowerCase().startsWith("<media:"),
+    isMediaSnippet: normalizeLowercaseStringOrEmpty(snippetRaw).startsWith("<media:"),
     createdAt: Date.now(),
   });
   return pendingOutboundMessageIdCounter;
@@ -290,14 +294,14 @@ function chatsMatch(
   left: Pick<PendingOutboundMessageId, "chatGuid" | "chatIdentifier" | "chatId">,
   right: { chatGuid?: string; chatIdentifier?: string; chatId?: number },
 ): boolean {
-  const leftGuid = trimOrUndefined(left.chatGuid);
-  const rightGuid = trimOrUndefined(right.chatGuid);
+  const leftGuid = normalizeOptionalString(left.chatGuid);
+  const rightGuid = normalizeOptionalString(right.chatGuid);
   if (leftGuid && rightGuid) {
     return leftGuid === rightGuid;
   }
 
-  const leftIdentifier = trimOrUndefined(left.chatIdentifier);
-  const rightIdentifier = trimOrUndefined(right.chatIdentifier);
+  const leftIdentifier = normalizeOptionalString(left.chatIdentifier);
+  const rightIdentifier = normalizeOptionalString(right.chatIdentifier);
   if (leftIdentifier && rightIdentifier) {
     return leftIdentifier === rightIdentifier;
   }
@@ -320,7 +324,7 @@ function consumePendingOutboundMessageId(params: {
 }): PendingOutboundMessageId | null {
   prunePendingOutboundMessageIds();
   const bodyNorm = normalizeSnippet(params.body);
-  const isMediaBody = params.body.trim().toLowerCase().startsWith("<media:");
+  const isMediaBody = normalizeLowercaseStringOrEmpty(params.body).startsWith("<media:");
 
   for (let i = 0; i < pendingOutboundMessageIds.length; i++) {
     const entry = pendingOutboundMessageIds[i];
@@ -396,7 +400,7 @@ function resolveBlueBubblesAckReaction(params: {
     normalizeBlueBubblesReactionInput(raw);
     return raw;
   } catch {
-    const key = raw.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(raw);
     if (!invalidAckReactions.has(key)) {
       invalidAckReactions.add(key);
       logVerbose(
@@ -581,11 +585,102 @@ function buildInboundHistorySnapshot(params: {
   return selected;
 }
 
+function sanitizeForLog(value: unknown, maxLen = 200): string {
+  const cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
+}
+
+/**
+ * Signal object threaded through `processMessageAfterDedupe` so the outer
+ * wrapper can distinguish "reply delivery failed silently" from "returned
+ * normally after an intentional drop" (fromMe cache, pairing flow, allowlist
+ * block, empty text, etc.).
+ *
+ * Reply delivery errors in the BlueBubbles path surface through the
+ * dispatcher's `onError` callback rather than as thrown exceptions, so a
+ * plain try/catch cannot detect them — see review thread `rwF8` on #66230.
+ */
+type InboundDedupeDeliverySignal = { deliveryFailed: boolean };
+
+/**
+ * Claim → process → finalize/release wrapper around the real inbound flow.
+ *
+ * Claim before doing any work so restart replays and in-flight concurrent
+ * redeliveries both drop cleanly. Finalize (persist the GUID) only when
+ * processing completed cleanly AND any reply dispatch reported success;
+ * release (let a later replay try again) when processing threw OR the reply
+ * pipeline reported a delivery failure via its onError callback.
+ *
+ * The dedupe key follows the same canonicalization rules as the debouncer
+ * (`monitor-debounce.ts`): balloon events (URL previews, stickers) share
+ * a logical identity with their originating text message via
+ * `associatedMessageGuid`, so balloon-first vs text-first event ordering
+ * cannot produce two distinct dedupe keys for the same logical message.
+ */
 export async function processMessage(
   message: NormalizedWebhookMessage,
   target: WebhookTarget,
 ): Promise<void> {
+  const { account, core, runtime } = target;
+
+  const dedupeKey = resolveBlueBubblesInboundDedupeKey(message);
+
+  // Drop BlueBubbles MessagePoller replays after server restart (#19176, #12053).
+  const claim = await claimBlueBubblesInboundMessage({
+    guid: dedupeKey,
+    accountId: account.accountId,
+    onDiskError: (error) =>
+      logVerbose(core, runtime, `inbound-dedupe disk error: ${sanitizeForLog(error)}`),
+  });
+  if (claim.kind === "duplicate" || claim.kind === "inflight") {
+    logVerbose(
+      core,
+      runtime,
+      `drop: ${claim.kind} inbound key=${sanitizeForLog(dedupeKey ?? "")} sender=${sanitizeForLog(message.senderId)}`,
+    );
+    return;
+  }
+
+  const signal: InboundDedupeDeliverySignal = { deliveryFailed: false };
+  try {
+    await processMessageAfterDedupe(message, target, signal);
+  } catch (error) {
+    if (claim.kind === "claimed") {
+      claim.release();
+    }
+    throw error;
+  }
+  if (claim.kind === "claimed") {
+    if (signal.deliveryFailed) {
+      logVerbose(
+        core,
+        runtime,
+        `inbound-dedupe: releasing claim for key=${sanitizeForLog(dedupeKey ?? "")} after reply delivery failure (will retry on replay)`,
+      );
+      claim.release();
+    } else {
+      try {
+        await claim.finalize();
+      } catch (finalizeError) {
+        // commit() already clears inflight state in its finally block, so
+        // no explicit release() needed here — just log the persistence error.
+        logVerbose(
+          core,
+          runtime,
+          `inbound-dedupe: finalize failed for key=${sanitizeForLog(dedupeKey ?? "")}: ${sanitizeForLog(finalizeError)}`,
+        );
+      }
+    }
+  }
+}
+
+async function processMessageAfterDedupe(
+  message: NormalizedWebhookMessage,
+  target: WebhookTarget,
+  dedupeSignal: InboundDedupeDeliverySignal,
+): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
+
   const pairing = createChannelPairingController({
     core,
     channel: "bluebubbles",
@@ -1169,7 +1264,7 @@ export async function processMessage(
         isDirect: !isGroup,
         isGroup,
         isMentionableGroup: isGroup,
-        requireMention: Boolean(requireMention),
+        requireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,
@@ -1597,6 +1692,19 @@ export async function processMessage(
         onReplyStart: typingCallbacks?.onReplyStart,
         onIdle: typingCallbacks?.onIdle,
         onError: (err, info) => {
+          // Flag the outer dedupe wrapper so it releases the claim instead
+          // of committing. Without this, a transient BlueBubbles send failure
+          // would permanently block replay-retry for 7 days and the user
+          // would never receive a reply to that message.
+          //
+          // Only the terminal `final` delivery represents the user-visible
+          // answer. The dispatcher continues past `tool` / `block` failures
+          // and may still deliver `final` successfully — releasing the
+          // dedupe claim for those would invite a replay that re-runs tool
+          // side effects and resends partially-delivered content.
+          if (info.kind === "final") {
+            dedupeSignal.deliveryFailed = true;
+          }
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
         },
       },

@@ -428,20 +428,15 @@ function buildArtifactContext(
   }
 
   const artifactContext = {
-    agentId: normalizeContextString(context.agentId),
-    sessionId: normalizeContextString(context.sessionId),
-    messageChannel: normalizeContextString(context.messageChannel),
-    agentAccountId: normalizeContextString(context.agentAccountId),
+    agentId: normalizeOptionalString(context.agentId),
+    sessionId: normalizeOptionalString(context.sessionId),
+    messageChannel: normalizeOptionalString(context.messageChannel),
+    agentAccountId: normalizeOptionalString(context.agentAccountId),
   };
 
   return Object.values(artifactContext).some((value) => value !== undefined)
     ? artifactContext
     : undefined;
-}
-
-function normalizeContextString(value: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  return normalized ? normalized : undefined;
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {

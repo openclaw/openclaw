@@ -80,7 +80,7 @@ export function collectExtensionPackageJsonCandidates<
 
   const candidates: PublishablePluginPackageCandidate<TPackageJson>[] = [];
   for (const dir of dirs) {
-    const packageDir = join("extensions", dir.name);
+    const packageDir = `extensions/${dir.name}`;
     const absolutePackageDir = join(extensionsDir, dir.name);
     const packageJsonPath = join(absolutePackageDir, "package.json");
     try {

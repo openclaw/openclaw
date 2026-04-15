@@ -2,10 +2,24 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureEnv } from "../test-utils/env.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
+
+const secretsRuntimePluginMocks = vi.hoisted(() => ({
+  resolveExternalAuthProfilesWithPluginsMock: vi.fn(() => []),
+  resolvePluginWebSearchProvidersMock: vi.fn(() => []),
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
+  resolvePluginWebSearchProviders: secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins:
+    secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock,
+}));
 
 export const OPENAI_ENV_KEY_REF = {
   source: "env",
@@ -109,6 +123,10 @@ export function expectResolvedOpenAIRuntime(agentDir: string) {
 }
 
 export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
+  secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReset();
+  secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
+  secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock.mockReset();
+  secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock.mockReturnValue([]);
   const envSnapshot = captureEnv([
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
     "OPENCLAW_DISABLE_BUNDLED_PLUGINS",

@@ -1,10 +1,13 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
   findBundledPluginMetadataById,
   type BundledPluginMetadata,
 } from "../plugins/bundled-plugin-metadata.js";
+import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -13,8 +16,49 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 
-function findBundledPluginMetadata(pluginId: string): BundledPluginMetadata {
-  const metadata = findBundledPluginMetadataById(pluginId);
+type BundledPluginPublicSurfaceMetadata = Pick<BundledPluginMetadata, "dirName">;
+
+function isSafeBundledPluginDirName(pluginId: string): boolean {
+  return /^[a-z0-9][a-z0-9._-]*$/u.test(pluginId);
+}
+
+function readPluginManifestId(pluginDir: string): string | undefined {
+  try {
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as { id?: unknown };
+    return typeof parsed.id === "string" ? parsed.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findBundledPluginMetadataFast(
+  pluginId: string,
+): BundledPluginPublicSurfaceMetadata | undefined {
+  if (!isSafeBundledPluginDirName(pluginId)) {
+    return undefined;
+  }
+  const roots = [
+    resolveBundledPluginsDir(),
+    path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions"),
+    path.resolve(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions"),
+    path.resolve(OPENCLAW_PACKAGE_ROOT, "dist", "extensions"),
+  ].filter(
+    (entry, index, values): entry is string => Boolean(entry) && values.indexOf(entry) === index,
+  );
+
+  for (const root of roots) {
+    const pluginDir = path.join(root, pluginId);
+    if (readPluginManifestId(pluginDir) === pluginId) {
+      return { dirName: pluginId };
+    }
+  }
+  return undefined;
+}
+
+function findBundledPluginMetadata(pluginId: string): BundledPluginPublicSurfaceMetadata {
+  const metadata =
+    findBundledPluginMetadataFast(pluginId) ?? findBundledPluginMetadataById(pluginId);
   if (!metadata) {
     throw new Error(`Unknown bundled plugin id: ${pluginId}`);
   }
@@ -28,7 +72,28 @@ export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
   const metadata = findBundledPluginMetadata(params.pluginId);
   return loadBundledPluginPublicSurfaceModuleSync<T>({
     dirName: metadata.dirName,
-    artifactBasename: params.artifactBasename,
+    artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
+  });
+}
+
+export function loadBundledPluginApiSync<T extends object>(pluginId: string): T {
+  return loadBundledPluginPublicSurfaceSync<T>({
+    pluginId,
+    artifactBasename: "api.js",
+  });
+}
+
+export function loadBundledPluginContractApiSync<T extends object>(pluginId: string): T {
+  return loadBundledPluginPublicSurfaceSync<T>({
+    pluginId,
+    artifactBasename: "contract-api.js",
+  });
+}
+
+export function loadBundledPluginRuntimeApiSync<T extends object>(pluginId: string): T {
+  return loadBundledPluginPublicSurfaceSync<T>({
+    pluginId,
+    artifactBasename: "runtime-api.js",
   });
 }
 
@@ -39,18 +104,46 @@ export function loadBundledPluginTestApiSync<T extends object>(pluginId: string)
   });
 }
 
+export function resolveBundledPluginPublicModulePath(params: {
+  pluginId: string;
+  artifactBasename: string;
+}): string {
+  const metadata = findBundledPluginMetadata(params.pluginId);
+  return path.resolve(
+    OPENCLAW_PACKAGE_ROOT,
+    "extensions",
+    metadata.dirName,
+    normalizeBundledPluginArtifactSubpath(params.artifactBasename),
+  );
+}
+
+function resolveVitestSourceModulePath(targetPath: string): string {
+  if (!targetPath.endsWith(".js")) {
+    return targetPath;
+  }
+  const sourcePath = `${targetPath.slice(0, -".js".length)}.ts`;
+  return pathExists(sourcePath) ? sourcePath : targetPath;
+}
+
+function pathExists(filePath: string): boolean {
+  try {
+    return Boolean(filePath) && path.isAbsolute(filePath) && fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function resolveRelativeBundledPluginPublicModuleId(params: {
   fromModuleUrl: string;
   pluginId: string;
   artifactBasename: string;
 }): string {
-  const metadata = findBundledPluginMetadata(params.pluginId);
   const fromFilePath = fileURLToPath(params.fromModuleUrl);
-  const targetPath = path.resolve(
-    OPENCLAW_PACKAGE_ROOT,
-    "extensions",
-    metadata.dirName,
-    params.artifactBasename,
+  const targetPath = resolveVitestSourceModulePath(
+    resolveBundledPluginPublicModulePath({
+      pluginId: params.pluginId,
+      artifactBasename: params.artifactBasename,
+    }),
   );
   const relativePath = path
     .relative(path.dirname(fromFilePath), targetPath)

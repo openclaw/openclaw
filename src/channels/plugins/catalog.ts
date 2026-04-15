@@ -5,11 +5,11 @@ import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "../../plugins/manifest.js";
-import type { PluginOrigin } from "../../plugins/types.js";
+import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import { resolveChannelExposure } from "./exposure.js";
-import type { ChannelMeta } from "./types.js";
+import type { ChannelMeta } from "./types.public.js";
 
 export type ChannelUiMetaEntry = {
   id: string;
@@ -243,10 +243,6 @@ function resolveInstallInfo(params: {
   };
 }
 
-function resolveCatalogPluginId(params: { pluginId?: string }): string | undefined {
-  return normalizeOptionalString(params.pluginId);
-}
-
 function buildCatalogEntryFromManifest(params: {
   pluginId?: string;
   packageName?: string;
@@ -276,9 +272,7 @@ function buildCatalogEntryFromManifest(params: {
   if (!install) {
     return null;
   }
-  const pluginId = resolveCatalogPluginId({
-    pluginId: params.pluginId,
-  });
+  const pluginId = normalizeOptionalString(params.pluginId);
   return {
     id,
     ...(pluginId ? { pluginId } : {}),

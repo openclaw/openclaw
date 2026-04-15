@@ -70,9 +70,13 @@ export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "../plugins/provider-model-helpers.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export function getModelProviderHint(modelId: string): string | null {
-  const trimmed = modelId.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(modelId);
+  if (!trimmed) {
+    return null;
+  }
   const slashIndex = trimmed.indexOf("/");
   if (slashIndex <= 0) {
     return null;
@@ -93,6 +97,7 @@ export {
 export type ProviderReplayFamily =
   | "openai-compatible"
   | "anthropic-by-model"
+  | "native-anthropic-by-model"
   | "google-gemini"
   | "passthrough-gemini"
   | "hybrid-anthropic-openai";
@@ -105,6 +110,7 @@ type ProviderReplayFamilyHooks = Pick<
 type BuildProviderReplayFamilyHooksOptions =
   | { family: "openai-compatible" }
   | { family: "anthropic-by-model" }
+  | { family: "native-anthropic-by-model" }
   | { family: "google-gemini" }
   | { family: "passthrough-gemini" }
   | {
@@ -125,6 +131,11 @@ export function buildProviderReplayFamilyHooks(
       return {
         buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
           buildAnthropicReplayPolicyForModel(modelId),
+      };
+    case "native-anthropic-by-model":
+      return {
+        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
+          buildNativeAnthropicReplayPolicyForModel(modelId),
       };
     case "google-gemini":
       return {
@@ -147,4 +158,21 @@ export function buildProviderReplayFamilyHooks(
           }),
       };
   }
+  throw new Error("Unsupported provider replay family");
 }
+
+export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "openai-compatible",
+});
+
+export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "anthropic-by-model",
+});
+
+export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "native-anthropic-by-model",
+});
+
+export const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "passthrough-gemini",
+});

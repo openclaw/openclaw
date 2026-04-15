@@ -2,23 +2,21 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
   projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import {
-  buildProbeChannelStatusSummary,
-  PAIRING_APPROVED_MESSAGE,
-} from "openclaw/plugin-sdk/channel-status";
+import { buildProbeChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { type ResolvedBlueBubblesAccount } from "./accounts.js";
+import {
+  type ResolvedBlueBubblesAccount,
+  resolveBlueBubblesEffectiveAllowPrivateNetwork,
+} from "./accounts.js";
 import { bluebubblesMessageActions } from "./actions.js";
 import {
   bluebubblesCapabilities,
@@ -40,6 +38,7 @@ import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
+import { createBlueBubblesPairingText } from "./pairing.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveBlueBubblesOutboundSessionRoute } from "./session-route.js";
@@ -229,7 +228,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
             timeoutMs,
-            allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+            allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetwork({
+              baseUrl: account.baseUrl,
+              config: account.config,
+            }),
           }),
         resolveAccountSnapshot: ({ account, runtime, probe }) => {
           const running = runtime?.running ?? false;
@@ -293,22 +295,9 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
       }),
     },
     pairing: {
-      text: {
-        idLabel: "bluebubblesSenderId",
-        message: PAIRING_APPROVED_MESSAGE,
-        normalizeAllowEntry: createPairingPrefixStripper(
-          /^bluebubbles:/i,
-          normalizeBlueBubblesHandle,
-        ),
-        notify: async ({ cfg, id, message, accountId }) => {
-          await (
-            await loadBlueBubblesChannelRuntime()
-          ).sendMessageBlueBubbles(id, message, {
-            cfg: cfg,
-            accountId,
-          });
-        },
-      },
+      text: createBlueBubblesPairingText(async (id, message, params) => {
+        await (await loadBlueBubblesChannelRuntime()).sendMessageBlueBubbles(id, message, params);
+      }),
     },
     outbound: {
       base: {

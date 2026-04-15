@@ -8,8 +8,10 @@ import {
   updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
-import { type SubagentRunOutcome } from "./subagent-announce.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { type SubagentRunOutcome } from "./subagent-announce-output.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { runOutcomesEqual } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -76,9 +78,9 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
   if (direct) {
     return direct;
   }
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   for (const [key, entry] of Object.entries(store)) {
-    if (key.toLowerCase() === normalized) {
+    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
       return entry;
     }
   }
@@ -283,7 +285,7 @@ export function reconcileOrphanedRestoredRuns(params: {
   return changed;
 }
 
-export function resolveArchiveAfterMs(cfg?: ReturnType<typeof loadConfig>) {
+export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? loadConfig();
   const minutes = config.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
   if (!Number.isFinite(minutes) || minutes < 0) {

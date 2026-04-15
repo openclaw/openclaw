@@ -17,10 +17,6 @@ const CREDENTIAL_STATUS_KEYS = [
 
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
 
-function readTrimmedString(record: Record<string, unknown>, key: string): string | undefined {
-  return normalizeOptionalString(record[key]);
-}
-
 function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
   return typeof record[key] === "boolean" ? record[key] : undefined;
 }
@@ -130,20 +126,16 @@ export function projectCredentialSnapshotFields(
   if (!record) {
     return {};
   }
+  const tokenSource = normalizeOptionalString(record.tokenSource);
+  const botTokenSource = normalizeOptionalString(record.botTokenSource);
+  const appTokenSource = normalizeOptionalString(record.appTokenSource);
+  const signingSecretSource = normalizeOptionalString(record.signingSecretSource);
 
   return {
-    ...(readTrimmedString(record, "tokenSource")
-      ? { tokenSource: readTrimmedString(record, "tokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "botTokenSource")
-      ? { botTokenSource: readTrimmedString(record, "botTokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "appTokenSource")
-      ? { appTokenSource: readTrimmedString(record, "appTokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "signingSecretSource")
-      ? { signingSecretSource: readTrimmedString(record, "signingSecretSource") }
-      : {}),
+    ...(tokenSource ? { tokenSource } : {}),
+    ...(botTokenSource ? { botTokenSource } : {}),
+    ...(appTokenSource ? { appTokenSource } : {}),
+    ...(signingSecretSource ? { signingSecretSource } : {}),
     ...(readCredentialStatus(record, "tokenStatus")
       ? { tokenStatus: readCredentialStatus(record, "tokenStatus") }
       : {}),
@@ -169,9 +161,16 @@ export function projectSafeChannelAccountSnapshotFields(
   if (!record) {
     return {};
   }
+  const name = normalizeOptionalString(record.name);
+  const healthState = normalizeOptionalString(record.healthState);
+  const mode = normalizeOptionalString(record.mode);
+  const dmPolicy = normalizeOptionalString(record.dmPolicy);
+  const baseUrl = normalizeOptionalString(record.baseUrl);
+  const cliPath = normalizeOptionalString(record.cliPath);
+  const dbPath = normalizeOptionalString(record.dbPath);
 
   return {
-    ...(readTrimmedString(record, "name") ? { name: readTrimmedString(record, "name") } : {}),
+    ...(name ? { name } : {}),
     ...(readBoolean(record, "linked") !== undefined
       ? { linked: readBoolean(record, "linked") }
       : {}),
@@ -187,27 +186,19 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readNumber(record, "lastInboundAt") !== undefined
       ? { lastInboundAt: readNumber(record, "lastInboundAt") }
       : {}),
-    ...(readTrimmedString(record, "healthState")
-      ? { healthState: readTrimmedString(record, "healthState") }
-      : {}),
-    ...(readTrimmedString(record, "mode") ? { mode: readTrimmedString(record, "mode") } : {}),
-    ...(readTrimmedString(record, "dmPolicy")
-      ? { dmPolicy: readTrimmedString(record, "dmPolicy") }
-      : {}),
+    ...(healthState ? { healthState } : {}),
+    ...(mode ? { mode } : {}),
+    ...(dmPolicy ? { dmPolicy } : {}),
     ...(readStringArray(record, "allowFrom")
       ? { allowFrom: readStringArray(record, "allowFrom") }
       : {}),
     ...projectCredentialSnapshotFields(account),
-    ...(readTrimmedString(record, "baseUrl")
-      ? { baseUrl: stripUrlUserInfo(readTrimmedString(record, "baseUrl")!) }
-      : {}),
+    ...(baseUrl ? { baseUrl: stripUrlUserInfo(baseUrl) } : {}),
     ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
       ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }
       : {}),
-    ...(readTrimmedString(record, "cliPath")
-      ? { cliPath: readTrimmedString(record, "cliPath") }
-      : {}),
-    ...(readTrimmedString(record, "dbPath") ? { dbPath: readTrimmedString(record, "dbPath") } : {}),
+    ...(cliPath ? { cliPath } : {}),
+    ...(dbPath ? { dbPath } : {}),
     ...(readNumber(record, "port") !== undefined ? { port: readNumber(record, "port") } : {}),
   };
 }

@@ -1,7 +1,10 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
@@ -14,21 +17,8 @@ function loadGroupsRuntime() {
   return groupsRuntimePromise;
 }
 
-function resolveGroupId(raw: string | undefined | null): string | undefined {
-  const trimmed = (raw ?? "").trim();
-  return extractExplicitGroupId(trimmed) ?? (trimmed || undefined);
-}
-
-function resolveLooseChannelId(raw?: string | null): string | null {
-  const normalized = normalizeOptionalString(raw)?.toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  return normalized;
-}
-
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {
-  const normalized = resolveLooseChannelId(raw);
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return null;
   }
@@ -58,7 +48,9 @@ export async function resolveGroupRequireMention(params: {
   if (!channel) {
     return true;
   }
-  const groupId = groupResolution?.id ?? resolveGroupId(ctx.From);
+  const rawGroupId = (ctx.From ?? "").trim();
+  const groupId =
+    groupResolution?.id ?? extractExplicitGroupId(rawGroupId) ?? (rawGroupId || undefined);
   const groupChannel =
     normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject);
   const groupSpace = normalizeOptionalString(ctx.GroupSpace);
@@ -91,12 +83,20 @@ export function defaultGroupActivation(requireMention: boolean): "always" | "men
 }
 
 function resolveProviderLabel(rawProvider: string | undefined): string {
-  const providerKey = normalizeOptionalString(rawProvider)?.toLowerCase() ?? "";
+  const providerKey = normalizeOptionalLowercaseString(rawProvider) ?? "";
   if (!providerKey) {
     return "chat";
   }
   if (isInternalMessageChannel(providerKey)) {
     return "WebChat";
+  }
+  const labels: Record<string, string> = {
+    imessage: "iMessage",
+    whatsapp: "WhatsApp",
+  };
+  const label = labels[providerKey];
+  if (label) {
+    return label;
   }
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }

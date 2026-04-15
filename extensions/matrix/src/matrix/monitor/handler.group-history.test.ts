@@ -68,6 +68,46 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function createFinalDeliveryFailureHandler(finalizeInboundContext: (ctx: unknown) => unknown) {
+  let capturedOnError:
+    | ((err: unknown, info: { kind: "tool" | "block" | "final" }) => void)
+    | undefined;
+
+  return createMatrixHandlerTestHarness({
+    historyLimit: 20,
+    groupPolicy: "open",
+    isDirectMessage: false,
+    finalizeInboundContext,
+    dispatchReplyFromConfig: async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }),
+    createReplyDispatcherWithTyping: (params?: {
+      onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+    }) => {
+      capturedOnError = params?.onError;
+      return {
+        dispatcher: {},
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      };
+    },
+    withReplyDispatcher: async <T>(params: {
+      dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
+      run: () => Promise<T>;
+      onSettled?: () => void | Promise<void>;
+    }) => {
+      const result = await params.run();
+      capturedOnError?.(new Error("simulated delivery failure"), { kind: "final" });
+      params.dispatcher.markComplete?.();
+      await params.dispatcher.waitForIdle?.();
+      await params.onSettled?.();
+      return result;
+    },
+  });
+}
+
 describe("matrix group chat history — scenario 1: basic accumulation", () => {
   it("pending messages appear in InboundHistory; trigger itself does not", async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
@@ -447,45 +487,8 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
   });
 
   it("watermark does not advance when final reply delivery fails (retry sees same history)", async () => {
-    // Capture the onError callback so we can fire a simulated final delivery failure
-    let capturedOnError:
-      | ((err: unknown, info: { kind: "tool" | "block" | "final" }) => void)
-      | undefined;
-
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
-      createReplyDispatcherWithTyping: (params?: {
-        onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
-      }) => {
-        capturedOnError = params?.onError;
-        return {
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: () => {},
-          markRunComplete: () => {},
-        };
-      },
-      withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-        run: () => Promise<T>;
-        onSettled?: () => void | Promise<void>;
-      }) => {
-        const result = await params.run();
-        capturedOnError?.(new Error("simulated delivery failure"), { kind: "final" });
-        params.dispatcher.markComplete?.();
-        await params.dispatcher.waitForIdle?.();
-        await params.onSettled?.();
-        return result;
-      },
-    });
+    const { handler } = createFinalDeliveryFailureHandler(finalizeInboundContext);
 
     await handler(
       DEFAULT_ROOM,
@@ -519,44 +522,8 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
   });
 
   it("retrying the same failed trigger reuses the original history window", async () => {
-    let capturedOnError:
-      | ((err: unknown, info: { kind: "tool" | "block" | "final" }) => void)
-      | undefined;
-
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
-      createReplyDispatcherWithTyping: (params?: {
-        onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
-      }) => {
-        capturedOnError = params?.onError;
-        return {
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: () => {},
-          markRunComplete: () => {},
-        };
-      },
-      withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-        run: () => Promise<T>;
-        onSettled?: () => void | Promise<void>;
-      }) => {
-        const result = await params.run();
-        capturedOnError?.(new Error("simulated delivery failure"), { kind: "final" });
-        params.dispatcher.markComplete?.();
-        await params.dispatcher.waitForIdle?.();
-        await params.onSettled?.();
-        return result;
-      },
-    });
+    const { handler } = createFinalDeliveryFailureHandler(finalizeInboundContext);
 
     await handler(
       DEFAULT_ROOM,

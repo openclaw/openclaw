@@ -103,7 +103,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
         const resolved = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
         const hasConfiguredValue = Boolean(
           hasConfiguredSecretInput(resolved.config.clientSecret) ||
-          resolved.config.clientSecretFile?.trim() ||
+          normalizeOptionalString(resolved.config.clientSecretFile) ||
           resolved.clientSecret,
         );
         return {
@@ -136,7 +136,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
         const resolved = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
         const hasConfiguredValue = Boolean(
           hasConfiguredSecretInput(resolved.config.clientSecret) ||
-          resolved.config.clientSecretFile?.trim() ||
+          normalizeOptionalString(resolved.config.clientSecretFile) ||
           resolved.clientSecret,
         );
         return {

@@ -1,5 +1,8 @@
 import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeAtHashSlug } from "../../shared/string-normalization.js";
 
 export type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";
@@ -40,7 +43,7 @@ export function parseExplicitElevatedAllowEntry(
   if (separatorIndex <= 0) {
     return null;
   }
-  const fieldRaw = entry.slice(0, separatorIndex).trim().toLowerCase();
+  const fieldRaw = normalizeLowercaseStringOrEmpty(entry.slice(0, separatorIndex));
   if (!EXPLICIT_ELEVATED_ALLOW_FIELDS.has(fieldRaw as ExplicitElevatedAllowField)) {
     return null;
   }
@@ -54,13 +57,6 @@ export function parseExplicitElevatedAllowEntry(
   };
 }
 
-function normalizeAllowToken(value?: string): string {
-  if (!value) {
-    return "";
-  }
-  return value.trim().toLowerCase();
-}
-
 function slugAllowToken(value?: string): string {
   return normalizeAtHashSlug(value);
 }
@@ -70,7 +66,7 @@ function addTokenVariants(tokens: Set<string>, value: string): void {
     return;
   }
   tokens.add(value);
-  const normalized = normalizeAllowToken(value);
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized) {
     tokens.add(normalized);
   }

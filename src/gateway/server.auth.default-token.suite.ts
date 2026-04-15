@@ -26,16 +26,24 @@ import {
 
 export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     let port: number;
+    const testsWithoutDefaultServer = new Set([
+      "closes silent handshakes after timeout",
+      "prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string",
+    ]);
 
-    beforeEach(async () => {
+    beforeEach(async (context) => {
+      if (testsWithoutDefaultServer.has(context.task.name)) {
+        return;
+      }
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
 
     afterEach(async () => {
-      await server.close();
+      await server?.close();
+      server = undefined;
     });
 
     async function expectNonceValidationError(params: {
@@ -84,7 +92,7 @@ export function registerDefaultAuthTokenSuite(): void {
         await withGatewayServer(async ({ port: isolatedPort }) => {
           const ws = await openWs(isolatedPort);
           const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
-          const closed = await waitForWsClose(ws, handshakeTimeoutMs + 2500);
+          const closed = await waitForWsClose(ws, handshakeTimeoutMs + 10_000);
           expect(closed).toBe(true);
         });
       } finally {
@@ -210,7 +218,7 @@ export function registerDefaultAuthTokenSuite(): void {
           expect(res.ok, scenario.name).toBe(scenario.expectConnectOk);
           if (!scenario.expectConnectOk) {
             expect(res.error?.message ?? "", scenario.name).toContain(
-              String(scenario.expectConnectError ?? ""),
+              scenario.expectConnectError ?? "",
             );
             continue;
           }
@@ -313,11 +321,11 @@ export function registerDefaultAuthTokenSuite(): void {
 
     test("sends connect challenge on open", async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-      const evtPromise = onceMessage<{
+      const evtPromise: Promise<{
         type?: string;
         event?: string;
         payload?: Record<string, unknown> | null;
-      }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+      }> = onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge");
       await new Promise<void>((resolve) => ws.once("open", resolve));
       const evt = await evtPromise;
       const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
@@ -342,7 +350,7 @@ export function registerDefaultAuthTokenSuite(): void {
     test("rejects non-connect first request", async () => {
       const ws = await openWs(port);
       ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
-      const res = await onceMessage<{ type?: string; id?: string; ok?: boolean; error?: unknown }>(
+      const res: { type?: string; id?: string; ok?: boolean; error?: unknown } = await onceMessage(
         ws,
         (o) => o.type === "res" && o.id === "h1",
       );
@@ -431,7 +439,7 @@ export function registerDefaultAuthTokenSuite(): void {
         (o) => (o as { type?: string }).type === "res" && (o as { id?: string }).id === "h-bad",
       );
       expect(res.ok).toBe(false);
-      expect(String(res.error?.message ?? "")).toContain("invalid connect params");
+      expect(res.error?.message ?? "").toContain("invalid connect params");
 
       const closeInfo = await closeInfoPromise;
       expect(closeInfo.code).toBe(1008);

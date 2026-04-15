@@ -5,6 +5,7 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -15,11 +16,7 @@ interface QQBotChannelConfig extends QQBotAccountConfig {
 }
 
 function normalizeConfiguredDefaultAccountId(raw: unknown): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim().toLowerCase();
-  return trimmed ? trimmed : null;
+  return normalizeOptionalLowercaseString(raw) ?? null;
 }
 
 function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): QQBotAccountConfig {

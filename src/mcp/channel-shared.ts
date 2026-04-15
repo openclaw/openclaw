@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString as toText } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 export type ClaudeChannelMode = "off" | "on" | "auto";
@@ -125,9 +125,7 @@ export const ClaudePermissionRequestSchema = z.object({
   }),
 });
 
-export function toText(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
+export { toText };
 
 export function resolveMessageId(entry: Record<string, unknown>): string | undefined {
   return (

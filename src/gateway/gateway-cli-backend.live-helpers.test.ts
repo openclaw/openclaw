@@ -96,8 +96,30 @@ describe("gateway cli backend live helpers", () => {
       clientDisplayName: "vitest-live",
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.TEST,
-      connectChallengeTimeoutMs: 30_000,
+      connectChallengeTimeoutMs: 45_000,
     });
     expect(gatewayClientState.lastOptions).not.toHaveProperty("requestTimeoutMs");
+  });
+
+  it("defaults the model switch probe to Claude Sonnet -> Opus", async () => {
+    const { resolveCliModelSwitchProbeTarget, shouldRunCliModelSwitchProbe } =
+      await import("./gateway-cli-backend.live-helpers.js");
+
+    delete process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE;
+
+    expect(resolveCliModelSwitchProbeTarget("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(
+      "claude-cli/claude-opus-4-6",
+    );
+    expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(true);
+    expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-opus-4-6")).toBe(false);
+    expect(shouldRunCliModelSwitchProbe("codex-cli", "codex-cli/gpt-5.4")).toBe(false);
+  });
+
+  it("lets env disable the model switch probe", async () => {
+    const { shouldRunCliModelSwitchProbe } = await import("./gateway-cli-backend.live-helpers.js");
+
+    process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE = "0";
+
+    expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(false);
   });
 });

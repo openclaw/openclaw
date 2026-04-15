@@ -1,4 +1,5 @@
 import type { ConfigUiHint } from "../config-ui-hints-types.js";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
 
 export const SENSITIVE_URL_HINT_TAG = "url-secret";
 
@@ -17,7 +18,7 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
 ]);
 
 export function isSensitiveUrlQueryParamName(name: string): boolean {
-  return SENSITIVE_URL_QUERY_PARAM_NAMES.has(name.toLowerCase());
+  return SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalizeLowercaseStringOrEmpty(name));
 }
 
 export function isSensitiveUrlConfigPath(path: string): boolean {

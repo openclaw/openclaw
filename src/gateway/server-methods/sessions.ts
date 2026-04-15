@@ -33,7 +33,11 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../../shared/string-coerce.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -98,7 +102,7 @@ function requireSessionKey(key: unknown, respond: RespondFn): string | null {
         : typeof key === "bigint"
           ? String(key)
           : "";
-  const normalized = raw.trim();
+  const normalized = normalizeOptionalString(raw) ?? "";
   if (!normalized) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
     return null;
@@ -175,6 +179,7 @@ function emitSessionsChanged(
             thinkingLevel: sessionRow.thinkingLevel,
             fastMode: sessionRow.fastMode,
             verboseLevel: sessionRow.verboseLevel,
+            traceLevel: sessionRow.traceLevel,
             reasoningLevel: sessionRow.reasoningLevel,
             elevatedLevel: sessionRow.elevatedLevel,
             sendPolicy: sessionRow.sendPolicy,
@@ -630,8 +635,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const keysRaw = Array.isArray(p.keys) ? p.keys : [];
     const keys = keysRaw
-      .map((key) => String(key ?? "").trim())
-      .filter(Boolean)
+      .map((key) => normalizeOptionalString(key ?? ""))
+      .filter((key): key is string => Boolean(key))
       .slice(0, 64);
     const limit =
       typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.max(1, p.limit) : 12;
@@ -741,8 +746,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const checkpointId =
-      typeof p.checkpointId === "string" && p.checkpointId.trim() ? p.checkpointId.trim() : "";
+    const checkpointId = normalizeOptionalString(p.checkpointId) ?? "";
     if (!checkpointId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "checkpointId required"));
       return;
@@ -805,7 +809,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
-    const loweredRequestedKey = requestedKey?.toLowerCase();
+    const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
     const key = requestedKey
       ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
         ? loweredRequestedKey
@@ -824,8 +828,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         storeKey: target.canonicalKey,
         patch: {
           key: target.canonicalKey,
-          label: typeof p.label === "string" ? p.label.trim() : undefined,
-          model: typeof p.model === "string" ? p.model.trim() : undefined,
+          label: normalizeOptionalString(p.label),
+          model: normalizeOptionalString(p.model),
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
@@ -1224,8 +1228,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           payload &&
           typeof payload === "object" &&
           Array.isArray((payload as { runIds?: unknown[] }).runIds)
-            ? (payload as { runIds: unknown[] }).runIds.filter(
-                (value): value is string => typeof value === "string" && value.trim().length > 0,
+            ? (payload as { runIds: unknown[] }).runIds.filter((value): value is string =>
+                Boolean(normalizeOptionalString(value)),
               )
             : [];
         abortedRunId = runIds[0] ?? null;
@@ -1533,7 +1537,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
       const resolvedModel = resolveSessionModelRef(cfg, entry, target.agentId);
       const workspaceDir =
-        entry?.spawnedWorkspaceDir?.trim() || resolveAgentWorkspaceDir(cfg, target.agentId);
+        normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
+        resolveAgentWorkspaceDir(cfg, target.agentId);
       const result = await compactEmbeddedPiSession({
         sessionId,
         sessionKey: target.canonicalKey,
@@ -1599,7 +1604,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const raw = fs.readFileSync(filePath, "utf-8");
-    const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    const lines = raw.split(/\r?\n/).filter((l) => Boolean(normalizeOptionalString(l)));
     if (lines.length <= maxLines) {
       respond(
         true,

@@ -122,3 +122,13 @@ export type MatrixFormattedContent = MessageEventContent & {
 };
 
 export type MatrixExtraContentFields = Record<string, unknown>;
+
+/**
+ * MSC4357 live marker key.
+ * When present on event content, signals that the message is still being
+ * streamed (e.g. an LLM generating a response). Supporting clients render
+ * the message with a streaming animation until an edit without this marker
+ * arrives, indicating the stream is complete.
+ * @see https://github.com/matrix-org/matrix-spec-proposals/pull/4357
+ */
+export const MSC4357_LIVE_KEY = "org.matrix.msc4357.live" as const;

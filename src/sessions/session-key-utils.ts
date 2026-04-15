@@ -1,4 +1,8 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -24,7 +28,7 @@ export type RawSessionConversationRef = {
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = normalizeOptionalString(sessionKey)?.toLowerCase();
+  const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {
     return null;
   }
@@ -56,7 +60,7 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   if (!parsed) {
     return false;
   }
-  return parsed.rest.toLowerCase().startsWith("cron:");
+  return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("cron:") === true;
 }
 
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
@@ -64,15 +68,15 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   if (!raw) {
     return false;
   }
-  if (raw.toLowerCase().startsWith("subagent:")) {
+  if (normalizeOptionalLowercaseString(raw)?.startsWith("subagent:")) {
     return true;
   }
   const parsed = parseAgentSessionKey(raw);
-  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
+  return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("subagent:") === true;
 }
 
 export function getSubagentDepth(sessionKey: string | undefined | null): number {
-  const raw = normalizeOptionalString(sessionKey)?.toLowerCase();
+  const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {
     return 0;
   }
@@ -84,16 +88,12 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   if (!raw) {
     return false;
   }
-  const normalized = raw.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
   if (normalized.startsWith("acp:")) {
     return true;
   }
   const parsed = parseAgentSessionKey(raw);
-  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
-}
-
-function normalizeSessionConversationChannel(value: string | undefined | null): string | undefined {
-  return normalizeOptionalString(value)?.toLowerCase();
+  return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
 }
 
 export function parseThreadSessionSuffix(
@@ -104,7 +104,7 @@ export function parseThreadSessionSuffix(
     return { baseSessionKey: undefined, threadId: undefined };
   }
 
-  const lowerRaw = raw.toLowerCase();
+  const lowerRaw = normalizeLowercaseStringOrEmpty(raw);
   const threadMarker = ":thread:";
   const threadIndex = lowerRaw.lastIndexOf(threadMarker);
   const markerIndex = threadIndex;
@@ -127,14 +127,14 @@ export function parseRawSessionConversationRef(
 
   const rawParts = raw.split(":").filter(Boolean);
   const bodyStartIndex =
-    rawParts.length >= 3 && normalizeOptionalString(rawParts[0])?.toLowerCase() === "agent" ? 2 : 0;
+    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
   const parts = rawParts.slice(bodyStartIndex);
   if (parts.length < 3) {
     return null;
   }
 
-  const channel = normalizeSessionConversationChannel(parts[0]);
-  const kind = normalizeOptionalString(parts[1])?.toLowerCase();
+  const channel = normalizeOptionalLowercaseString(parts[0]);
+  const kind = normalizeOptionalLowercaseString(parts[1]);
   if (!channel || (kind !== "group" && kind !== "channel")) {
     return null;
   }

@@ -6,9 +6,12 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const triggerInternalHookMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-
-vi.mock("../../channels/plugins/binding-targets.js", () => ({
-  resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: false, skipped: true }),
+const routeReplyMock = vi.hoisted(() =>
+  vi.fn<(params: unknown) => Promise<{ ok: boolean }>>(async () => ({ ok: true })),
+);
+const resetMocks = vi.hoisted(() => ({
+  resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
+  resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
 }));
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
@@ -37,12 +40,20 @@ vi.mock("../commands-registry.js", () => ({
   shouldHandleTextCommands: () => true,
 }));
 
+vi.mock("../../channels/plugins/binding-targets.js", () => ({
+  resetConfiguredBindingTargetInPlace: resetMocks.resetConfiguredBindingTargetInPlace,
+}));
+
 vi.mock("./commands-acp/targets.js", () => ({
-  resolveBoundAcpThreadSessionKey: vi.fn(() => undefined),
+  resolveBoundAcpThreadSessionKey: resetMocks.resolveBoundAcpThreadSessionKey,
 }));
 
 vi.mock("./commands-handlers.runtime.js", () => ({
   loadCommandHandlers: () => [],
+}));
+
+vi.mock("./route-reply.runtime.js", () => ({
+  routeReply: (params: unknown) => routeReplyMock(params),
 }));
 
 function buildResetParams(
@@ -70,9 +81,9 @@ function buildResetParams(
       isAuthorizedSender: true,
       senderIsOwner: true,
       senderId: ctx.SenderId ?? "123",
-      channel: String(ctx.Surface ?? "whatsapp"),
-      channelId: String(ctx.Surface ?? "whatsapp"),
-      surface: String(ctx.Surface ?? "whatsapp"),
+      channel: ctx.Surface ?? "whatsapp",
+      channelId: ctx.Surface ?? "whatsapp",
+      surface: ctx.Surface ?? "whatsapp",
       ownerList: [],
       from: ctx.From ?? "sender",
       to: ctx.To ?? "bot",
@@ -96,6 +107,9 @@ function buildResetParams(
 describe("handleCommands reset hooks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({ ok: true });
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(undefined);
+    triggerInternalHookMock.mockResolvedValue(undefined);
   });
 
   it("triggers hooks for /new commands", async () => {
@@ -148,5 +162,126 @@ describe("handleCommands reset hooks", () => {
       expect(triggerInternalHookMock, testCase.name).toHaveBeenCalledWith(testCase.expectedCall);
       triggerInternalHookMock.mockClear();
     }
+  });
+
+  it("uses gateway session reset for bound ACP sessions", async () => {
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+      "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+    );
+    const params = buildResetParams(
+      "/reset",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(resetMocks.resetConfiguredBindingTargetInPlace).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+      reason: "reset",
+      commandSource: "discord:native",
+    });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ ACP session reset in place." },
+    });
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+    expect(params.command.resetHookTriggered).toBe(true);
+  });
+
+  it("keeps tail dispatch after a bound ACP reset", async () => {
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+      "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+    );
+    const params = buildResetParams(
+      "/new who are you",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(params.ctx.Body).toBe("who are you");
+    expect(params.ctx.CommandBody).toBe("who are you");
+    expect(params.ctx.AcpDispatchTailAfterReset).toBe(true);
+  });
+
+  it("forwards non-id sender fields when reset hooks emit routed replies", async () => {
+    triggerInternalHookMock.mockImplementationOnce(async (event: { messages: string[] }) => {
+      event.messages.push("Reset hook says hi");
+    });
+    const params = buildResetParams(
+      "/new",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        SenderId: "id:whatsapp:123",
+        SenderName: "Alice",
+        SenderUsername: "alice_u",
+        SenderE164: "+15551234567",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "group:ops",
+        MessageThreadId: "thread-1",
+      },
+    );
+
+    await maybeHandleResetCommand(params);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderId: "id:whatsapp:123",
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+        threadId: "thread-1",
+      }),
+    );
+  });
+
+  it("prefers the target session entry when emitting reset hooks", async () => {
+    const params = buildResetParams("/reset", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+    } as HandleCommandsParams["sessionEntry"];
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    };
+
+    await maybeHandleResetCommand(params);
+
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          sessionEntry: expect.objectContaining({
+            sessionId: "target-session",
+          }),
+        }),
+      }),
+    );
   });
 });

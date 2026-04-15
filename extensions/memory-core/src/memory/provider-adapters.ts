@@ -1,15 +1,19 @@
 import fsSync from "node:fs";
 import {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   OPENAI_BATCH_ENDPOINT,
   buildGeminiEmbeddingRequest,
   createGeminiEmbeddingProvider,
+  createLmstudioEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
+  createOllamaEmbeddingProvider,
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
@@ -21,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatErrorMessage } from "../dreaming-shared.js";
 import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 
@@ -40,9 +45,11 @@ function sanitizeHeaders(
   headers: Record<string, string>,
   excludedHeaderNames: string[],
 ): Array<[string, string]> {
-  const excluded = new Set(excludedHeaderNames.map((name) => name.toLowerCase()));
+  const excluded = new Set(
+    excludedHeaderNames.map((name) => normalizeLowercaseStringOrEmpty(name)),
+  );
   return Object.entries(headers)
-    .filter(([key]) => !excluded.has(key.toLowerCase()))
+    .filter(([key]) => !excluded.has(normalizeLowercaseStringOrEmpty(key)))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => [key, value]);
 }
@@ -285,6 +292,56 @@ const mistralAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
+const ollamaAdapter: MemoryEmbeddingProviderAdapter = {
+  id: "ollama",
+  defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  transport: "remote",
+  create: async (options) => {
+    const { provider, client } = await createOllamaEmbeddingProvider({
+      ...options,
+      provider: "ollama",
+      fallback: "none",
+    });
+    return {
+      provider,
+      runtime: {
+        id: "ollama",
+        cacheKeyData: {
+          provider: "ollama",
+          baseUrl: client.baseUrl,
+          model: client.model,
+          headers: sanitizeHeaders(client.headers, ["authorization"]),
+        },
+      },
+    };
+  },
+};
+
+const lmstudioAdapter: MemoryEmbeddingProviderAdapter = {
+  id: "lmstudio",
+  defaultModel: DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
+  transport: "remote",
+  create: async (options) => {
+    const { provider, client } = await createLmstudioEmbeddingProvider({
+      ...options,
+      provider: "lmstudio",
+      fallback: "none",
+    });
+    return {
+      provider,
+      runtime: {
+        id: "lmstudio",
+        cacheKeyData: {
+          provider: "lmstudio",
+          baseUrl: client.baseUrl,
+          model: client.model,
+          headers: sanitizeHeaders(client.headers, ["authorization"]),
+        },
+      },
+    };
+  },
+};
+
 const localAdapter: MemoryEmbeddingProviderAdapter = {
   id: "local",
   defaultModel: DEFAULT_LOCAL_MODEL,
@@ -317,6 +374,8 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   geminiAdapter,
   voyageAdapter,
   mistralAdapter,
+  ollamaAdapter,
+  lmstudioAdapter,
 ] as const;
 
 const builtinMemoryEmbeddingProviderAdapterById = new Map(
@@ -375,8 +434,10 @@ export function listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Ar
 
 export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   canAutoSelectLocal,

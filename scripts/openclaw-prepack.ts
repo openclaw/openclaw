@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
 
 const skipPrepackPreparedEnv = "OPENCLAW_PREPACK_PREPARED";
 const requiredPreparedPathGroups = [
@@ -112,16 +113,28 @@ function run(command: string, args: string[]): void {
   process.exit(result.status ?? 1);
 }
 
-function main(): void {
+function runBuildSmoke(): void {
+  run(process.execPath, ["scripts/test-built-bundled-channel-entry-smoke.mjs"]);
+}
+
+async function writeDistInventory(): Promise<void> {
+  await writePackageDistInventory(process.cwd());
+}
+
+async function main(): Promise<void> {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   if (shouldSkipPrepack()) {
     ensurePreparedArtifacts();
+    await writeDistInventory();
+    runBuildSmoke();
     return;
   }
   run(pnpmCommand, ["build"]);
   run(pnpmCommand, ["ui:build"]);
+  await writeDistInventory();
+  runBuildSmoke();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main();
+  await main();
 }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { z } from "zod";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -69,7 +70,7 @@ function buildLegacyManifestContractMigration(params: {
     delete nextRaw.contracts;
   }
 
-  const pluginId = typeof params.raw.id === "string" ? params.raw.id.trim() : params.manifestPath;
+  const pluginId = normalizeOptionalString(params.raw.id) ?? params.manifestPath;
   return {
     manifestPath: params.manifestPath,
     pluginId,

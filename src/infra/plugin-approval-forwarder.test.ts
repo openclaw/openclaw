@@ -178,10 +178,10 @@ describe("plugin approval forwarding", () => {
       const mockPayload = { text: "custom adapter payload" };
       const adapterPlugin: Pick<
         ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "approvals"
+        "id" | "meta" | "capabilities" | "config" | "approvalCapability"
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        approvals: {
+        approvalCapability: {
           render: {
             plugin: {
               buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
@@ -234,10 +234,10 @@ describe("plugin approval forwarding", () => {
       const mockPayload = { text: "custom resolved payload" };
       const adapterPlugin: Pick<
         ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "approvals"
+        "id" | "meta" | "capabilities" | "config" | "approvalCapability"
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        approvals: {
+        approvalCapability: {
           render: {
             plugin: {
               buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),

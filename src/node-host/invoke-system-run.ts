@@ -21,6 +21,11 @@ import {
 } from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
+  extractEnvAssignmentKeysFromDispatchWrappers,
+  isShellWrapperInvocation,
+  resolveShellWrapperTransportArgv,
+} from "../infra/exec-wrapper-resolution.js";
+import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
@@ -77,6 +82,7 @@ type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 type SystemRunParsePhase = {
   argv: string[];
   shellPayload: string | null;
+  shellWrapperInvocation: boolean;
   commandText: string;
   commandPreview: string | null;
   approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
@@ -241,6 +247,7 @@ async function parseSystemRunPhase(
   }
 
   const shellPayload = command.shellPayload;
+  const shellWrapperInvocation = isShellWrapperInvocation(command.argv);
   const commandText = command.commandText;
   const approvalPlan =
     opts.params.systemRunPlan === undefined
@@ -257,6 +264,27 @@ async function parseSystemRunPhase(
   const sessionKey = normalizeOptionalString(opts.params.sessionKey) ?? "node";
   const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
+  const envAssignmentKeys = extractEnvAssignmentKeysFromDispatchWrappers(command.argv);
+  const envAssignmentOverrides =
+    envAssignmentKeys.length > 0
+      ? Object.fromEntries(envAssignmentKeys.map((key) => [key, "1"]))
+      : undefined;
+  const envAssignmentDiagnostics = inspectHostExecEnvOverrides({
+    overrides: envAssignmentOverrides,
+    blockPathOverrides: true,
+  });
+  // `extractEnvAssignmentKeysFromDispatchWrappers` only emits keys that satisfy
+  // `isEnvAssignment` and therefore portable env-key syntax by construction.
+  if (envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `SYSTEM_RUN_DENIED: command env assignment rejected (blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")})`,
+      },
+    });
+    return null;
+  }
   const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
     blockPathOverrides: true,
@@ -287,11 +315,12 @@ async function parseSystemRunPhase(
   }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
-    shellWrapper: shellPayload !== null,
+    shellWrapper: shellWrapperInvocation,
   });
   return {
     argv: command.argv,
     shellPayload,
+    shellWrapperInvocation,
     commandText,
     commandPreview: command.previewText,
     approvalPlan,
@@ -359,9 +388,11 @@ async function evaluateSystemRunPolicyPhase(
         .find((entry) => entry !== null) ?? null)
     : null;
   const isWindows = process.platform === "win32";
-  const cmdInvocation = parsed.shellPayload
-    ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
-    : opts.isCmdExeInvocation(parsed.argv);
+  // Detect Windows wrapper transport from the same shell-wrapper view used to
+  // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when
+  // dispatch carriers like `env FOO=bar ...` wrap the shell invocation.
+  const cmdDetectionArgv = resolveShellWrapperTransportArgv(parsed.argv) ?? parsed.argv;
+  const cmdInvocation = opts.isCmdExeInvocation(cmdDetectionArgv);
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries,
@@ -381,6 +412,8 @@ async function evaluateSystemRunPolicyPhase(
     approved: parsed.approved,
     isWindows,
     cmdInvocation,
+    // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
+    // Env sanitization uses broader shell-wrapper detection in parse phase.
     shellWrapperInvocation: parsed.shellPayload !== null,
   });
   analysisOk = policy.analysisOk;
@@ -407,13 +440,8 @@ async function evaluateSystemRunPolicyPhase(
     return null;
   }
 
-  // Fail closed if policy/runtime drift re-allows unapproved shell wrappers.
-  if (
-    security === "allowlist" &&
-    parsed.shellPayload &&
-    !policy.approvedByAsk &&
-    !durableApprovalSatisfied
-  ) {
+  // Fail closed if policy/runtime drift re-allows Windows shell wrappers.
+  if (policy.shellWrapperBlocked && !policy.approvedByAsk && !durableApprovalSatisfied) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: "SYSTEM_RUN_DENIED: approval required",

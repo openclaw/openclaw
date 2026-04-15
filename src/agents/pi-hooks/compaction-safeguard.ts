@@ -5,7 +5,12 @@ import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechn
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  getCompactionProvider,
+  type CompactionProvider,
+} from "../../plugins/compaction-provider.js";
 import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
@@ -23,6 +28,7 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { isTimeoutError } from "../failover-error.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
@@ -64,6 +70,100 @@ const compactionSafeguardDeps = {
   summarizeInStages,
 };
 
+/**
+ * Attempt provider-based summarization. Returns the summary string on success,
+ * or `undefined` when the caller should fall back to built-in LLM summarization.
+ * Rethrows abort/timeout errors so cancellation is always respected.
+ */
+async function tryProviderSummarize(
+  provider: CompactionProvider,
+  params: {
+    messages: unknown[];
+    signal?: AbortSignal;
+    customInstructions?: string;
+    summarizationInstructions?: {
+      identifierPolicy?: "strict" | "off" | "custom";
+      identifierInstructions?: string;
+    };
+    previousSummary?: string;
+  },
+): Promise<string | undefined> {
+  try {
+    const result = await provider.summarize(params);
+    if (typeof result === "string" && result.trim()) {
+      return result;
+    }
+    log.warn(`Compaction provider "${provider.id}" returned empty result, falling back to LLM.`);
+    return undefined;
+  } catch (err) {
+    // Abort/timeout errors must propagate — the caller requested cancellation.
+    if (isAbortError(err) || isTimeoutError(err)) {
+      throw err;
+    }
+    log.warn(
+      `Compaction provider "${provider.id}" failed, falling back to LLM: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Summarize via the built-in LLM pipeline (summarizeInStages).
+ * Only called when no compaction provider is available or the provider failed.
+ */
+async function summarizeViaLLM(params: {
+  messages: AgentMessage[];
+  model: NonNullable<Parameters<typeof summarizeInStages>[0]["model"]>;
+  apiKey: string;
+  headers?: Record<string, string>;
+  signal: AbortSignal;
+  reserveTokens: number;
+  maxChunkTokens: number;
+  contextWindow: number;
+  customInstructions?: string;
+  summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
+  previousSummary?: string;
+}): Promise<string> {
+  return compactionSafeguardDeps.summarizeInStages({
+    messages: params.messages,
+    model: params.model,
+    apiKey: params.apiKey,
+    headers: params.headers,
+    signal: params.signal,
+    reserveTokens: params.reserveTokens,
+    maxChunkTokens: params.maxChunkTokens,
+    contextWindow: params.contextWindow,
+    customInstructions: params.customInstructions,
+    summarizationInstructions: params.summarizationInstructions,
+    previousSummary: params.previousSummary,
+  });
+}
+
+/**
+ * Build the reserved suffix that follows the summary body. Both the provider
+ * and LLM paths use this so diagnostic sections survive truncation.
+ */
+function assembleSuffix(parts: {
+  splitTurnSection?: string;
+  preservedTurnsSection?: string;
+  toolFailureSection?: string;
+  fileOpsSummary?: string;
+  workspaceContext?: string;
+}): string {
+  let suffix = "";
+  suffix = appendSummarySection(suffix, parts.splitTurnSection ?? "");
+  suffix = appendSummarySection(suffix, parts.preservedTurnsSection ?? "");
+  suffix = appendSummarySection(suffix, parts.toolFailureSection ?? "");
+  suffix = appendSummarySection(suffix, parts.fileOpsSummary ?? "");
+  suffix = appendSummarySection(suffix, parts.workspaceContext ?? "");
+  // Ensure leading separator so suffix does not merge with body (e.g. when body
+  // ends without newline: "...## Exact identifiers## Tool Failures").
+  if (suffix && !/^\s/.test(suffix)) {
+    suffix = `\n\n${suffix}`;
+  }
+  return suffix;
+}
+
 type ToolFailure = {
   toolCallId: string;
   toolName: string;
@@ -87,6 +187,54 @@ type ResolvedRequestAuth =
       ok: false;
       error: string;
     };
+
+/**
+ * Resolve model credentials. Returns auth details on success or a cancel reason on failure.
+ * Extracted to keep the main handler readable when model/auth is conditional.
+ */
+async function resolveModelAuth(
+  ctx: ExtensionContext,
+  model: NonNullable<ExtensionContext["model"]>,
+): Promise<
+  { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
+> {
+  let requestAuth: ResolvedRequestAuth;
+  try {
+    const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
+    if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
+      throw new Error("model registry auth lookup unavailable");
+    }
+    requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
+  } catch (err) {
+    const error = formatErrorMessage(err);
+    log.warn(
+      `Compaction safeguard: request credentials unavailable; cancelling compaction. ${error}`,
+    );
+    return {
+      ok: false,
+      reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${error}`,
+    };
+  }
+  if (!requestAuth.ok) {
+    log.warn(
+      `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
+    );
+    return {
+      ok: false,
+      reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
+    };
+  }
+  if (!requestAuth.apiKey && !requestAuth.headers) {
+    log.warn(
+      "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
+    );
+    return {
+      ok: false,
+      reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
+    };
+  }
+  return { ok: true, apiKey: requestAuth.apiKey, headers: requestAuth.headers };
+}
 
 function clampNonNegativeInt(value: unknown, fallback: number): number {
   const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -453,11 +601,8 @@ function splitPreservedRecentTurns(params: {
   return { summarizableMessages: repairedSummarizableMessages, preservedMessages };
 }
 
-function formatPreservedTurnsSection(messages: AgentMessage[]): string {
-  if (messages.length === 0) {
-    return "";
-  }
-  const lines = messages
+function formatContextMessages(messages: AgentMessage[]): string[] {
+  return messages
     .map((message) => {
       let roleLabel: string;
       if (message.role === "assistant") {
@@ -487,10 +632,28 @@ function formatPreservedTurnsSection(messages: AgentMessage[]): string {
       return `- ${roleLabel}: ${trimmed}`;
     })
     .filter((line): line is string => Boolean(line));
+}
+
+function formatPreservedTurnsSection(messages: AgentMessage[]): string {
+  if (messages.length === 0) {
+    return "";
+  }
+  const lines = formatContextMessages(messages);
   if (lines.length === 0) {
     return "";
   }
   return `\n\n## Recent turns preserved verbatim\n${lines.join("\n")}`;
+}
+
+function formatSplitTurnContextSection(messages: AgentMessage[]): string {
+  if (messages.length === 0) {
+    return "";
+  }
+  const lines = formatContextMessages(messages);
+  if (lines.length === 0) {
+    return "";
+  }
+  return `**Turn Context (split turn):**\n\n${lines.join("\n")}`;
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
@@ -613,10 +776,89 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       identifierInstructions: runtime?.identifierInstructions,
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
+    const providerId = runtime?.provider;
+    const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+    const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
+    const { preservedMessages: providerPreservedMessages } = splitPreservedRecentTurns({
+      messages: preparation.messagesToSummarize,
+      recentTurnsPreserve,
+    });
+    const preservedTurnsSection = formatPreservedTurnsSection(providerPreservedMessages);
+    const splitTurnSection = preparation.isSplitTurn
+      ? formatSplitTurnContextSection(turnPrefixMessages)
+      : "";
+    const structuredInstructions = buildCompactionStructureInstructions(
+      customInstructions,
+      summarizationInstructions,
+    );
+
+    // -----------------------------------------------------------------------
+    // Provider path — one call with all messages, no LLM-specific prep.
+    // Falls through to the LLM path below on failure.
+    // -----------------------------------------------------------------------
+    if (providerId) {
+      const compactionProvider = getCompactionProvider(providerId);
+      if (compactionProvider) {
+        try {
+          // Give the provider ALL messages — no pruning, no chunking, no split-turn splitting.
+          // The provider handles its own context management.
+          const allMessages = [
+            ...preparation.messagesToSummarize,
+            ...(preparation.turnPrefixMessages ?? []),
+          ];
+          const providerResult = await tryProviderSummarize(compactionProvider, {
+            messages: allMessages,
+            signal,
+            customInstructions: structuredInstructions,
+            summarizationInstructions,
+            previousSummary: preparation.previousSummary,
+          });
+
+          if (providerResult !== undefined) {
+            // Provider succeeded — assemble suffix metadata and return.
+            // No quality guard: the provider is trusted.
+            const workspaceContext = await readWorkspaceContextForSummary();
+            const suffix = assembleSuffix({
+              splitTurnSection,
+              preservedTurnsSection,
+              toolFailureSection,
+              fileOpsSummary,
+              workspaceContext,
+            });
+            const summary = capCompactionSummaryPreservingSuffix(providerResult, suffix);
+            return {
+              compaction: {
+                summary,
+                firstKeptEntryId: preparation.firstKeptEntryId,
+                tokensBefore: preparation.tokensBefore,
+                details: { readFiles, modifiedFiles },
+              },
+            };
+          }
+          // Provider returned empty — fall through to LLM path.
+          log.info("Compaction provider did not produce a result; falling back to LLM path.");
+        } catch (err) {
+          // tryProviderSummarize rethrows abort/timeout — if we reach here it is
+          // an unexpected error from the assembly step. Fall through to LLM path.
+          if (isAbortError(err) || isTimeoutError(err)) {
+            throw err;
+          }
+          log.warn(
+            `Compaction provider path failed unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      } else {
+        log.warn(
+          `Compaction provider "${providerId}" is configured but not registered. Falling back to LLM.`,
+        );
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // LLM path — resolve model + auth, prune, chunk, quality guard.
+    // -----------------------------------------------------------------------
     const model = ctx.model ?? runtime?.model;
     if (!model) {
-      // Log warning once per session when both models are missing (diagnostic for future issues).
-      // Use a WeakSet to track which session managers have already logged the warning.
       if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
         missedModelWarningSessions.add(ctx.sessionManager);
         log.warn(
@@ -632,59 +874,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    let requestAuth: ResolvedRequestAuth;
-    try {
-      const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
-      if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
-        throw new Error("model registry auth lookup unavailable");
-      }
-      requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
-    } catch (err) {
-      const error = formatErrorMessage(err);
-      log.warn(
-        `Compaction safeguard: request credentials unavailable; cancelling compaction. ${error}`,
-      );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${error}`,
-      );
+    const authResult = await resolveModelAuth(ctx, model);
+    if (!authResult.ok) {
+      setCompactionSafeguardCancelReason(ctx.sessionManager, authResult.reason);
       return { cancel: true };
     }
-    if (!requestAuth.ok) {
-      log.warn(
-        `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
-      );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
-      );
-      return { cancel: true };
-    }
-    const apiKey = requestAuth.apiKey;
-    const headers = requestAuth.headers;
-    if (!apiKey && !headers) {
-      log.warn(
-        "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
-      );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
-      );
-      return { cancel: true };
-    }
+    const apiKey = authResult.apiKey ?? "";
+    const headers = authResult.headers;
 
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
-      const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
-      const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
-      const structuredInstructions = buildCompactionStructureInstructions(
-        customInstructions,
-        summarizationInstructions,
-      );
 
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
 
@@ -731,10 +934,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
-                droppedSummary = await compactionSafeguardDeps.summarizeInStages({
+                droppedSummary = await summarizeViaLLM({
                   messages: pruned.droppedMessagesList,
                   model,
-                  apiKey: apiKey ?? "",
+                  apiKey,
                   headers,
                   signal,
                   reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
@@ -803,10 +1006,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           historySummary =
             messagesToSummarize.length > 0
-              ? await compactionSafeguardDeps.summarizeInStages({
+              ? await summarizeViaLLM({
                   messages: messagesToSummarize,
                   model,
-                  apiKey: apiKey ?? "",
+                  apiKey,
                   headers,
                   signal,
                   reserveTokens,
@@ -820,10 +1023,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const prefixSummary = await compactionSafeguardDeps.summarizeInStages({
+            const prefixSummary = await summarizeViaLLM({
               messages: turnPrefixMessages,
               model,
-              apiKey: apiKey ?? "",
+              apiKey,
               headers,
               signal,
               reserveTokens,
@@ -893,29 +1096,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       // Cap the main history body first, then append split-turn context, preserved
       // turns, diagnostics, and workspace rules so they survive truncation.
-      // Truncation keeps the prefix (slice(0, budget)), so sections at the end
-      // of the body would be dropped first—split-turn, preserved turns, tool
-      // failures, and file ops must be in the suffix.
-      const reservedSuffix = appendSummarySection(
-        appendSummarySection(
-          appendSummarySection(
-            appendSummarySection("", lastSplitTurnSection),
-            preservedTurnsSection,
-          ),
-          toolFailureSection,
-        ),
-        fileOpsSummary,
-      );
       const workspaceContext = await readWorkspaceContextForSummary();
-      const fullReservedSuffix = appendSummarySection(reservedSuffix, workspaceContext);
-      // Ensure leading separator so suffix does not merge with body (e.g. when body
-      // ends without newline from buildStructuredFallbackSummary: "...## Exact identifiers## Tool Failures").
-      const normalizedSuffix =
-        fullReservedSuffix && !/^\s/.test(fullReservedSuffix)
-          ? `\n\n${fullReservedSuffix}`
-          : fullReservedSuffix;
+      const suffix = assembleSuffix({
+        splitTurnSection: lastSplitTurnSection,
+        preservedTurnsSection,
+        toolFailureSection,
+        fileOpsSummary,
+        workspaceContext,
+      });
       const bodyToCap = lastHistorySummary || summary;
-      summary = capCompactionSummaryPreservingSuffix(bodyToCap, normalizedSuffix ?? "");
+      summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffix);
 
       return {
         compaction: {
@@ -947,6 +1137,7 @@ export const __testing = {
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
+  formatSplitTurnContextSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   appendSummarySection,

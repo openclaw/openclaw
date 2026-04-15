@@ -17,7 +17,10 @@ function escapeFileBlockContent(value: string): string {
 }
 
 function sanitizeFileName(value: string | null | undefined, fallbackName: string): string {
-  const normalized = typeof value === "string" ? value.replace(/[\r\n\t]+/g, " ").trim() : "";
+  const normalized =
+    normalizeOptionalString(
+      typeof value === "string" ? value.replace(/[\r\n\t]+/g, " ") : undefined,
+    ) ?? "";
   return normalized || fallbackName;
 }
 

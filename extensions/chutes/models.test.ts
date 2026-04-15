@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-type ChutesModelsModule = typeof import("./models.js");
-
-let chutesModels: ChutesModelsModule;
+import {
+  buildChutesModelDefinition,
+  CHUTES_MODEL_CATALOG,
+  clearChutesModelCacheForTests,
+  discoverChutesModels,
+} from "./models.js";
 
 async function withLiveChutesDiscovery<T>(
   fetchMock: ReturnType<typeof vi.fn>,
@@ -44,14 +46,13 @@ function createAuthEchoFetchMock() {
 }
 
 describe("chutes-models", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    chutesModels = await import("./models.js");
+  beforeEach(() => {
+    clearChutesModelCacheForTests();
   });
 
   it("buildChutesModelDefinition returns config with required fields", () => {
-    const entry = chutesModels.CHUTES_MODEL_CATALOG[0];
-    const def = chutesModels.buildChutesModelDefinition(entry);
+    const entry = CHUTES_MODEL_CATALOG[0];
+    const def = buildChutesModelDefinition(entry);
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
     expect(def.reasoning).toBe(entry.reasoning);
@@ -63,14 +64,14 @@ describe("chutes-models", () => {
   });
 
   it("discoverChutesModels returns static catalog when accessToken is empty", async () => {
-    const models = await chutesModels.discoverChutesModels("");
-    expect(models).toHaveLength(chutesModels.CHUTES_MODEL_CATALOG.length);
-    expect(models.map((m) => m.id)).toEqual(chutesModels.CHUTES_MODEL_CATALOG.map((m) => m.id));
+    const models = await discoverChutesModels("");
+    expect(models).toHaveLength(CHUTES_MODEL_CATALOG.length);
+    expect(models.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
   });
 
   it("discoverChutesModels returns static catalog in test env by default", async () => {
-    const models = await chutesModels.discoverChutesModels("test-token");
-    expect(models).toHaveLength(chutesModels.CHUTES_MODEL_CATALOG.length);
+    const models = await discoverChutesModels("test-token");
+    expect(models).toHaveLength(CHUTES_MODEL_CATALOG.length);
     expect(models[0]?.id).toBe("Qwen/Qwen3-32B");
   });
 
@@ -93,7 +94,7 @@ describe("chutes-models", () => {
       }),
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
-      const models = await chutesModels.discoverChutesModels("test-token-real-fetch");
+      const models = await discoverChutesModels("test-token-real-fetch");
       expect(models.length).toBeGreaterThan(0);
       if (models.length === 3) {
         expect(models[0]?.id).toBe("zai-org/GLM-4.7-TEE");
@@ -146,7 +147,7 @@ describe("chutes-models", () => {
       });
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
-      const models = await chutesModels.discoverChutesModels("test-token-error");
+      const models = await discoverChutesModels("test-token-error");
       expect(models.length).toBeGreaterThan(0);
       expect(mockFetch).toHaveBeenCalled();
     });
@@ -159,10 +160,10 @@ describe("chutes-models", () => {
     });
 
     await withLiveChutesDiscovery(mockFetch, async () => {
-      const first = await chutesModels.discoverChutesModels("chutes-fallback-token");
-      const second = await chutesModels.discoverChutesModels("chutes-fallback-token");
-      expect(first.map((m) => m.id)).toEqual(chutesModels.CHUTES_MODEL_CATALOG.map((m) => m.id));
-      expect(second.map((m) => m.id)).toEqual(chutesModels.CHUTES_MODEL_CATALOG.map((m) => m.id));
+      const first = await discoverChutesModels("chutes-fallback-token");
+      const second = await discoverChutesModels("chutes-fallback-token");
+      expect(first.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
+      expect(second.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
@@ -196,9 +197,9 @@ describe("chutes-models", () => {
         });
       });
     await withLiveChutesDiscovery(mockFetch, async () => {
-      const modelsA = await chutesModels.discoverChutesModels("chutes-token-a");
-      const modelsB = await chutesModels.discoverChutesModels("chutes-token-b");
-      const modelsASecond = await chutesModels.discoverChutesModels("chutes-token-a");
+      const modelsA = await discoverChutesModels("chutes-token-a");
+      const modelsB = await discoverChutesModels("chutes-token-b");
+      const modelsASecond = await discoverChutesModels("chutes-token-a");
       expect(modelsA[0]?.id).toBe("private/model-a");
       expect(modelsB[0]?.id).toBe("private/model-b");
       expect(modelsASecond[0]?.id).toBe("private/model-a");
@@ -211,10 +212,10 @@ describe("chutes-models", () => {
 
     await withLiveChutesDiscovery(mockFetch, async () => {
       for (let i = 0; i < 150; i += 1) {
-        await chutesModels.discoverChutesModels(`cache-token-${i}`);
+        await discoverChutesModels(`cache-token-${i}`);
       }
 
-      await chutesModels.discoverChutesModels("cache-token-0");
+      await discoverChutesModels("cache-token-0");
       expect(mockFetch).toHaveBeenCalledTimes(151);
     });
   });
@@ -225,10 +226,10 @@ describe("chutes-models", () => {
     await withLiveChutesDiscovery(
       mockFetch,
       async () => {
-        await chutesModels.discoverChutesModels("token-a");
+        await discoverChutesModels("token-a");
         vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-        await chutesModels.discoverChutesModels("token-b");
-        await chutesModels.discoverChutesModels("token-a");
+        await discoverChutesModels("token-b");
+        await discoverChutesModels("token-a");
         expect(mockFetch).toHaveBeenCalledTimes(3);
       },
       { now: "2026-03-01T00:00:00.000Z" },
@@ -253,8 +254,8 @@ describe("chutes-models", () => {
         });
       });
     await withLiveChutesDiscovery(mockFetch, async () => {
-      await chutesModels.discoverChutesModels("failed-token");
-      await chutesModels.discoverChutesModels("failed-token");
+      await discoverChutesModels("failed-token");
+      await discoverChutesModels("failed-token");
       expect(mockFetch).toHaveBeenCalledTimes(4);
     });
   });

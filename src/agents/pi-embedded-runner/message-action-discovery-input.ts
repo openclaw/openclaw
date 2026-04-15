@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export function buildEmbeddedMessageActionDiscoveryInput(params: {
   cfg?: OpenClawConfig;
@@ -11,6 +11,7 @@ export function buildEmbeddedMessageActionDiscoveryInput(params: {
   sessionId?: string | null;
   agentId?: string | null;
   senderId?: string | null;
+  senderIsOwner?: boolean;
 }) {
   return {
     cfg: params.cfg,
@@ -23,5 +24,6 @@ export function buildEmbeddedMessageActionDiscoveryInput(params: {
     sessionId: params.sessionId ?? undefined,
     agentId: params.agentId ?? undefined,
     requesterSenderId: params.senderId ?? undefined,
+    senderIsOwner: params.senderIsOwner,
   };
 }

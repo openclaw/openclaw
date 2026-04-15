@@ -7,12 +7,12 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
@@ -65,13 +65,6 @@ function clearRefreshTimer(): void {
   }
   clearTimeout(refreshTimer);
   refreshTimer = null;
-}
-
-function listLikePrimary(value: ModelListLike): string | undefined {
-  if (typeof value === "string") {
-    return normalizeOptionalString(value);
-  }
-  return normalizeOptionalString(value?.primary);
 }
 
 function listLikeFallbacks(value: ModelListLike): string[] {
@@ -224,7 +217,7 @@ function addModelListLike(params: {
   refs: Map<string, ModelRef>;
 }): void {
   addResolvedModelRef({
-    raw: listLikePrimary(params.value),
+    raw: resolvePrimaryStringValue(params.value),
     aliasIndex: params.aliasIndex,
     refs: params.refs,
   });
@@ -340,7 +333,7 @@ async function fetchOpenRouterPricingCatalog(
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {
     const obj = entry as OpenRouterModelPayload;
-    const id = typeof obj.id === "string" ? obj.id.trim() : "";
+    const id = normalizeOptionalString(obj.id) ?? "";
     const pricing = parseOpenRouterPricing(obj.pricing);
     if (!id || !pricing) {
       continue;

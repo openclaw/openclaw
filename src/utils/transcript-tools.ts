@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 type ToolResultCounts = {
   total: number;
@@ -9,7 +12,7 @@ const TOOL_CALL_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
 const TOOL_RESULT_TYPES = new Set(["tool_result", "tool_result_error"]);
 
 const normalizeType = (value: unknown): string => {
-  return typeof value === "string" ? (normalizeOptionalString(value)?.toLowerCase() ?? "") : "";
+  return typeof value === "string" ? (normalizeOptionalLowercaseString(value) ?? "") : "";
 };
 
 export const extractToolCallNames = (message: Record<string, unknown>): string[] => {

@@ -14,9 +14,8 @@ import {
   resolveProviderSyntheticAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
-import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { isRecord } from "../utils.js";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
@@ -25,6 +24,10 @@ const PiAuthStorageClass = PiCodingAgent.AuthStorage;
 const PiModelRegistryClass = PiCodingAgent.ModelRegistry;
 
 export { PiAuthStorageClass as AuthStorage, PiModelRegistryClass as ModelRegistry };
+
+type ProviderRuntimeModelLike = Model<Api> & {
+  contextTokens?: number;
+};
 
 type InMemoryAuthStorageBackendLike = {
   withLock<T>(
@@ -67,7 +70,7 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
   ) {
     return value;
   }
-  const model = value as unknown as ProviderRuntimeModel;
+  const model = value as unknown as ProviderRuntimeModelLike;
   const pluginNormalized =
     normalizeProviderResolvedModelWithPlugin({
       provider: model.provider,
@@ -233,7 +236,7 @@ export function addEnvBackedPiCredentials(
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
   // live/model discovery sees the same providers runtime auth can use.
-  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates())) {
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates({ env }))) {
     if (next[provider]) {
       continue;
     }

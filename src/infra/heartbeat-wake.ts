@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isHeartbeatActionWakeReason,
   normalizeHeartbeatWakeReason,
@@ -71,7 +72,7 @@ function normalizeWakeReason(reason?: string): string {
 }
 
 function normalizeWakeTarget(value?: string): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed || undefined;
 }
 
