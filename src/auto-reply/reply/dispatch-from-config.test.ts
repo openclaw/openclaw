@@ -143,7 +143,9 @@ const ttsMocks = vi.hoisted(() => {
   };
 });
 const replyMediaPathMocks = vi.hoisted(() => ({
-  createReplyMediaPathNormalizer: vi.fn(() => async (payload: ReplyPayload) => payload),
+  createReplyMediaPathNormalizer: vi.fn(
+    (_params?: unknown) => async (payload: ReplyPayload) => payload,
+  ),
 }));
 const threadInfoMocks = vi.hoisted(() => ({
   parseSessionThreadInfo: vi.fn<

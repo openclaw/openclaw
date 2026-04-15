@@ -349,6 +349,7 @@ function loadSkillEntries(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
+    agentId?: string;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
