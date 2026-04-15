@@ -1,4 +1,4 @@
-import { loadQaLabRuntimeModule } from "openclaw/plugin-sdk/qa-lab-runtime";
+import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runtime";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 
 export type ResolvedMatrixQaModels = {
@@ -23,11 +23,11 @@ export function resolveMatrixQaModels(params: {
     };
   }
 
-  const qaLabRuntime = loadQaLabRuntimeModule();
+  const qaRuntime = loadQaRuntimeModule();
   return {
     providerMode,
-    primaryModel: primaryModel || qaLabRuntime.defaultQaRuntimeModelForMode(providerMode),
+    primaryModel: primaryModel || qaRuntime.defaultQaRuntimeModelForMode(providerMode),
     alternateModel:
-      alternateModel || qaLabRuntime.defaultQaRuntimeModelForMode(providerMode, { alternate: true }),
+      alternateModel || qaRuntime.defaultQaRuntimeModelForMode(providerMode, { alternate: true }),
   };
 }

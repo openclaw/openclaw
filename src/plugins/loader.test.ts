@@ -1679,8 +1679,6 @@ module.exports = { id: "throws-after-import", register() {} };`,
   });
 
   it("can scope bundled provider loads to deepseek without hanging", () => {
-    resetPluginLoaderTestStateForTest();
-
     const scoped = loadOpenClawPlugins({
       cache: false,
       activate: false,

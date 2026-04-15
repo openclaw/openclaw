@@ -2,25 +2,6 @@ import { listQaRunnerCliContributions } from "openclaw/plugin-sdk/qa-runner-runt
 import type { LiveTransportQaCliRegistration } from "./shared/live-transport-cli.js";
 import { telegramQaCliRegistration } from "./telegram/cli.js";
 
-function createMissingQaRunnerCliRegistration(params: {
-  commandName: string;
-  description: string;
-  npmSpec: string;
-}): LiveTransportQaCliRegistration {
-  return {
-    commandName: params.commandName,
-    register(qa) {
-      qa.command(params.commandName)
-        .description(params.description)
-        .action(() => {
-          throw new Error(
-            `QA runner "${params.commandName}" not installed. Install it with "openclaw plugins install ${params.npmSpec}".`,
-          );
-        });
-    },
-  };
-}
-
 function createBlockedQaRunnerCliRegistration(params: {
   commandName: string;
   description?: string;
@@ -46,19 +27,10 @@ function createQaRunnerCliRegistration(
   if (runner.status === "available") {
     return runner.registration;
   }
-  if (runner.status === "blocked") {
-    return createBlockedQaRunnerCliRegistration({
-      commandName: runner.commandName,
-      description: runner.description,
-      pluginId: runner.pluginId,
-    });
-  }
-  return createMissingQaRunnerCliRegistration({
+  return createBlockedQaRunnerCliRegistration({
     commandName: runner.commandName,
-    description:
-      runner.description ??
-      `Run the ${runner.commandName} live QA lane (install ${runner.npmSpec} first)`,
-    npmSpec: runner.npmSpec,
+    description: runner.description,
+    pluginId: runner.pluginId,
   });
 }
 

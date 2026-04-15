@@ -16,6 +16,11 @@ import {
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
 
+const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+] as const;
+
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
     expect(parseReleaseVersion("2026.3.10")).toMatchObject({
@@ -281,6 +286,10 @@ describe("parseNpmPackJsonOutput", () => {
 describe("collectControlUiPackErrors", () => {
   it("rejects packs that ship the dashboard HTML without the asset payload", () => {
     expect(collectControlUiPackErrors(["dist/control-ui/index.html"])).toEqual([
+      ...LEGACY_UPDATE_COMPAT_PACKED_PATHS.map(
+        (requiredPath) =>
+          `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+      ),
       ...WORKSPACE_TEMPLATE_PACK_PATHS.map(
         (requiredPath) =>
           `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
@@ -293,6 +302,7 @@ describe("collectControlUiPackErrors", () => {
     expect(
       collectControlUiPackErrors([
         "dist/control-ui/index.html",
+        ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
@@ -325,10 +335,17 @@ describe("collectForbiddenPackedPathErrors", () => {
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
-      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
-      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
     ]);
+  });
+
+  it("allows the legacy update verifier QA runtime sidecars", () => {
+    expect(
+      collectForbiddenPackedPathErrors([
+        "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-lab/runtime-api.js",
+      ]),
+    ).toEqual([]);
   });
 });
 

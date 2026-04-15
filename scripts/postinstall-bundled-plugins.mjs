@@ -17,7 +17,9 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
@@ -30,6 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -102,6 +105,195 @@ const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
+}
+
+function normalizeRelativePath(filePath) {
+  return filePath.replace(/\\/g, "/");
+}
+
+function readInstalledDistInventory(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const readFile = params.readFileSync ?? readFileSync;
+  const inventoryPath = join(packageRoot, DIST_INVENTORY_PATH);
+  if (!pathExists(inventoryPath)) {
+    throw new Error(`missing dist inventory: ${DIST_INVENTORY_PATH}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(readFile(inventoryPath, "utf8"));
+  } catch {
+    throw new Error(`invalid dist inventory: ${DIST_INVENTORY_PATH}`);
+  }
+  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
+    throw new Error(`invalid dist inventory: ${DIST_INVENTORY_PATH}`);
+  }
+  return new Set(parsed.map(normalizeRelativePath));
+}
+
+function isRecoverableInstalledDistInventoryError(error) {
+  return error instanceof Error && /^(missing|invalid) dist inventory: /u.test(error.message);
+}
+
+function resolveInstalledDistRoot(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const pathLstat = params.lstatSync ?? lstatSync;
+  const resolveRealPath = params.realpathSync ?? realpathSync;
+  const distDir = join(packageRoot, "dist");
+  if (!pathExists(distDir)) {
+    return null;
+  }
+  const distStats = pathLstat(distDir);
+  if (!distStats.isDirectory() || distStats.isSymbolicLink()) {
+    throw new Error("unsafe dist root: dist must be a real directory");
+  }
+  const packageRootReal = resolveRealPath(packageRoot);
+  const distDirReal = resolveRealPath(distDir);
+  const relativeDistPath = relative(packageRootReal, distDirReal);
+  if (relativeDistPath !== "dist") {
+    throw new Error("unsafe dist root: dist escaped package root");
+  }
+  return { distDir, distDirReal, packageRootReal };
+}
+
+function assertSafeInstalledDistPath(relativePath, params) {
+  const resolveRealPath = params.realpathSync ?? realpathSync;
+  const candidatePath = join(params.packageRoot, relativePath);
+  const candidateRealPath = resolveRealPath(candidatePath);
+  const relativeCandidatePath = relative(params.distDirReal, candidateRealPath);
+  if (relativeCandidatePath.startsWith("..") || isAbsolute(relativeCandidatePath)) {
+    throw new Error(`unsafe dist path: ${relativePath}`);
+  }
+  return candidatePath;
+}
+
+function listInstalledDistFiles(params = {}) {
+  const readDir = params.readdirSync ?? readdirSync;
+  const distRoot = resolveInstalledDistRoot(params);
+  if (distRoot === null) {
+    return [];
+  }
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pending = [distRoot.distDir];
+  const files = [];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    for (const entry of readDir(currentDir, { withFileTypes: true })) {
+      const entryPath = join(currentDir, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(
+          `unsafe dist entry: ${normalizeRelativePath(relative(packageRoot, entryPath))}`,
+        );
+      }
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const relativePath = normalizeRelativePath(relative(packageRoot, entryPath));
+      if (relativePath === DIST_INVENTORY_PATH) {
+        continue;
+      }
+      files.push(relativePath);
+    }
+  }
+  return files.toSorted((left, right) => left.localeCompare(right));
+}
+
+function pruneEmptyDistDirectories(params = {}) {
+  const readDir = params.readdirSync ?? readdirSync;
+  const removeDirectory = params.rmdirSync ?? rmdirSync;
+  const distRoot = resolveInstalledDistRoot(params);
+  if (distRoot === null) {
+    return;
+  }
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathLstat = params.lstatSync ?? lstatSync;
+
+  function prune(currentDir) {
+    for (const entry of readDir(currentDir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) {
+        throw new Error(
+          `unsafe dist entry: ${normalizeRelativePath(relative(packageRoot, join(currentDir, entry.name)))}`,
+        );
+      }
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      prune(join(currentDir, entry.name));
+    }
+    if (currentDir === distRoot.distDir) {
+      return;
+    }
+    const currentStats = pathLstat(currentDir);
+    if (!currentStats.isDirectory() || currentStats.isSymbolicLink()) {
+      throw new Error(
+        `unsafe dist directory: ${normalizeRelativePath(relative(packageRoot, currentDir))}`,
+      );
+    }
+    if (readDir(currentDir).length === 0) {
+      removeDirectory(
+        assertSafeInstalledDistPath(normalizeRelativePath(relative(packageRoot, currentDir)), {
+          packageRoot,
+          distDirReal: distRoot.distDirReal,
+          realpathSync: params.realpathSync,
+        }),
+      );
+    }
+  }
+
+  prune(distRoot.distDir);
+}
+
+export function pruneInstalledPackageDist(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const removeFile = params.unlinkSync ?? unlinkSync;
+  const log = params.log ?? console;
+  const distRoot = resolveInstalledDistRoot(params);
+  if (distRoot === null) {
+    return [];
+  }
+  let expectedFiles = params.expectedFiles ?? null;
+  if (expectedFiles === null) {
+    try {
+      expectedFiles = readInstalledDistInventory(params);
+    } catch (error) {
+      if (!isRecoverableInstalledDistInventoryError(error)) {
+        throw error;
+      }
+      log.warn?.(`[postinstall] skipping dist prune: ${error.message}`);
+      return [];
+    }
+  }
+  const installedFiles = listInstalledDistFiles(params);
+  const removed = [];
+
+  for (const relativePath of installedFiles) {
+    if (expectedFiles.has(relativePath)) {
+      continue;
+    }
+    removeFile(
+      assertSafeInstalledDistPath(relativePath, {
+        packageRoot,
+        distDirReal: distRoot.distDirReal,
+        realpathSync: params.realpathSync,
+      }),
+    );
+    removed.push(relativePath);
+  }
+
+  pruneEmptyDistDirectories(params);
+
+  if (removed.length > 0) {
+    log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
+  }
+  return removed;
 }
 
 function dependencySentinelPath(depName) {
@@ -458,6 +650,14 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
+  pruneInstalledPackageDist({
+    packageRoot,
+    existsSync: pathExists,
+    readFileSync: params.readFileSync,
+    readdirSync: params.readdirSync,
+    rmSync: params.rmSync,
+    log,
+  });
   if (
     !shouldRunBundledPluginPostinstall({
       env,
