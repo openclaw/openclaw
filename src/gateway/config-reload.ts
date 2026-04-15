@@ -35,20 +35,18 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
  */
 const SKILLS_INVALIDATION_PREFIXES = ["skills"] as const;
 
-export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): boolean {
-  return changedPaths.some((path) =>
-    SKILLS_INVALIDATION_PREFIXES.some(
-      (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-    ),
+function matchesSkillsInvalidationPrefix(path: string): boolean {
+  return SKILLS_INVALIDATION_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
   );
 }
 
 function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
-  return changedPaths.find((path) =>
-    SKILLS_INVALIDATION_PREFIXES.some(
-      (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-    ),
-  );
+  return changedPaths.find(matchesSkillsInvalidationPrefix);
+}
+
+export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): boolean {
+  return firstSkillsChangedPath(changedPaths) !== undefined;
 }
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
@@ -194,12 +192,10 @@ export function startGatewayConfigReloader(opts: {
     // the user touches skills.* config. Without this, sessions keep advertising
     // tools that no longer exist in the allowlist, which causes infinite
     // tool-not-found loops against the model.
-    if (shouldInvalidateSkillsSnapshotForPaths(changedPaths)) {
-      const changedPath = firstSkillsChangedPath(changedPaths);
-      bumpSkillsSnapshotVersion({ reason: "config-change", changedPath });
-      opts.log.info(
-        `skills snapshot invalidated by config change (${changedPath ?? "skills.*"})`,
-      );
+    const skillsChangedPath = firstSkillsChangedPath(changedPaths);
+    if (skillsChangedPath !== undefined) {
+      bumpSkillsSnapshotVersion({ reason: "config-change", changedPath: skillsChangedPath });
+      opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
     }
 
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
