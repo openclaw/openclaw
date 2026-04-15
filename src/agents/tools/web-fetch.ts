@@ -24,6 +24,7 @@ import {
   type ExtractMode,
 } from "./web-fetch-utils.js";
 import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
+import { fetchTweetViaFxTwitter, isTwitterStatusUrl } from "./web-fetch-twitter.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -380,6 +381,19 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
+  }
+
+  // Twitter/X returns login walls to non-browser clients.  Intercept tweet
+  // URLs and fetch via the public FxTwitter JSON API instead.
+  if (isTwitterStatusUrl(parsedUrl)) {
+    const tweetText = await fetchTweetViaFxTwitter(params.url, (params.timeoutSeconds ?? 10) * 1000);
+    if (tweetText) {
+      const truncated = truncateText(tweetText, params.maxChars);
+      const result = { url: params.url, text: wrapWebContent(truncated.text, "web_fetch"), tookMs: 0 };
+      writeCache(FETCH_CACHE, cacheKey, result, params.cacheTtlMs);
+      return result;
+    }
+    // Fall through to normal fetch if FxTwitter fails.
   }
 
   const start = Date.now();
