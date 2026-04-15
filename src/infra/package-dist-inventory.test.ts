@@ -45,10 +45,19 @@ describe("package dist inventory", () => {
         "runtime-api.js",
       );
       const omittedQaChunk = path.join(packageRoot, "dist", "extensions", "qa-channel", "cli.js");
+      const omittedQaMatrixChunk = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "qa-matrix",
+        "index.js",
+      );
       const omittedMap = path.join(packageRoot, "dist", "feature.runtime.js.map");
       await fs.mkdir(path.dirname(packagedQaRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(omittedQaMatrixChunk), { recursive: true });
       await fs.writeFile(packagedQaRuntime, "export {};\n", "utf8");
       await fs.writeFile(omittedQaChunk, "export {};\n", "utf8");
+      await fs.writeFile(omittedQaMatrixChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedMap, "{}", "utf8");
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([

@@ -11,6 +11,6 @@ export const NPM_UPDATE_COMPAT_SIDECARS = [
   },
 ] as const;
 
-export const NPM_UPDATE_COMPAT_SIDECAR_PATHS = new Set(
+export const NPM_UPDATE_COMPAT_SIDECAR_PATHS = new Set<string>(
   NPM_UPDATE_COMPAT_SIDECARS.map((entry) => entry.path),
 );
