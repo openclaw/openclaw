@@ -13,9 +13,9 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -2089,19 +2089,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) {
           return;
         }
-        const mediaAccess = resolveAgentScopedOutboundMediaAccess({
-          cfg,
-          agentId,
-          sessionKey,
-          messageProvider: originatingChannel,
-          accountId,
-          requesterSenderId: clientInfo?.id,
-          requesterSenderName: clientInfo?.displayName,
-          requesterSenderUsername: clientInfo?.displayName,
-          mediaSources: resolveSendableOutboundReplyParts(payload).mediaUrls,
-        });
         const audioMessage = await buildWebchatAudioOnlyAssistantMessage([payload], {
-          localRoots: mediaAccess.localRoots,
+          localRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
