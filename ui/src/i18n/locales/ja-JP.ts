@@ -397,9 +397,6 @@ export const ja_JP: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "トークンの使用先、セッションが急増するタイミング、コストの要因を確認できます。",
-    },
     common: {
       emptyValue: "—",
       unknown: "不明",

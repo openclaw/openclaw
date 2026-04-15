@@ -389,9 +389,6 @@ export const zh_TW: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "查看 token 流向、工作階段何時飆升，以及成本由何而來。",
-    },
     common: {
       emptyValue: "—",
       unknown: "未知",

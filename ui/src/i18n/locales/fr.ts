@@ -398,10 +398,6 @@ export const fr: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Voyez où vont les jetons, quand les sessions augmentent et ce qui génère les coûts.",
-    },
     common: {
       emptyValue: "—",
       unknown: "inconnu",

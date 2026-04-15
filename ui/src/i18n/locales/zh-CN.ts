@@ -389,9 +389,6 @@ export const zh_CN: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "查看 token 的去向、会话何时激增，以及成本由什么驱动。",
-    },
     common: {
       emptyValue: "—",
       unknown: "未知",

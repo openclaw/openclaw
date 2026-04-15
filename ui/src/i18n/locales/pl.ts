@@ -398,9 +398,6 @@ export const pl: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Zobacz, gdzie trafiają tokeny, kiedy sesje osiągają szczyt i co generuje koszty.",
-    },
     common: {
       emptyValue: "—",
       unknown: "nieznane",

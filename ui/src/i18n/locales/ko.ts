@@ -393,10 +393,6 @@ export const ko: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "토큰이 어디에 사용되는지, 언제 세션이 급증하는지, 무엇이 비용을 유발하는지 확인하세요.",
-    },
     common: {
       emptyValue: "—",
       unknown: "알 수 없음",

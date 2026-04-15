@@ -395,9 +395,6 @@ export const pt_BR: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Veja para onde vão os tokens, quando as sessões aumentam e o que gera custo.",
-    },
     common: {
       emptyValue: "—",
       unknown: "desconhecido",
