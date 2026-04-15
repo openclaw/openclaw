@@ -13,6 +13,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 
+const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
+const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
+const describeLive = liveEnabled ? describe : describe.skip;
+
 // ---------------------------------------------------------------------------
 // Hoisted mocks – vi.mock is hoisted above imports, so the factory runs
 // before any module that transitively imports these targets.
