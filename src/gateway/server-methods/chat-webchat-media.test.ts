@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getDefaultLocalRoots } from "../../media/local-media-access.js";
 import { buildWebchatAudioContentBlocksFromReplyPayloads } from "./chat-webchat-media.js";
 
 describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
@@ -22,7 +23,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
 
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
       [{ mediaUrl: audioPath }],
-      [tmpDir],
+      { localRoots: [tmpDir] },
     );
 
     expect(blocks).toHaveLength(1);
@@ -40,10 +41,9 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   });
 
   it("skips remote URLs", async () => {
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
-      [{ mediaUrl: "https://example.com/a.mp3" }],
-      undefined,
-    );
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([
+      { mediaUrl: "https://example.com/a.mp3" },
+    ]);
     expect(blocks).toHaveLength(0);
   });
 
@@ -54,7 +54,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
 
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
       [{ mediaUrl: imagePath }],
-      [tmpDir],
+      { localRoots: [tmpDir] },
     );
 
     expect(blocks).toHaveLength(0);
@@ -67,7 +67,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
 
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
       [{ mediaUrl: audioPath }, { mediaUrl: audioPath }],
-      [tmpDir],
+      { localRoots: [tmpDir] },
     );
     expect(blocks).toHaveLength(1);
   });
@@ -78,10 +78,9 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     fs.writeFileSync(audioPath, Buffer.from([0x01]));
 
     const fileUrl = pathToFileURL(audioPath).href;
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
-      [{ mediaUrl: fileUrl }],
-      [tmpDir],
-    );
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: fileUrl }], {
+      localRoots: [tmpDir],
+    });
 
     expect(blocks).toHaveLength(1);
     expect((blocks[0] as { type?: string }).type).toBe("audio");
@@ -96,12 +95,32 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     const audioPath = path.join(outsideRoot, "clip.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0x03]));
 
+    const onLocalAudioAccessDenied = vi.fn();
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
       [{ mediaUrl: audioPath }],
-      [allowedRoot],
+      {
+        localRoots: [allowedRoot],
+        onLocalAudioAccessDenied,
+      },
     );
 
     expect(blocks).toHaveLength(0);
+    expect(onLocalAudioAccessDenied).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to default localRoots when explicit roots are omitted", async () => {
+    const [defaultRoot] = getDefaultLocalRoots();
+    expect(defaultRoot).toBeTruthy();
+
+    fs.mkdirSync(defaultRoot, { recursive: true });
+    tmpDir = fs.mkdtempSync(path.join(defaultRoot, "openclaw-webchat-audio-default-"));
+    const audioPath = path.join(tmpDir, "clip.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0x04]));
+
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: audioPath }]);
+
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { type?: string }).type).toBe("audio");
   });
 
   it("does not read file contents when stat reports size over the cap", async () => {
@@ -120,7 +139,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
 
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
       [{ mediaUrl: audioPath }],
-      [tmpDir],
+      { localRoots: [tmpDir] },
     );
 
     expect(blocks).toHaveLength(0);

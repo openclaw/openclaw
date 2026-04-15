@@ -124,9 +124,17 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
 
 async function buildWebchatAudioOnlyAssistantMessage(
   payloads: ReplyPayload[],
-  localRoots: readonly string[] | "any" | undefined,
+  options?: {
+    localRoots?: readonly string[];
+    onLocalAudioAccessDenied?: (message: string) => void;
+  },
 ): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
-  const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(payloads, localRoots);
+  const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(payloads, {
+    localRoots: options?.localRoots,
+    onLocalAudioAccessDenied: (err) => {
+      options?.onLocalAudioAccessDenied?.(formatForLog(err));
+    },
+  });
   if (audioBlocks.length === 0) {
     return null;
   }
@@ -2092,10 +2100,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           requesterSenderUsername: clientInfo?.displayName,
           mediaSources: resolveSendableOutboundReplyParts(payload).mediaUrls,
         });
-        const audioMessage = await buildWebchatAudioOnlyAssistantMessage(
-          [payload],
-          mediaAccess.localRoots,
-        );
+        const audioMessage = await buildWebchatAudioOnlyAssistantMessage([payload], {
+          localRoots: mediaAccess.localRoots,
+          onLocalAudioAccessDenied: (message) => {
+            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+          },
+        });
         if (!audioMessage) {
           return;
         }
