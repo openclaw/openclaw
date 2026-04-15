@@ -91,6 +91,37 @@ function formatOllamaPullStatus(status: string): { text: string; hidePercent: bo
   return { text: trimmed, hidePercent: false };
 }
 
+export async function checkOllamaCloudAuth(
+  baseUrl: string,
+): Promise<{ signedIn: boolean; signinUrl?: string }> {
+  try {
+    const apiBase = resolveOllamaApiBase(baseUrl);
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${apiBase}/api/me`,
+      init: {
+        method: "POST",
+        signal: AbortSignal.timeout(5000),
+      },
+      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+      auditContext: "ollama-setup.me",
+    });
+    try {
+      if (response.status === 401) {
+        const data = (await response.json()) as { signin_url?: string };
+        return { signedIn: false, signinUrl: data.signin_url };
+      }
+      if (!response.ok) {
+        return { signedIn: false };
+      }
+      return { signedIn: true };
+    } finally {
+      await release();
+    }
+  } catch {
+    return { signedIn: false };
+  }
+}
+
 type OllamaPullChunk = {
   status?: string;
   total?: number;
