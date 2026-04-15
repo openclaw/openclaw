@@ -297,6 +297,9 @@ export async function promptDefaultModel(
   const seen = new Set<string>();
 
   for (const entry of models) {
+    if (!hasAuth(entry.provider)) {
+      continue;
+    }
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
 
@@ -416,6 +419,9 @@ export async function promptModelAllowlist(params: {
     : catalog;
 
   for (const entry of filteredCatalog) {
+    if (!hasAuth(entry.provider)) {
+      continue;
+    }
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
 

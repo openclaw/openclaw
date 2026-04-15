@@ -11,6 +11,7 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
 } from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
+import { applyPrimaryModel, promptDefaultModel } from "../commands/model-picker.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
@@ -22,7 +23,7 @@ import {
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { type OpenClawConfig, writeConfigFile } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
@@ -49,7 +50,9 @@ type FinalizeOnboardingOptions = {
 export async function finalizeOnboardingWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
-  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
+  const { flow, opts, baseConfig, nextConfig: startingConfig, settings, prompter, runtime } =
+    options;
+  let nextConfig = startingConfig;
 
   const withWizardProgress = async <T>(
     label: string,
@@ -356,6 +359,24 @@ export async function finalizeOnboardingWizard(
       ].join("\n"),
       "Token",
     );
+
+    // Model selection, let user pick from authenticated providers.
+    const modelSelection = await promptDefaultModel({
+      config: nextConfig,
+      prompter,
+      allowKeep: true,
+      ignoreAllowlist: true,
+      includeVllm: true,
+    });
+    if (modelSelection.config) {
+      nextConfig = modelSelection.config;
+    }
+    if (modelSelection.model) {
+      nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+    }
+    if (modelSelection.config || modelSelection.model) {
+      await writeConfigFile(nextConfig);
+    }
 
     hatchChoice = await prompter.select({
       message: "How do you want to hatch your bot?",

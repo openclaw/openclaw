@@ -412,14 +412,11 @@ export async function runOnboardingWizard(
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
   const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
-  const { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff } =
-    await import("../commands/auth-choice.js");
-  const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
+  const { applyAuthChoice, warnIfModelConfigLooksOff } = await import("../commands/auth-choice.js");
 
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
   });
-  const authChoiceFromPrompt = opts.authChoice === undefined;
   const authChoice =
     opts.authChoice ??
     (await promptAuthChoiceGrouped({
@@ -449,23 +446,6 @@ export async function runOnboardingWizard(
       },
     });
     nextConfig = authResult.config;
-  }
-
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
-    const modelSelection = await promptDefaultModel({
-      config: nextConfig,
-      prompter,
-      allowKeep: true,
-      ignoreAllowlist: true,
-      includeVllm: true,
-      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
-    });
-    if (modelSelection.config) {
-      nextConfig = modelSelection.config;
-    }
-    if (modelSelection.model) {
-      nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
-    }
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
