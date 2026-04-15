@@ -364,6 +364,15 @@ describe("browser config", () => {
     expect(profile?.color).toBe("#00AA00");
   });
 
+  it("expands tilde-prefixed executablePath", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~/chrome-linux/chrome",
+    });
+    expect(resolved.executablePath).toBe(
+      resolveUserPath("~/chrome-linux/chrome"),
+    );
+  });
+
   it("expands tilde-prefixed userDataDir for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
