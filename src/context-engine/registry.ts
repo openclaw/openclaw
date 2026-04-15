@@ -489,9 +489,9 @@ export type ResolveContextEngineOptions = {
  *   2. Default slot value ("legacy")
  *
  * When `config` is provided it is forwarded to the factory as part of a
- * {@link ContextEngineFactoryContext}. Additional runtime paths
- * can be supplied via `options`. No-arg factories still work — the context
- * parameter is silently ignored by factories that don't declare it.
+ * {@link ContextEngineFactoryContext}. Additional runtime paths can be
+ * supplied via `options`. Existing no-arg factories continue to work
+ * because JavaScript permits extra arguments at call sites.
  *
  * Non-default engines that fail (unregistered, factory throw, or contract
  * violation) are logged and silently replaced by the default engine.
