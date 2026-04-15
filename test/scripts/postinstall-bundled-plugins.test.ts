@@ -262,6 +262,40 @@ describe("bundled plugin postinstall", () => {
     ).toThrow("unsafe dist entry: dist/escape");
   });
 
+  it("unlinks stale files instead of recursive pruning them", () => {
+    const unlinkSync = vi.fn();
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn(() => ({
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        })),
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn((filePath, options) => {
+          if (filePath === "/pkg/dist" && options?.withFileTypes) {
+            return [
+              {
+                name: "stale.js",
+                isDirectory: () => false,
+                isFile: () => true,
+                isSymbolicLink: () => false,
+              },
+            ];
+          }
+          return [];
+        }),
+        unlinkSync,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/stale.js"]);
+
+    expect(unlinkSync).toHaveBeenCalledWith("/pkg/dist/stale.js");
+  });
+
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
