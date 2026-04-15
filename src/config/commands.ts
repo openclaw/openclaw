@@ -11,7 +11,11 @@ function resolveAutoDefault(
   // Pass id ?? providerId to getChannelPlugin: when normalizeChannelId returns null
   // (registry empty during startup), getChannelPlugin's getBundledChannelPlugin fallback
   // can still resolve bundled channels by reading manifest metadata from disk.
-  const plugin = getChannelPlugin(id ?? providerId);
+  const resolvedId = id ?? providerId;
+  if (!resolvedId) {
+    return false;
+  }
+  const plugin = getChannelPlugin(resolvedId);
   if (!plugin) {
     return false;
   }
