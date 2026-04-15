@@ -339,11 +339,31 @@ async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<stri
       if (entry.name.startsWith(".") || entry.name === "node_modules") {
         continue;
       }
+      // Skip test directories — test files commonly mock env vars + fetch,
+      // which triggers false-positive "credential harvesting" findings.
+      if (
+        entry.kind === "dir" &&
+        (entry.name === "tests" ||
+          entry.name === "__tests__" ||
+          entry.name === "__mocks__" ||
+          entry.name === "test" ||
+          entry.name === "__fixtures__")
+      ) {
+        continue;
+      }
 
       const fullPath = path.join(currentDir, entry.name);
       if (entry.kind === "dir") {
         stack.push(fullPath);
       } else if (entry.kind === "file" && isScannable(entry.name)) {
+        // Skip test files by name pattern
+        if (
+          entry.name.includes(".test.") ||
+          entry.name.includes(".spec.") ||
+          entry.name.includes(".mock.")
+        ) {
+          continue;
+        }
         files.push(fullPath);
       }
     }
