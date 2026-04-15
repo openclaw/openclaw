@@ -92,7 +92,13 @@ export function createAccountListHelpers(
           return baseTokenFields.every((f) => isTruthy(acct[f]));
         });
       if (everyAccountHasOwnTokens) {
-        implicitId = DEFAULT_ACCOUNT_ID;
+        // Only inject implicit default if no configured account already normalizes to "default"
+        const alreadyHasDefault = configuredIds.some(
+          (id) => normalizeId(id) === DEFAULT_ACCOUNT_ID,
+        );
+        if (!alreadyHasDefault) {
+          implicitId = DEFAULT_ACCOUNT_ID;
+        }
       }
     }
 
