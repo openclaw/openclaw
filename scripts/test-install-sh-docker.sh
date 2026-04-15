@@ -150,6 +150,7 @@ SKIP_UPDATE="${OPENCLAW_INSTALL_SMOKE_SKIP_UPDATE:-0}"
 SKIP_NPM_GLOBAL="${OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL:-0}"
 UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE:-2026.4.10}"
 UPDATE_PACKAGE_SPEC="${OPENCLAW_INSTALL_SMOKE_UPDATE_PACKAGE_SPEC:-}"
+UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"
 UPDATE_SKIP_LOCAL_BUILD="${OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD:-0}"
 UPDATE_HOST_ALIAS="${OPENCLAW_INSTALL_SMOKE_UPDATE_HOST:-host.docker.internal}"
 UPDATE_PORT="${OPENCLAW_INSTALL_SMOKE_UPDATE_PORT:-}"
@@ -191,6 +192,20 @@ allocate_host_port() {
   '
 }
 
+restore_local_dist_from_image() {
+  local image="$1"
+  local container_id=""
+
+  echo "==> Reuse local dist/ from Docker image: $image"
+  container_id="$(docker create "$image")"
+  rm -rf "$ROOT_DIR/dist"
+  if ! docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
+    docker rm -f "$container_id" >/dev/null 2>&1 || true
+    return 1
+  fi
+  docker rm -f "$container_id" >/dev/null
+}
+
 prepare_update_tarball() {
   local pack_json
   local baseline_pack_json
@@ -204,7 +219,9 @@ prepare_update_tarball() {
     quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   else
     echo "==> Build local release artifacts for update smoke"
-    if [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
+    if [[ -n "$UPDATE_DIST_IMAGE" ]]; then
+      restore_local_dist_from_image "$UPDATE_DIST_IMAGE"
+    elif [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
       pnpm build
       pnpm ui:build
     fi
