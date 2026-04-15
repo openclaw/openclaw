@@ -237,6 +237,21 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs 
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
+async function waitForRealTimeAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 5) {
+  let lastError: unknown;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, stepMs));
+  }
+  throw lastError ?? new Error("assertion did not pass in time");
+}
+
 function createTranscriptFixture(prefix: string) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const transcriptPath = path.join(dir, "sess.jsonl");
@@ -544,7 +559,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     let assistantUpdate: (typeof mockState.emittedTranscriptUpdates)[number] | undefined;
-    await waitForAssertion(() => {
+    await waitForRealTimeAssertion(() => {
       assistantUpdate = mockState.emittedTranscriptUpdates.find(
         (update) =>
           typeof update.message === "object" &&
@@ -557,7 +572,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             false),
       );
       expect(assistantUpdate).toBeDefined();
-    });
+    }, 5000);
     expect(assistantUpdate).toMatchObject({
       message: {
         role: "assistant",

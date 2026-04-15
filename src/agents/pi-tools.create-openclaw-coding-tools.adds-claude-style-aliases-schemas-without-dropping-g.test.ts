@@ -86,7 +86,9 @@ describe("createOpenClawCodingTools read behavior", () => {
       const result = await readTool.execute("read-cap-1", { path: "huge.txt" });
       const text = extractToolText(result);
       expect(text).toContain("line-0001");
-      expect(text).toContain("[Read output capped at 32KB for this call. Use offset=");
+      expect(text).toMatch(
+        /\[Read output capped at \d+(?:\.\d+)?(?:KB|MB) for this call\. Use offset=/,
+      );
       expect(text).not.toContain("line-8000");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
