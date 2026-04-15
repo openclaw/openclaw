@@ -933,6 +933,17 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toBe("Breaking\nDetails");
   });
 
+  it("uses embed url when content is empty and embed has no text fields", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ url: "https://example.com/test" }],
+      }),
+    );
+
+    expect(text).toBe("https://example.com/test");
+  });
+
   it("prefers message content over embed fallback text", () => {
     const text = resolveDiscordMessageText(
       asMessage({

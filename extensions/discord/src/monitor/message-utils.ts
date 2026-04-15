@@ -604,12 +604,22 @@ function buildDiscordMediaPlaceholder(params: {
 }
 
 export function resolveDiscordEmbedText(
-  embed?: { title?: string | null; description?: string | null } | null,
+  embed?: { title?: string | null; description?: string | null; url?: string | null } | null,
 ): string {
   const title = normalizeOptionalString(embed?.title) ?? "";
   const description = normalizeOptionalString(embed?.description) ?? "";
+  const url = normalizeOptionalString((embed as { url?: string | null } | null | undefined)?.url) ?? "";
   if (title && description) {
     return `${title}\n${description}`;
+  }
+  if (title && url) {
+    return `${title}\n${url}`;
+  }
+  if (description && url) {
+    return `${description}\n${url}`;
+  }
+  if (url) {
+    return url;
   }
   return title || description || "";
 }
