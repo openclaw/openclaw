@@ -56,6 +56,37 @@ describe("preemptive-compaction", () => {
     expect(larger).toBeGreaterThan(smaller);
   });
 
+  it("does not throw on malformed replay history during pre-prompt estimation", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          null,
+          { type: "text" },
+          { type: "thinking" },
+          { type: "text", text: "still usable" },
+        ],
+        timestamp: timestamp++,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: `call_${timestamp}`,
+        toolName: "read",
+        content: undefined,
+        isError: false,
+        timestamp: timestamp++,
+      } as unknown as AgentMessage,
+    ];
+
+    expect(() =>
+      estimatePrePromptTokens({
+        messages,
+        systemPrompt: verboseSystem,
+        prompt: verbosePrompt,
+      }),
+    ).not.toThrow();
+  });
+
   it("requests preemptive compaction when the reserve-based prompt budget would be exceeded", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory(verboseHistory)],

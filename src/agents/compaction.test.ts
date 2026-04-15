@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  estimateMessageTokens,
   estimateMessagesTokens,
   pruneHistoryForContextShare,
   splitMessagesByTokenShare,
@@ -59,6 +60,121 @@ function pruneLargeSimpleHistory() {
   });
   return { messages, pruned, maxContextTokens };
 }
+
+describe("estimateMessageTokens", () => {
+  it("falls back to guarded estimation for malformed assistant blocks", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        null,
+        { type: "text" },
+        { type: "text", text: "abcd" },
+        { type: "input_text", text: "gh" },
+        { type: "output_text", text: "ij" },
+        { type: "thinking" },
+        { type: "thinking", thinking: "ef" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: { path: "x" } },
+      ],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(() => estimateMessageTokens(message)).not.toThrow();
+    expect(estimateMessageTokens(message)).toBe(
+      Math.ceil(
+        ("abcd".length +
+          "gh".length +
+          "ij".length +
+          "ef".length +
+          "read".length +
+          JSON.stringify({ path: "x" }).length) /
+          4,
+      ),
+    );
+  });
+
+  it("counts provider-specific tool-call payloads in the fallback estimator", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "text" },
+        { type: "toolUse", id: "call_2", name: "read", input: { path: "IDENTITY.md" } },
+        { type: "functionCall", id: "call_3", name: "bash", arguments: { command: "pwd" } },
+        { type: "tool_use", id: "call_4", name: "search", input: { q: "openclaw" } },
+        { type: "tool_call", id: "call_5", name: "write", arguments: { path: "out.txt" } },
+        { type: "function_call", id: "call_6", name: "exec", arguments: { cmd: "pwd" } },
+        {
+          type: "toolCall",
+          id: "call_7",
+          name: "stream",
+          arguments: {},
+          partialJson: '{"path":"x"}',
+        },
+        {
+          type: "toolUse",
+          id: "call_8",
+          name: "delta",
+          input: undefined,
+          arguments: {},
+          partialArgs: '{"cmd":"ls"}',
+        },
+      ],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(estimateMessageTokens(message)).toBe(
+      Math.ceil(
+        ("read".length +
+          JSON.stringify({ path: "IDENTITY.md" }).length +
+          "bash".length +
+          JSON.stringify({ command: "pwd" }).length +
+          "search".length +
+          JSON.stringify({ q: "openclaw" }).length +
+          "write".length +
+          JSON.stringify({ path: "out.txt" }).length +
+          "exec".length +
+          JSON.stringify({ cmd: "pwd" }).length +
+          "stream".length +
+          JSON.stringify('{"path":"x"}').length +
+          "delta".length +
+          JSON.stringify('{"cmd":"ls"}').length) /
+          4,
+      ),
+    );
+  });
+
+  it("returns zero for assistant messages missing content arrays", () => {
+    const message = {
+      role: "assistant",
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(() => estimateMessageTokens(message)).not.toThrow();
+    expect(estimateMessageTokens(message)).toBe(0);
+    expect(estimateMessagesTokens([message])).toBe(0);
+  });
+
+  it("counts input_image blocks in the fallback estimator", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        null,
+        { type: "text" },
+        { type: "input_text", text: "describe this" },
+        {
+          type: "input_image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "aGVsbG8=",
+          },
+        },
+      ],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(estimateMessageTokens(message)).toBe(Math.ceil(("describe this".length + 4800) / 4));
+  });
+});
 
 describe("splitMessagesByTokenShare", () => {
   it("splits messages into two non-empty parts", () => {
