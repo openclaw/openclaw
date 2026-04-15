@@ -2,9 +2,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
+import { collectPackageDistInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
@@ -89,11 +89,7 @@ export async function collectInstalledGlobalPackageErrors(params: {
       `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
     );
   }
-  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
-    if (!(await pathExists(path.join(params.packageRoot, relativePath)))) {
-      errors.push(`missing bundled runtime sidecar ${relativePath}`);
-    }
-  }
+  errors.push(...(await collectPackageDistInventoryErrors(params.packageRoot)));
   return errors;
 }
 
