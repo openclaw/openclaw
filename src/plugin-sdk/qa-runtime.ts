@@ -1,6 +1,6 @@
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
-type QaLabRuntimeSurface = {
+type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
     mode: string,
     options?: {
@@ -11,7 +11,7 @@ type QaLabRuntimeSurface = {
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
 };
 
-function isMissingQaLabRuntimeError(error: unknown) {
+function isMissingQaRuntimeError(error: unknown) {
   return (
     error instanceof Error &&
     (error.message === "Unable to resolve bundled plugin public surface qa-lab/runtime-api.js" ||
@@ -19,19 +19,19 @@ function isMissingQaLabRuntimeError(error: unknown) {
   );
 }
 
-export function loadQaLabRuntimeModule(): QaLabRuntimeSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<QaLabRuntimeSurface>({
+export function loadQaRuntimeModule(): QaRuntimeSurface {
+  return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
     dirName: "qa-lab",
     artifactBasename: "runtime-api.js",
   });
 }
 
-export function isQaLabRuntimeAvailable(): boolean {
+export function isQaRuntimeAvailable(): boolean {
   try {
-    loadQaLabRuntimeModule();
+    loadQaRuntimeModule();
     return true;
   } catch (error) {
-    if (isMissingQaLabRuntimeError(error)) {
+    if (isMissingQaRuntimeError(error)) {
       return false;
     }
     throw error;

@@ -69,8 +69,8 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
   - This QA host is repo/dev-only today. Packaged OpenClaw installs do not ship
     `qa-lab`, so they do not expose `openclaw qa`.
-  - Repo checkouts can link the in-tree plugin directly:
-    `openclaw plugins install -l ./extensions/qa-matrix`.
+  - Repo checkouts load the bundled runner directly; no separate plugin install
+    step is needed.
   - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
   - Matrix does not expose shared credential-source flags because the lane provisions disposable users locally.

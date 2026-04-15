@@ -1,18 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadQaLabRuntimeModule = vi.hoisted(() => vi.fn());
+const loadQaRuntimeModule = vi.hoisted(() => vi.fn());
 const defaultQaRuntimeModelForMode = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/qa-lab-runtime", () => ({
-  loadQaLabRuntimeModule,
+vi.mock("openclaw/plugin-sdk/qa-runtime", () => ({
+  loadQaRuntimeModule,
 }));
 
 describe("matrix qa model selection", () => {
   beforeEach(() => {
-    defaultQaRuntimeModelForMode.mockReset().mockImplementation((mode, options) =>
-      options?.alternate ? `${mode}:alt` : `${mode}:primary`,
-    );
-    loadQaLabRuntimeModule.mockReset().mockReturnValue({
+    defaultQaRuntimeModelForMode
+      .mockReset()
+      .mockImplementation((mode, options) =>
+        options?.alternate ? `${mode}:alt` : `${mode}:primary`,
+      );
+    loadQaRuntimeModule.mockReset().mockReturnValue({
       defaultQaRuntimeModelForMode,
     });
   });
@@ -45,7 +47,7 @@ describe("matrix qa model selection", () => {
       primaryModel: "custom-primary",
       alternateModel: "custom-alt",
     });
-    expect(loadQaLabRuntimeModule).not.toHaveBeenCalled();
+    expect(loadQaRuntimeModule).not.toHaveBeenCalled();
     expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
   });
 });

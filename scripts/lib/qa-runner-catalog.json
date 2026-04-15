@@ -1,8 +1,0 @@
-[
-  {
-    "pluginId": "qa-matrix",
-    "commandName": "matrix",
-    "description": "Run the Docker-backed Matrix live QA lane against a disposable homeserver",
-    "npmSpec": "@openclaw/qa-matrix"
-  }
-]
