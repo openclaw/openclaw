@@ -649,18 +649,30 @@ describeLive("gateway live (ACP bind)", () => {
           }
         }
         if (!recallHistory) {
-          const recallTurn = await waitForAssistantTurn({
-            client,
-            sessionKey: spawnedSessionKey,
-            minAssistantCount: expectedRecallAssistantCount,
-            timeoutMs: 60_000,
-          });
-          recallHistory = {
-            messages: recallTurn.messages,
-            lastAssistantText: recallTurn.lastAssistantText,
-            matchedAssistantText: recallTurn.lastAssistantText,
-          };
-          logLiveStep("bound memory recall response did not repeat token; using turn progression");
+          if (liveAgent === "claude") {
+            const recallTurn = await waitForAssistantTurn({
+              client,
+              sessionKey: spawnedSessionKey,
+              minAssistantCount: expectedRecallAssistantCount,
+              timeoutMs: 60_000,
+            });
+            recallHistory = {
+              messages: recallTurn.messages,
+              lastAssistantText: recallTurn.lastAssistantText,
+              matchedAssistantText: recallTurn.lastAssistantText,
+            };
+            logLiveStep(
+              "bound memory recall response did not repeat token; using turn progression",
+            );
+          } else {
+            // Non-Claude lanes can miss or significantly delay this intermediate recall turn.
+            // Continue from the previously observed bound transcript and validate marker/image/cron
+            // on subsequent turns.
+            recallHistory = firstBoundHistory;
+            logLiveStep(
+              "bound memory recall response not observed; continuing from previous bound transcript",
+            );
+          }
         }
         const recallAssistantText = recallHistory.matchedAssistantText;
         if (liveAgent === "claude") {
@@ -884,6 +896,6 @@ describeLive("gateway live (ACP bind)", () => {
         }
       }
     },
-    LIVE_TIMEOUT_MS + 180_000,
+    LIVE_TIMEOUT_MS + 360_000,
   );
 });

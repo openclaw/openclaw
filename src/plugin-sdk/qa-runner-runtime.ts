@@ -15,6 +15,17 @@ type QaRunnerRuntimeSurface = {
   qaRunnerCliRegistrations?: readonly QaRunnerCliRegistration[];
 };
 
+type QaRuntimeSurface = {
+  defaultQaRuntimeModelForMode: (
+    mode: string,
+    options?: {
+      alternate?: boolean;
+      preferredLiveModel?: string;
+    },
+  ) => string;
+  startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+};
+
 export type QaRunnerCliContribution =
   | {
       pluginId: string;
@@ -29,6 +40,36 @@ export type QaRunnerCliContribution =
       description?: string;
       status: "blocked";
     };
+
+function isMissingQaRuntimeError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message.includes("qa-lab") &&
+    (error.message.includes("runtime-api.js") ||
+      error.message.startsWith("Unable to open bundled plugin public surface "))
+  );
+}
+
+export function loadQaRuntimeModule(): QaRuntimeSurface {
+  return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
+    dirName: ["qa", "lab"].join("-"),
+    artifactBasename: ["runtime-api", "js"].join("."),
+  });
+}
+
+export function isQaRuntimeAvailable(): boolean {
+  try {
+    loadQaRuntimeModule();
+    return true;
+  } catch (error) {
+    if (isMissingQaRuntimeError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
 
 function listDeclaredQaRunnerPlugins(): Array<
   PluginManifestRecord & {
