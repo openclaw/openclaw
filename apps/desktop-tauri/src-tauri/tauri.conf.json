@@ -1,0 +1,51 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "OpenClaw",
+  "version": "0.1.8",
+  "identifier": "ai.openclaw.app",
+  "build": {
+    "frontendDist": "../../../dist/control-ui",
+    "devUrl": "http://localhost:18789",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "node ./scripts/prepare-runtime.mjs"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OpenClaw",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "url": "loading.html"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' asset: http://localhost:18789 http://127.0.0.1:18789 ws://localhost:18789 ws://127.0.0.1:18789 'unsafe-inline' 'unsafe-eval' https: wss: data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../loading.html": "loading.html",
+      "../loading.js": "loading.js",
+      "icons/icon.png": "icon.png",
+      "resources/openclaw.cmd": "openclaw.cmd",
+      "runtime/openclaw-runtime.tar.gz": "openclaw-runtime.tar.gz"
+    },
+    "externalBin": [
+      "binaries/node"
+    ]
+  }
+}

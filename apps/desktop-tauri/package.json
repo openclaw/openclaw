@@ -1,0 +1,19 @@
+{
+  "name": "windows-tauri",
+  "version": "0.1.8",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "prepare-runtime": "node ./scripts/prepare-runtime.mjs",
+    "tauri:version:bump": "node ./scripts/bump-desktop-version.mjs",
+    "tauri": "node ./scripts/run-tauri.mjs",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.32.1",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.0"
+  }
+}

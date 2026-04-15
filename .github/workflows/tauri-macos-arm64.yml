@@ -1,0 +1,379 @@
+name: Build macOS Tauri App (Apple Silicon)
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "apps/desktop-tauri/**"
+      - "dist/**"
+      - ".github/actions/setup-node-env/action.yml"
+      - ".github/workflows/tauri-macos-arm64.yml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "apps/desktop-tauri/**"
+      - "dist/**"
+      - ".github/actions/setup-node-env/action.yml"
+      - ".github/workflows/tauri-macos-arm64.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build from (for example v2026.4.16-beta1 or 2026.4.16-beta1)
+        required: true
+        type: string
+      draft:
+        description: Create the GitHub release as a draft if it does not already exist
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark the GitHub release as a prerelease if it does not already exist
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: tauri-macos-arm64-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
+  DESKTOP_DIR: apps/desktop-tauri
+  OPENCLAW_DESKTOP_AUTO_BUMP: "0"
+
+jobs:
+  validate_macos_arm64:
+    if: github.event_name != 'workflow_dispatch'
+    name: Validate macOS arm64 build
+    runs-on: macos-14
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop-tauri/src-tauri -> target
+
+      - name: Build repository
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Build Tauri macOS app
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export APPLE_SIGNING_IDENTITY="-"
+          pnpm tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin
+
+      - name: Locate build outputs
+        id: artifacts
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          DMG_PATH="$(find apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload macOS app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-macos-arm64-app-${{ github.sha }}
+          path: ${{ steps.artifacts.outputs.app_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload macOS DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-macos-arm64-dmg-${{ github.sha }}
+          path: ${{ steps.artifacts.outputs.dmg_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release_macos_arm64:
+    if: github.event_name == 'workflow_dispatch'
+    name: Build and publish macOS arm64 release
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Validate release tag input
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+((\-beta(\.?[0-9]+)?)|(\-[0-9]+))?$ ]]; then
+            echo "Invalid release tag format: ${RELEASE_TAG}"
+            exit 1
+          fi
+
+      - name: Verify release tag exists
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            echo "::error::Release tag ${RELEASE_TAG} does not exist. Create and push it first: git tag ${RELEASE_TAG} && git push origin ${RELEASE_TAG}"
+            exit 1
+          fi
+
+      - name: Checkout selected tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop-tauri/src-tauri -> target
+
+      - name: Resolve macOS signing mode
+        id: signing
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" || -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
+            echo "Apple signing certificate secrets are not configured; using ad-hoc signing for the release build."
+            echo "signing_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "notarization_enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CERT_PATH="$RUNNER_TEMP/openclaw-signing.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/openclaw-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 18)"
+
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/productbuild
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          {
+            echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+            echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "signing_enabled=true" >> "$GITHUB_OUTPUT"
+          if [[ -n "${APPLE_SIGNING_IDENTITY:-}" && -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+            echo "notarization_enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarization_enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build repository
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Build macOS app
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            echo "Building with Apple signing identity."
+          else
+            echo "APPLE_SIGNING_IDENTITY is not configured; using ad-hoc signing identity '-'."
+            export APPLE_SIGNING_IDENTITY="-"
+          fi
+          pnpm tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin
+
+      - name: Locate release artifacts
+        id: artifacts
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          APP_PATH="$(find apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          DMG_PATH="$(find apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          DSYM_PATH="$(find apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release -name '*.dSYM' -print -quit)"
+          RELEASE_ASSET_DIR="$RUNNER_TEMP/openclaw-macos-arm64-release"
+          APP_ZIP_PATH="$RELEASE_ASSET_DIR/OpenClaw-${VERSION}-macOS-arm64.zip"
+          NOTARY_ZIP_PATH="$RUNNER_TEMP/OpenClaw-${VERSION}-macOS-arm64.notary.zip"
+          DSYM_ZIP_PATH="$RELEASE_ASSET_DIR/OpenClaw-${VERSION}-macOS-arm64.dSYM.zip"
+
+          [[ -n "$APP_PATH" ]] || { echo "Missing .app bundle"; exit 1; }
+          [[ -n "$DMG_PATH" ]] || { echo "Missing .dmg bundle"; exit 1; }
+          rm -rf "$RELEASE_ASSET_DIR"
+          mkdir -p "$RELEASE_ASSET_DIR"
+
+          {
+            echo "app_path=$APP_PATH"
+            echo "dmg_path=$DMG_PATH"
+            echo "dsym_path=$DSYM_PATH"
+            echo "app_zip_path=$APP_ZIP_PATH"
+            echo "notary_zip_path=$NOTARY_ZIP_PATH"
+            echo "dsym_zip_path=$DSYM_ZIP_PATH"
+            echo "release_asset_dir=$RELEASE_ASSET_DIR"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notarize app and staple bundle
+        if: steps.signing.outputs.notarization_enabled == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          rm -f "${{ steps.artifacts.outputs.notary_zip_path }}"
+          ditto -c -k --sequesterRsrc --keepParent "${{ steps.artifacts.outputs.app_path }}" "${{ steps.artifacts.outputs.notary_zip_path }}"
+          xcrun notarytool submit "${{ steps.artifacts.outputs.notary_zip_path }}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${{ steps.artifacts.outputs.app_path }}"
+          xcrun stapler validate "${{ steps.artifacts.outputs.app_path }}"
+
+      - name: Create app zip
+        run: |
+          set -euo pipefail
+          rm -f "${{ steps.artifacts.outputs.app_zip_path }}"
+          ditto -c -k --sequesterRsrc --keepParent "${{ steps.artifacts.outputs.app_path }}" "${{ steps.artifacts.outputs.app_zip_path }}"
+
+      - name: Sign, notarize, and staple DMG
+        if: steps.signing.outputs.notarization_enabled == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "${{ steps.artifacts.outputs.dmg_path }}"
+          xcrun notarytool submit "${{ steps.artifacts.outputs.dmg_path }}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${{ steps.artifacts.outputs.dmg_path }}"
+          xcrun stapler validate "${{ steps.artifacts.outputs.dmg_path }}"
+
+      - name: Create dSYM zip
+        if: steps.artifacts.outputs.dsym_path != ''
+        run: |
+          set -euo pipefail
+          rm -f "${{ steps.artifacts.outputs.dsym_zip_path }}"
+          ditto -c -k --keepParent "${{ steps.artifacts.outputs.dsym_path }}" "${{ steps.artifacts.outputs.dsym_zip_path }}"
+
+      - name: Verify signed artifacts
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict "${{ steps.artifacts.outputs.app_path }}"
+          if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            echo "APPLE_SIGNING_IDENTITY is not configured; skipping Gatekeeper assessment for ad-hoc signed artifacts."
+            exit 0
+          fi
+          spctl --assess --type open --context context:primary-signature --verbose "${{ steps.artifacts.outputs.app_path }}"
+          spctl --assess --type open --context context:primary-signature --verbose "${{ steps.artifacts.outputs.dmg_path }}"
+
+      - name: Stage macOS release assets
+        run: |
+          set -euo pipefail
+          cp "${{ steps.artifacts.outputs.app_zip_path }}" "${{ steps.artifacts.outputs.release_asset_dir }}/"
+          cp "${{ steps.artifacts.outputs.dmg_path }}" "${{ steps.artifacts.outputs.release_asset_dir }}/"
+          if [[ -n "${{ steps.artifacts.outputs.dsym_path }}" && -f "${{ steps.artifacts.outputs.dsym_zip_path }}" ]]; then
+            cp "${{ steps.artifacts.outputs.dsym_zip_path }}" "${{ steps.artifacts.outputs.release_asset_dir }}/"
+          fi
+
+      - name: Upload macOS release bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-macos-arm64-release-${{ inputs.tag }}
+          path: ${{ steps.artifacts.outputs.release_asset_dir }}/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_DRAFT: ${{ inputs.draft }}
+          RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            create_args=(
+              "$RELEASE_TAG"
+              --repo "$GITHUB_REPOSITORY"
+              --title "OpenClaw ${RELEASE_TAG#v}"
+            )
+            if [[ "$RELEASE_DRAFT" == "true" ]]; then
+              create_args+=(--draft)
+            fi
+            if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
+              create_args+=(--prerelease)
+            fi
+            gh release create "${create_args[@]}"
+          fi
+
+      - name: Upload macOS release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" "${{ steps.artifacts.outputs.release_asset_dir }}"/* --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Cleanup signing keychain
+        if: always()
+        run: |
+          if [[ -n "${KEYCHAIN_PATH:-}" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Starting OpenClaw</title>
+  <style>
+    :root {
+      --bg: #0a0f18;
+      --card: rgba(16, 24, 38, 0.94);
+      --line: rgba(154, 170, 196, 0.18);
+      --text: #eef3fb;
+      --muted: #94a3b8;
+      --accent: #eb8234;
+      --danger: #ff6b6b;
+      --font: "IBM Plex Sans", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font);
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(235, 130, 52, 0.24), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(88, 166, 255, 0.18), transparent 34%),
+        linear-gradient(155deg, var(--bg), #101826);
+      display: grid;
+      place-items: center;
+      padding: 28px;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+      background-size: 26px 26px;
+      mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.65), transparent);
+    }
+
+    main {
+      width: min(680px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--card);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+      padding: 34px;
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 30px;
+    }
+
+    .brand img {
+      width: 64px;
+      height: 64px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
+      padding: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      letter-spacing: -0.03em;
+    }
+
+    p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .progress-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .spinner-wrap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      border: 2px solid rgba(255, 255, 255, 0.14);
+      border-top-color: var(--accent);
+      animation: spin 0.9s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .bar {
+      height: 14px;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .bar-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), #ffb05f);
+      transition: width 0.35s ease;
+    }
+
+    .status {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--line);
+      color: var(--text);
+      min-height: 50px;
+    }
+
+    .error {
+      display: none;
+      margin-top: 16px;
+      color: var(--danger);
+      white-space: pre-wrap;
+    }
+
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">
+      <img src="icon.png" alt="OpenClaw" />
+      <div>
+        <h1>Starting OpenClaw</h1>
+        <p>Loading local gateway…</p>
+      </div>
+    </div>
+
+    <div class="spinner-wrap" aria-hidden="true">
+      <div class="spinner"></div>
+      <span id="phase">Starting</span>
+    </div>
+
+    <div class="progress-top">
+      <span id="status-label">Gateway status</span>
+      <strong id="percent">0%</strong>
+    </div>
+    <div class="bar" aria-label="Startup progress">
+      <div class="bar-fill" id="bar-fill"></div>
+    </div>
+
+    <div class="status" id="status">Loading local gateway…</div>
+    <div class="error" id="error"></div>
+  </main>
+  <script src="loading.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "identifier": "ai.openclaw.windows",
+  "bundle": {
+    "targets": ["nsis"],
+    "windows": {
+      "signCommand": {
+        "cmd": "node",
+        "args": [
+          "../scripts/sign-windows-binary.mjs",
+          "%1"
+        ]
+      },
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "template": "installer/windows/nsis/installer.nsi",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/windows/assets/nsis-header.bmp",
+        "sidebarImage": "installer/windows/assets/nsis-sidebar.bmp"
+      }
+    }
+  }
+}

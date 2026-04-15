@@ -1,0 +1,322 @@
+name: Build Windows Tauri App
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "apps/desktop-tauri/**"
+      - "dist/**"
+      - ".github/actions/setup-node-env/action.yml"
+      - ".github/workflows/tauri-windows.yml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "apps/desktop-tauri/**"
+      - "dist/**"
+      - ".github/actions/setup-node-env/action.yml"
+      - ".github/workflows/tauri-windows.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build from (for example v2026.4.16-beta1 or 2026.4.16-beta1)
+        required: true
+        type: string
+      draft:
+        description: Create the GitHub release as a draft if it does not already exist
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark the GitHub release as a prerelease if it does not already exist
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: tauri-windows-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
+  DESKTOP_DIR: apps/desktop-tauri
+  WINDOWS_BUNDLE_DIR: apps/desktop-tauri/src-tauri/target/release/bundle
+  OPENCLAW_DESKTOP_AUTO_BUMP: "0"
+
+jobs:
+  validate_windows:
+    if: github.event_name != 'workflow_dispatch'
+    name: Validate Windows build
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop-tauri/src-tauri -> target
+
+      - name: Build repository
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Build Tauri Windows installers
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm tauri build --config src-tauri/tauri.windows.conf.json
+
+      - name: List build outputs
+        shell: pwsh
+        run: |
+          Get-ChildItem $env:WINDOWS_BUNDLE_DIR -Recurse -Include "*.exe" |
+            Select-Object FullName, @{Name="SizeMB"; Expression = { [math]::Round($_.Length / 1MB, 2) }}
+
+      - name: Upload validation NSIS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-windows-nsis-${{ github.sha }}
+          path: apps/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  build_release_windows:
+    if: github.event_name == 'workflow_dispatch'
+    name: Build Windows release
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Validate release tag input
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v?[0-9]+\.[0-9]+\.[0-9]+((?:-beta(?:\.?[0-9]+)?)|(?:-[0-9]+))?$') {
+            throw "Invalid release tag format: $env:RELEASE_TAG"
+          }
+
+      - name: Verify release tag exists
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git ls-remote --exit-code --tags "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY" "refs/tags/$env:RELEASE_TAG" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag $env:RELEASE_TAG does not exist. Create and push it first: git tag $env:RELEASE_TAG; git push origin $env:RELEASE_TAG"
+          }
+
+      - name: Checkout selected tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop-tauri/src-tauri -> target
+
+      - name: Resolve Windows signing mode
+        id: signing
+        shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_PFX_BASE64)) {
+            Write-Host "WINDOWS_PFX_BASE64 is not configured; continuing with unsigned Windows installers."
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "openclaw-signing.pfx"
+          [System.IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+          "WINDOWS_PFX_PATH=$pfxPath" >> $env:GITHUB_ENV
+          "enabled=true" >> $env:GITHUB_OUTPUT
+
+      - name: Build repository
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Build Windows installers
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: pnpm tauri build --config src-tauri/tauri.windows.conf.json
+
+      - name: Verify Authenticode signatures
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          function Resolve-SignTool {
+            $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
+            if ($command) {
+              return $command.Source
+            }
+
+            $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+            $candidates = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+              Sort-Object FullName -Descending
+            return $candidates[0].FullName
+          }
+
+          $signTool = Resolve-SignTool
+          if (-not $signTool) {
+            throw "Unable to locate signtool.exe"
+          }
+
+          $artifacts = Get-ChildItem $env:WINDOWS_BUNDLE_DIR -Recurse -Include "*.exe"
+          if (-not $artifacts) {
+            throw "No Windows bundle artifacts found to verify."
+          }
+
+          foreach ($artifact in $artifacts) {
+            $signature = Get-AuthenticodeSignature -FilePath $artifact.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid signature for $($artifact.FullName): $($signature.Status)"
+            }
+
+            & $signTool verify /pa $artifact.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool verify failed for $($artifact.FullName)"
+            }
+          }
+
+      - name: Generate SHA256 manifest
+        shell: pwsh
+        run: |
+          $manifestPath = Join-Path $env:WINDOWS_BUNDLE_DIR "WINDOWS-SHA256SUMS.txt"
+          Get-ChildItem $env:WINDOWS_BUNDLE_DIR -Recurse -Include "*.exe" |
+            Sort-Object Name |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object {
+              "{0} *{1}" -f $_.Hash.ToLowerInvariant(), [System.IO.Path]::GetFileName($_.Path)
+            } |
+            Set-Content -Path $manifestPath
+
+      - name: Upload release bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-windows-release-${{ inputs.tag }}
+          path: |
+            apps/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
+            apps/desktop-tauri/src-tauri/target/release/bundle/WINDOWS-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke_nsis_release:
+    if: github.event_name == 'workflow_dispatch'
+    name: Smoke Windows NSIS installer
+    runs-on: windows-latest
+    needs: build_release_windows
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-windows-release-${{ inputs.tag }}
+          path: release-artifacts
+
+      - name: Run NSIS smoke install
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release-artifacts -Recurse -Filter *.exe | Select-Object -First 1
+          if (-not $installer) {
+            throw "NSIS installer not found in downloaded artifacts."
+          }
+          powershell -NoProfile -ExecutionPolicy Bypass -File apps/desktop-tauri/scripts/windows-installer-smoke.ps1 `
+            -InstallerPath $installer.FullName `
+            -InstallerType nsis
+
+  publish_release_windows:
+    if: github.event_name == 'workflow_dispatch'
+    name: Publish Windows release assets
+    runs-on: ubuntu-latest
+    needs:
+      - build_release_windows
+      - smoke_nsis_release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-windows-release-${{ inputs.tag }}
+          path: release-artifacts
+
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_DRAFT: ${{ inputs.draft }}
+          RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            create_args=(
+              "$RELEASE_TAG"
+              --repo "$GITHUB_REPOSITORY"
+              --title "OpenClaw ${RELEASE_TAG#v}"
+            )
+            if [[ "$RELEASE_DRAFT" == "true" ]]; then
+              create_args+=(--draft)
+            fi
+            if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
+              create_args+=(--prerelease)
+            fi
+            gh release create "${create_args[@]}"
+          fi
+
+      - name: Upload Windows release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" release-artifacts/* --repo "$GITHUB_REPOSITORY" --clobber

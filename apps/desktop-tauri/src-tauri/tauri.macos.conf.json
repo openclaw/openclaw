@@ -1,0 +1,6 @@
+{
+  "identifier": "ai.openclaw.mac",
+  "bundle": {
+    "targets": ["app", "dmg"]
+  }
+}

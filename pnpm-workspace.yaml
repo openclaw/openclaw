@@ -3,6 +3,7 @@ packages:
   - ui
   - packages/*
   - extensions/*
+  - apps/*
 
 minimumReleaseAge: 2880
 
