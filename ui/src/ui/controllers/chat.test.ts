@@ -674,6 +674,32 @@ describe("loadChatHistory", () => {
 
     expect(state.chatMessages).toEqual([messages[1]]);
   });
+
+  it("filters leaked session reset startup prompts from history", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "A new session was started via /new or /reset. If runtime-provided startup context is included for this first turn, use it before responding to the user. Then greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.\nCurrent time: Wednesday, April 15th, 2026 - 11:42 AM (America/Los_Angeles) / 2026-04-15 18:42 UTC",
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "real reply" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([messages[1]]);
+  });
 });
 
 describe("sendChatMessage", () => {
