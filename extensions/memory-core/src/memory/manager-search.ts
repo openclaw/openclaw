@@ -65,13 +65,22 @@ function extractRelevantSnippet(
   }
 
   // extractKeywords drops pure-numeric tokens (e.g. "404", "2024").
-  // Fall back to raw alphanumeric tokens so numeric queries still anchor.
-  if (queryTerms.length === 0) {
-    queryTerms = query
+  // For mixed queries like "error 404", append numeric tokens that
+  // extractKeywords removed so they can still anchor the snippet.
+  {
+    const rawTokens = query
       .toLowerCase()
       .split(/[^a-z0-9]+/i)
-      .filter((t) => t.length >= 2)
-      .toSorted((a, b) => b.length - a.length);
+      .filter((t) => t.length >= 2);
+    const numericTokens = rawTokens.filter((t) => /^\d+$/.test(t) && !queryTerms.includes(t));
+    if (queryTerms.length === 0) {
+      // Entirely numeric query — use all raw tokens.
+      queryTerms = rawTokens.toSorted((a, b) => b.length - a.length);
+    } else if (numericTokens.length > 0) {
+      // Mixed query — append missing numeric tokens so anchoring
+      // considers them alongside the keyword-extracted terms.
+      queryTerms = [...queryTerms, ...numericTokens.toSorted((a, b) => b.length - a.length)];
+    }
   }
 
   let matchIndex = -1;
