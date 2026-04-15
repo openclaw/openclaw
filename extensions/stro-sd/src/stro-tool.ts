@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import {
   computeStats,
   fetchStroLicenses,
@@ -32,59 +31,55 @@ export const stroSdTool = {
     "Look up active Short-Term Residential Occupancy (STRO) licenses issued by the City of San Diego. " +
     "Use action=search to filter licenses, action=get to look up a specific license by ID, " +
     "and action=stats to see a summary of all active licenses.",
-  parameters: Type.Object(
-    {
-      action: Type.Unsafe<"search" | "get" | "stats">({
+  // Plain JSON schema — no external dependencies needed
+  parameters: {
+    type: "object" as const,
+    additionalProperties: false,
+    required: ["action"],
+    properties: {
+      action: {
         type: "string",
         enum: ["search", "get", "stats"],
         description:
           'Action to perform: "search" filters licenses, "get" retrieves one by license_id, "stats" returns aggregate counts.',
-      }),
-      license_id: Type.Optional(
-        Type.String({
-          description: 'License ID to look up (for action=get), e.g. "STR-01636L".',
-        }),
-      ),
-      tier: Type.Optional(
-        Type.String({
-          description:
-            'Filter by license tier, e.g. "Tier 1", "Tier 2", "Tier 3", or "Tier 4".',
-        }),
-      ),
-      community_planning_area: Type.Optional(
-        Type.String({
-          description:
-            'Filter by community planning area (partial match), e.g. "NORTH PARK" or "MISSION BEACH".',
-        }),
-      ),
-      zip: Type.Optional(
-        Type.String({ description: 'Filter by ZIP code, e.g. "92104".' }),
-      ),
-      council_district: Type.Optional(
-        Type.String({
-          description: 'Filter by city council district number, e.g. "3".',
-        }),
-      ),
-      address_query: Type.Optional(
-        Type.String({
-          description: "Partial address string to search for.",
-        }),
-      ),
-      host_name: Type.Optional(
-        Type.String({
-          description: "Partial host or local contact name to search for.",
-        }),
-      ),
-      limit: Type.Optional(
-        Type.Number({
-          description: "Maximum number of results to return (default 50, max 200).",
-          minimum: 1,
-          maximum: 200,
-        }),
-      ),
+      },
+      license_id: {
+        type: "string",
+        description: 'License ID to look up (for action=get), e.g. "STR-01636L".',
+      },
+      tier: {
+        type: "string",
+        description: 'Filter by license tier, e.g. "Tier 1", "Tier 2", "Tier 3", or "Tier 4".',
+      },
+      community_planning_area: {
+        type: "string",
+        description:
+          'Filter by community planning area (partial match), e.g. "NORTH PARK" or "MISSION BEACH".',
+      },
+      zip: {
+        type: "string",
+        description: 'Filter by ZIP code, e.g. "92104".',
+      },
+      council_district: {
+        type: "string",
+        description: 'Filter by city council district number, e.g. "3".',
+      },
+      address_query: {
+        type: "string",
+        description: "Partial address string to search for.",
+      },
+      host_name: {
+        type: "string",
+        description: "Partial host or local contact name to search for.",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum number of results to return (default 50, max 200).",
+        minimum: 1,
+        maximum: 200,
+      },
     },
-    { additionalProperties: false },
-  ),
+  },
 
   async execute(_id: string, params: Record<string, unknown>) {
     const action = typeof params.action === "string" ? params.action.trim() : "";

@@ -1,14 +1,11 @@
 {
   "name": "stro-sd-plugin",
-  "version": "2026.3.27",
+  "version": "2026.3.28",
   "description": "OpenClaw plugin: San Diego STRO active license lookup",
   "type": "module",
   "openclaw": {
     "extensions": [
       "./index.ts"
     ]
-  },
-  "dependencies": {
-    "@sinclair/typebox": "0.34.48"
   }
 }
