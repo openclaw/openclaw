@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   probeGateway: vi.fn(),
+  detectBinary: vi.fn<(bin: string) => Promise<boolean>>(async () => true),
+  isWSL: vi.fn<() => Promise<boolean>>(async () => false),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -36,6 +38,14 @@ vi.mock("../infra/tailnet.js", () => ({
 
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
+}));
+
+vi.mock("../infra/detect-binary.js", () => ({
+  detectBinary: mocks.detectBinary,
+}));
+
+vi.mock("../infra/wsl.js", () => ({
+  isWSL: mocks.isWSL,
 }));
 
 afterEach(() => {
@@ -73,6 +83,32 @@ describe("resolveBrowserOpenCommand", () => {
     const resolved = await resolveBrowserOpenCommand();
     expect(resolved.argv).toEqual(["explorer.exe"]);
     expect(resolved.command).toBe("explorer.exe");
+    platformSpy.mockRestore();
+  });
+
+  it("does not short-circuit to ssh-no-display on darwin when only SSH_* env vars are set (#67088)", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.stubEnv("SSH_CLIENT", "10.0.0.1 53822 22");
+    vi.stubEnv("SSH_TTY", "/dev/ttys002");
+    vi.stubEnv("SSH_CONNECTION", "10.0.0.1 53822 10.0.0.2 22");
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "");
+    const resolved = await resolveBrowserOpenCommand();
+    expect(resolved.argv).toEqual(["open"]);
+    expect(resolved.command).toBe("open");
+    expect(resolved.reason).toBeUndefined();
+    platformSpy.mockRestore();
+  });
+
+  it("still short-circuits on linux when SSH_* is set without DISPLAY", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    mocks.isWSL.mockResolvedValueOnce(false);
+    vi.stubEnv("SSH_CLIENT", "10.0.0.1 53822 22");
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "");
+    const resolved = await resolveBrowserOpenCommand();
+    expect(resolved.argv).toBeNull();
+    expect(resolved.reason).toBe("ssh-no-display");
     platformSpy.mockRestore();
   });
 });

@@ -29,7 +29,12 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
     Boolean(process.env.SSH_TTY) ||
     Boolean(process.env.SSH_CONNECTION);
 
-  if (isSsh && !hasDisplay && platform !== "win32") {
+  // macOS and Windows both ship their own native GUI subsystem; SSH_* env
+  // vars (for example lingering from Tailscale SSH or a reused shell) do
+  // NOT imply the local display is unavailable. Only use the SSH-without-
+  // DISPLAY heuristic on Linux, where DISPLAY/WAYLAND_DISPLAY is the
+  // canonical GUI probe.
+  if (isSsh && !hasDisplay && platform === "linux") {
     return { argv: null, reason: "ssh-no-display" };
   }
 
