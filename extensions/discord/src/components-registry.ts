@@ -1,11 +1,14 @@
 import {
-  chmodSync,
+  closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   statSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep as pathSep } from "node:path";
@@ -19,6 +22,21 @@ const DISCORD_MODAL_ENTRIES_KEY = Symbol.for("openclaw.discord.modalEntries");
 const REGISTRY_FILE_VERSION = 1;
 const MAX_REGISTRY_BYTES = 1_000_000; // 1 MB — prevents unbounded read/parse DoS
 const MAX_ENTRIES_PER_TYPE = 10_000; // cap total entries per registry type
+const MAX_STRING_ARRAY_LEN = 1_000; // cap for options / allowedUsers arrays
+
+// Fields stripped from persisted entries. Routing fields (sessionKey/agentId/
+// accountId) and authorization fields (allowedUsers) are ephemeral by design
+// and must not be written to disk — an attacker reading the cache must not be
+// able to impersonate sessions or bypass allowlists after a gateway restart.
+const SENSITIVE_ENTRY_FIELDS = ["sessionKey", "agentId", "accountId", "allowedUsers"] as const;
+
+function stripSensitiveFields<T extends object>(entry: T): T {
+  const clone: Record<string, unknown> = { ...entry };
+  for (const key of SENSITIVE_ENTRY_FIELDS) {
+    delete clone[key];
+  }
+  return clone as T;
+}
 
 // --- Path hardening: validate env-var path stays under the safe base directory ---
 function resolveRegistryPath(): string {
@@ -78,6 +96,43 @@ function normalizeEntryTimestamps<T extends { createdAt?: number; expiresAt?: nu
   return { ...entry, createdAt, expiresAt };
 }
 
+function isOptionArray(x: unknown): x is Array<{ value: string; label: string }> {
+  return (
+    Array.isArray(x) &&
+    x.length <= MAX_STRING_ARRAY_LEN &&
+    x.every(
+      (o) =>
+        typeof o === "object" &&
+        o !== null &&
+        typeof (o as { value?: unknown }).value === "string" &&
+        typeof (o as { label?: unknown }).label === "string",
+    )
+  );
+}
+
+function isModalFieldRecord(entry: unknown): boolean {
+  if (typeof entry !== "object" || entry === null) {
+    return false;
+  }
+  const e = entry as Record<string, unknown>;
+  if (typeof e.id !== "string" || !e.id.trim()) {
+    return false;
+  }
+  if (typeof e.name !== "string") {
+    return false;
+  }
+  if (typeof e.label !== "string") {
+    return false;
+  }
+  if (typeof e.type !== "string") {
+    return false;
+  }
+  if (e.options !== undefined && !isOptionArray(e.options)) {
+    return false;
+  }
+  return true;
+}
+
 function isComponentEntryRecord(entry: unknown): entry is DiscordComponentEntry {
   if (typeof entry !== "object" || entry === null) {
     return false;
@@ -92,19 +147,7 @@ function isComponentEntryRecord(entry: unknown): entry is DiscordComponentEntry 
   if (e.selectType !== undefined && typeof e.selectType !== "string") {
     return false;
   }
-  if (e.options !== undefined && !Array.isArray(e.options)) {
-    return false;
-  }
-  if (e.sessionKey !== undefined && typeof e.sessionKey !== "string") {
-    return false;
-  }
-  if (e.agentId !== undefined && typeof e.agentId !== "string") {
-    return false;
-  }
-  if (e.accountId !== undefined && typeof e.accountId !== "string") {
-    return false;
-  }
-  if (e.allowedUsers !== undefined && !Array.isArray(e.allowedUsers)) {
+  if (e.options !== undefined && !isOptionArray(e.options)) {
     return false;
   }
   return true;
@@ -121,19 +164,10 @@ function isModalEntryRecord(entry: unknown): entry is DiscordModalEntry {
   if (typeof e.title !== "string") {
     return false;
   }
-  if (!Array.isArray(e.fields)) {
+  if (!Array.isArray(e.fields) || e.fields.length > MAX_STRING_ARRAY_LEN) {
     return false;
   }
-  if (e.sessionKey !== undefined && typeof e.sessionKey !== "string") {
-    return false;
-  }
-  if (e.agentId !== undefined && typeof e.agentId !== "string") {
-    return false;
-  }
-  if (e.accountId !== undefined && typeof e.accountId !== "string") {
-    return false;
-  }
-  if (e.allowedUsers !== undefined && !Array.isArray(e.allowedUsers)) {
+  if (!e.fields.every(isModalFieldRecord)) {
     return false;
   }
   return true;
@@ -200,42 +234,63 @@ function schedulePersistComponentRegistry(): void {
   });
 }
 
+// Reject symlinks at the destination (CWE-59). Resolving the directory via
+// realpathSync and comparing to the expected base protects against attackers
+// staging `discord-component-registry.json` as a symlink into `~/.ssh/` etc.
+function assertSafeRegistryDestination(filePath: string): void {
+  const dir = dirname(filePath);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const expectedBase = resolve(join(homedir(), ".openclaw", "cache")) + pathSep;
+  const realDir = realpathSync(dir) + pathSep;
+  if (!realDir.startsWith(expectedBase)) {
+    throw new Error("registry directory escapes ~/.openclaw/cache after realpath");
+  }
+  if (existsSync(filePath)) {
+    const st = lstatSync(filePath);
+    if (st.isSymbolicLink()) {
+      throw new Error("registry file is a symlink; refusing to write");
+    }
+  }
+}
+
 function persistComponentRegistry(): void {
   const filePath = getRegistryPath();
+  let tmp: string | undefined;
+  let fd: number | undefined;
   try {
-    const dir = dirname(filePath);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    assertSafeRegistryDestination(filePath);
     const payload: PersistedRegistryFile = {
       version: REGISTRY_FILE_VERSION,
-      components: [...getComponentEntriesStore().values()],
-      modals: [...getModalEntriesStore().values()],
+      components: [...getComponentEntriesStore().values()].map(stripSensitiveFields),
+      modals: [...getModalEntriesStore().values()].map(stripSensitiveFields),
     };
-    // Atomic write: temp file + rename, both with restrictive perms (issues #1, #4)
-    const tmp = filePath + ".tmp";
-    writeFileSync(tmp, `${JSON.stringify(payload)}\n`, { mode: 0o600, flag: "w" });
-    chmodSync(tmp, 0o600);
-    atomicRename(tmp, filePath);
+    // Random tmp name + `wx` open prevents clobbering an attacker-prepared
+    // file (CWE-59/CWE-362). `wx` fails if the path already exists.
+    tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`;
+    fd = openSync(tmp, "wx", 0o600);
+    writeSync(fd, `${JSON.stringify(payload)}\n`);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(tmp, filePath);
+    tmp = undefined;
   } catch (err) {
     console.warn(
       `discord component registry persist failed: ${err instanceof Error ? err.message : String(err)}`,
     );
-  }
-}
-
-function atomicRename(tmp: string, dest: string): void {
-  try {
-    // On POSIX, rename is atomic per the directory entry level.
-    // Node 22+ provides a native `fs.renameSync` which is atomic on same filesystem.
-    renameSync(tmp, dest);
-  } catch {
-    // If rename fails (e.g. cross-device on some POSIX), fall back to direct write.
-    // The file already has 0o600 so the permissions are correct either way.
-    try {
-      const { copyFileSync, unlinkSync } = require("node:fs");
-      copyFileSync(tmp, dest);
-      unlinkSync(tmp);
-    } catch {
-      // Best-effort; leave the temp file for manual cleanup.
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // best-effort
+      }
+    }
+    if (tmp !== undefined) {
+      try {
+        const { unlinkSync } = require("node:fs") as typeof import("node:fs");
+        unlinkSync(tmp);
+      } catch {
+        // best-effort
+      }
     }
   }
 }
@@ -250,7 +305,14 @@ function loadPersistedComponentRegistry(): void {
     return;
   }
   try {
-    // DoS guard: reject files larger than MAX_REGISTRY_BYTES (issue #2)
+    // Refuse to read through a symlink — an attacker who can stage a symlink
+    // inside the cache dir could redirect this read to an arbitrary file.
+    const lst = lstatSync(filePath);
+    if (lst.isSymbolicLink()) {
+      console.warn("discord component registry file is a symlink; ignoring");
+      return;
+    }
+    // DoS guard: reject files larger than MAX_REGISTRY_BYTES
     const st = statSync(filePath);
     if (st.size > MAX_REGISTRY_BYTES) {
       console.warn("discord component registry file too large; ignoring");
@@ -297,6 +359,14 @@ function getModalEntries(): Map<string, DiscordModalEntry> {
   return getModalEntriesStore();
 }
 
+function purgeExpired<T extends { expiresAt?: number }>(store: Map<string, T>, now: number): void {
+  for (const [id, entry] of store) {
+    if (isExpired(entry, now)) {
+      store.delete(id);
+    }
+  }
+}
+
 function registerEntries<
   T extends { id: string; messageId?: string; createdAt?: number; expiresAt?: number },
 >(
@@ -304,6 +374,16 @@ function registerEntries<
   store: Map<string, T>,
   params: { now: number; ttlMs: number; messageId?: string },
 ): void {
+  // Purge expired before inserting so stale entries do not hog the cap and
+  // the persisted snapshot only contains live items. Enforces the
+  // MAX_ENTRIES_PER_TYPE hard cap on registration paths, not just at load.
+  purgeExpired(store, params.now);
+  if (store.size + entries.length > MAX_ENTRIES_PER_TYPE) {
+    console.warn(
+      `discord component registry cap reached (${store.size}/${MAX_ENTRIES_PER_TYPE}); rejecting ${entries.length} new entries`,
+    );
+    return;
+  }
   for (const entry of entries) {
     const normalized = normalizeEntryTimestamps(
       { ...entry, messageId: params.messageId ?? entry.messageId },
