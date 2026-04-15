@@ -4,14 +4,10 @@ import path from "node:path";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
   appendFileWithinRoot,
-  SafeOpenError,
-  openFileWithinRoot,
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
-import { detectMime } from "../media/mime.js";
-import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -19,7 +15,7 @@ import {
   getToolParamsRecord,
   wrapToolParamValidation,
 } from "./pi-tools.params.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
+import type { AnyAgentTool, AgentToolResult } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
@@ -48,6 +44,7 @@ type OpenClawReadToolOptions = {
   imageSanitization?: import("./image-sanitization.js").ImageSanitizationLimits;
   root?: string;
   containerWorkdir?: string;
+  bridge?: SandboxFsBridge;
 };
 
 // --- OPERATIONS HELPERS ---
@@ -57,7 +54,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     readFile: (filePath: string) => params.bridge.readFile({ filePath, cwd: params.root }),
     stat: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }),
     readdir: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(() => []),
-    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) throw new Error("ENOENT"); })
+    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) { throw new Error("ENOENT"); } })
   };
 }
 
@@ -75,7 +72,7 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       params.bridge.readFile({ filePath, cwd: params.root }), 
     writeFile: (filePath: string, data: string) =>
       params.bridge.writeFile({ filePath, data, cwd: params.root }),
-    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) throw new Error("ENOENT"); })
+    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) { throw new Error("ENOENT"); } })
   };
 }
 
@@ -107,7 +104,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   };
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(root: string, _options?: { workspaceOnly?: boolean }) {
   return {
     readFile: (relativePath: string) => 
       readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
@@ -117,18 +114,6 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         relativePath,
         data,
       }),
-    access: (relativePath: string) => fs.access(path.join(root, relativePath))
-  };
-}
-
-function createHostReadOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  return {
-    readFile: (relativePath: string) => readFileWithinRoot({ rootDir: root, relativePath }),
-    stat: async (relativePath: string) => {
-        const f = await openFileWithinRoot({ rootDir: root, relativePath });
-        return f.stat;
-    },
-    readdir: (relativePath: string) => fs.readdir(path.join(root, relativePath)),
     access: (relativePath: string) => fs.access(path.join(root, relativePath))
   };
 }
@@ -193,16 +178,6 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
     readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
   });
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)}KB`;
-  }
-  return `${bytes}B`;
 }
 
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
@@ -479,13 +454,9 @@ export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
-  // Store bridge separately to avoid type issues
-  const bridge = (options as any)?.bridge;
-  const rootDir = options?.root;
-  
   return {
     ...base,
-    execute: async (toolCallId, params, signal, onUpdate) => {
+    execute: async (toolCallId, params, signal, _onUpdate): Promise<AgentToolResult> => {
       if (signal?.aborted) {
         throw new Error("Read operation aborted");
       }
@@ -507,22 +478,13 @@ export function createOpenClawReadTool(
       });
 
       try {
-        // Use bridge if available, otherwise use fs
-        const stats = bridge 
-          ? await bridge.stat({ filePath: inputPath, cwd: rootDir })
-          : await fs.stat(inputPath);
-
-        // P1 FIX: Handle sandbox stat objects without fs.Stats methods
-        const isDirectory = 'type' in stats 
-          ? stats.type === 'directory' 
-          : typeof stats.isDirectory === 'function' && stats.isDirectory();
+        const stats = await fs.stat(inputPath);
+        const isDirectory = stats.isDirectory();
 
         if (isDirectory) {
-          if (signal?.aborted) throw new Error("Read operation aborted");
+          if (signal?.aborted) { throw new Error("Read operation aborted"); }
 
-          const files = bridge
-            ? await (bridge.readdir?.({ filePath: inputPath, cwd: rootDir }) ?? fs.readdir(inputPath))
-            : await fs.readdir(inputPath);
+          const files = await fs.readdir(inputPath);
           
           let truncated = false;
           let fileList = files;
@@ -539,21 +501,17 @@ export function createOpenClawReadTool(
             toolCallId,
             content: [{ type: "text", text: listingText }],
             details: { path: inputPath },
-          };
+          } as AgentToolResult;
         }
 
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
-        const encodedSource = encodeURIComponent(inputPath);
-        // Use absolute path for ALL media types - images, audio, and video
         const mediaUrl = `http://localhost:18791${inputPath.split('/').map(encodeURIComponent).join('/')}`;
 
         if (IMAGE_EXTENSIONS.has(ext)) {
-          if (signal?.aborted) throw new Error("Read operation aborted");
+          if (signal?.aborted) { throw new Error("Read operation aborted"); }
 
-          let fileBuffer = bridge
-            ? await bridge.readFile({ filePath: inputPath, cwd: rootDir })
-            : await fs.readFile(inputPath);
+          let fileBuffer = await fs.readFile(inputPath);
           let mimeType = getImageMimeType(ext);
 
           if (options?.imageSanitization) {
@@ -593,7 +551,7 @@ export function createOpenClawReadTool(
               { type: "text", text: `📷 [${fileName}](${mediaUrl})` },
             ],
             details: { path: inputPath, size: fileBuffer.length },
-          };
+          } as AgentToolResult;
         }
 
         if (AUDIO_EXTENSIONS.has(ext)) {
@@ -612,11 +570,11 @@ export function createOpenClawReadTool(
                 url: mediaUrl,
                 filename: fileName,
                 mimeType: mimeType,
-              } as any,
-              { type: "text", text: `🎵 [${fileName}](${mediaUrl})` }  // ← FIX: Added text link with media URL
+              } as const,
+              { type: "text", text: `🎵 [${fileName}](${mediaUrl})` }
             ],
             details: { path: inputPath, size: stats.size },
-          };
+          } as AgentToolResult;
         }
 
         if (VIDEO_EXTENSIONS.has(ext)) {
@@ -634,17 +592,16 @@ export function createOpenClawReadTool(
                 url: mediaUrl,
                 filename: fileName,
                 mimeType: mimeType,
-              } as any,
-              { type: "text", text: `🎬 [${fileName}](${mediaUrl})` }  // ← FIX: Added text link with media URL
+              } as const,
+              { type: "text", text: `🎬 [${fileName}](${mediaUrl})` }
             ],
             details: { path: inputPath, size: stats.size },
-          };
+          } as AgentToolResult;
         }
 
-        if (signal?.aborted) throw new Error("Read operation aborted");
-        let text = bridge
-          ? (await bridge.readFile({ filePath: inputPath, cwd: rootDir })).toString("utf-8")
-          : await fs.readFile(inputPath, "utf-8");
+        if (signal?.aborted) { throw new Error("Read operation aborted"); }
+        
+        let text = await fs.readFile(inputPath, "utf-8");
 
         if (offset > 0 || limit !== undefined) {
           const lines = text.split('\n');
@@ -662,14 +619,14 @@ export function createOpenClawReadTool(
           toolCallId,
           content: [{ type: "text", text }],
           details: { path: inputPath, size: stats.size, offset, limit },
-        };
+        } as AgentToolResult;
 
       } catch (error) {
         return {
           toolCallId,
           content: [{ type: "text", text: `Error reading path: ${(error as Error).message}` }],
           details: { path: inputPath },
-        };
+        } as AgentToolResult;
       }
     },
   };

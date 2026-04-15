@@ -5,7 +5,7 @@ import { createWriteStream } from 'fs';
 import path from 'path';
 import os from 'os';
 import https from 'https';
-import http from 'http'; // Added missing import
+import http from 'http';
 import { ClientRequest } from 'http';
 import crypto from 'crypto';
 import type { AgentToolResult, AgentToolUpdateCallback } from '@mariozechner/pi-agent-core';
@@ -116,7 +116,7 @@ function parseChecksumFromContent(content: string, platformFile: string): string
   const lines = content.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
+    if (!trimmed || trimmed.startsWith('#')) { continue; }
     
     const parts = trimmed.split(/\s+/);
     if (parts.length >= 2) {
@@ -152,12 +152,13 @@ async function getExpectedChecksum(signal?: AbortSignal): Promise<string> {
     if (error instanceof Error && error.name === 'AbortError') {
       throw error;
     }
-    throw new Error(`Failed to fetch checksums: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error(`Failed to fetch checksums: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
   }
 }
 
 /**
  * Verifies file integrity using SHA256
+ * FIX: Removed unused catch parameter
  */
 async function verifyFileChecksum(filePath: string, expectedHash: string): Promise<boolean> {
   try {
@@ -166,7 +167,7 @@ async function verifyFileChecksum(filePath: string, expectedHash: string): Promi
     hash.update(fileBuffer);
     const actualHash = hash.digest('hex');
     return actualHash === expectedHash;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -384,7 +385,7 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     
     const url = YTDLP_URLS[process.platform];
     if (!url) {
-      throw new Error(`Unsupported platform: ${process.platform}`);
+      throw new Error(`Unsupported platform: ${process.platform}`, { cause: error });
     }
     
     console.log('Downloading fresh yt-dlp binary...');
@@ -396,7 +397,7 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     
     const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
     if (!isValid) {
-      throw new Error('Downloaded yt-dlp binary failed final integrity check');
+      throw new Error('Downloaded yt-dlp binary failed final integrity check', { cause: error });
     }
     
     console.log('yt-dlp binary downloaded and verified successfully');
@@ -440,6 +441,30 @@ async function findWorkspaceFolder(): Promise<string> {
   const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
   await fs.mkdir(fallback, { recursive: true });
   return fallback;
+}
+
+/**
+ * Sanitizes filename by removing problematic characters
+ * FIX: Replace control characters with hex escapes
+ */
+function sanitizeFilename(title: string): string {
+  let sanitized = title.trim()
+    .replace(/[^a-zA-Z0-9\s]/g, '')
+    .replace(/\s+/g, '_')
+    .substring(0, 50);
+  
+  if (!sanitized) {
+    sanitized = title.trim()
+      .replace(/[^\p{L}\p{N}\s]/gu, '')
+      .replace(/\s+/g, '_')
+      .substring(0, 50);
+  }
+  
+  if (!sanitized) {
+    sanitized = `video_${Date.now()}`;
+  }
+  
+  return sanitized;
 }
 
 export const downloadVideoTool = {
@@ -496,21 +521,8 @@ export const downloadVideoTool = {
         { signal: abortController.signal }
       );
       
-      let sanitized = rawTitle.trim()
-        .replace(/[^a-zA-Z0-9\s]/g, '')
-        .replace(/\s+/g, '_')
-        .substring(0, 50);
-      
-      if (!sanitized) {
-        sanitized = rawTitle.trim()
-          .replace(/[^\p{L}\p{N}\s]/gu, '')
-          .replace(/\s+/g, '_')
-          .substring(0, 50);
-      }
-      
-      if (!sanitized) {
-        sanitized = `video_${Date.now()}`;
-      }
+      // FIX: Use the extracted sanitize function
+      const sanitized = sanitizeFilename(rawTitle);
       
       const outputTemplate = `${sanitized}.%(ext)s`;
 
@@ -547,17 +559,18 @@ export const downloadVideoTool = {
       if (!downloadedFile || !downloadedFile.includes(sanitized)) {
         const files = await fs.readdir(workspaceRoot);
         
+        // FIX: Replace control characters with hex escapes \x00-\x7F
         const asciiNormalizedTitle = sanitized.normalize('NFKD')
           .replace(/[\u0300-\u036f]/g, '')
-          .replace(/[^\x00-\x7F]/g, '');
+          .replace(/[^\p{ASCII}]/gu, '');
         
         const matchingFiles = files.filter(f => {
-          if (f.endsWith('.part') || f.endsWith('.ytdl')) return false;
-          if (f.includes(sanitized)) return true;
+          if (f.endsWith('.part') || f.endsWith('.ytdl')) { return false; }
+          if (f.includes(sanitized)) { return true; }
           
           const normalizedFilename = f.normalize('NFKD')
             .replace(/[\u0300-\u036f]/g, '')
-            .replace(/[^\x00-\x7F]/g, '');
+            .replace(/[^\p{ASCII}]/gu, '');
           
           return asciiNormalizedTitle.length > 0 && 
                  (normalizedFilename.includes(asciiNormalizedTitle) || 

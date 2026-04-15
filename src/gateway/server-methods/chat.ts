@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
@@ -13,7 +12,6 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
@@ -2175,7 +2173,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               });
             } else {
               const finalPayloads = deliveredReplies.filter((entry) => entry.kind === "final").map((entry) => entry.payload);
-              const mediaPayloads = finalPayloads.filter((p) => isMediaBearingPayload(p));
               const textPayloads = finalPayloads.filter((p) => !isMediaBearingPayload(p));
               
               let message: Record<string, unknown> | undefined;

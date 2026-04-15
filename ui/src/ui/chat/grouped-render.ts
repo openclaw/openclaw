@@ -1443,7 +1443,7 @@ function renderGroupedMessage(
     if (el.hasAttribute('data-resize-initialized')) {return;}
     el.setAttribute('data-resize-initialized', 'true');
     setTimeout(() => {
-      setupResizeHandles(el as HTMLElement, 'bottom-right', messageId);
+      setupResizeHandles(el, 'bottom-right', messageId);
     }, 100);
   };
 
