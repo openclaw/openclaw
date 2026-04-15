@@ -162,6 +162,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private readonly deps = createDefaultDeps();
   private readonly runs = new Map<string, LocalRunState>();
   private unsubscribe?: () => void;
+  private previousRuntimeLog?: typeof defaultRuntime.log;
+  private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
 
   start() {
@@ -171,8 +173,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     setEmbeddedMode(true);
     // Suppress console output from logError/logInfo that would pollute the TUI.
     // File logger (getLogger()) still captures everything via logger.ts:35.
-    defaultRuntime.log = () => undefined;
-    defaultRuntime.error = () => undefined;
+    this.previousRuntimeLog = defaultRuntime.log;
+    this.previousRuntimeError = defaultRuntime.error;
+    defaultRuntime.log = silentRuntime.log;
+    defaultRuntime.error = silentRuntime.error;
     this.unsubscribe = onAgentEvent((evt) => {
       void this.handleAgentEvent(evt);
     });
@@ -188,6 +192,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.controller.abort();
     }
     this.runs.clear();
+    defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
+    defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
+    this.previousRuntimeLog = undefined;
+    this.previousRuntimeError = undefined;
+    setEmbeddedMode(false);
   }
 
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
@@ -357,7 +366,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
       catalog,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    return (allowedCatalog.length > 0 ? allowedCatalog : catalog) as TuiModelChoice[];
+    const entries = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+    return entries.map((entry) => ({
+      id: entry.id,
+      name: entry.name ?? entry.id,
+      provider: entry.provider,
+      contextWindow: entry.contextWindow,
+      reasoning: entry.reasoning,
+    }));
   }
 
   private abortSessionRuns(sessionKey: string) {

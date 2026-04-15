@@ -25,12 +25,13 @@ export function registerTuiCli(program: Command) {
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
     )
-    .action(async (opts, _cmd) => {
+    .action(async (opts, cmd) => {
       try {
-        // `openclaw terminal` and `openclaw chat` imply --local.
-        // Extract the actual subcommand (first non-flag arg after the binary).
-        const subcommand = process.argv.slice(2).find((arg) => !arg.startsWith("-"));
-        const invokedAsLocalAlias = subcommand === "terminal" || subcommand === "chat";
+        // `cmd.name()` always returns the canonical subcommand name (`tui`).
+        // Use the parsed parent args to see which alias the user actually typed.
+        const invokedSubcommand = cmd.parent?.args[0];
+        const invokedAsLocalAlias =
+          invokedSubcommand === "terminal" || invokedSubcommand === "chat";
         const isLocal = Boolean(opts.local) || invokedAsLocalAlias;
         if (isLocal && (opts.url || opts.token || opts.password)) {
           throw new Error("--local cannot be combined with --url, --token, or --password");

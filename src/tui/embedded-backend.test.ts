@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
+import { defaultRuntime } from "../runtime.js";
 
 const agentCommandFromIngressMock = vi.fn();
 let registeredListener: ((evt: unknown) => void) | undefined;
@@ -34,9 +36,21 @@ async function flushMicrotasks() {
 }
 
 describe("EmbeddedTuiBackend", () => {
+  const originalRuntimeLog = defaultRuntime.log;
+  const originalRuntimeError = defaultRuntime.error;
+
   beforeEach(() => {
     agentCommandFromIngressMock.mockReset();
     registeredListener = undefined;
+    setEmbeddedMode(false);
+    defaultRuntime.log = originalRuntimeLog;
+    defaultRuntime.error = originalRuntimeError;
+  });
+
+  afterEach(() => {
+    setEmbeddedMode(false);
+    defaultRuntime.log = originalRuntimeLog;
+    defaultRuntime.error = originalRuntimeError;
   });
 
   it("bridges assistant and lifecycle events into chat events", async () => {
@@ -197,5 +211,22 @@ describe("EmbeddedTuiBackend", () => {
 
     expect(result).toEqual({ ok: true, aborted: true });
     expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it("restores embedded mode and runtime loggers on stop", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+
+    expect(isEmbeddedMode()).toBe(true);
+    expect(defaultRuntime.log).not.toBe(originalRuntimeLog);
+    expect(defaultRuntime.error).not.toBe(originalRuntimeError);
+
+    backend.stop();
+
+    expect(isEmbeddedMode()).toBe(false);
+    expect(defaultRuntime.log).toBe(originalRuntimeLog);
+    expect(defaultRuntime.error).toBe(originalRuntimeError);
   });
 });

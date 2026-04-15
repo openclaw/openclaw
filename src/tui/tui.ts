@@ -56,7 +56,7 @@ export {
   shouldEnableWindowsGitBashPasteFallback,
 } from "./tui-submit.js";
 
-const RUN_NODE_SCRIPT_PATH = fileURLToPath(new URL("../scripts/run-node.mjs", import.meta.url));
+const RUN_NODE_SCRIPT_PATH = fileURLToPath(new URL("../../scripts/run-node.mjs", import.meta.url));
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
 
