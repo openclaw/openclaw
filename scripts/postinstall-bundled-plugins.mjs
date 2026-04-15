@@ -119,11 +119,20 @@ function readInstalledDistInventory(params = {}) {
   if (!pathExists(inventoryPath)) {
     throw new Error(`missing dist inventory: ${DIST_INVENTORY_PATH}`);
   }
-  const parsed = JSON.parse(readFile(inventoryPath, "utf8"));
+  let parsed;
+  try {
+    parsed = JSON.parse(readFile(inventoryPath, "utf8"));
+  } catch {
+    throw new Error(`invalid dist inventory: ${DIST_INVENTORY_PATH}`);
+  }
   if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
     throw new Error(`invalid dist inventory: ${DIST_INVENTORY_PATH}`);
   }
   return new Set(parsed.map(normalizeRelativePath));
+}
+
+function isRecoverableInstalledDistInventoryError(error) {
+  return error instanceof Error && /^(missing|invalid) dist inventory: /u.test(error.message);
 }
 
 function resolveInstalledDistRoot(params = {}) {
@@ -250,7 +259,18 @@ export function pruneInstalledPackageDist(params = {}) {
   if (distRoot === null) {
     return [];
   }
-  const expectedFiles = params.expectedFiles ?? readInstalledDistInventory(params);
+  let expectedFiles = params.expectedFiles ?? null;
+  if (expectedFiles === null) {
+    try {
+      expectedFiles = readInstalledDistInventory(params);
+    } catch (error) {
+      if (!isRecoverableInstalledDistInventoryError(error)) {
+        throw error;
+      }
+      log.warn?.(`[postinstall] skipping dist prune: ${error.message}`);
+      return [];
+    }
+  }
   const installedFiles = listInstalledDistFiles(params);
   const removed = [];
 
