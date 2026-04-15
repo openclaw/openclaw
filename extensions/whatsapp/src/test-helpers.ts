@@ -587,6 +587,7 @@ vi.mock("./session.runtime.js", () => {
     created.lastSocket;
   return {
     ...created.mod,
+    loadBaileysRuntime: async () => created.mod,
   };
 });
 
