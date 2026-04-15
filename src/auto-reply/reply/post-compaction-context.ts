@@ -157,7 +157,7 @@ export async function readPostCompactionContext(
 
 /**
  * Extract named sections from markdown content.
- * Matches H2 (##) or H3 (###) headings case-insensitively.
+ * Matches H1 (#) through H4 (####) headings case-insensitively.
  * Skips content inside fenced code blocks.
  * Captures until the next heading of same or higher level, or end of string.
  */
@@ -193,11 +193,11 @@ export function extractSections(
         continue;
       }
 
-      // Check if this line is a heading
-      const headingMatch = line.match(/^(#{2,3})\s+(.+?)\s*$/);
+      // Check if this line is a heading (H1 through H4)
+      const headingMatch = line.match(/^(#{1,4})\s+(.+?)\s*$/);
 
       if (headingMatch) {
-        const level = headingMatch[1].length; // 2 or 3
+        const level = headingMatch[1].length; // 1 to 4
         const headingText = headingMatch[2];
 
         if (!inSection) {

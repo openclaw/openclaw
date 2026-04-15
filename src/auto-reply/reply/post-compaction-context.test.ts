@@ -150,6 +150,88 @@ Read these files.
     expect(result).toContain("Read these files");
   });
 
+  it("matches H1 headings (top-level section)", async () => {
+    // Regression: extractSections previously used /^(#{2,3})/ and silently
+    // skipped H1 headings, causing post-compaction injection to fail when users
+    // wrote "# Session Startup" instead of "## Session Startup".
+    const content = `# Session Startup
+
+Read WORKFLOW_AUTO.md first.
+
+# Other Section
+
+Not relevant.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Session Startup");
+    expect(result).toContain("WORKFLOW_AUTO.md");
+    expect(result).not.toContain("Other Section");
+  });
+
+  it("matches H4 headings", async () => {
+    const content = `#### Session Startup
+
+H4 startup instructions.
+
+#### Other
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("H4 startup instructions");
+  });
+
+  it("H1 section is terminated by the next H1", async () => {
+    // A same-level H1 should terminate the current H1 section.
+    const content = `# Session Startup
+
+Critical startup content.
+
+# Red Lines
+
+Do not break rules.
+
+# Unrelated
+
+Ignore this.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Critical startup content");
+    expect(result).toContain("Do not break rules");
+    expect(result).not.toContain("Unrelated");
+  });
+
+  it("H1 section includes lower-level sub-headings (H2/H3)", async () => {
+    // Sub-headings inside an H1 section must be captured as part of the section.
+    const content = `# Session Startup
+
+## Step 1
+
+Do step one.
+
+### Step 1a
+
+Detail for step 1a.
+
+## Step 2
+
+Do step two.
+
+# Other
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Step 1");
+    expect(result).toContain("Step 1a");
+    expect(result).toContain("Step 2");
+    expect(result).not.toContain("Other");
+  });
+
   it("skips sections inside code blocks", async () => {
     const content = `# Rules
 
