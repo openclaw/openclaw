@@ -1058,7 +1058,7 @@ export async function spawnAcpDirect(
         const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
         const store = loadSessionStore(storePath);
         const entry = store[resolved.key] as SessionEntry | undefined;
-        if (!entry?.acp?.mode || entry.acp.mode === "persistent") {
+        if (entry && (!entry.acp?.mode || entry.acp.mode === "persistent")) {
           sessionKey = resolved.key;
           wasResolved = true;
         }
