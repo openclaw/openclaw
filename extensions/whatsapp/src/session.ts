@@ -15,13 +15,8 @@ import {
   resolveWebCredsPath,
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
-type BaileysRuntime = typeof import("@whiskeysockets/baileys");
-let baileysRuntimePromise: Promise<BaileysRuntime> | null = null;
-
-function loadBaileysRuntime(): Promise<BaileysRuntime> {
-  baileysRuntimePromise ??= import("@whiskeysockets/baileys");
-  return baileysRuntimePromise;
-}
+import { loadBaileysRuntime } from "./session.runtime.js";
+type BaileysRuntime = Awaited<ReturnType<typeof loadBaileysRuntime>>;
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
