@@ -38,6 +38,13 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // Telegram Bot API URLs embed the token as `/bot<token>/...` (no word-boundary before digits).
   String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
+  // JWT tokens (eyJ... format — three base64url segments separated by dots).
+  String.raw`\b(eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,})\b`,
+  // Authorization: Basic <base64>
+  String.raw`Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]{10,})`,
+  String.raw`\bBasic\s+([A-Za-z0-9+/=]{18,})\b`,
+  // Custom header-style token assignments (X-OpenClaw-Token, x-pomerium-jwt-assertion, etc.).
+  String.raw`(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|[Xx]-[A-Za-z0-9-]*[Tt]oken|[Xx]-[A-Za-z0-9-]*[Aa]ssertion|[Xx]-[A-Za-z0-9-]*[Ss]ecret)\s*[:=]\s*([^\s\"']{10,})`,
 ];
 
 type RedactOptions = {
