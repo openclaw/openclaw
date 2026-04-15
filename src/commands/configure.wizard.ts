@@ -1,9 +1,10 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
+import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -165,8 +166,7 @@ async function promptWebToolsConfig(
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
   const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
-  const { describeCodexNativeWebSearch, isCodexNativeWebSearchRelevant } =
-    await import("../agents/codex-native-web-search.js");
+  const { isCodexNativeWebSearchRelevant } = await import("../agents/codex-native-web-search.js");
   const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
 
   note(
@@ -465,7 +465,7 @@ export async function runConfigureWizard(
         runtime,
       );
       workspaceDir = resolveUserPath(
-        normalizeOptionalString(String(workspaceInput ?? "")) || DEFAULT_WORKSPACE,
+        normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,
       );
       if (!snapshot.exists) {
         const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
@@ -530,7 +530,7 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      gatewayPort = Number.parseInt(String(portInput), 10);
+      gatewayPort = Number.parseInt(portInput, 10);
     };
 
     if (opts.sections) {

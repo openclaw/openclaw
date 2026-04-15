@@ -12,12 +12,12 @@ import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import type { OpenClawConfig } from "../api.js";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";

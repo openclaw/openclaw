@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createWhatsAppPollFixture, expectWhatsAppPollSent } from "../test-api.js";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";
+import { createWhatsAppPollFixture } from "./outbound-test-support.js";
 
 describe("createWhatsAppOutboundBase", () => {
   it("exposes the provided chunker", () => {
@@ -75,7 +75,11 @@ describe("createWhatsAppOutboundBase", () => {
       accountId,
     });
 
-    expectWhatsAppPollSent(sendPollWhatsApp, { cfg, poll, to, accountId });
+    expect(sendPollWhatsApp).toHaveBeenCalledWith(to, poll, {
+      verbose: false,
+      accountId,
+      cfg,
+    });
     expect(result).toEqual({
       channel: "whatsapp",
       messageId: "wa-poll-1",

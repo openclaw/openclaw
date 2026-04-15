@@ -686,17 +686,17 @@ describe("workspace .env blocklist completeness", () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          "MY_APP_KEY=user-value\nGITHUB_TOKEN=ghp_test123\nDATABASE_URL_CUSTOM=pg://localhost\n",
+          "MY_APP_KEY=user-value\nAPP_GITHUB_REPO=openclaw/openclaw\nDATABASE_URL_CUSTOM=pg://localhost\n",
         );
 
         delete process.env.MY_APP_KEY;
-        delete process.env.GITHUB_TOKEN;
+        delete process.env.APP_GITHUB_REPO;
         delete process.env.DATABASE_URL_CUSTOM;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.MY_APP_KEY).toBe("user-value");
-        expect(process.env.GITHUB_TOKEN).toBe("ghp_test123");
+        expect(process.env.APP_GITHUB_REPO).toBe("openclaw/openclaw");
         expect(process.env.DATABASE_URL_CUSTOM).toBe("pg://localhost");
       });
     });

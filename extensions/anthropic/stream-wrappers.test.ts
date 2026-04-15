@@ -18,7 +18,7 @@ function runWrapper(apiKey: string | undefined): Record<string, string> | undefi
     return {} as never;
   };
   const wrapper = createAnthropicBetaHeadersWrapper(base, [CONTEXT_1M_BETA]);
-  wrapper(
+  void wrapper(
     { provider: "anthropic", id: "claude-opus-4-6" } as never,
     {} as never,
     { apiKey } as never,
@@ -64,7 +64,7 @@ describe("anthropic stream wrappers", () => {
       extraParams: { context1m: true, serviceTier: "auto" },
     } as never);
 
-    wrapped?.(
+    void wrapped?.(
       { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
       {} as never,
       { apiKey: "sk-ant-oat01-oauth-token" } as never,
@@ -91,7 +91,7 @@ describe("anthropic stream wrappers", () => {
       extraParams: { context1m: true, serviceTier: "auto" },
     } as never);
 
-    wrapped?.(
+    void wrapped?.(
       { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
       {} as never,
       { apiKey: "sk-ant-api-123" } as never,
@@ -121,7 +121,7 @@ describe("createAnthropicFastModeWrapper", () => {
     };
 
     const wrapper = createAnthropicFastModeWrapper(base, params.enabled ?? true);
-    wrapper(
+    void wrapper(
       {
         provider: params.provider ?? "anthropic",
         api: params.api ?? "anthropic-messages",
@@ -177,7 +177,7 @@ describe("createAnthropicServiceTierWrapper", () => {
     };
 
     const wrapper = createAnthropicServiceTierWrapper(base, params.serviceTier ?? "auto");
-    wrapper(
+    void wrapper(
       {
         provider: params.provider ?? "anthropic",
         api: params.api ?? "anthropic-messages",

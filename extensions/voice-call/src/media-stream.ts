@@ -15,6 +15,7 @@ import type {
   RealtimeTranscriptionSession,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
+import { logger } from "./logger.js";
 
 /**
  * Configuration for the media stream handler.
@@ -32,6 +33,8 @@ export interface MediaStreamConfig {
   maxPendingConnectionsPerIp?: number;
   /** Max total open sockets (pending + active sessions). */
   maxConnections?: number;
+  /** Optional trusted resolver for the source IP used by pending-connection guards. */
+  resolveClientIp?: (request: IncomingMessage) => string | undefined;
   /** Validate whether to accept a media stream for the given call ID */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
@@ -119,6 +122,7 @@ export class MediaStreamHandler {
   private maxPendingConnections: number;
   private maxPendingConnectionsPerIp: number;
   private maxConnections: number;
+  private inflightUpgrades = 0;
   /** TTS playback queues per stream (serialize audio to prevent overlap) */
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
   /** Whether TTS is currently playing per stream */
@@ -148,15 +152,42 @@ export class MediaStreamHandler {
       this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
     }
 
-    const currentConnections = this.wss.clients.size;
+    const currentConnections = this.getCurrentConnectionCount();
     if (currentConnections >= this.maxConnections) {
       this.rejectUpgrade(socket, 503, "Too many media stream connections");
       return;
     }
 
-    this.wss.handleUpgrade(request, socket, head, (ws) => {
-      this.wss?.emit("connection", ws, request);
-    });
+    this.inflightUpgrades += 1;
+    let released = false;
+    const releaseUpgradeReservation = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.inflightUpgrades = Math.max(0, this.inflightUpgrades - 1);
+    };
+    const handleUpgradeAbort = () => {
+      socket.removeListener("error", handleUpgradeAbort);
+      socket.removeListener("close", handleUpgradeAbort);
+      releaseUpgradeReservation();
+    };
+    socket.once("error", handleUpgradeAbort);
+    socket.once("close", handleUpgradeAbort);
+
+    try {
+      this.wss.handleUpgrade(request, socket, head, (ws) => {
+        socket.removeListener("error", handleUpgradeAbort);
+        socket.removeListener("close", handleUpgradeAbort);
+        releaseUpgradeReservation();
+        this.wss?.emit("connection", ws, request);
+      });
+    } catch (error) {
+      socket.removeListener("error", handleUpgradeAbort);
+      socket.removeListener("close", handleUpgradeAbort);
+      releaseUpgradeReservation();
+      throw error;
+    }
   }
 
   /**
@@ -179,7 +210,7 @@ export class MediaStreamHandler {
 
         switch (message.event) {
           case "connected":
-            console.log("[MediaStream] Twilio connected");
+            logger.info("[MediaStream] Twilio connected");
             break;
 
           case "start":
@@ -205,16 +236,14 @@ export class MediaStreamHandler {
             break;
         }
       } catch (error) {
-        console.error("[MediaStream] Error processing message:", error);
+        logger.error("[MediaStream] Error processing message:", error);
       }
     });
 
     ws.on("close", (code, reason) => {
       const rawReason = Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || "");
       const reasonText = sanitizeLogText(rawReason, CLOSE_REASON_LOG_MAX_CHARS);
-      console.log(
-        `[MediaStream] WebSocket closed (code: ${code}, reason: ${reasonText || "none"})`,
-      );
+      logger.info(`[MediaStream] WebSocket closed (code: ${code}, reason: ${reasonText || "none"})`);
       this.clearPendingConnection(ws);
       if (session) {
         this.handleStop(session);
@@ -222,7 +251,7 @@ export class MediaStreamHandler {
     });
 
     ws.on("error", (error) => {
-      console.error("[MediaStream] WebSocket error:", error);
+      logger.error("[MediaStream] WebSocket error:", error);
     });
   }
 
@@ -242,9 +271,9 @@ export class MediaStreamHandler {
     // URLs but reliably delivers <Parameter> values in customParameters.
     const effectiveToken = message.start?.customParameters?.token ?? streamToken;
 
-    console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
+    logger.info(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
     if (!callSid) {
-      console.warn("[MediaStream] Missing callSid; closing stream");
+      logger.warn("[MediaStream] Missing callSid; closing stream");
       ws.close(1008, "Missing callSid");
       return null;
     }
@@ -252,7 +281,7 @@ export class MediaStreamHandler {
       this.config.shouldAcceptStream &&
       !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })
     ) {
-      console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
+      logger.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
       ws.close(1008, "Unknown call");
       return null;
     }
@@ -269,7 +298,7 @@ export class MediaStreamHandler {
         this.config.onSpeechStart?.(callSid);
       },
       onError: (error) => {
-        console.warn("[MediaStream] Transcription session error:", error.message);
+        logger.warn("[MediaStream] Transcription session error:", error.message);
       },
     });
 
@@ -287,7 +316,7 @@ export class MediaStreamHandler {
 
     // Connect to transcription service (non-blocking, log errors but don't fail the call)
     sttSession.connect().catch((err) => {
-      console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
+      logger.warn(`[MediaStream] STT connection failed (TTS still works): ${err.message}`);
     });
 
     return session;
@@ -297,7 +326,7 @@ export class MediaStreamHandler {
    * Handle stream stop event.
    */
   private handleStop(session: StreamSession): void {
-    console.log(`[MediaStream] Stream stopped: ${session.streamSid}`);
+    logger.info(`[MediaStream] Stream stopped: ${session.streamSid}`);
 
     this.clearTtsState(session.streamSid);
     session.sttSession.close();
@@ -318,18 +347,26 @@ export class MediaStreamHandler {
   }
 
   private getClientIp(request: IncomingMessage): string {
+    const resolvedIp = this.config.resolveClientIp?.(request)?.trim();
+    if (resolvedIp) {
+      return resolvedIp;
+    }
     return request.socket.remoteAddress || "unknown";
+  }
+
+  private getCurrentConnectionCount(): number {
+    return this.wss ? this.wss.clients.size + this.inflightUpgrades : this.inflightUpgrades;
   }
 
   private registerPendingConnection(ws: WebSocket, ip: string): boolean {
     if (this.pendingConnections.size >= this.maxPendingConnections) {
-      console.warn("[MediaStream] Rejecting connection: pending connection limit reached");
+      logger.warn("[MediaStream] Rejecting connection: pending connection limit reached");
       return false;
     }
 
     const pendingForIp = this.pendingByIp.get(ip) ?? 0;
     if (pendingForIp >= this.maxPendingConnectionsPerIp) {
-      console.warn(`[MediaStream] Rejecting connection: pending per-IP limit reached (${ip})`);
+      logger.warn(`[MediaStream] Rejecting connection: pending per-IP limit reached (${ip})`);
       return false;
     }
 
@@ -337,9 +374,7 @@ export class MediaStreamHandler {
       if (!this.pendingConnections.has(ws)) {
         return;
       }
-      console.warn(
-        `[MediaStream] Closing pre-start idle connection after ${this.preStartTimeoutMs}ms (${ip})`,
-      );
+      logger.warn(`[MediaStream] Closing pre-start idle connection after ${this.preStartTimeoutMs}ms (${ip})`);
       ws.close(1008, "Start timeout");
     }, this.preStartTimeoutMs);
 
@@ -578,7 +613,7 @@ export class MediaStreamHandler {
         if (entry.controller.signal.aborted) {
           entry.resolve();
         } else {
-          console.error("[MediaStream] TTS playback error:", error);
+          logger.error("[MediaStream] TTS playback error:", error);
           entry.reject(error);
         }
       } finally {

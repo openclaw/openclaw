@@ -6,12 +6,8 @@ import type {
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
-import type { OpenShellSandboxBackend } from "./backend.js";
+import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { movePathWithCopyFallback } from "./mirror.js";
-
-type OpenShellFsBridgeContext = Parameters<
-  NonNullable<OpenShellSandboxBackend["createFsBridge"]>
->[0]["sandbox"];
 
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;

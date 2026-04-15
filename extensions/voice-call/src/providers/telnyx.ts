@@ -19,6 +19,7 @@ import type {
 import { verifyTelnyxWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
+import { logger } from "../logger.js";
 
 /**
  * Telnyx Voice API provider implementation.
@@ -224,7 +225,7 @@ export class TelnyxProvider implements VoiceCallProvider {
       default:
         // Unknown cause - log it for debugging and return completed
         if (cause) {
-          console.warn(`[telnyx] Unknown hangup cause: ${cause}`);
+          logger.warn(`Unknown hangup cause: ${cause}`);
         }
         return "completed";
     }

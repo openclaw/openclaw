@@ -132,7 +132,7 @@ export class MetricsCollector {
       case "prometheus":
         return this.exportAsPrometheus();
       default:
-        throw new Error(`Unsupported export format: ${format}`);
+        throw new Error(`Unsupported export format: `);
     }
   }
 

@@ -16,6 +16,7 @@ import {
 import { z } from "openclaw/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
+  getPluginRuntimeGatewayRequestScope,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
 } from "../runtime-api.js";
@@ -127,6 +128,8 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
   nip05: nip05FormatSchema,
   lud16: lud16FormatSchema,
 });
+
+const PROFILE_MUTATION_SCOPE = "operator.admin";
 
 // ============================================================================
 // Request Helpers
@@ -298,6 +301,21 @@ function enforceLoopbackMutationGuards(
   return true;
 }
 
+function enforceGatewayMutationScope(
+  ctx: NostrProfileHttpContext,
+  accountId: string,
+  res: ServerResponse,
+): boolean {
+  const runtimeScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
+  const scopes = Array.isArray(runtimeScopes) ? runtimeScopes : [];
+  if (scopes.includes(PROFILE_MUTATION_SCOPE)) {
+    return true;
+  }
+  ctx.log?.warn?.(`[${accountId}] Rejected profile mutation missing ${PROFILE_MUTATION_SCOPE}`);
+  sendJson(res, 403, { ok: false, error: `missing scope: ${PROFILE_MUTATION_SCOPE}` });
+  return false;
+}
+
 // ============================================================================
 // HTTP Handler
 // ============================================================================
@@ -380,6 +398,9 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }
@@ -483,6 +504,9 @@ async function handleImportProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }

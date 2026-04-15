@@ -4,8 +4,8 @@ import {
   normalizeAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
 
 let zalouserAccountsRuntimePromise: Promise<typeof import("./accounts.runtime.js")> | undefined;

@@ -130,7 +130,7 @@ export function createAgentPerformanceTool(
 async function monitorPerformance(
   metric: string,
   duration: number,
-  config?: OpenClawConfig,
+  _config?: OpenClawConfig,
 ): Promise<Partial<PerformanceMetrics>> {
   // Simulate performance monitoring
   const mockMetrics = generateMockMetrics(metric);
@@ -148,7 +148,7 @@ async function monitorPerformance(
 async function runBenchmark(
   metric: string,
   includeBaseline: boolean,
-  config?: OpenClawConfig,
+  _config?: OpenClawConfig,
 ): Promise<BenchmarkResult> {
   const testType = `${metric}_performance_test`;
   const score = Math.floor(Math.random() * 100) + 50;
@@ -173,7 +173,7 @@ async function runBenchmark(
 
 async function profileAgent(
   metric: string,
-  config?: OpenClawConfig,
+  _config?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   const profileData = {
     metric,
@@ -197,7 +197,7 @@ async function profileAgent(
 
 async function diagnosePerformance(
   metric: string,
-  config?: OpenClawConfig,
+  _config?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   const issues = [
     "High memory usage detected",
@@ -225,7 +225,7 @@ async function diagnosePerformance(
 
 async function getOptimizationSuggestions(
   metric: string,
-  config?: OpenClawConfig,
+  _config?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   const suggestions = {
     immediate: [

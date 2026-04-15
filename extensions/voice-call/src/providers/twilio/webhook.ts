@@ -1,6 +1,7 @@
 import type { WebhookContext, WebhookVerificationResult } from "../../types.js";
 import { verifyTwilioWebhook } from "../../webhook-security.js";
-import type { TwilioProviderOptions } from "../twilio.js";
+import type { TwilioProviderOptions } from "../twilio.types.js";
+import { logger } from "../../logger.js";
 
 export function verifyTwilioProviderWebhook(params: {
   ctx: WebhookContext;
@@ -19,9 +20,9 @@ export function verifyTwilioProviderWebhook(params: {
   });
 
   if (!result.ok) {
-    console.warn(`[twilio] Webhook verification failed: ${result.reason}`);
+    logger.warn(`Webhook verification failed: ${result.reason}`);
     if (result.verificationUrl) {
-      console.warn(`[twilio] Verification URL: ${result.verificationUrl}`);
+      logger.warn(`Verification URL: ${result.verificationUrl}`);
     }
   }
 

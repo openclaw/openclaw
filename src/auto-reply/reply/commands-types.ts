@@ -1,12 +1,12 @@
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { InlineDirectives } from "./directive-handling.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { TypingController } from "./typing.js";
 
 export type CommandContext = {

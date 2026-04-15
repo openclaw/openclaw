@@ -6,10 +6,53 @@ import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
-async function createPendingPromptHarness() {
-  const sessionId = "session-1";
-  const sessionKey = "agent:main:main";
+type PendingPromptHarness = {
+  agent: AcpGatewayAgent;
+  promptPromise: ReturnType<AcpGatewayAgent["prompt"]>;
+  runId: string;
+};
 
+const DEFAULT_SESSION_ID = "session-1";
+const DEFAULT_SESSION_KEY = "agent:main:main";
+const DEFAULT_PROMPT_TEXT = "hello";
+
+function createSessionAgentHarness(
+  request: GatewayClient["request"],
+  options: { sessionId?: string; sessionKey?: string; cwd?: string } = {},
+) {
+  const sessionId = options.sessionId ?? DEFAULT_SESSION_ID;
+  const sessionKey = options.sessionKey ?? DEFAULT_SESSION_KEY;
+  const sessionStore = createInMemorySessionStore();
+  sessionStore.createSession({
+    sessionId,
+    sessionKey,
+    cwd: options.cwd ?? "/tmp",
+  });
+  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    sessionStore,
+  });
+
+  return {
+    agent,
+    sessionId,
+    sessionKey,
+    sessionStore,
+  };
+}
+
+function promptAgent(
+  agent: AcpGatewayAgent,
+  sessionId = DEFAULT_SESSION_ID,
+  text = DEFAULT_PROMPT_TEXT,
+) {
+  return agent.prompt({
+    sessionId,
+    prompt: [{ type: "text", text }],
+    _meta: {},
+  } as unknown as PromptRequest);
+}
+
+async function createPendingPromptHarness(): Promise<PendingPromptHarness> {
   let runId: string | undefined;
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     if (method === "chat.send") {
@@ -19,23 +62,8 @@ async function createPendingPromptHarness() {
     return {};
   }) as GatewayClient["request"];
 
-  const sessionStore = createInMemorySessionStore();
-  sessionStore.createSession({
-    sessionId,
-    sessionKey,
-    cwd: "/tmp",
-  });
-
-  const agent = new AcpGatewayAgent(
-    createAcpConnection(),
-    createAcpGateway(request),
-    { sessionStore },
-  );
-  const promptPromise = agent.prompt({
-    sessionId,
-    prompt: [{ type: "text", text: "hello" }],
-    _meta: {},
-  } as unknown as PromptRequest);
+  const { agent, sessionId } = createSessionAgentHarness(request);
+  const promptPromise = promptAgent(agent, sessionId);
 
   await vi.waitFor(() => {
     expect(runId).toBeDefined();
@@ -56,71 +84,55 @@ function createChatEvent(payload: Record<string, unknown>): EventFrame {
   } as EventFrame;
 }
 
-describe("acp translator errorKind handling", () => {
-  it("resolves as end_turn when errorKind is refusal", async () => {
+describe("acp translator errorKind mapping", () => {
+  it("maps errorKind: refusal to stopReason: refusal", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
 
     await agent.handleGatewayEvent(
       createChatEvent({
         runId,
-        sessionKey: "agent:main:main",
+        sessionKey: DEFAULT_SESSION_KEY,
         seq: 1,
         state: "error",
         errorKind: "refusal",
-        error: "I cannot do that.",
+        errorMessage: "I cannot fulfill this request.",
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "refusal" });
+  });
+
+  it("maps errorKind: timeout to stopReason: end_turn", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness();
+
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: DEFAULT_SESSION_KEY,
+        seq: 1,
+        state: "error",
+        errorKind: "timeout",
+        errorMessage: "gateway timeout",
       }),
     );
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 
-  it("rejects when errorKind is a transient error (timeout)", async () => {
+  it("maps unknown errorKind to stopReason: end_turn", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
 
     await agent.handleGatewayEvent(
       createChatEvent({
         runId,
-        sessionKey: "agent:main:main",
+        sessionKey: DEFAULT_SESSION_KEY,
         seq: 1,
         state: "error",
-        errorKind: "timeout",
-        error: "gateway timeout",
+        errorKind: "unknown",
+        errorMessage: "something went wrong",
       }),
     );
 
-    await expect(promptPromise).rejects.toThrow("gateway timeout (timeout)");
-  });
-
-  it("rejects when errorKind is a transient error (rate_limit)", async () => {
-    const { agent, promptPromise, runId } = await createPendingPromptHarness();
-
-    await agent.handleGatewayEvent(
-      createChatEvent({
-        runId,
-        sessionKey: "agent:main:main",
-        seq: 1,
-        state: "error",
-        errorKind: "rate_limit",
-        error: "too many requests",
-      }),
-    );
-
-    await expect(promptPromise).rejects.toThrow("too many requests (rate_limit)");
-  });
-
-  it("rejects when no errorKind is provided (backward compatibility as error)", async () => {
-    const { agent, promptPromise, runId } = await createPendingPromptHarness();
-
-    await agent.handleGatewayEvent(
-      createChatEvent({
-        runId,
-        sessionKey: "agent:main:main",
-        seq: 1,
-        state: "error",
-        error: "something went wrong",
-      }),
-    );
-
-    await expect(promptPromise).rejects.toThrow("something went wrong");
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 });

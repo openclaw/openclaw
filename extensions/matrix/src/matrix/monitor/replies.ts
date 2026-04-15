@@ -41,7 +41,7 @@ export async function deliverMatrixReplies(params: {
   accountId?: string;
   mediaLocalRoots?: readonly string[];
   tableMode?: MarkdownTableMode;
-}): Promise<void> {
+}): Promise<boolean> {
   const core = getMatrixRuntime();
   const tableMode =
     params.tableMode ??
@@ -56,6 +56,7 @@ export async function deliverMatrixReplies(params: {
     }
   };
   let hasReplied = false;
+  let deliveredAny = false;
   for (const reply of params.replies) {
     if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
       logVerbose("matrix reply suppressed as reasoning-only");
@@ -102,6 +103,7 @@ export async function deliverMatrixReplies(params: {
           threadId: params.threadId,
           accountId: params.accountId,
         });
+        deliveredAny = true;
         sentTextChunk = true;
       }
       if (replyToIdForReply && !hasReplied && sentTextChunk) {
@@ -123,10 +125,12 @@ export async function deliverMatrixReplies(params: {
         audioAsVoice: reply.audioAsVoice,
         accountId: params.accountId,
       });
+      deliveredAny = true;
       first = false;
     }
     if (replyToIdForReply && !hasReplied) {
       hasReplied = true;
     }
   }
+  return deliveredAny;
 }

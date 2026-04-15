@@ -24,6 +24,7 @@ import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
+import { logger } from "../logger.js";
 
 export interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -118,7 +119,7 @@ export class PlivoProvider implements VoiceCallProvider {
     });
 
     if (!result.ok) {
-      console.warn(`[plivo] Webhook verification failed: ${result.reason}`);
+      logger.warn(`Webhook verification failed: ${result.reason}`);
     }
 
     return {

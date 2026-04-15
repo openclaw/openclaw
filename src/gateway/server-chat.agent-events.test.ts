@@ -1258,6 +1258,39 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-terminal-error")).toBe(false);
   });
 
+  it("adds detected errorKind to chat lifecycle error payloads", () => {
+    const { broadcast, nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-detected-error",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    registerAgentRunContext("run-detected-error", { sessionKey: "session-detected-error" });
+
+    handler({
+      runId: "run-detected-error",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "error",
+        error: Object.assign(new Error("Too many requests"), { code: 429 }),
+      },
+    });
+
+    const payload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      errorKind?: string;
+      errorMessage?: string;
+    };
+    expect(payload.state).toBe("error");
+    expect(payload.errorKind).toBe("rate_limit");
+    expect(payload.errorMessage).toContain("Too many requests");
+
+    const nodePayload = sessionChatCalls(nodeSendToSession).at(-1)?.[2] as {
+      errorKind?: string;
+    };
+    expect(nodePayload.errorKind).toBe("rate_limit");
+  });
+
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
