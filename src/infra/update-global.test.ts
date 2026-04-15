@@ -6,7 +6,10 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./npm-update-compat-sidecars.js";
-import { writePackageDistInventory } from "./package-dist-inventory.js";
+import {
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "./package-dist-inventory.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   collectInstalledGlobalPackageErrors,
@@ -375,6 +378,11 @@ describe("update global helpers", () => {
         JSON.stringify({ name: "openclaw", version: "1.0.0" }),
         "utf-8",
       );
+      for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
+        const absolutePath = path.join(packageRoot, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+      }
       for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
         const absolutePath = path.join(packageRoot, relativePath);
         await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -422,6 +430,51 @@ describe("update global helpers", () => {
     });
   });
 
+  it("fails closed on newer installs when the inventory is missing", async () => {
+    await withTempDir(
+      { prefix: "openclaw-update-global-missing-inventory-new-" },
+      async (packageRoot) => {
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
+          "utf-8",
+        );
+        for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
+          const absolutePath = path.join(packageRoot, relativePath);
+          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+          await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+        }
+
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+          `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+        );
+      },
+    );
+  });
+
+  it("rejects invalid inventory files during global verify", async () => {
+    await withTempDir(
+      { prefix: "openclaw-update-global-invalid-inventory-" },
+      async (packageRoot) => {
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
+          "utf-8",
+        );
+        await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+          "{not-json}\n",
+          "utf8",
+        );
+
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+          `invalid package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+        );
+      },
+    );
+  });
+
   it("verifies legacy sidecars for installed bundled plugins without inventory", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-plugin-" }, async (packageRoot) => {
       await fs.writeFile(
@@ -443,5 +496,41 @@ describe("update global helpers", () => {
         `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
       );
     });
+  });
+
+  it("still enforces critical sidecars when the inventory omits them", async () => {
+    await withTempDir(
+      { prefix: "openclaw-update-global-critical-sidecars-" },
+      async (packageRoot) => {
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
+          "utf-8",
+        );
+        for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
+          const absolutePath = path.join(packageRoot, relativePath);
+          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+          await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+        }
+        const matrixPackageJson = path.join(
+          packageRoot,
+          "dist",
+          "extensions",
+          "matrix",
+          "package.json",
+        );
+        await fs.mkdir(path.dirname(matrixPackageJson), { recursive: true });
+        await fs.writeFile(
+          matrixPackageJson,
+          JSON.stringify({ name: "@openclaw/matrix" }),
+          "utf-8",
+        );
+        await writePackageDistInventory(packageRoot);
+
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+          `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+        );
+      },
+    );
   });
 });

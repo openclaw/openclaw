@@ -214,6 +214,48 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("keeps packaged postinstall non-fatal when the dist inventory is missing", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-missing-inventory-");
+    const staleFile = path.join(packageRoot, "dist", "channel-CJUAgRQR.js");
+    await fs.mkdir(path.dirname(staleFile), { recursive: true });
+    await fs.writeFile(staleFile, "export {};\n");
+    const warn = vi.fn();
+
+    expect(() =>
+      runBundledPluginPostinstall({
+        packageRoot,
+        log: { log: vi.fn(), warn },
+      }),
+    ).not.toThrow();
+
+    await expect(fs.stat(staleFile)).resolves.toBeTruthy();
+    expect(warn).toHaveBeenCalledWith(
+      "[postinstall] skipping dist prune: missing dist inventory: dist/postinstall-inventory.json",
+    );
+  });
+
+  it("keeps packaged postinstall non-fatal when the dist inventory is invalid", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-invalid-inventory-");
+    const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");
+    const inventoryPath = path.join(packageRoot, "dist", "postinstall-inventory.json");
+    await fs.mkdir(path.dirname(currentFile), { recursive: true });
+    await fs.writeFile(currentFile, "export {};\n");
+    await fs.writeFile(inventoryPath, "{not-json}\n");
+    const warn = vi.fn();
+
+    expect(() =>
+      runBundledPluginPostinstall({
+        packageRoot,
+        log: { log: vi.fn(), warn },
+      }),
+    ).not.toThrow();
+
+    await expect(fs.stat(currentFile)).resolves.toBeTruthy();
+    expect(warn).toHaveBeenCalledWith(
+      "[postinstall] skipping dist prune: invalid dist inventory: dist/postinstall-inventory.json",
+    );
+  });
+
   it("rejects symlinked dist roots in packaged installs", () => {
     expect(() =>
       pruneInstalledPackageDist({
