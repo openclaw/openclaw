@@ -78,6 +78,14 @@ const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
 
 const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
+// Keep this in sync with the facade runtime's always-allowed bundled surfaces.
+// QA child staging must include these runtime helpers even when they are not in
+// cfg.plugins.allow, otherwise lazy facade loads can fail inside the child.
+const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
+  "image-generation-core",
+  "media-understanding-core",
+  "speech-core",
+]);
 const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
@@ -220,6 +228,12 @@ export function normalizeQaProviderModeEnv(
   }
 
   return env;
+}
+
+export function resolveQaGatewayChildProviderMode(
+  providerMode?: "mock-openai" | "live-frontier",
+): "mock-openai" | "live-frontier" {
+  return providerMode ?? "mock-openai";
 }
 
 function resolveQaLiveCliAuthEnv(
@@ -395,6 +409,72 @@ export async function stageQaLiveAnthropicSetupToken(params: {
   });
 }
 
+/** Providers the mock-openai harness stages placeholder credentials for. */
+export const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
+
+/** Agent IDs the mock-openai harness stages credentials under. */
+export const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
+
+export function buildQaMockProfileId(provider: string): string {
+  return `qa-mock-${provider}`;
+}
+
+/**
+ * In mock-openai mode the qa suite runs against the embedded mock server
+ * instead of a real provider API. The mock does not validate credentials, but
+ * the agent auth layer still needs a matching `api_key` auth profile in
+ * `auth-profiles.json` before it will route the request through
+ * `providerBaseUrl`. Without this staging step, every scenario fails with
+ * `FailoverError: No API key found for provider "openai"` before the mock
+ * server ever sees a request.
+ *
+ * Stages a placeholder `api_key` profile per provider in each of the agent
+ * dirs the qa suite uses (`main` for the runtime config, `qa` for scenario
+ * runs) and returns a config with matching `auth.profiles` entries so the
+ * runtime accepts the profile on the first lookup.
+ *
+ * The placeholder value `qa-mock-not-a-real-key` is intentionally not
+ * shaped like a real API key (no `sk-` prefix that would trip secret
+ * scanners). It only needs to be non-empty to pass the credential
+ * serializer; anything beyond that is ignored by the mock.
+ */
+export async function stageQaMockAuthProfiles(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+  agentIds?: readonly string[];
+  providers?: readonly string[];
+}): Promise<OpenClawConfig> {
+  const agentIds = [...new Set(params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS)];
+  const providers = [...new Set(params.providers ?? QA_MOCK_AUTH_PROVIDERS)];
+  let next = params.cfg;
+  for (const agentId of agentIds) {
+    const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    for (const provider of providers) {
+      const profileId = buildQaMockProfileId(provider);
+      upsertAuthProfile({
+        profileId,
+        credential: {
+          type: "api_key",
+          provider,
+          key: "qa-mock-not-a-real-key",
+          displayName: `QA mock ${provider} credential`,
+        },
+        agentDir,
+      });
+    }
+  }
+  for (const provider of providers) {
+    next = applyAuthProfileConfig(next, {
+      profileId: buildQaMockProfileId(provider),
+      provider,
+      mode: "api_key",
+      displayName: `QA mock ${provider} credential`,
+    });
+  }
+  return next;
+}
+
 function isRetryableGatewayCallError(details: string): boolean {
   return (
     details.includes("handshake timeout") ||
@@ -440,8 +520,10 @@ export const __testing = {
   preserveQaGatewayDebugArtifacts,
   redactQaGatewayDebugText,
   readQaLiveProviderConfigOverrides,
+  resolveQaGatewayChildProviderMode,
   resolveQaLiveAnthropicSetupToken,
   stageQaLiveAnthropicSetupToken,
+  stageQaMockAuthProfiles,
   resolveQaLiveCliAuthEnv,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginsSourceRoot,
@@ -691,8 +773,12 @@ async function resolveQaRuntimeHostVersion(params: {
   const rootPackageRaw = await fs.readFile(path.join(params.repoRoot, "package.json"), "utf8");
   const rootPackage = JSON.parse(rootPackageRaw) as { version?: string };
   let selected = parseStableSemverFloor(rootPackage.version);
+  const stagedPluginIds = collectQaBundledPluginIds({
+    sourceRoot: params.bundledPluginsSourceRoot,
+    allowedPluginIds: params.allowedPluginIds,
+  });
 
-  for (const pluginId of params.allowedPluginIds) {
+  for (const pluginId of stagedPluginIds) {
     const packagePath = path.join(params.bundledPluginsSourceRoot, pluginId, "package.json");
     if (!existsSync(packagePath)) {
       continue;
@@ -714,12 +800,29 @@ async function resolveQaRuntimeHostVersion(params: {
   return selected?.label;
 }
 
+function collectQaBundledPluginIds(params: {
+  sourceRoot: string;
+  allowedPluginIds: readonly string[];
+}) {
+  const pluginIds = new Set(params.allowedPluginIds);
+  for (const pluginId of QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS) {
+    if (existsSync(path.join(params.sourceRoot, pluginId))) {
+      pluginIds.add(pluginId);
+    }
+  }
+  return [...pluginIds];
+}
+
 async function createQaBundledPluginsDir(params: {
   repoRoot: string;
   tempRoot: string;
   allowedPluginIds: readonly string[];
 }) {
   const sourceRoot = resolveQaBundledPluginsSourceRoot(params.repoRoot);
+  const stagedPluginIds = collectQaBundledPluginIds({
+    sourceRoot,
+    allowedPluginIds: params.allowedPluginIds,
+  });
   const sourceTreeRoot = path.dirname(sourceRoot);
   if (
     sourceTreeRoot === path.join(params.repoRoot, "dist") ||
@@ -740,7 +843,7 @@ async function createQaBundledPluginsDir(params: {
       const targetPath = path.join(stagedTreeRoot, entry.name);
       if (entry.name === "extensions") {
         await fs.mkdir(targetPath, { recursive: true });
-        for (const pluginId of params.allowedPluginIds) {
+        for (const pluginId of stagedPluginIds) {
           const sourceDir = path.join(sourceRoot, pluginId);
           if (!existsSync(sourceDir)) {
             throw new Error(`qa bundled plugin not found: ${pluginId} (${sourceDir})`);
@@ -760,7 +863,7 @@ async function createQaBundledPluginsDir(params: {
 
   const bundledPluginsDir = path.join(params.tempRoot, "bundled-plugins");
   await fs.mkdir(bundledPluginsDir, { recursive: true });
-  for (const pluginId of params.allowedPluginIds) {
+  for (const pluginId of stagedPluginIds) {
     const sourceDir = path.join(sourceRoot, pluginId);
     if (!existsSync(sourceDir)) {
       throw new Error(`qa bundled plugin not found: ${pluginId} (${sourceDir})`);
@@ -868,8 +971,9 @@ export async function startQaGatewayChild(params: {
     fs.mkdir(xdgDataHome, { recursive: true }),
     fs.mkdir(xdgCacheHome, { recursive: true }),
   ]);
+  const providerMode = resolveQaGatewayChildProviderMode(params.providerMode);
   const liveProviderIds =
-    params.providerMode === "live-frontier"
+    providerMode === "live-frontier"
       ? [params.primaryModel, params.alternateModel]
           .map((modelRef) =>
             typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
@@ -902,7 +1006,7 @@ export async function startQaGatewayChild(params: {
         controlUiEnabled: params.controlUiEnabled,
       }),
       controlUiAllowedOrigins: params.controlUiAllowedOrigins,
-      providerMode: params.providerMode,
+      providerMode,
       primaryModel: params.primaryModel,
       alternateModel: params.alternateModel,
       enabledPluginIds,
@@ -921,6 +1025,12 @@ export async function startQaGatewayChild(params: {
       cfg,
       stateDir,
     });
+    if (providerMode === "mock-openai") {
+      cfg = await stageQaMockAuthProfiles({
+        cfg,
+        stateDir,
+      });
+    }
     return params.mutateConfig ? params.mutateConfig(cfg) : cfg;
   };
   const stdout: Buffer[] = [];
@@ -981,7 +1091,7 @@ export async function startQaGatewayChild(params: {
           xdgCacheHome,
           bundledPluginsDir,
           compatibilityHostVersion: runtimeHostVersion,
-          providerMode: params.providerMode,
+          providerMode,
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });
