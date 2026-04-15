@@ -43,7 +43,7 @@ export default defineConfig(() => {
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {
-          server.middlewares.use("/__openclaw/control-ui-config.json", (_req, res) => {
+          server.middlewares.use("/control-ui-config.json", (_req, res) => {
             res.setHeader("Content-Type", "application/json");
             res.end(
               JSON.stringify({
