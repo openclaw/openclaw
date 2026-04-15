@@ -53,33 +53,31 @@ describe("isPathInsideWithRealpath", () => {
     expect(result).toBe(false); // covers line 25: return false
   });
 
-  it("covers line 30 fallback — default opts when realpath fails for non-existent candidate", () => {
+  it("returns false (safe default) when realpath fails for non-existent candidate", () => {
     // Non-existent path causes safeRealpathSync to return null (covers line 15)
-    // Current default (opts not set): opts?.requireRealpath !== true → returns true
-    // NOTE: this assertion reflects current (unsafe) default; it changes to false after the fix.
+    // New safe default (requireRealpath not set): returns false — secure by default
     const nonExistent = path.join(tmpDir, "__does_not_exist_clawin_test__");
     const result = isPathInsideWithRealpath(tmpDir, nonExistent);
-    expect(typeof result).toBe("boolean"); // covers lines 15 and 30 regardless of value
+    expect(result).toBe(false);
   });
 
-  it("returns false (line 30) when requireRealpath is true and realpath fails", () => {
+  it("returns false when requireRealpath is true and realpath fails", () => {
     const nonExistent = path.join(tmpDir, "__does_not_exist_clawin_test__");
     const result = isPathInsideWithRealpath(tmpDir, nonExistent, { requireRealpath: true });
     expect(result).toBe(false);
   });
 
-  it("returns true (line 30) when requireRealpath is false and realpath fails", () => {
+  it("returns true (explicit opt-out) when requireRealpath is false and realpath fails", () => {
     const nonExistent = path.join(tmpDir, "__does_not_exist_clawin_test__");
     const result = isPathInsideWithRealpath(tmpDir, nonExistent, { requireRealpath: false });
     expect(result).toBe(true);
   });
 
-  it("covers line 30 fallback when realpath fails for base path", () => {
+  it("returns false (safe default) when realpath fails for base path", () => {
     const nonExistentBase = path.join(tmpDir, "__nonexistent_base__");
     const child = path.join(nonExistentBase, "child.ts");
-    // safeRealpathSync returns null for base → line 30 hit
     const result = isPathInsideWithRealpath(nonExistentBase, child);
-    expect(typeof result).toBe("boolean"); // line 30 covered; value changes after fix
+    expect(result).toBe(false);
   });
 });
 

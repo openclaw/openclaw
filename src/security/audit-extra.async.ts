@@ -100,9 +100,15 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
     return [];
   }
 
-  const parsed = JSON.parse(raw) as Partial<
-    Record<typeof MANIFEST_KEY, { extensions?: unknown }>
-  > | null;
+  let parsed: Partial<Record<typeof MANIFEST_KEY, { extensions?: unknown }>> | null;
+  try {
+    parsed = JSON.parse(raw) as Partial<
+      Record<typeof MANIFEST_KEY, { extensions?: unknown }>
+    > | null;
+  } catch {
+    // Malformed package.json — treat as no extensions rather than crashing
+    return [];
+  }
   const extensions = parsed?.[MANIFEST_KEY]?.extensions;
   if (!Array.isArray(extensions)) {
     return [];
@@ -390,8 +396,14 @@ async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<st
   const skillFiles: string[] = [];
   const queue: string[] = [skillsRoot];
   const visitedDirs = new Set<string>();
+  const MAX_SYMLINK_DEPTH = 20;
+  let depthGuard = 0;
 
-  while (queue.length > 0 && skillFiles.length < MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE) {
+  while (
+    queue.length > 0 &&
+    skillFiles.length < MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE &&
+    depthGuard++ < MAX_SYMLINK_DEPTH * MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE
+  ) {
     const dir = queue.shift()!;
     const dirRealPath = await fs.realpath(dir).catch(() => path.resolve(dir));
     if (visitedDirs.has(dirRealPath)) {
@@ -630,6 +642,32 @@ export async function collectPluginsTrustFindings(params: {
   if (pluginDirs.length > 0) {
     const allow = params.cfg.plugins?.allow;
     const allowConfigured = Array.isArray(allow) && allow.length > 0;
+
+    if (allowConfigured) {
+      // Warn about allowlist entries that don't match any installed plugin ID.
+      // An attacker could register a plugin with an allowlisted ID after the
+      // allowlist was created, exploiting the pre-approved entry.
+      const installedPluginIds = new Set(pluginDirs.map((dir) => path.basename(dir).toLowerCase()));
+      const phantomEntries = allow.filter(
+        (entry) =>
+          typeof entry === "string" &&
+          entry !== "group:plugins" &&
+          !installedPluginIds.has(entry.toLowerCase()),
+      );
+      if (phantomEntries.length > 0) {
+        findings.push({
+          checkId: "plugins.allow_phantom_entries",
+          severity: "warn",
+          title: "plugins.allow contains entries with no matching installed plugin",
+          detail:
+            `The following plugins.allow entries do not correspond to any installed plugin: ${phantomEntries.join(", ")}.\n` +
+            "Phantom entries could be exploited by registering a new plugin with an allowlisted ID.",
+          remediation:
+            "Remove unused entries from plugins.allow, or verify the expected plugins are installed.",
+        });
+      }
+    }
+
     if (!allowConfigured) {
       const skillCommandsLikelyExposed = (
         await Promise.all(
@@ -884,9 +922,15 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   }> = [];
   const seenSkillPaths = new Set<string>();
 
+  const realpathWithTimeout = (p: string, timeoutMs = 2000): Promise<string | null> =>
+    Promise.race([
+      fs.realpath(p).catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
+
   for (const workspaceDir of workspaceDirs) {
     const workspacePath = path.resolve(workspaceDir);
-    const workspaceRealPath = await fs.realpath(workspacePath).catch(() => workspacePath);
+    const workspaceRealPath = (await realpathWithTimeout(workspacePath)) ?? workspacePath;
     const skillFilePaths = await listWorkspaceSkillMarkdownFiles(workspacePath);
 
     for (const skillFilePath of skillFilePaths) {
@@ -896,7 +940,7 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
       }
       seenSkillPaths.add(canonicalSkillPath);
 
-      const skillRealPath = await fs.realpath(canonicalSkillPath).catch(() => null);
+      const skillRealPath = await realpathWithTimeout(canonicalSkillPath);
       if (!skillRealPath) {
         continue;
       }

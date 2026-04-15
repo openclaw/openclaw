@@ -668,6 +668,24 @@ Successfully processed 1 files`;
       expect(result?.display).toBe(expected);
     });
 
+    it("world SIDs in USERSID env are not added to trusted set", () => {
+      // S-1-1-0 = Everyone. Even if USERSID is set to this, it must NOT be trusted.
+      const env = { USERSID: "S-1-1-0" };
+      const entries: WindowsAclEntry[] = [
+        aclEntry({
+          principal: "S-1-1-0",
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        }),
+      ];
+      const summary = summarizeWindowsAcl(entries, env);
+      // Everyone must remain in untrustedWorld, not trusted
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.trusted).toHaveLength(0);
+    });
+
     it("returns null when no username can be resolved (line 348)", () => {
       // Temporarily make os.userInfo().username empty so resolveWindowsUserPrincipal returns null
       userInfoMock.mockReturnValueOnce({
