@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
+  MATRIX_QA_BLOCK_ROOM_KEY,
+  MATRIX_QA_HOMESERVER_ROOM_KEY,
   MATRIX_QA_MEMBERSHIP_ROOM_KEY,
+  MATRIX_QA_RESTART_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,
 } from "./scenario-catalog.js";
 import {
@@ -218,30 +221,51 @@ export async function runRoomThreadReplyOverrideScenario(context: MatrixQaScenar
 }
 
 export async function runObserverAllowlistOverrideScenario(context: MatrixQaScenarioContext) {
-  const result = await runTopLevelMentionScenario({
+  const { client, startSince } = await primeMatrixQaActorCursor({
     accessToken: context.observerAccessToken,
     actorId: "observer",
     baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
-    roomId: context.roomId,
     syncState: context.syncState,
-    sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
-    tokenPrefix: "MATRIX_QA_OBSERVER_ALLOWLIST",
   });
-  assertTopLevelReplyArtifact("observer allowlist override reply", result.reply);
+  const token = `MATRIX_QA_OBSERVER_ALLOWLIST_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const body = buildMentionPrompt(context.sutUserId, token);
+  const driverEventId = await client.sendTextMessage({
+    body,
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const matched = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === context.roomId &&
+      event.sender === context.sutUserId &&
+      event.type === "m.room.message" &&
+      event.relatesTo === undefined &&
+      typeof event.body === "string" &&
+      event.body.trim().length > 0,
+    roomId: context.roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "observer",
+    syncState: context.syncState,
+    nextSince: matched.since,
+    startSince,
+  });
+  const reply = buildMatrixReplyArtifact(matched.event, token);
   return {
     artifacts: {
       actorUserId: context.observerUserId,
-      driverEventId: result.driverEventId,
-      reply: result.reply,
-      token: result.token,
-      triggerBody: result.body,
+      driverEventId,
+      reply,
+      token,
+      triggerBody: body,
     },
     details: [
       `trigger sender: ${context.observerUserId}`,
-      `driver event: ${result.driverEventId}`,
-      ...buildMatrixReplyDetails("reply", result.reply),
+      `driver event: ${driverEventId}`,
+      ...buildMatrixReplyDetails("reply", reply),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
@@ -312,6 +336,7 @@ export async function runQuietStreamingPreviewScenario(context: MatrixQaScenario
 }
 
 export async function runBlockStreamingScenario(context: MatrixQaScenarioContext) {
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_BLOCK_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaActorCursor({
     accessToken: context.driverAccessToken,
     actorId: "driver",
@@ -324,27 +349,28 @@ export async function runBlockStreamingScenario(context: MatrixQaScenarioContext
   const driverEventId = await client.sendTextMessage({
     body: triggerBody,
     mentionUserIds: [context.sutUserId],
-    roomId: context.roomId,
+    roomId,
   });
   const firstBlock = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
-      event.roomId === context.roomId &&
+      event.roomId === roomId &&
       event.sender === context.sutUserId &&
       isMatrixQaMessageLikeKind(event.kind) &&
-      event.body === firstText,
-    roomId: context.roomId,
+      (event.body ?? "").includes(firstText) &&
+      !(event.body ?? "").includes(secondText),
+    roomId,
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
   const secondBlock = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
-      event.roomId === context.roomId &&
+      event.roomId === roomId &&
       event.sender === context.sutUserId &&
       isMatrixQaMessageLikeKind(event.kind) &&
-      event.body === secondText,
-    roomId: context.roomId,
+      (event.body ?? "").includes(secondText),
+    roomId,
     since: firstBlock.since,
     timeoutMs: context.timeoutMs,
   });
@@ -364,10 +390,12 @@ export async function runBlockStreamingScenario(context: MatrixQaScenarioContext
       blockEventIds: [firstBlock.event.eventId, secondBlock.event.eventId],
       driverEventId,
       reply: buildMatrixReplyArtifact(secondBlock.event, secondText),
+      roomId,
       token: secondText,
       triggerBody,
     },
     details: [
+      `room id: ${roomId}`,
       `driver event: ${driverEventId}`,
       `block one event: ${firstBlock.event.eventId}`,
       `block two event: ${secondBlock.event.eventId}`,
@@ -592,12 +620,13 @@ export async function runHomeserverRestartResumeScenario(context: MatrixQaScenar
   if (!context.interruptTransport) {
     throw new Error("Matrix homeserver restart scenario requires a transport interruption hook");
   }
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_HOMESERVER_ROOM_KEY);
   await context.interruptTransport();
   const resumed = await runDriverTopLevelMentionScenario({
     baseUrl: context.baseUrl,
     driverAccessToken: context.driverAccessToken,
     observedEvents: context.observedEvents,
-    roomId: context.roomId,
+    roomId,
     syncState: context.syncState,
     sutUserId: context.sutUserId,
     timeoutMs: context.timeoutMs,
@@ -608,10 +637,12 @@ export async function runHomeserverRestartResumeScenario(context: MatrixQaScenar
     artifacts: {
       driverEventId: resumed.driverEventId,
       reply: resumed.reply,
+      roomId,
       token: resumed.token,
       transportInterruption: "homeserver-restart",
     },
     details: [
+      `room id: ${roomId}`,
       "transport interruption: homeserver-restart",
       `driver event: ${resumed.driverEventId}`,
       ...buildMatrixReplyDetails("reply", resumed.reply),
@@ -623,12 +654,13 @@ export async function runRestartResumeScenario(context: MatrixQaScenarioContext)
   if (!context.restartGateway) {
     throw new Error("Matrix restart scenario requires a gateway restart callback");
   }
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_RESTART_ROOM_KEY);
   await context.restartGateway();
   const result = await runDriverTopLevelMentionScenario({
     baseUrl: context.baseUrl,
     driverAccessToken: context.driverAccessToken,
     observedEvents: context.observedEvents,
-    roomId: context.roomId,
+    roomId,
     syncState: context.syncState,
     sutUserId: context.sutUserId,
     timeoutMs: context.timeoutMs,
@@ -640,9 +672,11 @@ export async function runRestartResumeScenario(context: MatrixQaScenarioContext)
       driverEventId: result.driverEventId,
       reply: result.reply,
       restartSignal: "SIGUSR1",
+      roomId,
       token: result.token,
     },
     details: [
+      `room id: ${roomId}`,
       "restart signal: SIGUSR1",
       `post-restart driver event: ${result.driverEventId}`,
       ...buildMatrixReplyDetails("reply", result.reply),

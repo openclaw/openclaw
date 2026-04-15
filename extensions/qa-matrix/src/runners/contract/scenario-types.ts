@@ -26,6 +26,7 @@ export type MatrixQaScenarioArtifacts = {
   recoveredDriverEventId?: string;
   recoveredReply?: MatrixQaReplyArtifact;
   roomKey?: string;
+  roomId?: string;
   restartSignal?: string;
   rootEventId?: string;
   threadDriverEventId?: string;

@@ -9,6 +9,19 @@ export type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
 export type MatrixQaStreamingMode = "off" | "partial" | "quiet";
 export type MatrixQaActorRole = "driver" | "observer" | "sut";
 
+export type MatrixQaAgentDefaultsOverrides = {
+  blockStreamingChunk?: {
+    breakPreference?: "newline" | "paragraph" | "sentence";
+    maxChars?: number;
+    minChars?: number;
+  };
+  blockStreamingCoalesce?: {
+    idleMs?: number;
+    maxChars?: number;
+    minChars?: number;
+  };
+};
+
 export type MatrixQaGroupConfigOverrides = {
   enabled?: boolean;
   requireMention?: boolean;
@@ -23,6 +36,7 @@ export type MatrixQaDmConfigOverrides = {
 };
 
 export type MatrixQaConfigOverrides = {
+  agentDefaults?: MatrixQaAgentDefaultsOverrides;
   autoJoin?: MatrixQaAutoJoinMode;
   autoJoinAllowlist?: string[];
   blockStreaming?: boolean;
@@ -352,6 +366,17 @@ export function buildMatrixQaConfig(
 
   return {
     ...baseCfg,
+    ...(params.overrides?.agentDefaults
+      ? {
+          agents: {
+            ...baseCfg.agents,
+            defaults: {
+              ...baseCfg.agents?.defaults,
+              ...params.overrides.agentDefaults,
+            },
+          },
+        }
+      : {}),
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,

@@ -86,6 +86,18 @@ describe("matrix qa config", () => {
       overrides: {
         autoJoin: "allowlist",
         autoJoinAllowlist: [" !dm:matrix-qa.test ", "#ops:matrix-qa.test"],
+        agentDefaults: {
+          blockStreamingChunk: {
+            breakPreference: "newline",
+            maxChars: 48,
+            minChars: 1,
+          },
+          blockStreamingCoalesce: {
+            idleMs: 0,
+            maxChars: 48,
+            minChars: 1,
+          },
+        },
         blockStreaming: true,
         dm: {
           sessionScope: "per-room",
@@ -108,6 +120,18 @@ describe("matrix qa config", () => {
       topology,
     });
 
+    expect(next.agents?.defaults).toMatchObject({
+      blockStreamingChunk: {
+        breakPreference: "newline",
+        maxChars: 48,
+        minChars: 1,
+      },
+      blockStreamingCoalesce: {
+        idleMs: 0,
+        maxChars: 48,
+        minChars: 1,
+      },
+    });
     expect(next.channels?.matrix?.accounts?.sut).toMatchObject({
       autoJoin: "allowlist",
       autoJoinAllowlist: ["!dm:matrix-qa.test", "#ops:matrix-qa.test"],
