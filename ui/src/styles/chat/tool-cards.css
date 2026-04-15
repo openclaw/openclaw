@@ -10,13 +10,6 @@
     border-color var(--duration-fast) ease-out,
     background var(--duration-fast) ease-out,
     box-shadow var(--duration-fast) ease-out;
-  max-height: 120px;
-  overflow: hidden;
-}
-
-.chat-tool-card--expanded {
-  max-height: none;
-  overflow: visible;
 }
 
 .chat-tool-card:hover {
@@ -352,6 +345,8 @@
 .chat-tool-card__block-content {
   color: var(--text);
   overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .chat-tool-card__block-preview {
@@ -722,7 +717,6 @@
 @media (max-width: 768px) {
   .chat-tool-card {
     padding: 8px 10px;
-    max-height: 100px;
   }
 
   .chat-tool-card__title {
@@ -758,7 +752,6 @@
 @media (max-width: 480px) {
   .chat-tool-card {
     padding: 6px 8px;
-    max-height: 80px;
   }
 
   .chat-tool-card__preview {
