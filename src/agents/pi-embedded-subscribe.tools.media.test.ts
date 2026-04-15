@@ -277,6 +277,42 @@ describe("extractToolResultMediaPaths", () => {
     expect(isToolResultMediaTrusted("music_generate")).toBe(true);
   });
 
+  it("blocks trusted-media aliases that are not exact registered built-ins", () => {
+    expect(filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"]))).toEqual(
+      [],
+    );
+    expect(
+      filterToolResultMediaUrls(
+        "Web_Search",
+        ["/etc/passwd"],
+        undefined,
+        new Set(["web_search"]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps local media for exact registered built-in tool names", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "web_search",
+        ["/tmp/screenshot.png"],
+        undefined,
+        new Set(["web_search"]),
+      ),
+    ).toEqual(["/tmp/screenshot.png"]);
+  });
+
+  it("still allows remote media for colliding aliases", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "bash",
+        ["/etc/passwd", "https://example.com/file.png"],
+        undefined,
+        new Set(["exec"]),
+      ),
+    ).toEqual(["https://example.com/file.png"]);
+  });
+
   it("does not trust local MEDIA paths for MCP-provenance results", () => {
     expect(
       filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], {

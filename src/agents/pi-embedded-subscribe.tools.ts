@@ -211,11 +211,22 @@ export function filterToolResultMediaUrls(
   toolName: string | undefined,
   mediaUrls: string[],
   result?: unknown,
+  builtinToolNames?: ReadonlySet<string>,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
   if (isToolResultMediaTrusted(toolName, result)) {
+    // When the current run provides its exact built-in registrations, require
+    // the raw emitted tool name to match one of them before allowing local
+    // MEDIA: paths. This blocks aliases and case-variant collisions such as
+    // "bash" -> "exec" or "Web_Search" -> "web_search".
+    if (builtinToolNames !== undefined) {
+      const registeredName = toolName?.trim();
+      if (!registeredName || !builtinToolNames.has(registeredName)) {
+        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+      }
+    }
     return mediaUrls;
   }
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));

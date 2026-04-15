@@ -511,10 +511,10 @@ async function emitToolResultOutput(params: {
     ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText });
   if (shouldEmitOutput) {
     if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText, result);
+      ctx.emitToolOutput(rawToolName, meta, outputText, result);
       if (ctx.params.toolResultFormat === "plain") {
         emittedToolOutputMediaUrls = await collectEmittedToolOutputMediaUrls(
-          toolName,
+          rawToolName,
           outputText,
           result,
         );
@@ -533,7 +533,12 @@ async function emitToolResultOutput(params: {
   if (!mediaReply) {
     return;
   }
-  const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls, result);
+  const mediaUrls = filterToolResultMediaUrls(
+    rawToolName,
+    mediaReply.mediaUrls,
+    result,
+    ctx.builtinToolNames,
+  );
   const pendingMediaUrls =
     mediaReply.audioAsVoice || emittedToolOutputMediaUrls.length === 0
       ? mediaUrls
@@ -779,7 +784,8 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(evt.toolName);
+  const rawToolName = evt.toolName;
+  const toolName = normalizeToolName(rawToolName);
   const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
   const isError = evt.isError;
