@@ -1137,12 +1137,19 @@ function resolveExpectedDevUpdateRef(ref) {
 }
 
 export function resolveDevUpdateVerificationRef(ref, sourceSha) {
-  void sourceSha;
-  return resolveExpectedDevUpdateRef(ref);
+  const expectedRef = resolveExpectedDevUpdateRef(ref);
+  if (expectedRef === "main" && looksLikeCommitSha(sourceSha || "")) {
+    return sourceSha.trim();
+  }
+  return expectedRef;
 }
 
 export function shouldRunMainChannelDevUpdate(ref) {
-  return !isImmutableReleaseRef(ref) && resolveExpectedDevUpdateRef(ref) === "main";
+  if (isImmutableReleaseRef(ref)) {
+    return false;
+  }
+  const expectedRef = resolveExpectedDevUpdateRef(ref);
+  return expectedRef === "main" || looksLikeCommitSha(expectedRef);
 }
 
 export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform) {

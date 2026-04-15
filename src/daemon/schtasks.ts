@@ -404,6 +404,24 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
   );
 }
 
+async function resolveListenerBackedScheduledTaskRuntime(
+  env: GatewayServiceEnv,
+): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
+  const port = await resolveScheduledTaskPort(env);
+  if (!port) {
+    return null;
+  }
+  const pids = await resolveScheduledTaskGatewayListenerPids(port);
+  if (pids.length === 0) {
+    return null;
+  }
+  return {
+    status: "running",
+    pid: pids[0],
+    detail: `Gateway listener detected on port ${port} even though schtasks did not report a running task.`,
+  };
+}
+
 async function terminateScheduledTaskGatewayListeners(env: GatewayServiceEnv): Promise<number[]> {
   const port = await resolveScheduledTaskPort(env);
   if (!port) {
@@ -899,6 +917,17 @@ export async function readScheduledTaskRuntime(
   }
   const parsed = parseSchtasksQuery(res.stdout || "");
   const derived = deriveScheduledTaskRuntimeStatus(parsed);
+  if (derived.status !== "running") {
+    const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(env);
+    if (observedRuntime) {
+      return {
+        ...observedRuntime,
+        state: parsed.status,
+        lastRunTime: parsed.lastRunTime,
+        lastRunResult: parsed.lastRunResult,
+      };
+    }
+  }
   return {
     status: derived.status,
     state: parsed.status,

@@ -90,6 +90,15 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
+  it("keeps dev-update enabled for pinned main commit refs", () => {
+    expect(resolveRequestedSuites("both", "08753a1d793c040b101c8a26c43445dbbab14995")).toEqual([
+      "packaged-fresh",
+      "installer-fresh",
+      "packaged-upgrade",
+      "dev-update",
+    ]);
+  });
+
   it("builds a suite-aware runner matrix with the beefy Windows default", () => {
     const matrix = resolveRunnerMatrix({
       mode: "both",
@@ -233,26 +242,26 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("only treats main as a real dev-update lane", () => {
+  it("keeps the dev-update lane for main and pinned main-commit refs", () => {
     expect(shouldRunMainChannelDevUpdate("main")).toBe(true);
-    expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(false);
+    expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(true);
     expect(shouldRunMainChannelDevUpdate(" codex/cross-os-release-checks-full-native-e2e ")).toBe(
       false,
     );
     expect(shouldRunMainChannelDevUpdate("v2026.4.14")).toBe(false);
   });
 
-  it("keeps dev-update verification aligned to the requested ref", () => {
+  it("pins main dev-update verification to the prepared source sha", () => {
     expect(resolveDevUpdateVerificationRef("main")).toBe("main");
     expect(
       resolveDevUpdateVerificationRef("main", "08753a1d793c040b101c8a26c43445dbbab14995"),
-    ).toBe("main");
+    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
     expect(
       resolveDevUpdateVerificationRef(
         "refs/heads/main",
         "08753a1d793c040b101c8a26c43445dbbab14995",
       ),
-    ).toBe("main");
+    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
     expect(resolveDevUpdateVerificationRef("codex/cross-os-release-checks-full-native-e2e")).toBe(
       "codex/cross-os-release-checks-full-native-e2e",
     );

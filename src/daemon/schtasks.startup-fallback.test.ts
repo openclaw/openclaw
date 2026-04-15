@@ -30,6 +30,9 @@ const spawnSync = vi.hoisted(() =>
     signal: null,
   })),
 );
+const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
+  vi.fn<(port: number) => number[]>(() => []),
+);
 
 vi.mock("../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
@@ -47,6 +50,10 @@ vi.mock("node:child_process", async () => {
     spawnSync,
   };
 });
+vi.mock("../infra/gateway-processes.js", () => ({
+  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
+    findVerifiedGatewayListenerPidsOnPortSync(port),
+}));
 
 const {
   installScheduledTask,
@@ -113,6 +120,14 @@ function notYetRunTaskQueryOutput() {
 
 beforeEach(() => {
   resetSchtasksBaseMocks();
+  findVerifiedGatewayListenerPidsOnPortSync.mockReset();
+  findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+  inspectPortUsage.mockResolvedValue({
+    port: 18789,
+    status: "free",
+    listeners: [],
+    hints: [],
+  });
   spawn.mockClear();
   spawnSync.mockClear();
   childUnref.mockClear();
@@ -210,6 +225,24 @@ describe("Windows startup fallback", () => {
       });
 
       expectStartupFallbackSpawn(env);
+    });
+  });
+
+  it("reports a fallback-launched gateway as running even when schtasks still says not-yet-run", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await writeGatewayScript(env);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+      );
+
+      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
+        status: "running",
+        pid: 4242,
+        state: "Ready",
+        lastRunResult: "267011",
+      });
     });
   });
 
