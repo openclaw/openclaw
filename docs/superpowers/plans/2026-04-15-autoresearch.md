@@ -988,7 +988,7 @@ pnpm vitest run skills/autoresearch/tests/report-generator.test.mjs
 
 ```javascript
 // report-generator.mjs
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
 export function buildMarkdownReport({ date, experiments, token, totalCost, flags = [], opusComparison = [] }) {
@@ -1032,7 +1032,7 @@ ${skillSections}
 
 export function renderMarkdownToPdf(mdPath, pdfPath) {
   const htmlPath = mdPath.replace(/\.md$/, '.html');
-  const md = require('fs').readFileSync(mdPath, 'utf8');
+  const md = readFileSync(mdPath, 'utf8');
   // Minimal inline MD-to-HTML (we don't need a full parser for v1 — basic structure is enough).
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Segoe UI,Arial,sans-serif;max-width:800px;margin:2em auto;padding:0 1em;}h1{border-bottom:2px solid #02020E}h2{color:#0A9EFC}a{display:inline-block;padding:8px 16px;background:#0A9EFC;color:white;text-decoration:none;border-radius:4px;margin-right:8px}code{background:#f4f4f4;padding:2px 6px;border-radius:3px}</style></head><body>${mdToHtml(md)}</body></html>`;
   writeFileSync(htmlPath, html);
