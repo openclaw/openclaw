@@ -424,6 +424,7 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     });
 
     expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("throws when the fallback directory cannot be created", () => {
