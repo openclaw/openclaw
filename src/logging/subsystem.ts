@@ -11,7 +11,7 @@ import {
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { getChildLogger, getLoggerGeneration, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -314,6 +314,7 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerGeneration = -1;
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -336,8 +337,12 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      if (!fileLogger) {
+      // Re-fetch the child logger if the parent logger was rebuilt (e.g., due to
+      // config changes). This ensures we write to the correct configured log file.
+      const currentGeneration = getLoggerGeneration();
+      if (!fileLogger || fileLoggerGeneration !== currentGeneration) {
         fileLogger = getChildLogger({ subsystem });
+        fileLoggerGeneration = currentGeneration;
       }
       logToFile(fileLogger, level, message, fileMeta);
     }

@@ -241,8 +241,18 @@ export function getLogger(): TsLogger<LogObj> {
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
+    loggingState.loggerGeneration += 1;
   }
   return loggingState.cachedLogger as TsLogger<LogObj>;
+}
+
+/**
+ * Returns the current logger generation. Incremented each time the file logger
+ * is rebuilt due to configuration changes. Used by subsystem loggers to detect
+ * when their cached child logger is stale.
+ */
+export function getLoggerGeneration(): number {
+  return loggingState.loggerGeneration;
 }
 
 export function getChildLogger(
