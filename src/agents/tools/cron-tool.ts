@@ -170,6 +170,20 @@ const CronJobObjectSchema = Type.Optional(
       deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first execution" })),
       sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
       failureAlert: CronFailureAlertSchema,
+      preHook: Type.Optional(
+        Type.Object(
+          {
+            command: Type.String({
+              description:
+                "Shell command to run before execution. Exit 0 = proceed, 10 = skip, other = error.",
+            }),
+            timeoutSeconds: Type.Optional(
+              Type.Number({ description: "Timeout in seconds (default 30, max 300)" }),
+            ),
+          },
+          { additionalProperties: true },
+        ),
+      ),
     },
     { additionalProperties: true },
   ),
@@ -235,6 +249,23 @@ const CronPatchObjectSchema = Type.Optional(
       agentId: nullableStringSchema("Agent id, or null to clear it"),
       sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
       failureAlert: CronFailureAlertSchema,
+      preHook: Type.Optional(
+        Type.Unsafe<{ command: string; timeoutSeconds?: number } | false>({
+          type: "object",
+          properties: {
+            command: Type.String({
+              description:
+                "Shell command to run before execution. Exit 0 = proceed, 10 = skip, other = error.",
+            }),
+            timeoutSeconds: Type.Optional(
+              Type.Number({ description: "Timeout in seconds (default 30, max 300)" }),
+            ),
+          },
+          additionalProperties: true,
+          description:
+            "Pre-hook config object, or the boolean value false to clear the pre-hook from this job",
+        }),
+      ),
     },
     { additionalProperties: true },
   ),
