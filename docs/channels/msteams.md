@@ -194,7 +194,7 @@ Before configuring OpenClaw, you need to create an Azure Bot resource.
 
 ## Federated Authentication (Certificate + Managed Identity)
 
-> Added in 2026.3.24
+> Added in 2026.4.11
 
 For production deployments, OpenClaw supports **federated authentication** as a more secure alternative to client secrets. Two methods are available:
 
