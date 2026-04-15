@@ -413,6 +413,7 @@ export function createOpenClawCodingTools(options?: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
+    senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
   ]);

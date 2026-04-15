@@ -264,7 +264,8 @@ function matchToolsBySenderPolicy(
 ): GroupToolPolicyConfig | undefined {
   // Channel-scoped compound key: checked first so platform-specific entries win over bare id matches.
   // Key format stored in bucket: "<channel>:<senderId>" (both lowercased).
-  const channelProvider = normalizeSenderKey(params.messageProvider ?? "");
+  const rawProvider = normalizeOptionalString(params.messageProvider);
+  const channelProvider = rawProvider ? normalizeSenderKey(rawProvider) : "";
   if (channelProvider) {
     for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
       const compositeKey = `${channelProvider}:${senderIdCandidate}`;

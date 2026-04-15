@@ -18,7 +18,7 @@ import type { SandboxToolPolicy } from "./sandbox/types.js";
  *   1. agents.<agentId>.tools.toolsBySender  (agent-level, highest priority)
  *   2. tools.toolsBySender                  (global fallback)
  *
- * Within each level, key priority: id → e164 → username → name → "*" (wildcard).
+ * Within each level, key priority: channel → id → e164 → username → name → "*" (wildcard).
  *
  * ## YAML config example
  *
