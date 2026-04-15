@@ -187,6 +187,22 @@ describe("message hook mappers", () => {
     expect(canonical.mediaType).toBe("image/jpeg");
   });
 
+  it("keeps media path/type pairing aligned when filtering invalid entries", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        MediaPath: undefined,
+        MediaType: undefined,
+        MediaPaths: ["x".repeat(2049), "/tmp/ramp.jpg"],
+        MediaTypes: ["image/png", "image/jpeg"],
+      }),
+    );
+
+    expect(canonical.mediaPath).toBe("/tmp/ramp.jpg");
+    expect(canonical.mediaType).toBe("image/jpeg");
+    expect(canonical.mediaPaths).toEqual(["/tmp/ramp.jpg"]);
+    expect(canonical.mediaTypes).toEqual(["image/jpeg"]);
+  });
+
   it("maps canonical inbound context to plugin/internal received payloads", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({

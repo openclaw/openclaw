@@ -22,24 +22,45 @@ import type {
 const MAX_HOOK_MEDIA_ITEMS = 16;
 const MAX_HOOK_MEDIA_VALUE_LENGTH = 2048;
 
-function normalizeHookMediaValues(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
+function normalizeHookMediaValue(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0) {
     return undefined;
   }
-  const normalized: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string" || entry.length === 0) {
+  if (value.length > MAX_HOOK_MEDIA_VALUE_LENGTH) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeHookMediaPairs(
+  paths: unknown,
+  types: unknown,
+): {
+  mediaPaths?: string[];
+  mediaTypes?: string[];
+} {
+  if (!Array.isArray(paths) || !Array.isArray(types)) {
+    return {};
+  }
+  const mediaPaths: string[] = [];
+  const mediaTypes: string[] = [];
+  const pairCount = Math.min(paths.length, types.length);
+  for (let index = 0; index < pairCount; index += 1) {
+    const path = normalizeHookMediaValue(paths[index]);
+    const type = normalizeHookMediaValue(types[index]);
+    if (!path || !type) {
       continue;
     }
-    if (entry.length > MAX_HOOK_MEDIA_VALUE_LENGTH) {
-      continue;
-    }
-    normalized.push(entry);
-    if (normalized.length >= MAX_HOOK_MEDIA_ITEMS) {
+    mediaPaths.push(path);
+    mediaTypes.push(type);
+    if (mediaPaths.length >= MAX_HOOK_MEDIA_ITEMS) {
       break;
     }
   }
-  return normalized.length > 0 ? normalized : undefined;
+  if (mediaPaths.length === 0 || mediaTypes.length === 0) {
+    return {};
+  }
+  return { mediaPaths, mediaTypes };
 }
 
 export type CanonicalInboundMessageHookContext = {
@@ -108,9 +129,9 @@ export function deriveInboundMessageHookContext(
   );
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const mediaPaths = normalizeHookMediaValues(ctx.MediaPaths);
-  // Keep media type cardinality aligned with the exported media paths.
-  const mediaTypes = normalizeHookMediaValues(ctx.MediaTypes)?.slice(0, mediaPaths?.length);
+  const { mediaPaths, mediaTypes } = normalizeHookMediaPairs(ctx.MediaPaths, ctx.MediaTypes);
+  const normalizedMediaPath = normalizeHookMediaValue(ctx.MediaPath);
+  const normalizedMediaType = normalizeHookMediaValue(ctx.MediaType);
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -138,8 +159,8 @@ export function deriveInboundMessageHookContext(
     provider: ctx.Provider,
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
-    mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
-    mediaType: ctx.MediaType ?? mediaTypes?.[0],
+    mediaPath: normalizedMediaPath ?? mediaPaths?.[0],
+    mediaType: normalizedMediaType ?? mediaTypes?.[0],
     mediaPaths,
     mediaTypes,
     originatingChannel: ctx.OriginatingChannel,
