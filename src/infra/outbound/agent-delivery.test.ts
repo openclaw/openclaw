@@ -162,31 +162,7 @@ describe("agent delivery helpers", () => {
     expect(plan).toMatchObject(expected);
   });
 
-  it("resolves fallback targets when channel config may provide an implicit destination", () => {
-    const plan = resolveAgentDeliveryPlan({
-      sessionEntry: {
-        sessionId: "s2",
-        updatedAt: 2,
-        deliveryContext: { channel: "whatsapp" },
-      },
-      requestedChannel: "last",
-      explicitTo: undefined,
-      accountId: undefined,
-      wantsDelivery: true,
-    });
-
-    const resolved = resolveAgentOutboundTarget({
-      cfg: { channels: { whatsapp: { defaultTo: "+1999" } } } as OpenClawConfig,
-      plan,
-      targetMode: "implicit",
-    });
-
-    expect(mocks.resolveOutboundTarget).toHaveBeenCalledTimes(1);
-    expect(resolved.resolvedTarget?.ok).toBe(true);
-    expect(resolved.resolvedTo).toBe("+1999");
-  });
-
-  it("skips implicit fallback target resolution when channel config is absent", () => {
+  it("resolves fallback targets when no explicit destination is provided", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
         sessionId: "s2",
@@ -205,10 +181,9 @@ describe("agent delivery helpers", () => {
       targetMode: "implicit",
     });
 
-    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
-    expect(resolved.resolvedTarget).toBeNull();
-    expect(resolved.resolvedTo).toBeUndefined();
-    expect(resolved.targetMode).toBe("implicit");
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledTimes(1);
+    expect(resolved.resolvedTarget?.ok).toBe(true);
+    expect(resolved.resolvedTo).toBe("+1999");
   });
 
   it("skips outbound target resolution when explicit target validation is disabled", () => {

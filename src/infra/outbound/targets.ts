@@ -4,6 +4,7 @@ import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
@@ -51,6 +52,15 @@ export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 import { resolveSessionDeliveryTarget } from "./targets-session.js";
 
+function activeRegistryHasChannelPlugin(channel: GatewayMessageChannel): boolean {
+  const activeRegistry = getActivePluginRegistry();
+  return (
+    activeRegistry?.channels.some(
+      (entry) => entry?.plugin?.id === channel || entry?.pluginId === channel,
+    ) === true
+  );
+}
+
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
   channel: GatewayMessageChannel;
@@ -60,6 +70,19 @@ export function resolveOutboundTarget(params: {
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
 }): OutboundTargetResolution {
+  const channelConfig = (params.cfg?.channels as Record<string, unknown> | undefined)?.[
+    params.channel
+  ];
+  if (
+    !params.to?.trim() &&
+    channelConfig === undefined &&
+    !activeRegistryHasChannelPlugin(params.channel)
+  ) {
+    return {
+      ok: false,
+      error: new Error(`Missing target for channel: ${params.channel}`),
+    };
+  }
   return (
     resolveOutboundTargetWithPlugin({
       plugin: resolveOutboundChannelPlugin({

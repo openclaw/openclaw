@@ -151,15 +151,6 @@ export function resolveAgentOutboundTarget(params: {
       targetMode,
     };
   }
-  const channels = params.cfg.channels as Record<string, unknown> | undefined;
-  const channelConfig = channels?.[params.plan.resolvedChannel];
-  if (targetMode === "implicit" && !params.plan.resolvedTo && channelConfig === undefined) {
-    return {
-      resolvedTarget: null,
-      resolvedTo: params.plan.resolvedTo,
-      targetMode,
-    };
-  }
   if (params.validateExplicitTarget !== true && params.plan.resolvedTo) {
     return {
       resolvedTarget: null,
