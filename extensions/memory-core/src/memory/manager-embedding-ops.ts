@@ -463,6 +463,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
+    // Always respect the user's configured concurrency (batch.concurrency),
+    // even when batch mode is disabled (e.g. Ollama without batch API).
+    // Only fall back to the hardcoded default when no user config is present.
+    const userConcurrency = this.settings.remote?.batch?.concurrency;
+    if (typeof userConcurrency === "number" && userConcurrency >= 1) {
+      return userConcurrency;
+    }
     return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
   }
 
