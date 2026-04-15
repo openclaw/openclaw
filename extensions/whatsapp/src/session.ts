@@ -15,11 +15,11 @@ import {
   resolveWebCredsPath,
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
-type BaileysRuntime = typeof import("./session.runtime.js");
+type BaileysRuntime = typeof import("@whiskeysockets/baileys");
 let baileysRuntimePromise: Promise<BaileysRuntime> | null = null;
 
 function loadBaileysRuntime(): Promise<BaileysRuntime> {
-  baileysRuntimePromise ??= import("./session.runtime.js");
+  baileysRuntimePromise ??= import("@whiskeysockets/baileys");
   return baileysRuntimePromise;
 }
 export { formatError, getStatusCode } from "./session-errors.js";
