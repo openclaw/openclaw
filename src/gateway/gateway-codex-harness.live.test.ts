@@ -491,6 +491,7 @@ describeLive("gateway live (Codex harness)", () => {
             "OpenClaw status:",
             "model `codex/",
             "session `agent:dev:live-codex-harness`",
+            "Model/status card shown above",
           ],
         });
         logCodexLiveStep("codex-status-command", { statusText });
@@ -508,6 +509,8 @@ describeLive("gateway live (Codex harness)", () => {
             "running as Codex on `codex/",
             "currently running on `codex/",
             "stdin is not a terminal",
+            "Configured model from `~/.codex/config.toml`:",
+            "Current OpenClaw session status reports the active model as:",
           ],
         });
         logCodexLiveStep("codex-models-command", { modelsText });
