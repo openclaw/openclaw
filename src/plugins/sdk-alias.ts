@@ -472,6 +472,10 @@ function supportsNativeJitiRuntime(): boolean {
   return typeof versions.bun !== "string" && process.platform !== "win32";
 }
 
+function isBundledPluginDistModulePath(modulePath: string): boolean {
+  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
+}
+
 export function shouldPreferNativeJiti(modulePath: string): boolean {
   if (!supportsNativeJitiRuntime()) {
     return false;
@@ -493,6 +497,9 @@ export function resolvePluginLoaderJitiTryNative(
     preferBuiltDist?: boolean;
   },
 ): boolean {
+  if (isBundledPluginDistModulePath(modulePath)) {
+    return false;
+  }
   return (
     shouldPreferNativeJiti(modulePath) ||
     (supportsNativeJitiRuntime() &&
