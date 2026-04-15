@@ -199,7 +199,21 @@ final class HealthStore {
             return .degraded(error)
         }
         guard let snap = self.snapshot else { return .unknown }
-        guard let link = self.resolveLinkChannel(snap) else { return .unknown }
+        guard let link = self.resolveLinkChannel(snap) else {
+            // No channel has linking info — derive health from channel probes.
+            // snap.ok is hardcoded true when the endpoint responds, so check probes.
+            let configuredChannels = snap.channels.values.filter { $0.configured == true }
+            if configuredChannels.isEmpty {
+                return .unknown
+            }
+            if configuredChannels.contains(where: { $0.probe == nil }) {
+                return .unknown
+            }
+            let hasFailedProbe = configuredChannels.contains { $0.probe?.ok == false }
+            if hasFailedProbe { return .degraded("channel probe failed") }
+            let allProbesHealthy = configuredChannels.allSatisfy { $0.probe?.ok == true }
+            return allProbesHealthy ? .ok : .unknown
+        }
         if link.summary.linked != true {
             // Linking is optional if any other channel is healthy; don't paint the whole app red.
             let fallback = self.resolveFallbackChannel(snap, excluding: link.id)
@@ -216,11 +230,29 @@ final class HealthStore {
         if self.isRefreshing { return "Health check running…" }
         if let error = self.lastError { return "Health check failed: \(error)" }
         guard let snap = self.snapshot else { return "Health check pending" }
-        guard let link = self.resolveLinkChannel(snap) else { return "Health check pending" }
+        guard let link = self.resolveLinkChannel(snap) else {
+            // No channel has linking info — derive from channel probes.
+            let configuredChannels = snap.channels.values.filter { $0.configured == true }
+            if configuredChannels.isEmpty {
+                return "Health check pending"
+            }
+            if configuredChannels.contains(where: { $0.probe == nil }) {
+                return "Health check pending"
+            }
+            let failedChannel = configuredChannels.first { $0.probe?.ok == false }
+            if let failedChannel, let probe = failedChannel.probe {
+                return "Gateway degraded: \(Self.describeProbeFailure(probe))"
+            }
+            let allProbesHealthy = configuredChannels.allSatisfy { $0.probe?.ok == true }
+            return allProbesHealthy ? "Gateway healthy" : "Health check pending"
+        }
         if link.summary.linked != true {
             if let fallback = self.resolveFallbackChannel(snap, excluding: link.id) {
                 let fallbackLabel = snap.channelLabels?[fallback.id] ?? fallback.id.capitalized
-                let fallbackState = (fallback.summary.probe?.ok ?? true) ? "ok" : "degraded"
+                let fallbackState: String
+                if fallback.summary.probe == nil { fallbackState = "pending" }
+                else if fallback.summary.probe?.ok == false { fallbackState = "degraded" }
+                else { fallbackState = "ok" }
                 return "\(fallbackLabel) \(fallbackState) · Not linked — run openclaw login"
             }
             return "Not linked — run openclaw login"
