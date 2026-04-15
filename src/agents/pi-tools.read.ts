@@ -470,7 +470,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   };
 }
 
-const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg"]);
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 const MAX_DIR_ENTRIES = 200;
@@ -512,7 +512,12 @@ export function createOpenClawReadTool(
           ? await bridge.stat({ filePath: inputPath, cwd: rootDir })
           : await fs.stat(inputPath);
 
-        if ('type' in stats ? stats.type === 'directory' : stats.isDirectory()) {
+        // P1 FIX: Handle sandbox stat objects without fs.Stats methods
+        const isDirectory = 'type' in stats 
+          ? stats.type === 'directory' 
+          : typeof stats.isDirectory === 'function' && stats.isDirectory();
+
+        if (isDirectory) {
           if (signal?.aborted) throw new Error("Read operation aborted");
 
           const files = bridge
@@ -601,12 +606,15 @@ export function createOpenClawReadTool(
           
           return {
             toolCallId,
-            content: [{
-              type: "audio",
-              url: mediaUrl,
-              filename: fileName,
-              mimeType: mimeType,
-            } as any],
+            content: [
+              {
+                type: "audio",
+                url: mediaUrl,
+                filename: fileName,
+                mimeType: mimeType,
+              } as any,
+              { type: "text", text: `🎵 [${fileName}](${mediaUrl})` }  // ← FIX: Added text link with media URL
+            ],
             details: { path: inputPath, size: stats.size },
           };
         }
@@ -620,12 +628,15 @@ export function createOpenClawReadTool(
           
           return {
             toolCallId,
-            content: [{
-              type: "video",
-              url: mediaUrl,
-              filename: fileName,
-              mimeType: mimeType,
-            } as any],
+            content: [
+              {
+                type: "video",
+                url: mediaUrl,
+                filename: fileName,
+                mimeType: mimeType,
+              } as any,
+              { type: "text", text: `🎬 [${fileName}](${mediaUrl})` }  // ← FIX: Added text link with media URL
+            ],
             details: { path: inputPath, size: stats.size },
           };
         }
