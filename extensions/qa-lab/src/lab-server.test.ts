@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { startQaLabServer } from "./lab-server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -77,6 +78,19 @@ async function waitForFile(filePath: string, timeoutMs = 5_000) {
     }
   }
   throw new Error(`file did not appear: ${filePath}`);
+}
+
+function decodeWebSocketRawData(data: RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
 }
 
 describe("qa-lab server", () => {
@@ -355,6 +369,100 @@ describe("qa-lab server", () => {
     });
     expect(withBootstrapToken.status).toBe(200);
     expect(await withBootstrapToken.json()).toEqual({ ok: true });
+  });
+
+  it("rewrites bootstrap token in websocket connect payloads", async () => {
+    const gatewayToken = "gateway-token";
+    let resolveSeenToken: ((value: string) => void) | null = null;
+    const seenToken = new Promise<string>((resolve) => {
+      resolveSeenToken = resolve;
+    });
+    const upstreamWss = new WebSocketServer({ noServer: true });
+    const upstream = createServer();
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWss.handleUpgrade(req, socket, head, (ws) => {
+        ws.once("message", (data) => {
+          const text = decodeWebSocketRawData(data);
+          const parsed = JSON.parse(text) as {
+            params?: {
+              auth?: { token?: string };
+            };
+          };
+          resolveSeenToken?.(parsed.params?.auth?.token ?? "");
+          ws.close();
+        });
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => resolve());
+    });
+    cleanups.push(
+      async () =>
+        await new Promise<void>((resolve) => {
+          upstreamWss.close(() => {
+            upstream.close(() => resolve());
+          });
+        }),
+    );
+
+    const address = upstream.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected websocket upstream address");
+    }
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      advertiseHost: "127.0.0.1",
+      advertisePort: 43124,
+      controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
+      controlUiProxyAuthToken: gatewayToken,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const bootstrap = (await (await fetchWithRetry(`${lab.listenUrl}/api/bootstrap`)).json()) as {
+      controlUiEmbeddedUrl: string | null;
+    };
+    const embeddedToken = decodeURIComponent(
+      new URL(String(bootstrap.controlUiEmbeddedUrl)).hash.match(/token=([^&]+)/)?.[1] ?? "",
+    );
+    expect(embeddedToken).toBeTruthy();
+    expect(embeddedToken).not.toBe(gatewayToken);
+
+    const wsUrl = new URL(lab.listenUrl);
+    wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+    wsUrl.pathname = "/control-ui/";
+    const client = new WebSocket(wsUrl.toString());
+    cleanups.push(async () => {
+      client.close();
+    });
+    await new Promise<void>((resolve, reject) => {
+      client.once("open", () => resolve());
+      client.once("error", reject);
+    });
+    client.send(
+      JSON.stringify({
+        type: "req",
+        id: "connect-test",
+        method: "connect",
+        params: {
+          auth: {
+            token: embeddedToken,
+          },
+        },
+      }),
+    );
+
+    const forwardedToken = await Promise.race([
+      seenToken,
+      sleep(2_000).then(() => {
+        throw new Error("timed out waiting for websocket connect frame");
+      }),
+    ]);
+    expect(forwardedToken).toBe(gatewayToken);
   });
 
   it("reports startup reachability for proxy and gateway", async () => {

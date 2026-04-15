@@ -9,7 +9,7 @@ import {
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import path from "node:path";
-import type { Duplex } from "node:stream";
+import { Transform, type Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -425,6 +425,240 @@ function rewriteProxyAuthorizationHeader(params: {
   });
 }
 
+type ParsedWebSocketFrame = {
+  raw: Buffer;
+  firstByte: number;
+  fin: boolean;
+  opcode: number;
+  masked: boolean;
+  maskKey: Buffer | null;
+  payload: Buffer;
+};
+
+function xorWebSocketPayload(payload: Buffer, maskKey: Buffer) {
+  const next = Buffer.allocUnsafe(payload.length);
+  for (let index = 0; index < payload.length; index += 1) {
+    next[index] = payload[index] ^ maskKey[index % 4];
+  }
+  return next;
+}
+
+function decodeWebSocketFrames(source: Buffer): {
+  frames: ParsedWebSocketFrame[];
+  remainder: Buffer;
+} {
+  const frames: ParsedWebSocketFrame[] = [];
+  let offset = 0;
+
+  while (offset + 2 <= source.length) {
+    const firstByte = source[offset];
+    const secondByte = source[offset + 1];
+    const fin = (firstByte & 0x80) !== 0;
+    const opcode = firstByte & 0x0f;
+    const masked = (secondByte & 0x80) !== 0;
+    let payloadLength = secondByte & 0x7f;
+    let cursor = offset + 2;
+
+    if (payloadLength === 126) {
+      if (cursor + 2 > source.length) {
+        break;
+      }
+      payloadLength = source.readUInt16BE(cursor);
+      cursor += 2;
+    } else if (payloadLength === 127) {
+      if (cursor + 8 > source.length) {
+        break;
+      }
+      const upper = source.readUInt32BE(cursor);
+      const lower = source.readUInt32BE(cursor + 4);
+      cursor += 8;
+      const wideLength = upper * 2 ** 32 + lower;
+      if (!Number.isSafeInteger(wideLength)) {
+        throw new Error("websocket frame exceeds safe integer length");
+      }
+      payloadLength = wideLength;
+    }
+
+    let maskKey: Buffer | null = null;
+    if (masked) {
+      if (cursor + 4 > source.length) {
+        break;
+      }
+      maskKey = source.subarray(cursor, cursor + 4);
+      cursor += 4;
+    }
+
+    if (cursor + payloadLength > source.length) {
+      break;
+    }
+
+    const payloadSegment = source.subarray(cursor, cursor + payloadLength);
+    const payload =
+      masked && maskKey ? xorWebSocketPayload(payloadSegment, maskKey) : payloadSegment;
+    const raw = source.subarray(offset, cursor + payloadLength);
+    frames.push({
+      raw,
+      firstByte,
+      fin,
+      opcode,
+      masked,
+      maskKey,
+      payload,
+    });
+    offset = cursor + payloadLength;
+  }
+
+  return {
+    frames,
+    remainder: source.subarray(offset),
+  };
+}
+
+function encodeWebSocketFrame(params: {
+  firstByte: number;
+  masked: boolean;
+  maskKey: Buffer | null;
+  payload: Buffer;
+}) {
+  const payloadLength = params.payload.byteLength;
+  const maskKey = params.masked ? (params.maskKey ?? Buffer.from([0, 0, 0, 0])) : null;
+  const headerLength =
+    2 + (payloadLength < 126 ? 0 : payloadLength < 65_536 ? 2 : 8) + (params.masked ? 4 : 0);
+  const header = Buffer.allocUnsafe(headerLength);
+
+  let cursor = 0;
+  header[cursor] = params.firstByte;
+  cursor += 1;
+
+  if (payloadLength < 126) {
+    header[cursor] = (params.masked ? 0x80 : 0) | payloadLength;
+    cursor += 1;
+  } else if (payloadLength < 65_536) {
+    header[cursor] = (params.masked ? 0x80 : 0) | 126;
+    cursor += 1;
+    header.writeUInt16BE(payloadLength, cursor);
+    cursor += 2;
+  } else {
+    header[cursor] = (params.masked ? 0x80 : 0) | 127;
+    cursor += 1;
+    const upper = Math.floor(payloadLength / 2 ** 32);
+    const lower = payloadLength >>> 0;
+    header.writeUInt32BE(upper, cursor);
+    cursor += 4;
+    header.writeUInt32BE(lower, cursor);
+    cursor += 4;
+  }
+
+  if (params.masked && maskKey) {
+    maskKey.copy(header, cursor);
+    cursor += 4;
+  }
+
+  const payload =
+    params.masked && maskKey ? xorWebSocketPayload(params.payload, maskKey) : params.payload;
+  return Buffer.concat([header, payload]);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function rewriteConnectFrameToken(params: {
+  frame: ParsedWebSocketFrame;
+  bootstrapToken: string;
+  gatewayToken: string;
+}): {
+  raw: Buffer;
+  rewritten: boolean;
+} {
+  if (!params.frame.fin || params.frame.opcode !== 0x1) {
+    return { raw: params.frame.raw, rewritten: false };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.frame.payload.toString("utf8")) as unknown;
+  } catch {
+    return { raw: params.frame.raw, rewritten: false };
+  }
+  if (!isRecord(parsed) || parsed.method !== "connect") {
+    return { raw: params.frame.raw, rewritten: false };
+  }
+
+  const requestParams = isRecord(parsed.params) ? parsed.params : null;
+  const auth = requestParams && isRecord(requestParams.auth) ? requestParams.auth : null;
+  if (!auth || auth.token !== params.bootstrapToken) {
+    return { raw: params.frame.raw, rewritten: false };
+  }
+
+  auth.token = params.gatewayToken;
+  const nextPayload = Buffer.from(JSON.stringify(parsed), "utf8");
+  return {
+    raw: encodeWebSocketFrame({
+      firstByte: params.frame.firstByte,
+      masked: params.frame.masked,
+      maskKey: params.frame.maskKey,
+      payload: nextPayload,
+    }),
+    rewritten: true,
+  };
+}
+
+function createConnectTokenRewriteTransform(params: {
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
+}) {
+  if (!params.bootstrapToken || !params.gatewayToken) {
+    return new Transform({
+      transform(chunk, _encoding, callback) {
+        this.push(chunk);
+        callback();
+      },
+    });
+  }
+
+  let pending = Buffer.alloc(0);
+  let disabled = false;
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      if (disabled) {
+        this.push(chunk);
+        callback();
+        return;
+      }
+
+      pending = Buffer.concat([pending, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+      let decoded: { frames: ParsedWebSocketFrame[]; remainder: Buffer };
+      try {
+        decoded = decodeWebSocketFrames(pending);
+      } catch {
+        disabled = true;
+        this.push(pending);
+        pending = Buffer.alloc(0);
+        callback();
+        return;
+      }
+
+      pending = decoded.remainder;
+      for (const frame of decoded.frames) {
+        const rewritten = rewriteConnectFrameToken({
+          frame,
+          bootstrapToken: params.bootstrapToken,
+          gatewayToken: params.gatewayToken,
+        });
+        this.push(rewritten.raw);
+      }
+      callback();
+    },
+    flush(callback) {
+      if (pending.length > 0) {
+        this.push(pending);
+      }
+      callback();
+    },
+  });
+}
+
 async function proxyHttpRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -500,6 +734,21 @@ function proxyUpgradeRequest(params: {
           port,
         });
 
+  const closeBoth = () => {
+    if (!params.socket.destroyed) {
+      params.socket.destroy();
+    }
+    if (!upstream.destroyed) {
+      upstream.destroy();
+    }
+  };
+
+  const clientToUpstream = createConnectTokenRewriteTransform({
+    bootstrapToken: params.bootstrapToken,
+    gatewayToken: params.gatewayToken,
+  });
+  clientToUpstream.on("error", closeBoth);
+
   const headerLines: string[] = [];
   for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
     const name = params.req.rawHeaders[index];
@@ -530,21 +779,12 @@ function proxyUpgradeRequest(params: {
       "",
     ].join("\r\n");
     upstream.write(requestText);
-    if (params.head.length > 0) {
-      upstream.write(params.head);
-    }
+    params.socket.pipe(clientToUpstream).pipe(upstream);
     upstream.pipe(params.socket);
-    params.socket.pipe(upstream);
+    if (params.head.length > 0) {
+      clientToUpstream.write(params.head);
+    }
   });
-
-  const closeBoth = () => {
-    if (!params.socket.destroyed) {
-      params.socket.destroy();
-    }
-    if (!upstream.destroyed) {
-      upstream.destroy();
-    }
-  };
 
   upstream.on("error", () => {
     if (!params.socket.destroyed) {
