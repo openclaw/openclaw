@@ -505,6 +505,25 @@ describe("promptSingleChannelToken", () => {
     expect(result).toEqual(expected);
     expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
   });
+
+  it("does not throw when the text prompter returns undefined", async () => {
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async () => undefined),
+    };
+
+    await expect(
+      promptSingleChannelToken({
+        prompter: prompter as any,
+        accountConfigured: false,
+        canUseEnv: false,
+        hasConfigToken: false,
+        envPrompt: "use env",
+        keepPrompt: "keep",
+        inputPrompt: "token",
+      }),
+    ).resolves.toEqual({ useEnv: false, token: "" });
+  });
 });
 
 describe("promptSingleChannelSecretInput", () => {

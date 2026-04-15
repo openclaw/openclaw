@@ -100,7 +100,7 @@ export function createClackPrompter(): WizardPrompter {
     },
     text: async (params) => {
       const validate = params.validate;
-      return guardCancel(
+      const value = guardCancel(
         await text({
           message: stylePromptMessage(params.message),
           initialValue: params.initialValue,
@@ -108,6 +108,7 @@ export function createClackPrompter(): WizardPrompter {
           validate: validate ? (value) => validate(value ?? "") : undefined,
         }),
       );
+      return typeof value === "string" ? value : "";
     },
     confirm: async (params) =>
       guardCancel(

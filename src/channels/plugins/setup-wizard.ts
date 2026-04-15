@@ -455,7 +455,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               });
             },
           });
-          const trimmedValue = rawValue.trim();
+          const trimmedValue = normalizeOptionalString(rawValue) ?? "";
           if (!trimmedValue && textInput.required === false) {
             if (textInput.applyEmptyValue) {
               next = await applyWizardTextInputValue({
