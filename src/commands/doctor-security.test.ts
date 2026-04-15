@@ -196,6 +196,51 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('config set session.dmScope "per-channel-peer"');
   });
 
+  it("degrades safely when a non-default account fails read-only resolution", async () => {
+    pluginRegistry.list = [
+      {
+        id: "discord",
+        meta: { label: "Discord" },
+        config: {
+          listAccountIds: () => ["default", "work-bot"],
+          resolveAccount: (_cfg: unknown, accountId: string) => {
+            if (accountId === "work-bot") {
+              throw new Error("missing secret");
+            }
+            return {
+              accountId: "default",
+              config: { dm: { policy: "pairing", allowFrom: [] } },
+            };
+          },
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: ({
+            accountId,
+            account,
+          }: {
+            cfg: unknown;
+            accountId: string;
+            account: { config: { dm: { policy: string; allowFrom: string[] } } };
+          }) => ({
+            policy: account.config.dm.policy,
+            allowFrom: account.config.dm.allowFrom,
+            allowFromPath: `channels.discord.accounts.${accountId}.dm.`,
+            approveHint: "approve via pairing",
+          }),
+        },
+      },
+    ];
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("[secrets]");
+    expect(message).toContain("work-bot");
+    expect(message).toContain("failed to resolve account");
+    expect(message).toContain("Discord (default)");
+  });
+
   it("warns for all accounts, not just the default", async () => {
     pluginRegistry.list = [
       {

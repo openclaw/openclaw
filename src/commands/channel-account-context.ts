@@ -39,6 +39,109 @@ function formatContextDiagnostic(params: {
   return `${prefix}channels.${params.pluginId}.accounts.${params.accountId}: ${params.message}`;
 }
 
+export type ChannelAccountReadOnlyContext = {
+  account: unknown;
+  enabled: boolean;
+  configured: boolean;
+  diagnostics: string[];
+  degraded: boolean;
+};
+
+/**
+ * Resolve one channel account using the same inspect-first / try-catch strategy as
+ * {@link resolveDefaultChannelAccountContext} in read_only mode, for an arbitrary
+ * account id (not only the channel default).
+ */
+export async function resolveChannelAccountReadOnly(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+  accountId: string,
+  options?: { commandName?: string },
+): Promise<ChannelAccountReadOnlyContext> {
+  const diagnostics: string[] = [];
+  let degraded = false;
+
+  const inspected =
+    plugin.config.inspectAccount?.(cfg, accountId) ??
+    (await inspectReadOnlyChannelAccount({
+      channelId: plugin.id,
+      cfg,
+      accountId,
+    }));
+
+  let account = inspected;
+  if (!account) {
+    try {
+      account = plugin.config.resolveAccount(cfg, accountId);
+    } catch (error) {
+      degraded = true;
+      diagnostics.push(
+        formatContextDiagnostic({
+          commandName: options?.commandName,
+          pluginId: plugin.id,
+          accountId,
+          message: `failed to resolve account (${formatErrorMessage(error)}); skipping read-only checks.`,
+        }),
+      );
+      return {
+        account: {},
+        enabled: false,
+        configured: false,
+        diagnostics,
+        degraded,
+      };
+    }
+  } else {
+    degraded = true;
+  }
+
+  const inspectEnabled = getBooleanField(account, "enabled");
+  let enabled = inspectEnabled ?? true;
+  if (inspectEnabled === undefined && plugin.config.isEnabled) {
+    try {
+      enabled = plugin.config.isEnabled(account, cfg);
+    } catch (error) {
+      degraded = true;
+      enabled = false;
+      diagnostics.push(
+        formatContextDiagnostic({
+          commandName: options?.commandName,
+          pluginId: plugin.id,
+          accountId,
+          message: `failed to evaluate enabled state (${formatErrorMessage(error)}); treating as disabled.`,
+        }),
+      );
+    }
+  }
+
+  const inspectConfigured = getBooleanField(account, "configured");
+  let configured = inspectConfigured ?? true;
+  if (inspectConfigured === undefined && plugin.config.isConfigured) {
+    try {
+      configured = await plugin.config.isConfigured(account, cfg);
+    } catch (error) {
+      degraded = true;
+      configured = false;
+      diagnostics.push(
+        formatContextDiagnostic({
+          commandName: options?.commandName,
+          pluginId: plugin.id,
+          accountId,
+          message: `failed to evaluate configured state (${formatErrorMessage(error)}); treating as unconfigured.`,
+        }),
+      );
+    }
+  }
+
+  return {
+    account,
+    enabled,
+    configured,
+    diagnostics,
+    degraded,
+  };
+}
+
 export async function resolveDefaultChannelAccountContext(
   plugin: ChannelPlugin,
   cfg: OpenClawConfig,
@@ -68,82 +171,8 @@ export async function resolveDefaultChannelAccountContext(
     };
   }
 
-  const diagnostics: string[] = [];
-  let degraded = false;
-
-  const inspected =
-    plugin.config.inspectAccount?.(cfg, defaultAccountId) ??
-    (await inspectReadOnlyChannelAccount({
-      channelId: plugin.id,
-      cfg,
-      accountId: defaultAccountId,
-    }));
-
-  let account = inspected;
-  if (!account) {
-    try {
-      account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    } catch (error) {
-      degraded = true;
-      diagnostics.push(
-        formatContextDiagnostic({
-          commandName: options?.commandName,
-          pluginId: plugin.id,
-          accountId: defaultAccountId,
-          message: `failed to resolve account (${formatErrorMessage(error)}); skipping read-only checks.`,
-        }),
-      );
-      return {
-        accountIds,
-        defaultAccountId,
-        account: {},
-        enabled: false,
-        configured: false,
-        diagnostics,
-        degraded,
-      };
-    }
-  } else {
-    degraded = true;
-  }
-
-  const inspectEnabled = getBooleanField(account, "enabled");
-  let enabled = inspectEnabled ?? true;
-  if (inspectEnabled === undefined && plugin.config.isEnabled) {
-    try {
-      enabled = plugin.config.isEnabled(account, cfg);
-    } catch (error) {
-      degraded = true;
-      enabled = false;
-      diagnostics.push(
-        formatContextDiagnostic({
-          commandName: options?.commandName,
-          pluginId: plugin.id,
-          accountId: defaultAccountId,
-          message: `failed to evaluate enabled state (${formatErrorMessage(error)}); treating as disabled.`,
-        }),
-      );
-    }
-  }
-
-  const inspectConfigured = getBooleanField(account, "configured");
-  let configured = inspectConfigured ?? true;
-  if (inspectConfigured === undefined && plugin.config.isConfigured) {
-    try {
-      configured = await plugin.config.isConfigured(account, cfg);
-    } catch (error) {
-      degraded = true;
-      configured = false;
-      diagnostics.push(
-        formatContextDiagnostic({
-          commandName: options?.commandName,
-          pluginId: plugin.id,
-          accountId: defaultAccountId,
-          message: `failed to evaluate configured state (${formatErrorMessage(error)}); treating as unconfigured.`,
-        }),
-      );
-    }
-  }
+  const { account, enabled, configured, diagnostics, degraded } =
+    await resolveChannelAccountReadOnly(plugin, cfg, defaultAccountId, options);
 
   return {
     accountIds,

@@ -11,7 +11,10 @@ import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exe
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
-import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
+import {
+  resolveChannelAccountReadOnly,
+  resolveDefaultChannelAccountContext,
+} from "./channel-account-context.js";
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
@@ -232,28 +235,35 @@ async function collectChannelPluginAccountSecurityWarnings(
     return;
   }
 
-  const { defaultAccountId, enabled, configured, diagnostics } =
-    await resolveDefaultChannelAccountContext(plugin, cfg, {
-      mode: "read_only",
-      commandName: "doctor",
-    });
-  for (const diagnostic of diagnostics) {
+  const defaultCtx = await resolveDefaultChannelAccountContext(plugin, cfg, {
+    mode: "read_only",
+    commandName: "doctor",
+  });
+  for (const diagnostic of defaultCtx.diagnostics) {
     warnings.push(`- [secrets] ${diagnostic}`);
   }
-  if (!enabled || !configured) {
+  if (!defaultCtx.enabled || !defaultCtx.configured) {
     return;
   }
 
   const accountIds = plugin.config.listAccountIds(cfg);
-  const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+  const orderedAccountIds = Array.from(new Set([defaultCtx.defaultAccountId, ...accountIds]));
 
   for (const accountId of orderedAccountIds) {
-    const account = plugin.config.resolveAccount(cfg, accountId);
-    if (plugin.config.isEnabled && !plugin.config.isEnabled(account, cfg)) {
-      continue;
-    }
-    if (plugin.config.isConfigured && !(await plugin.config.isConfigured(account, cfg))) {
-      continue;
+    let account: unknown;
+    if (accountId === defaultCtx.defaultAccountId) {
+      account = defaultCtx.account;
+    } else {
+      const row = await resolveChannelAccountReadOnly(plugin, cfg, accountId, {
+        commandName: "doctor",
+      });
+      for (const diagnostic of row.diagnostics) {
+        warnings.push(`- [secrets] ${diagnostic}`);
+      }
+      if (!row.enabled || !row.configured) {
+        continue;
+      }
+      account = row.account;
     }
     const accountLabel =
       orderedAccountIds.length > 1
