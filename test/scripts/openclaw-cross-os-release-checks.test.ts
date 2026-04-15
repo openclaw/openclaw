@@ -246,7 +246,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveDevUpdateVerificationRef("main")).toBe("main");
     expect(
       resolveDevUpdateVerificationRef("main", "08753a1d793c040b101c8a26c43445dbbab14995"),
-    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
+    ).toBe("main");
     expect(resolveDevUpdateVerificationRef("refs/heads/main")).toBe("main");
   });
 
