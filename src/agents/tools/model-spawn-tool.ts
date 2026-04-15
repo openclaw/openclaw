@@ -169,6 +169,10 @@ export function createModelSpawnTool(
           selection: { provider, model: modelId, isDefault: false },
           selectionSource: "user",
           markLiveSwitchPending: true,
+          // Preserve the existing auth profile override so an LLM-initiated model
+          // switch does not silently clear a user-configured auth profile.
+          profileOverride: entry.authProfileOverride,
+          profileOverrideSource: entry.authProfileOverrideSource === "auto" ? "auto" : "user",
         });
 
         if (updated) {

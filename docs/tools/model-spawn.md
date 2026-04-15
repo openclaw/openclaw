@@ -52,7 +52,7 @@ description: Spawn one or more model instances for inference tasks — in-place 
       },
       "spawns": {
         "type": "array",
-        "maxItems": 10,
+        "maxItems": 5,
         "description": "Multi-model parallel execution. Each entry runs in its own isolated session concurrently.",
         "items": {
           "type": "object",
