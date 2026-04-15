@@ -179,7 +179,7 @@
   "matrix-runtime-surface",
   "matrix-surface",
   "matrix-thread-bindings",
-  "qa-lab-runtime",
+  "qa-runtime",
   "qa-runner-runtime",
   "mattermost",
   "mattermost-policy",

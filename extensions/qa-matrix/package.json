@@ -1,6 +1,7 @@
 {
   "name": "@openclaw/qa-matrix",
   "version": "2026.4.12",
+  "private": true,
   "description": "OpenClaw Matrix QA runner plugin",
   "type": "module",
   "devDependencies": {
@@ -19,16 +20,8 @@
     "extensions": [
       "./index.ts"
     ],
-    "install": {
-      "npmSpec": "@openclaw/qa-matrix",
-      "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.12"
-    },
     "compat": {
       "pluginApi": ">=2026.4.12"
-    },
-    "build": {
-      "openclawVersion": "2026.4.12"
     }
   }
 }

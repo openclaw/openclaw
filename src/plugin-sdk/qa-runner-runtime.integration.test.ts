@@ -55,7 +55,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
     }
   });
 
-  it("loads an activated qa runner from a linked plugin path", async () => {
+  it("loads an activated qa runner from a linked plugin path without a bundled install fallback", async () => {
     const stateDir = makeTempDir("openclaw-qa-runner-state-");
     const pluginDir = path.join(stateDir, "extensions", "qa-linked");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -102,7 +102,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       }),
       "utf8",
     );
-    fs.writeFileSync(path.join(pluginDir, "index.js"), 'export default {};\n', "utf8");
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n", "utf8");
     fs.writeFileSync(
       path.join(pluginDir, "runtime-api.js"),
       [
@@ -118,26 +118,17 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
 
     const module = await import("./qa-runner-runtime.js");
 
-    expect(module.listQaRunnerCliContributions()).toEqual(
-      expect.arrayContaining([
-        {
-          pluginId: "qa-linked",
+    expect(module.listQaRunnerCliContributions()).toEqual([
+      {
+        pluginId: "qa-linked",
+        commandName: "linked",
+        description: "Run the linked QA lane",
+        status: "available",
+        registration: {
           commandName: "linked",
-          description: "Run the linked QA lane",
-          status: "available",
-          registration: {
-            commandName: "linked",
-            register: expect.any(Function),
-          },
+          register: expect.any(Function),
         },
-        {
-          pluginId: "qa-matrix",
-          commandName: "matrix",
-          description: "Run the Docker-backed Matrix live QA lane against a disposable homeserver",
-          status: "missing",
-          npmSpec: "@openclaw/qa-matrix",
-        },
-      ]),
-    );
+      },
+    ]);
   });
 });

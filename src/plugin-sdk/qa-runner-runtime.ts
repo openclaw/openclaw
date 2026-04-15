@@ -1,8 +1,10 @@
 import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { listBundledQaRunnerCatalog } from "../plugins/qa-runner-catalog.js";
-import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import {
+  loadBundledPluginPublicSurfaceModuleSync,
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
+} from "./facade-runtime.js";
 
 export type QaRunnerCliRegistration = {
   commandName: string;
@@ -26,13 +28,6 @@ export type QaRunnerCliContribution =
       commandName: string;
       description?: string;
       status: "blocked";
-    }
-  | {
-      pluginId: string;
-      commandName: string;
-      description?: string;
-      status: "missing";
-      npmSpec: string;
     };
 
 function listDeclaredQaRunnerPlugins(): Array<
@@ -77,40 +72,24 @@ function indexRuntimeRegistrations(
   return registrationByCommandName;
 }
 
-function buildKnownQaRunnerCatalog(): readonly QaRunnerCliContribution[] {
-  const knownRunners = listBundledQaRunnerCatalog();
-  const seenCommandNames = new Map<string, string>();
-  return knownRunners.map((runner) => {
-    const previousOwner = seenCommandNames.get(runner.commandName);
-    if (previousOwner) {
-      throw new Error(
-        `QA runner command "${runner.commandName}" declared by both "${previousOwner}" and "${runner.pluginId}"`,
-      );
-    }
-    seenCommandNames.set(runner.commandName, runner.pluginId);
-    return {
-      pluginId: runner.pluginId,
-      commandName: runner.commandName,
-      ...(runner.description ? { description: runner.description } : {}),
-      status: "missing" as const,
-      npmSpec: runner.npmSpec,
-    };
+function loadQaRunnerRuntimeSurface(plugin: PluginManifestRecord): QaRunnerRuntimeSurface | null {
+  if (plugin.origin === "bundled") {
+    return loadBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
+      dirName: plugin.id,
+      artifactBasename: "runtime-api.js",
+    });
+  }
+  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
+    dirName: plugin.id,
+    artifactBasename: "runtime-api.js",
   });
 }
 
 export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
   const contributions = new Map<string, QaRunnerCliContribution>();
 
-  for (const runner of buildKnownQaRunnerCatalog()) {
-    contributions.set(runner.commandName, runner);
-  }
-
   for (const plugin of listDeclaredQaRunnerPlugins()) {
-    const runtimeSurface =
-      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
-        dirName: plugin.id,
-        artifactBasename: "runtime-api.js",
-      });
+    const runtimeSurface = loadQaRunnerRuntimeSurface(plugin);
     const runtimeRegistrationByCommandName = runtimeSurface
       ? indexRuntimeRegistrations(plugin.id, runtimeSurface)
       : null;
