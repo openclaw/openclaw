@@ -253,6 +253,11 @@ describe("subagent announce formatting", () => {
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
     });
+    subagentAnnounceTesting.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        req: Parameters<typeof gatewayCall.callGateway>[0],
+      ) => (await callGatewaySpy(req)) as T,
+    });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
@@ -698,7 +703,6 @@ describe("subagent announce formatting", () => {
   });
 
   it("suppresses announce flow for whitespace-padded ANNOUNCE_SKIP and still runs cleanup", async () => {
-    subagentAnnounceTesting.setDepsForTest({ callGateway: callGatewaySpy });
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-skip-whitespace",
@@ -727,7 +731,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: " NO_REPLY ",
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).not.toHaveBeenCalled();
   });
@@ -745,9 +749,11 @@ describe("subagent announce formatting", () => {
       fallbackReply: "final summary from prior completion",
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    expect(call?.params?.message).toContain("final summary from prior completion");
   });
 
   it("retries completion direct agent announce on transient channel-unavailable errors", async () => {
