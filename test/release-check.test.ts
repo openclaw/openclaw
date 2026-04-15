@@ -9,13 +9,14 @@ import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
+  collectForbiddenPackContentPaths,
   collectRootDistBundledRuntimeMirrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
-  listRequiredQaScenarioPackPaths,
   packageNameFromSpecifier,
 } from "../scripts/release-check.ts";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
@@ -28,7 +29,6 @@ function makePackResult(filename: string, unpackedSize: number) {
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
-const requiredQaScenarioPackPaths = listRequiredQaScenarioPackPaths();
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -309,6 +309,47 @@ describe("collectForbiddenPackPaths", () => {
       "dist/plugin-sdk/.tsbuildinfo",
     ]);
   });
+
+  it("blocks private qa lab and suite paths from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "dist/extensions/qa-lab/runtime-api.js",
+        "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+        "dist/plugin-sdk/qa-lab.js",
+        "dist/plugin-sdk/qa-runtime.js",
+        "dist/qa-runtime-B9LDtssJ.js",
+        "qa/scenarios/index.md",
+      ]),
+    ).toEqual([
+      "dist/extensions/qa-lab/runtime-api.js",
+      "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+      "dist/plugin-sdk/qa-lab.js",
+      "dist/plugin-sdk/qa-runtime.js",
+      "dist/qa-runtime-B9LDtssJ.js",
+      "qa/scenarios/index.md",
+    ]);
+  });
+
+  it("blocks root dist chunks that still reference private qa lab sources", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-private-qa-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "dist", "entry.js"),
+        "//#region extensions/qa-lab/src/runtime-api.ts\n",
+        "utf8",
+      );
+      writeFileSync(join(tempRoot, "CHANGELOG.md"), "local QA notes mention extensions/qa-lab/\n");
+
+      expect(collectForbiddenPackContentPaths(["dist/entry.js", "CHANGELOG.md"], tempRoot)).toEqual(
+        ["dist/entry.js"],
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("collectMissingPackPaths", () => {
@@ -326,8 +367,8 @@ describe("collectMissingPackPaths", () => {
     expect(missing).toEqual(
       expect.arrayContaining([
         "dist/channel-catalog.json",
+        PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
         "dist/control-ui/index.html",
-        "qa/scenarios/index.md",
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
@@ -343,9 +384,6 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("whatsapp", "package.json"),
       ]),
     );
-    expect(
-      missing.some((path) => path.startsWith("qa/scenarios/") && path !== "qa/scenarios/index.md"),
-    ).toBe(true);
   });
 
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
@@ -357,7 +395,6 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
-        ...requiredQaScenarioPackPaths,
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
@@ -366,6 +403,7 @@ describe("collectMissingPackPaths", () => {
         "dist/plugin-sdk/root-alias.cjs",
         "dist/build-info.json",
         "dist/channel-catalog.json",
+        PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       ]),
     ).toEqual([]);
   });
@@ -380,15 +418,6 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("whatsapp", "runtime-api.js"),
       ]),
     );
-  });
-
-  it("requires the authored qa scenario pack files in npm pack output", () => {
-    expect(requiredQaScenarioPackPaths).toContain("qa/scenarios/index.md");
-    expect(
-      requiredQaScenarioPackPaths.some(
-        (path) => path.startsWith("qa/scenarios/") && path !== "qa/scenarios/index.md",
-      ),
-    ).toBe(true);
   });
 });
 
