@@ -6,8 +6,6 @@ import path from "node:path";
 const GATEWAY_TOKEN_FILENAME = "gateway.token";
 const SIG_EXTENSION = ".sig";
 
-let cachedGatewayToken: string | null | undefined;
-
 /**
  * Resolves the gateway token path at ~/.openclaw/gateway.token.
  */
@@ -16,21 +14,18 @@ function resolveGatewayTokenPath(): string {
 }
 
 /**
- * Reads and caches the gateway token from ~/.openclaw/gateway.token.
- * Returns null if the file does not exist or cannot be read.
+ * Reads the gateway token from ~/.openclaw/gateway.token.
+ * No process-lifetime cache — reads fresh from disk each call so token
+ * rotation takes effect immediately without a gateway restart.
  */
 export function readGatewayToken(): string | null {
-  if (cachedGatewayToken !== undefined) {
-    return cachedGatewayToken;
-  }
   try {
     const tokenPath = resolveGatewayTokenPath();
     const raw = fs.readFileSync(tokenPath, "utf-8").trim();
-    cachedGatewayToken = raw.length > 0 ? raw : null;
+    return raw.length > 0 ? raw : null;
   } catch {
-    cachedGatewayToken = null;
+    return null;
   }
-  return cachedGatewayToken;
 }
 
 /**
@@ -68,13 +63,16 @@ export async function writeConfigHmacSig(configPath: string, configContent: stri
 export type ConfigHmacVerifyResult =
   | { status: "ok" }
   | { status: "no-token" }
-  | { status: "no-sig" }
+  | { status: "no-sig"; suspicious: boolean }
   | { status: "mismatch" }
   | { status: "error"; detail: string };
 
 /**
  * Verifies the HMAC signature sidecar file against config content.
- * Returns a discriminated result indicating the verification outcome.
+ *
+ * When `no-sig` is returned with `suspicious: true`, it means a sig file
+ * was expected (config exists and is established) but is missing —
+ * this could indicate the sig was deleted to bypass integrity checks.
  */
 export function verifyConfigHmac(
   configPath: string,
@@ -89,14 +87,23 @@ export function verifyConfigHmac(
   try {
     storedHmac = fs.readFileSync(sigPath, "utf-8").trim();
   } catch {
-    return { status: "no-sig" };
+    const suspicious = (() => {
+      try {
+        return fs.statSync(configPath).size > 100;
+      } catch {
+        return false;
+      }
+    })();
+    return { status: "no-sig", suspicious };
   }
   if (storedHmac.length === 0) {
-    return { status: "no-sig" };
+    return { status: "no-sig", suspicious: false };
   }
   try {
     const expectedHmac = computeConfigHmac(configContent, token);
-    if (storedHmac === expectedHmac) {
+    const stored = Buffer.from(storedHmac, "hex");
+    const expected = Buffer.from(expectedHmac, "hex");
+    if (stored.length === expected.length && crypto.timingSafeEqual(stored, expected)) {
       return { status: "ok" };
     }
     return { status: "mismatch" };
@@ -104,11 +111,4 @@ export function verifyConfigHmac(
     const detail = err instanceof Error ? err.message : "unknown error during HMAC verification";
     return { status: "error", detail };
   }
-}
-
-/**
- * Clears the cached gateway token. Useful for testing.
- */
-export function clearGatewayTokenCache(): void {
-  cachedGatewayToken = undefined;
 }
