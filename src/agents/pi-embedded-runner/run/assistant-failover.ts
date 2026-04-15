@@ -32,6 +32,121 @@ type AssistantFailoverOutcome =
       error: FailoverError;
     };
 
+type FailoverMessageParams = {
+  timedOut: boolean;
+  billingFailure: boolean;
+  rateLimitFailure: boolean;
+  authFailure: boolean;
+  lastAssistant: AssistantMessage | undefined;
+  config: OpenClawConfig | undefined;
+  sessionKey?: string;
+  activeErrorContext: { provider: string; model: string };
+};
+
+// Shared by the `fallback_model` and `surface_error` branches. Preserves the
+// legacy `fallback_model` precedence in two ways:
+//   1. Upstream assistant text wins over the generic type-specific messages,
+//      so users see provider/model-specific context (e.g.
+//      "deepseek/deepseek-chat: 429 …") rather than a canonical one-liner.
+//   2. Among the type-specific fallbacks the order is
+//      timeout → rate_limit → billing → auth. This matters when an error
+//      matches multiple classifiers (e.g. an "insufficient quota" body
+//      trips both `isRateLimitAssistantError` and `isBillingAssistantError`).
+//      The decision/status path frequently keeps `rate_limit` (status 429),
+//      so the user-facing message must agree — otherwise the chat would say
+//      "billing" while the backend emitted a 429.
+function buildFailoverMessage(params: FailoverMessageParams): string {
+  if (params.lastAssistant) {
+    const formatted = formatAssistantErrorText(params.lastAssistant, {
+      cfg: params.config,
+      sessionKey: params.sessionKey,
+      provider: params.activeErrorContext.provider,
+      model: params.activeErrorContext.model,
+    });
+    const trimmed = params.lastAssistant.errorMessage?.trim();
+    if (formatted) {
+      return formatted;
+    }
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (params.timedOut) {
+    return "LLM request timed out.";
+  }
+  if (params.rateLimitFailure) {
+    return "LLM request rate limited.";
+  }
+  if (params.billingFailure) {
+    return formatBillingErrorMessage(
+      params.activeErrorContext.provider,
+      params.activeErrorContext.model,
+    );
+  }
+  if (params.authFailure) {
+    return "LLM request unauthorized.";
+  }
+  return "LLM request failed.";
+}
+
+function resolveFailoverStatusOrTimeout(
+  reason: FailoverReason,
+  message: string,
+): number | undefined {
+  const fromReason = resolveFailoverStatus(reason);
+  if (fromReason !== undefined) {
+    return fromReason;
+  }
+  if (isTimeoutErrorMessage(message)) {
+    return 408;
+  }
+  return undefined;
+}
+
+function resolveSurfaceReason(
+  decisionReason: FailoverReason | null | undefined,
+  timedOut: boolean,
+): FailoverReason {
+  if (decisionReason) {
+    return decisionReason;
+  }
+  if (timedOut) {
+    return "timeout";
+  }
+  return "unknown";
+}
+
+// Shared throw-outcome shape for the `fallback_model` and `surface_error`
+// branches. Returns the computed status alongside the outcome so the caller
+// can decide how (or whether) to include it in the decision log.
+function buildFailoverThrowOutcome(params: {
+  reason: FailoverReason;
+  overloadProfileRotations: number;
+  messageParams: FailoverMessageParams;
+  lastProfileId?: string;
+  activeErrorContext: { provider: string; model: string };
+}): {
+  outcome: Extract<AssistantFailoverOutcome, { action: "throw" }>;
+  status: number | undefined;
+} {
+  const message = buildFailoverMessage(params.messageParams);
+  const status = resolveFailoverStatusOrTimeout(params.reason, message);
+  return {
+    status,
+    outcome: {
+      action: "throw",
+      overloadProfileRotations: params.overloadProfileRotations,
+      error: new FailoverError(message, {
+        reason: params.reason,
+        provider: params.activeErrorContext.provider,
+        model: params.activeErrorContext.model,
+        profileId: params.lastProfileId,
+        status,
+      }),
+    },
+  };
+}
+
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   aborted: boolean;
@@ -182,49 +297,54 @@ export async function handleAssistantFailover(params: {
 
   if (decision.action === "fallback_model") {
     await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
-    const message =
-      (params.lastAssistant
-        ? formatAssistantErrorText(params.lastAssistant, {
-            cfg: params.config,
-            sessionKey: params.sessionKey,
-            provider: params.activeErrorContext.provider,
-            model: params.activeErrorContext.model,
-          })
-        : undefined) ||
-      params.lastAssistant?.errorMessage?.trim() ||
-      (params.timedOut
-        ? "LLM request timed out."
-        : params.rateLimitFailure
-          ? "LLM request rate limited."
-          : params.billingFailure
-            ? formatBillingErrorMessage(
-                params.activeErrorContext.provider,
-                params.activeErrorContext.model,
-              )
-            : params.authFailure
-              ? "LLM request unauthorized."
-              : "LLM request failed.");
-    const status =
-      resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
-    params.logAssistantFailoverDecision("fallback_model", { status });
-    return {
-      action: "throw",
+    const { outcome, status } = buildFailoverThrowOutcome({
+      reason: decision.reason,
       overloadProfileRotations,
-      error: new FailoverError(message, {
-        reason: decision.reason,
-        provider: params.activeErrorContext.provider,
-        model: params.activeErrorContext.model,
-        profileId: params.lastProfileId,
-        status,
-      }),
-    };
+      messageParams: params,
+      lastProfileId: params.lastProfileId,
+      activeErrorContext: params.activeErrorContext,
+    });
+    params.logAssistantFailoverDecision("fallback_model", { status });
+    return outcome;
   }
 
   if (decision.action === "surface_error") {
     if (!params.externalAbort && params.idleTimedOut && params.allowSameModelIdleTimeoutRetry) {
       return sameModelIdleTimeoutRetry();
     }
-    params.logAssistantFailoverDecision("surface_error");
+
+    // Two cases route through `surface_error` but must NOT throw a synthetic
+    // `FailoverError`:
+    //   1. `externalAbort` — user/system cancellation. Throwing here would show
+    //      a misleading generic error and bypass the normal cancellation flow.
+    //   2. `timedOut` — `run.ts` has a dedicated timeout payload builder that
+    //      emits a helpful, config-key-aware error ("increase `agents.defaults.
+    //      llm.idleTimeoutSeconds` …"). Throwing here short-circuits that path
+    //      and replaces a specific message with a generic one.
+    // In both cases we still log the decision for observability and fall
+    // through to `continue_normal` so the outer run loop can handle it.
+    if (params.externalAbort || params.timedOut) {
+      params.logAssistantFailoverDecision("surface_error");
+      return {
+        action: "continue_normal",
+        overloadProfileRotations,
+      };
+    }
+
+    // Non-timeout terminal failures (auth / billing / rate-limit / unknown
+    // upstream error) were previously swallowed here — they had no dedicated
+    // payload builder downstream, so the UI saw nothing. Mirror the
+    // `fallback_model` branch: build a descriptive message + HTTP status and
+    // throw a `FailoverError` so the dispatcher can propagate it to the chat.
+    const { outcome, status } = buildFailoverThrowOutcome({
+      reason: resolveSurfaceReason(decision.reason, params.timedOut),
+      overloadProfileRotations,
+      messageParams: params,
+      lastProfileId: params.lastProfileId,
+      activeErrorContext: params.activeErrorContext,
+    });
+    params.logAssistantFailoverDecision("surface_error", { status });
+    return outcome;
   }
 
   return {
