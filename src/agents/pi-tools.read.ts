@@ -7,7 +7,7 @@ import {
   appendFileWithinRoot,
   readFileWithinRoot,
   writeFileWithinRoot,
-  mkdirWithinRoot,
+  mkdirPathWithinRoot,
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
@@ -102,10 +102,9 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         mkdir: true,
       }),
     mkdir: (relativePath: string) => 
-      mkdirWithinRoot({
+      mkdirPathWithinRoot({
         rootDir: root,
         relativePath,
-        recursive: true,
       }).then(() => {})
   };
 }
