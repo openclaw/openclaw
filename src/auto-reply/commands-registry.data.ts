@@ -737,7 +737,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "detect",
       nativeName: "detect",
-      description: "Detect deepfakes in media URLs using Resemble AI.",
+      description: "Detect deepfakes in media URLs or attachments using Resemble AI.",
       textAlias: "/detect",
       category: "media",
       acceptsArgs: true,
