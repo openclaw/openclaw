@@ -56,6 +56,8 @@ Use it for:
   plugin before runtime loads
 - static capability ownership snapshots used for bundled compat wiring and
   contract coverage
+- cheap QA runner metadata that the shared `openclaw qa` host can inspect
+  before plugin runtime loads
 - channel-specific config metadata that should merge into catalog and validation
   surfaces without loading runtime
 - config UI hints
@@ -158,6 +160,7 @@ Those belong in your plugin code and `package.json`.
 | `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                |
 | `activation`                        | No       | `object`                         | Cheap activation hints for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                    |
 | `setup`                             | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                             |
+| `qaRunners`                         | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                               |
 | `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
 | `channelConfigs`                    | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                   |
 | `skills`                            | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                      |
@@ -219,8 +222,34 @@ uses this metadata for diagnostics without importing plugin runtime code.
 Use `activation` when the plugin can cheaply declare which control-plane events
 should activate it later.
 
+## qaRunners reference
+
+Use `qaRunners` when a plugin contributes one or more transport runners beneath
+the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
+runtime still owns actual CLI registration through a lightweight
+`runtime-api.ts` surface that exports `qaRunnerCliRegistrations`.
+
+```json
+{
+  "qaRunners": [
+    {
+      "commandName": "matrix",
+      "description": "Run the Docker-backed Matrix live QA lane against a disposable homeserver"
+    }
+  ]
+}
+```
+
+| Field         | Required | Type     | What it means                                                      |
+| ------------- | -------- | -------- | ------------------------------------------------------------------ |
+| `commandName` | Yes      | `string` | Subcommand mounted beneath `openclaw qa`, for example `matrix`.    |
+| `description` | No       | `string` | Fallback help text used when the shared host needs a stub command. |
+
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
+Current consumers use it as a narrowing hint before broader plugin loading, so
+missing activation metadata usually only costs performance; it should not
+change correctness while legacy manifest ownership fallbacks still exist.
 
 ```json
 {
@@ -241,6 +270,16 @@ not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
 | `onChannels`     | No       | `string[]`                                           | Channel ids that should activate this plugin.                     |
 | `onRoutes`       | No       | `string[]`                                           | Route kinds that should activate this plugin.                     |
 | `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. |
+
+Current live consumers:
+
+- command-triggered CLI planning falls back to legacy
+  `commandAliases[].cliCommand` or `commandAliases[].name`
+- channel-triggered setup/channel planning falls back to legacy `channels[]`
+  ownership when explicit channel activation metadata is missing
+- provider-triggered setup/runtime planning falls back to legacy
+  `providers[]` and top-level `cliBackends[]` ownership when explicit provider
+  activation metadata is missing
 
 ## setup reference
 
@@ -268,22 +307,33 @@ Top-level `cliBackends` stays valid and continues to describe CLI inference
 backends. `setup.cliBackends` is the setup-specific descriptor surface for
 control-plane/setup flows that should stay metadata-only.
 
+When present, `setup.providers` and `setup.cliBackends` are the preferred
+descriptor-first lookup surface for setup discovery. If the descriptor only
+narrows the candidate plugin and setup still needs richer setup-time runtime
+hooks, set `requiresRuntime: true` and keep `setup-api` in place as the
+fallback execution path.
+
+Because setup lookup can execute plugin-owned `setup-api` code, normalized
+`setup.providers[].id` and `setup.cliBackends[]` values must stay unique across
+discovered plugins. Ambiguous ownership fails closed instead of picking a
+winner from discovery order.
+
 ### setup.providers reference
 
-| Field         | Required | Type       | What it means                                                                      |
-| ------------- | -------- | ---------- | ---------------------------------------------------------------------------------- |
-| `id`          | Yes      | `string`   | Provider id exposed during setup or onboarding.                                    |
-| `authMethods` | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.         |
-| `envVars`     | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads. |
+| Field         | Required | Type       | What it means                                                                        |
+| ------------- | -------- | ---------- | ------------------------------------------------------------------------------------ |
+| `id`          | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique. |
+| `authMethods` | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.           |
+| `envVars`     | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.   |
 
 ### setup fields
 
-| Field              | Required | Type       | What it means                                                               |
-| ------------------ | -------- | ---------- | --------------------------------------------------------------------------- |
-| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.             |
-| `cliBackends`      | No       | `string[]` | Setup-time backend ids available without full runtime activation.           |
-| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                  |
-| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs plugin runtime execution after descriptor lookup. |
+| Field              | Required | Type       | What it means                                                                                       |
+| ------------------ | -------- | ---------- | --------------------------------------------------------------------------------------------------- |
+| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.                                     |
+| `cliBackends`      | No       | `string[]` | Setup-time backend ids used for descriptor-first setup lookup. Keep normalized ids globally unique. |
+| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                                          |
+| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs `setup-api` execution after descriptor lookup.                            |
 
 ## uiHints reference
 

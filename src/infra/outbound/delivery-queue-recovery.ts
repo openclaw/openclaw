@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../errors.js";
 import {
   ackDelivery,
@@ -104,6 +104,7 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) 
     forceDocument: entry.forceDocument,
     silent: entry.silent,
     mirror: entry.mirror,
+    session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
     skipQueue: true, // Prevent re-enqueueing during recovery.
   } satisfies Parameters<DeliverFn>[0];

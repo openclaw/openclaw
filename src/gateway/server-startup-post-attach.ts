@@ -16,11 +16,11 @@ import { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtim
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import { scheduleSubagentOrphanRecovery } from "../agents/subagent-registry.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { loadConfig } from "../config/config.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   createInternalHookEvent,
@@ -43,12 +43,13 @@ import {
 } from "./server-restart-sentinel.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
 async function prewarmConfiguredPrimaryModel(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
   const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
@@ -88,7 +89,7 @@ async function prewarmConfiguredPrimaryModel(params: {
 }
 
 export async function startGatewaySidecars(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -237,43 +238,62 @@ export async function startGatewaySidecars(params: {
   return { pluginServices };
 }
 
-export async function startGatewayPostAttachRuntime(params: {
-  minimalTestGateway: boolean;
-  cfgAtStart: ReturnType<typeof loadConfig>;
-  bindHost: string;
-  bindHosts: string[];
-  port: number;
-  tlsEnabled: boolean;
-  log: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-  };
-  isNixMode: boolean;
-  startupStartedAt?: number;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  tailscaleMode: GatewayTailscaleMode;
-  resetOnExit: boolean;
-  controlUiBasePath: string;
-  logTailscale: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-    debug?: (msg: string) => void;
-  };
-  gatewayPluginConfigAtStart: ReturnType<typeof loadConfig>;
-  pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
-  defaultWorkspaceDir: string;
-  deps: CliDeps;
-  startChannels: () => Promise<void>;
-  logHooks: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
-  logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  unavailableGatewayMethods: Set<string>;
-}) {
-  logGatewayStartup({
+type GatewayPostAttachRuntimeDeps = {
+  getGlobalHookRunner: typeof getGlobalHookRunner;
+  logGatewayStartup: typeof logGatewayStartup;
+  scheduleGatewayUpdateCheck: typeof scheduleGatewayUpdateCheck;
+  startGatewaySidecars: typeof startGatewaySidecars;
+  startGatewayTailscaleExposure: typeof startGatewayTailscaleExposure;
+};
+
+const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
+  getGlobalHookRunner,
+  logGatewayStartup,
+  scheduleGatewayUpdateCheck,
+  startGatewaySidecars,
+  startGatewayTailscaleExposure,
+};
+
+export async function startGatewayPostAttachRuntime(
+  params: {
+    minimalTestGateway: boolean;
+    cfgAtStart: OpenClawConfig;
+    bindHost: string;
+    bindHosts: string[];
+    port: number;
+    tlsEnabled: boolean;
+    log: {
+      info: (msg: string) => void;
+      warn: (msg: string) => void;
+    };
+    isNixMode: boolean;
+    startupStartedAt?: number;
+    broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+    tailscaleMode: GatewayTailscaleMode;
+    resetOnExit: boolean;
+    controlUiBasePath: string;
+    logTailscale: {
+      info: (msg: string) => void;
+      warn: (msg: string) => void;
+      error: (msg: string) => void;
+      debug?: (msg: string) => void;
+    };
+    gatewayPluginConfigAtStart: OpenClawConfig;
+    pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+    defaultWorkspaceDir: string;
+    deps: CliDeps;
+    startChannels: () => Promise<void>;
+    logHooks: {
+      info: (msg: string) => void;
+      warn: (msg: string) => void;
+      error: (msg: string) => void;
+    };
+    logChannels: { info: (msg: string) => void; error: (msg: string) => void };
+    unavailableGatewayMethods: Set<string>;
+  },
+  runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
+) {
+  runtimeDeps.logGatewayStartup({
     cfg: params.cfgAtStart,
     bindHost: params.bindHost,
     bindHosts: params.bindHosts,
@@ -289,7 +309,7 @@ export async function startGatewayPostAttachRuntime(params: {
 
   const stopGatewayUpdateCheck = params.minimalTestGateway
     ? () => {}
-    : scheduleGatewayUpdateCheck({
+    : runtimeDeps.scheduleGatewayUpdateCheck({
         cfg: params.cfgAtStart,
         log: params.log,
         isNixMode: params.isNixMode,
@@ -301,7 +321,7 @@ export async function startGatewayPostAttachRuntime(params: {
 
   const tailscaleCleanup = params.minimalTestGateway
     ? null
-    : await startGatewayTailscaleExposure({
+    : await runtimeDeps.startGatewayTailscaleExposure({
         tailscaleMode: params.tailscaleMode,
         resetOnExit: params.resetOnExit,
         port: params.port,
@@ -312,7 +332,7 @@ export async function startGatewayPostAttachRuntime(params: {
   let pluginServices: PluginServicesHandle | null = null;
   if (!params.minimalTestGateway) {
     params.log.info("starting channels and sidecars...");
-    ({ pluginServices } = await startGatewaySidecars({
+    ({ pluginServices } = await runtimeDeps.startGatewaySidecars({
       cfg: params.gatewayPluginConfigAtStart,
       pluginRegistry: params.pluginRegistry,
       defaultWorkspaceDir: params.defaultWorkspaceDir,
@@ -322,11 +342,13 @@ export async function startGatewayPostAttachRuntime(params: {
       logHooks: params.logHooks,
       logChannels: params.logChannels,
     }));
-    params.unavailableGatewayMethods.delete("chat.history");
+    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+      params.unavailableGatewayMethods.delete(method);
+    }
   }
 
   if (!params.minimalTestGateway) {
-    const hookRunner = getGlobalHookRunner();
+    const hookRunner = runtimeDeps.getGlobalHookRunner();
     if (hookRunner?.hasHooks("gateway_start")) {
       void hookRunner.runGatewayStart({ port: params.port }, { port: params.port }).catch((err) => {
         params.log.warn(`gateway_start hook failed: ${String(err)}`);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -11,7 +11,8 @@ import {
   normalizeManifestCommandAliases,
   type PluginManifestCommandAlias,
 } from "./manifest-command-aliases.js";
-import type { PluginConfigUiHint, PluginKind } from "./types.js";
+import type { PluginConfigUiHint } from "./manifest-types.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
@@ -77,6 +78,13 @@ export type PluginManifestSetup = {
    * Defaults to false when omitted.
    */
   requiresRuntime?: boolean;
+};
+
+export type PluginManifestQaRunner = {
+  /** Subcommand mounted beneath `openclaw qa`, for example `matrix`. */
+  commandName: string;
+  /** Optional user-facing help text for fallback host stubs. */
+  description?: string;
 };
 
 export type PluginManifestConfigLiteral = string | number | boolean | null;
@@ -173,6 +181,8 @@ export type PluginManifest = {
   activation?: PluginManifestActivation;
   /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
   setup?: PluginManifestSetup;
+  /** Cheap QA runner metadata exposed before plugin runtime loads. */
+  qaRunners?: PluginManifestQaRunner[];
   skills?: string[];
   name?: string;
   description?: string;
@@ -483,6 +493,28 @@ function normalizeManifestSetup(value: unknown): PluginManifestSetup | undefined
   return Object.keys(setup).length > 0 ? setup : undefined;
 }
 
+function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestQaRunner[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const commandName = normalizeOptionalString(entry.commandName) ?? "";
+    if (!commandName) {
+      continue;
+    }
+    const description = normalizeOptionalString(entry.description) ?? "";
+    normalized.push({
+      commandName,
+      ...(description ? { description } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -672,6 +704,7 @@ export function loadPluginManifest(
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const activation = normalizeManifestActivation(raw.activation);
   const setup = normalizeManifestSetup(raw.setup);
+  const qaRunners = normalizeManifestQaRunners(raw.qaRunners);
   const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
@@ -705,6 +738,7 @@ export function loadPluginManifest(
       providerAuthChoices,
       activation,
       setup,
+      qaRunners,
       skills,
       name,
       description,

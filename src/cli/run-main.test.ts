@@ -1,10 +1,30 @@
 import { describe, expect, it } from "vitest";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
   shouldUseRootHelpFastPath,
 } from "./run-main.js";
+
+const memoryWikiCommandAliasRegistry: PluginManifestRegistry = {
+  plugins: [
+    {
+      id: "memory-wiki",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/tmp/memory-wiki",
+      source: "bundled",
+      manifestPath: "/tmp/memory-wiki/openclaw.plugin.json",
+      commandAliases: [{ name: "wiki" }],
+    },
+  ],
+  diagnostics: [],
+};
 
 describe("rewriteUpdateFlagArgv", () => {
   it("leaves argv unchanged when --update is absent", () => {
@@ -147,5 +167,33 @@ describe("resolveMissingPluginCommandMessage", () => {
     });
     expect(message).toContain("plugins.entries.memory-core.enabled=false");
     expect(message).not.toContain("runtime slash command");
+  });
+
+  it("allows CLI commands when their parent plugin is in plugins.allow", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "wiki",
+      {
+        plugins: {
+          allow: ["memory-wiki"],
+        },
+      },
+      { registry: memoryWikiCommandAliasRegistry },
+    );
+    expect(message).toBeNull();
+  });
+
+  it("blocks CLI commands when parent plugin is NOT in plugins.allow", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "wiki",
+      {
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      { registry: memoryWikiCommandAliasRegistry },
+    );
+    expect(message).not.toBeNull();
+    expect(message).toContain('"memory-wiki"');
+    expect(message).toContain("plugins.allow");
   });
 });

@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
@@ -1377,9 +1377,9 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
     getExistingAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
       params.getExistingAllowFrom?.(cfg) ??
       (
-        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[params.section] as
-          | { allowFrom?: Array<string | number> }
-          | undefined
+        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[
+          params.section
+        ] as { allowFrom?: Array<string | number> } | undefined
       )?.allowFrom ??
       [],
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
