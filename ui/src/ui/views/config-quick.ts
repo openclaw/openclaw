@@ -10,6 +10,7 @@ import { icons } from "../icons.ts";
 import type { BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
+import { CONFIG_PRESETS, detectActivePreset, type ConfigPresetId } from "./config-presets.ts";
 
 // ── Types ──
 
@@ -73,6 +74,10 @@ export type QuickSettingsProps = {
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setBorderRadius: (value: number) => void;
+
+  // Presets
+  configObject?: Record<string, unknown>;
+  onApplyPreset?: (presetId: ConfigPresetId) => void;
 
   // Navigation
   onAdvancedSettings?: () => void;
@@ -376,6 +381,30 @@ function renderAppearanceCard(props: QuickSettingsProps) {
   `;
 }
 
+function renderPresetsCard(props: QuickSettingsProps) {
+  const activePreset = props.configObject ? detectActivePreset(props.configObject) : "personal";
+
+  return html`
+    <div class="qs-card">
+      ${renderCardHeader(icons.zap, "Profile")}
+      <div class="qs-card__body qs-presets-grid">
+        ${CONFIG_PRESETS.map(
+          (preset) => html`
+            <button
+              class="qs-preset ${preset.id === activePreset ? "qs-preset--active" : ""}"
+              @click=${() => props.onApplyPreset?.(preset.id)}
+            >
+              <span class="qs-preset__icon">${preset.icon}</span>
+              <span class="qs-preset__label">${preset.label}</span>
+              <span class="qs-preset__desc muted">${preset.description}</span>
+            </button>
+          `,
+        )}
+      </div>
+    </div>
+  `;
+}
+
 function renderConnectionFooter(props: QuickSettingsProps) {
   return html`
     <div class="qs-footer">
@@ -404,6 +433,7 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       <div class="qs-grid">
         ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderApiKeysCard(props)}
         ${renderAutomationsCard(props)} ${renderSecurityCard(props)} ${renderAppearanceCard(props)}
+        ${renderPresetsCard(props)}
       </div>
 
       ${renderConnectionFooter(props)}

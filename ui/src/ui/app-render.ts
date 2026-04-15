@@ -129,6 +129,7 @@ import {
 } from "./views/agents-utils.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
+import { getPresetById } from "./views/config-presets.ts";
 import {
   renderQuickSettings,
   type QuickSettingsChannel,
@@ -874,6 +875,15 @@ export function renderApp(state: AppViewState) {
             setTheme: (theme, context) => state.setTheme(theme, context),
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            configObject: configObj,
+            onApplyPreset: (presetId) => {
+              const preset = getPresetById(presetId);
+              if (preset && state.client) {
+                void state.client.request("config.patch", {
+                  patch: preset.patch,
+                });
+              }
+            },
             onAdvancedSettings: () => {
               state.configSettingsMode = "advanced";
               requestHostUpdate?.();
