@@ -39,6 +39,7 @@ const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*Write a dream diary entry from these memory fragments:?/i;
+const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
@@ -240,10 +241,10 @@ function normalizeSnippet(raw: string): string {
 function consumeDreamingLeadPrefix(snippet: string): string {
   let index = 0;
   while (index < snippet.length) {
-    const remaining = snippet.slice(index);
-    const diffMatch = /^@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/i.exec(remaining);
+    DREAMING_DIFF_PREFIX_RE.lastIndex = index;
+    const diffMatch = DREAMING_DIFF_PREFIX_RE.exec(snippet);
     if (diffMatch) {
-      index += diffMatch[0].length;
+      index = DREAMING_DIFF_PREFIX_RE.lastIndex;
       continue;
     }
     const char = snippet[index];
