@@ -24,6 +24,7 @@ import {
   extensionForMime,
   getFileExtension,
   kindFromMime,
+  mimeTypeFromFilePath,
   normalizeMimeType,
 } from "./mime.js";
 
@@ -201,6 +202,21 @@ function assertHostReadMediaAllowed(params: {
   kind: MediaKind | undefined;
   buffer?: Buffer;
 }): void {
+  const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
+  const normalizedMime = normalizeMimeType(params.contentType);
+  // For extension-declared plain-text aliases such as .csv/.md, trust only the
+  // text validator path. Some opaque blobs can still produce bogus binary MIME
+  // hits (for example BOM-prefixed 0xFF data sniffing as audio/mpeg), and
+  // host-read should reject those instead of returning early on the sniff.
+  if (declaredMime && HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime)) {
+    if (!params.sniffedContentType && params.buffer && isValidatedHostReadText(params.buffer)) {
+      return;
+    }
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      "hostReadCapability permits only validated plain-text CSV/Markdown documents for local reads",
+    );
+  }
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
     return;
@@ -219,7 +235,6 @@ function assertHostReadMediaAllowed(params: {
   ) {
     return;
   }
-  const normalizedMime = normalizeMimeType(params.contentType);
   // CSV / Markdown exception: file-type v22 returns undefined (not "text/plain") for
   // plain-text buffers that have no binary magic bytes. Allow these formats when:
   // - sniffedMime is undefined (no binary signature detected by file-type)
