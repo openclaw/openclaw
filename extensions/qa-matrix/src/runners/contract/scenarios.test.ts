@@ -25,6 +25,8 @@ describe("matrix live qa scenarios", () => {
   it("ships the Matrix live QA scenario set by default", () => {
     expect(scenarioTesting.findMatrixQaScenarios().map((scenario) => scenario.id)).toEqual([
       "matrix-thread-follow-up",
+      "matrix-thread-root-preservation",
+      "matrix-thread-nested-reply-shape",
       "matrix-thread-isolation",
       "matrix-top-level-reply-shape",
       "matrix-room-thread-reply-override",
@@ -38,6 +40,8 @@ describe("matrix live qa scenarios", () => {
       "matrix-secondary-room-reply",
       "matrix-secondary-room-open-trigger",
       "matrix-reaction-notification",
+      "matrix-reaction-threaded",
+      "matrix-reaction-not-a-reply",
       "matrix-restart-resume",
       "matrix-room-membership-loss",
       "matrix-homeserver-restart-resume",
