@@ -106,8 +106,14 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
     !model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl);
   const api =
     useCodexTransport && model.api === "openai-responses" ? "openai-codex-responses" : model.api;
+  // Rewrite empty, openai.com, and any chatgpt.com/backend-api* URL — including
+  // the stale `/backend-api/v1` form that older releases persisted to
+  // agent-scoped models.json — to the canonical codex base. Without this, a
+  // stale `/v1` suffix survives and requests hit `/backend-api/v1/codex/responses`,
+  // which Cloudflare blocks with a 403 challenge (see #67131).
   const baseUrl =
-    api === "openai-codex-responses" && (!model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl))
+    api === "openai-codex-responses" &&
+    (!model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl))
       ? OPENAI_CODEX_BASE_URL
       : model.baseUrl;
   if (

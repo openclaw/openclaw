@@ -375,4 +375,56 @@ describe("openai codex provider", () => {
       name: "gpt-5.4",
     });
   });
+
+  it("rewrites stale /backend-api/v1 baseUrl to the canonical codex root (#67131)", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        // Older releases persisted this stale path into agent-scoped
+        // models.json; the responses endpoint is /backend-api/codex/responses,
+        // and /backend-api/v1/codex/responses triggers a Cloudflare 403.
+        baseUrl: "https://chatgpt.com/backend-api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      baseUrl: "https://chatgpt.com/backend-api",
+      api: "openai-codex-responses",
+    });
+  });
+
+  it("leaves the canonical /backend-api baseUrl unchanged (no-op rewrite)", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const original = {
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      provider: "openai-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    };
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: original,
+    } as never);
+
+    expect(model).toBe(original);
+  });
 });
