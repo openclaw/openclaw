@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/tools: anchor trusted local `MEDIA:` tool-result passthrough on the exact raw name of this run's registered built-in tools, and reject client tool definitions whose names normalize-collide with a built-in or with another client tool in the same request (`400 invalid_request_error` on both JSON and SSE paths), so a client-supplied tool named like a built-in can no longer inherit its local-media trust. (#67303)
+
 ## 2026.4.15-beta.1
 
 ### Changes
