@@ -5,8 +5,16 @@ import {
   resolveMantleBearerToken,
 } from "./discovery.js";
 
+type MantlePluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+  };
+};
+
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
   const providerId = "amazon-bedrock-mantle";
+  const pluginConfig = (api.pluginConfig ?? {}) as MantlePluginConfig;
+  const discoveryEnabled = pluginConfig.discovery?.enabled;
 
   api.registerProvider({
     id: providerId,
@@ -16,6 +24,11 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        // Honor explicit discovery.enabled gate — when set to false, skip
+        // discovery entirely so the plugin stays quiet when not in use.
+        if (discoveryEnabled === false) {
+          return null;
+        }
         const implicit = await resolveImplicitMantleProvider({
           env: ctx.env,
         });
