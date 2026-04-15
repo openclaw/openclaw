@@ -442,7 +442,7 @@ const closeRunNodeOutputTee = async (deps, exitCode) => {
 
 const syncRuntimeArtifacts = (deps) => {
   try {
-    deps.runRuntimePostBuild({ cwd: deps.cwd });
+    deps.runRuntimePostBuild({ cwd: deps.cwd, env: deps.env });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -468,6 +468,25 @@ const writeBuildStamp = (deps) => {
 
 const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
 
+/**
+ * @typedef {{
+ *   cwd?: string;
+ *   args?: string[];
+ *   env?: NodeJS.ProcessEnv;
+ *   execPath?: string;
+ *   fs?: typeof fs;
+ *   platform?: NodeJS.Platform;
+ *   process?: NodeJS.Process;
+ *   runRuntimePostBuild?: (params?: { cwd?: string; env?: NodeJS.ProcessEnv }) => void;
+ *   spawn?: typeof spawn;
+ *   spawnSync?: typeof spawnSync;
+ *   stderr?: NodeJS.WritableStream;
+ * }} RunNodeMainParams
+ */
+
+/**
+ * @param {RunNodeMainParams} [params={}]
+ */
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,

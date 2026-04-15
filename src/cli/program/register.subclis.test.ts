@@ -124,6 +124,16 @@ describe("registerSubCliCommands", () => {
     expect(program.commands.map((cmd) => cmd.name())).not.toContain("qa");
   });
 
+  it("loads the private qa cli from the bundled extension surface", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "qa", "run"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["qa", "completion"]);
+
+    await program.parseAsync(["qa", "run"], { from: "user" });
+
+    expect(registerQaLabCli).toHaveBeenCalledTimes(1);
+  });
+
   it("re-parses argv for lazy subcommands", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
 
