@@ -80,6 +80,20 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts memorySearch fallback "zeroentropy"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            fallback: "zeroentropy",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch provider "mistral"', () => {
     const res = validateConfigObject({
       agents: {
@@ -100,6 +114,20 @@ describe("config schema regressions", () => {
         defaults: {
           memorySearch: {
             provider: "bedrock",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts memorySearch provider "zeroentropy"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "zeroentropy",
           },
         },
       },

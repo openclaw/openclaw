@@ -15,6 +15,7 @@ export type EmbeddingProviderId =
   | "openai"
   | "local"
   | "gemini"
+  | "zeroentropy"
   | "voyage"
   | "mistral"
   | "lmstudio"
@@ -52,4 +53,10 @@ export type EmbeddingProviderOptions = {
   outputDimensionality?: number;
   /** Gemini: override the default task type sent with embedding requests. */
   taskType?: GeminiTaskType;
+  /** ZeroEntropy: request-level tuning for model/embed calls. */
+  zeroentropy?: {
+    dimensions?: number;
+    encodingFormat?: "float" | "base64";
+    latency?: "fast" | "slow";
+  };
 };

@@ -21,6 +21,10 @@ import {
 import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
+import {
+  createZeroentropyEmbeddingProvider,
+  type ZeroentropyEmbeddingClient,
+} from "./embeddings-zeroentropy.js";
 import type {
   EmbeddingProvider,
   EmbeddingProviderFallback,
@@ -35,6 +39,7 @@ export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { LmstudioEmbeddingClient } from "./embeddings-lmstudio.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
+export type { ZeroentropyEmbeddingClient } from "./embeddings-zeroentropy.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
 export type { BedrockEmbeddingClient } from "./embeddings-bedrock.js";
@@ -51,7 +56,13 @@ export type {
 // LM Studio and Ollama are intentionally excluded here so that "auto" mode does not
 // implicitly assume either instance is available.
 // Bedrock is handled separately when AWS credentials are detected.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = [
+  "openai",
+  "gemini",
+  "voyage",
+  "zeroentropy",
+  "mistral",
+] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -61,6 +72,7 @@ export type EmbeddingProviderResult = {
   providerUnavailableReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
+  zeroentropy?: ZeroentropyEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
@@ -181,6 +193,10 @@ export async function createEmbeddingProvider(
     if (id === "voyage") {
       const { provider, client } = await createVoyageEmbeddingProvider(options);
       return { provider, voyage: client };
+    }
+    if (id === "zeroentropy") {
+      const { provider, client } = await createZeroentropyEmbeddingProvider(options);
+      return { provider, zeroentropy: client };
     }
     if (id === "mistral") {
       const { provider, client } = await createMistralEmbeddingProvider(options);

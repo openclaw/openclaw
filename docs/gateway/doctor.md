@@ -480,7 +480,7 @@ for the default agent. The behavior depends on the configured backend and provid
   If not, prints fix guidance including the npm package and a manual binary path option.
 - **Explicit local provider**: checks for a local model file or a recognized
   remote/downloadable model URL. If missing, suggests switching to a remote provider.
-- **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is
+- **Explicit remote provider** (`openai`, `voyage`, `zeroentropy`, etc.): verifies an API key is
   present in the environment or auth store. Prints actionable fix hints if missing.
 - **Auto provider**: checks local model availability first, then tries each remote
   provider in auto-selection order.

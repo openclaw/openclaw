@@ -667,6 +667,17 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("accepts ZEROENTROPY_API_KEY for zeroentropy", async () => {
+    await withEnvAsync({ [envVar("ZEROENTROPY", "API", "KEY")]: "ze-test-key" }, async () => {
+      const zeroentropy = await resolveApiKeyForProvider({
+        provider: "zeroentropy",
+        store: { version: 1, profiles: {} },
+      });
+      expect(zeroentropy.apiKey).toBe("ze-test-key");
+      expect(zeroentropy.source).toContain("ZEROENTROPY_API_KEY");
+    });
+  });
+
   it("strips embedded CR/LF from ANTHROPIC_API_KEY", async () => {
     await withEnvAsync({ [envVar("ANTHROPIC", "API", "KEY")]: "sk-ant-test-\r\nkey" }, async () => {
       // pragma: allowlist secret

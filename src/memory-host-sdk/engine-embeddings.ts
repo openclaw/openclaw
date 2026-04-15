@@ -40,6 +40,10 @@ export {
   DEFAULT_OPENAI_EMBEDDING_MODEL,
 } from "./host/embeddings-openai.js";
 export {
+  createZeroentropyEmbeddingProvider,
+  DEFAULT_ZEROENTROPY_EMBEDDING_MODEL,
+} from "./host/embeddings-zeroentropy.js";
+export {
   createVoyageEmbeddingProvider,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
 } from "./host/embeddings-voyage.js";

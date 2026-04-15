@@ -121,7 +121,7 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
 
 function expectAutoSelectedProvider(
   result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
-  expectedId: "openai" | "gemini" | "mistral",
+  expectedId: "openai" | "gemini" | "zeroentropy" | "mistral",
 ) {
   expect(result.requestedProvider).toBe("auto");
   const provider = requireProvider(result);
@@ -378,7 +378,7 @@ describe("embedding provider auto selection", () => {
   it("selects the first available remote provider in auto mode", async () => {
     const cases: Array<{
       name: string;
-      expectedProvider: "openai" | "gemini" | "mistral";
+      expectedProvider: "openai" | "gemini" | "zeroentropy" | "mistral";
       fetchMockFactory: typeof createFetchMock | typeof createGeminiFetchMock;
       resolveApiKey: (provider: string) => ResolvedProviderAuth;
       expectedUrl: string;
@@ -413,6 +413,22 @@ describe("embedding provider auto selection", () => {
           throw new Error(`Unexpected provider ${provider}`);
         },
         expectedUrl: `https://generativelanguage.googleapis.com/v1beta/models/${DEFAULT_GEMINI_EMBEDDING_MODEL}:embedContent`,
+      },
+      {
+        name: "zeroentropy after voyage misses",
+        expectedProvider: "zeroentropy" as const,
+        fetchMockFactory: createFetchMock,
+        resolveApiKey(provider: string): ResolvedProviderAuth {
+          if (provider === "zeroentropy") {
+            return {
+              apiKey: "zeroentropy-key",
+              source: "env: ZEROENTROPY_API_KEY",
+              mode: "api-key" as const,
+            };
+          }
+          throw new Error(`No API key found for provider "${provider}".`);
+        },
+        expectedUrl: "https://api.zeroentropy.dev/v1/models/embed",
       },
       {
         name: "mistral after earlier misses",

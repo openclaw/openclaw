@@ -21,7 +21,7 @@ a per-agent SQLite database and needs no extra dependencies to get started.
 
 ## Getting started
 
-If you have an API key for OpenAI, Gemini, Voyage, or Mistral, the builtin
+If you have an API key for OpenAI, Gemini, Voyage, ZeroEntropy, or Mistral, the builtin
 engine auto-detects it and enables vector search. No config needed.
 
 To set a provider explicitly:
@@ -42,14 +42,15 @@ Without an embedding provider, only keyword search is available.
 
 ## Supported embedding providers
 
-| Provider | ID        | Auto-detected | Notes                               |
-| -------- | --------- | ------------- | ----------------------------------- |
-| OpenAI   | `openai`  | Yes           | Default: `text-embedding-3-small`   |
-| Gemini   | `gemini`  | Yes           | Supports multimodal (image + audio) |
-| Voyage   | `voyage`  | Yes           |                                     |
-| Mistral  | `mistral` | Yes           |                                     |
-| Ollama   | `ollama`  | No            | Local, set explicitly               |
-| Local    | `local`   | Yes (first)   | GGUF model, ~0.6 GB download        |
+| Provider    | ID            | Auto-detected | Notes                               |
+| ----------- | ------------- | ------------- | ----------------------------------- |
+| OpenAI      | `openai`      | Yes           | Default: `text-embedding-3-small`   |
+| Gemini      | `gemini`      | Yes           | Supports multimodal (image + audio) |
+| Voyage      | `voyage`      | Yes           |                                     |
+| ZeroEntropy | `zeroentropy` | Yes           | Default: `zembed-1`                 |
+| Mistral     | `mistral`     | Yes           |                                     |
+| Ollama      | `ollama`      | No            | Local, set explicitly               |
+| Local       | `local`       | Yes (first)   | GGUF model, ~0.6 GB download        |
 
 Auto-detection picks the first provider whose API key can be resolved, in the
 order shown. Set `memorySearch.provider` to override.

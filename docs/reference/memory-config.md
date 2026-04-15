@@ -37,12 +37,12 @@ plugin-owned config, transcript persistence, and safe rollout pattern.
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                 |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `openai`, `gemini`, `voyage`, `mistral`, `bedrock`, `ollama`, `local` |
-| `model`    | `string`  | provider default | Embedding model name                                                                        |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                  |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                             |
+| Key        | Type      | Default          | Description                                                                                                |
+| ---------- | --------- | ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID: `openai`, `gemini`, `voyage`, `zeroentropy`, `mistral`, `bedrock`, `ollama`, `local` |
+| `model`    | `string`  | provider default | Embedding model name                                                                                       |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                 |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                            |
 
 ### Auto-detection order
 
@@ -52,8 +52,9 @@ When `provider` is not set, OpenClaw selects the first available:
 2. `openai` -- if an OpenAI key can be resolved.
 3. `gemini` -- if a Gemini key can be resolved.
 4. `voyage` -- if a Voyage key can be resolved.
-5. `mistral` -- if a Mistral key can be resolved.
-6. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
+5. `zeroentropy` -- if a ZeroEntropy key can be resolved.
+6. `mistral` -- if a Mistral key can be resolved.
+7. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
 
 `ollama` is supported but not auto-detected (set it explicitly).
 
@@ -62,14 +63,15 @@ When `provider` is not set, OpenClaw selects the first available:
 Remote embeddings require an API key. Bedrock uses the AWS SDK default
 credential chain instead (instance roles, SSO, access keys).
 
-| Provider | Env var                        | Config key                        |
-| -------- | ------------------------------ | --------------------------------- |
-| OpenAI   | `OPENAI_API_KEY`               | `models.providers.openai.apiKey`  |
-| Gemini   | `GEMINI_API_KEY`               | `models.providers.google.apiKey`  |
-| Voyage   | `VOYAGE_API_KEY`               | `models.providers.voyage.apiKey`  |
-| Mistral  | `MISTRAL_API_KEY`              | `models.providers.mistral.apiKey` |
-| Bedrock  | AWS credential chain           | No API key needed                 |
-| Ollama   | `OLLAMA_API_KEY` (placeholder) | --                                |
+| Provider    | Env var                        | Config key                            |
+| ----------- | ------------------------------ | ------------------------------------- |
+| OpenAI      | `OPENAI_API_KEY`               | `models.providers.openai.apiKey`      |
+| Gemini      | `GEMINI_API_KEY`               | `models.providers.google.apiKey`      |
+| Voyage      | `VOYAGE_API_KEY`               | `models.providers.voyage.apiKey`      |
+| ZeroEntropy | `ZEROENTROPY_API_KEY`          | `models.providers.zeroentropy.apiKey` |
+| Mistral     | `MISTRAL_API_KEY`              | `models.providers.mistral.apiKey`     |
+| Bedrock     | AWS credential chain           | No API key needed                     |
+| Ollama      | `OLLAMA_API_KEY` (placeholder) | --                                    |
 
 Codex OAuth covers chat/completions only and does not satisfy embedding
 requests.

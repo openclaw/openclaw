@@ -41,6 +41,12 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
     create: async () => ({ provider: null }),
   });
   registerMemoryEmbeddingProvider({
+    id: "zeroentropy",
+    defaultModel: "zembed-1",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+  registerMemoryEmbeddingProvider({
     id: "mistral",
     defaultModel: "mistral-embed",
     transport: "remote",
