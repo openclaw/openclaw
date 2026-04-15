@@ -43,15 +43,27 @@ importers:
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.15.0
         version: 0.15.0(zod@4.3.6)
+      '@aws-sdk/client-bedrock':
+        specifier: 3.1028.0
+        version: 3.1028.0
       '@aws-sdk/client-bedrock-runtime':
         specifier: 3.1028.0
         version: 3.1028.0
       '@aws-sdk/credential-provider-node':
         specifier: 3.972.30
         version: 3.972.30
+      '@aws/bedrock-token-generator':
+        specifier: ^1.1.0
+        version: 1.1.0
+      '@buape/carbon':
+        specifier: 0.15.0
+        version: 0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.12)(opusscript@0.1.1)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
+      '@google/genai':
+        specifier: ^1.49.0
+        version: 1.49.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
       '@grammyjs/runner':
         specifier: ^2.0.3
         version: 2.0.3(grammy@1.42.0)
@@ -64,6 +76,9 @@ importers:
       '@lancedb/lancedb':
         specifier: ^0.27.2
         version: 0.27.2(apache-arrow@18.1.0)
+      '@larksuiteoapi/node-sdk':
+        specifier: ^1.60.0
+        version: 1.60.0
       '@lydell/node-pty':
         specifier: 1.2.0-beta.12
         version: 1.2.0-beta.12
@@ -91,9 +106,18 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
+      '@pierre/diffs':
+        specifier: 1.1.13
+        version: 1.1.13(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+      '@slack/bolt':
+        specifier: ^4.7.0
+        version: 4.7.0(@types/express@5.0.6)
+      '@slack/web-api':
+        specifier: ^7.15.0
+        version: 7.15.0
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
@@ -115,6 +139,9 @@ importers:
       croner:
         specifier: ^10.0.1
         version: 10.0.1
+      discord-api-types:
+        specifier: ^0.38.45
+        version: 0.38.45
       dotenv:
         specifier: ^17.4.1
         version: 17.4.1
@@ -178,6 +205,9 @@ importers:
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)
+      opusscript:
+        specifier: ^0.1.1
+        version: 0.1.1
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
@@ -294,6 +324,9 @@ importers:
         specifier: ^4.1.4
         version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(@vitest/browser-playwright@4.1.4)(@vitest/coverage-v8@4.1.4)(jsdom@29.0.2(@noble/hashes@2.0.1))(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
     optionalDependencies:
+      '@discordjs/opus':
+        specifier: ^0.10.0
+        version: 0.10.0
       '@matrix-org/matrix-sdk-crypto-nodejs':
         specifier: ^0.4.0
         version: 0.4.0
