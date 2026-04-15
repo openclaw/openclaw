@@ -1,12 +1,9 @@
 export {
   abortEmbeddedPiRun,
-  clearActiveEmbeddedRun,
   compactEmbeddedPiSession,
   isEmbeddedPiRunActive,
-  setActiveEmbeddedRun,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
-export type { EmbeddedPiQueueHandle } from "../../agents/pi-embedded.js";
 export {
   resolveFreshSessionTotalTokens,
   resolveSessionFilePath,

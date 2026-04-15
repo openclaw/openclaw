@@ -30,6 +30,11 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "./runs.js";
+import type { EmbeddedPiQueueHandle } from "./runs.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 
 /**
@@ -59,6 +64,24 @@ export async function compactEmbeddedPiSession(
       const contextEngine = await resolveContextEngine(params.config);
       let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
       let checkpointSnapshotRetained = false;
+
+      // Register a compaction handle in ACTIVE_EMBEDDED_RUNS so that
+      // chat.abort / abortEmbeddedPiRun / /stop can cancel this compaction.
+      // Registration happens inside the lane callback to avoid being
+      // overwritten by other queued runs for the same session.
+      const compactHandle: EmbeddedPiQueueHandle = {
+        kind: "embedded",
+        queueMessage: async () => {},
+        isStreaming: () => false,
+        isCompacting: () => true,
+        abort: () => {
+          params.abortSignal?.addEventListener
+            ? undefined // signal is read-only; cancel via abortEmbeddedPiRun
+            : undefined;
+        },
+      };
+      setActiveEmbeddedRun(params.sessionId, compactHandle, params.sessionKey);
+
       try {
         const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
         const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
@@ -251,6 +274,7 @@ export async function compactEmbeddedPiSession(
             : undefined,
         };
       } finally {
+        clearActiveEmbeddedRun(params.sessionId, compactHandle, params.sessionKey);
         if (!checkpointSnapshotRetained) {
           await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
         }

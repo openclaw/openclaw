@@ -1,5 +1,4 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { EmbeddedPiQueueHandle } from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -117,73 +116,44 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     isGroup: params.isGroup,
   });
 
-  // Wire up abort signal and register in ACTIVE_EMBEDDED_RUNS so that
-  // chat.abort / abortEmbeddedPiRun / /stop can cancel the compaction.
-  const compactAbortController = new AbortController();
-  const compactHandle: EmbeddedPiQueueHandle = {
-    kind: "embedded",
-    queueMessage: async () => {},
-    isStreaming: () => false,
-    isCompacting: () => true,
-    abort: () => {
-      compactAbortController.abort("user_abort");
-    },
-  };
-  runtime.setActiveEmbeddedRun(sessionId, compactHandle, params.sessionKey);
-
-  let result: Awaited<ReturnType<typeof runtime.compactEmbeddedPiSession>>;
-  try {
-    result = await runtime.compactEmbeddedPiSession({
+  const result = await runtime.compactEmbeddedPiSession({
+    sessionId,
+    sessionKey: params.sessionKey,
+    allowGatewaySubagentBinding: true,
+    messageChannel: params.command.channel,
+    groupId: targetSessionEntry.groupId,
+    groupChannel: targetSessionEntry.groupChannel,
+    groupSpace: targetSessionEntry.space,
+    spawnedBy: targetSessionEntry.spawnedBy,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
+    sessionFile: runtime.resolveSessionFilePath(
       sessionId,
-      sessionKey: params.sessionKey,
-      allowGatewaySubagentBinding: true,
-      messageChannel: params.command.channel,
-      groupId: targetSessionEntry.groupId,
-      groupChannel: targetSessionEntry.groupChannel,
-      groupSpace: targetSessionEntry.space,
-      spawnedBy: targetSessionEntry.spawnedBy,
-      senderId: params.command.senderId,
-      senderName: params.ctx.SenderName,
-      senderUsername: params.ctx.SenderUsername,
-      senderE164: params.ctx.SenderE164,
-      sessionFile: runtime.resolveSessionFilePath(
-        sessionId,
-        targetSessionEntry,
-        runtime.resolveSessionFilePathOptions({
-          agentId: sessionAgentId,
-          storePath: params.storePath,
-        }),
-      ),
-      workspaceDir: params.workspaceDir,
-      agentDir: sessionAgentDir,
-      config: params.cfg,
-      skillsSnapshot: targetSessionEntry.skillsSnapshot,
-      provider: params.provider,
-      model: params.model,
-      thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
-      bashElevated: {
-        enabled: false,
-        allowed: false,
-        defaultLevel: "off",
-      },
-      customInstructions,
-      trigger: "manual",
-      senderIsOwner: params.command.senderIsOwner,
-      ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
-      abortSignal: compactAbortController.signal,
-    });
-  } catch (err) {
-    const label = compactAbortController.signal.aborted
-      ? "Compaction canceled"
-      : "Compaction failed";
-    runtime.enqueueSystemEvent(label, { sessionKey: params.sessionKey });
-    return {
-      shouldContinue: false,
-      reply: { text: `⚙️ ${label}` },
-    };
-  } finally {
-    runtime.clearActiveEmbeddedRun(sessionId, compactHandle, params.sessionKey);
-  }
+      targetSessionEntry,
+      runtime.resolveSessionFilePathOptions({
+        agentId: sessionAgentId,
+        storePath: params.storePath,
+      }),
+    ),
+    workspaceDir: params.workspaceDir,
+    agentDir: sessionAgentDir,
+    config: params.cfg,
+    skillsSnapshot: targetSessionEntry.skillsSnapshot,
+    provider: params.provider,
+    model: params.model,
+    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    bashElevated: {
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off",
+    },
+    customInstructions,
+    trigger: "manual",
+    senderIsOwner: params.command.senderIsOwner,
+    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+  });
 
   const compactLabel =
     result.ok || isCompactionSkipReason(result.reason)
