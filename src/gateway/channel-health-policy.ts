@@ -1,5 +1,9 @@
 import type { ChannelId } from "../channels/plugins/types.public.js";
 
+export const CHANNEL_HEALTH_STATE_RECONNECTING = "reconnecting" as const;
+
+export type ChannelHealthState = typeof CHANNEL_HEALTH_STATE_RECONNECTING;
+
 export type ChannelHealthSnapshot = {
   running?: boolean;
   connected?: boolean;
@@ -13,8 +17,21 @@ export type ChannelHealthSnapshot = {
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
-  healthState?: string;
+  healthState?: ChannelHealthState;
 };
+
+export type ChannelHealthSnapshotInput = Omit<ChannelHealthSnapshot, "healthState"> & {
+  healthState?: unknown;
+};
+
+export function normalizeChannelHealthSnapshot(
+  snapshot: ChannelHealthSnapshotInput,
+): ChannelHealthSnapshot {
+  const { healthState, ...rest } = snapshot;
+  return healthState === CHANNEL_HEALTH_STATE_RECONNECTING
+    ? { ...rest, healthState: CHANNEL_HEALTH_STATE_RECONNECTING }
+    : rest;
+}
 
 export type ChannelHealthEvaluationReason =
   | "healthy"
@@ -106,7 +123,7 @@ export function evaluateChannelHealth(
       return { healthy: true, reason: "startup-connect-grace" };
     }
   }
-  if (snapshot.healthState === "reconnecting") {
+  if (snapshot.healthState === CHANNEL_HEALTH_STATE_RECONNECTING) {
     const lastEventAt =
       typeof snapshot.lastEventAt === "number" && Number.isFinite(snapshot.lastEventAt)
         ? snapshot.lastEventAt

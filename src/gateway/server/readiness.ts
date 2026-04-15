@@ -4,6 +4,7 @@ import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
+  normalizeChannelHealthSnapshot,
   type ChannelHealthPolicy,
   type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
@@ -67,7 +68,10 @@ export function createReadinessChecker(deps: {
           channelId,
           skipStaleSocketCheck: getChannelPlugin(channelId)?.status?.skipStaleSocketHealthCheck,
         };
-        const health = evaluateChannelHealth(accountSnapshot, policy);
+        const health = evaluateChannelHealth(
+          normalizeChannelHealthSnapshot(accountSnapshot),
+          policy,
+        );
         if (!health.healthy && !shouldIgnoreReadinessFailure(accountSnapshot, health)) {
           failing.push(channelId);
           break;

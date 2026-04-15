@@ -5,6 +5,7 @@ import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
+  normalizeChannelHealthSnapshot,
   resolveChannelRestartReason,
   type ChannelHealthPolicy,
 } from "./channel-health-policy.js";
@@ -132,7 +133,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             channelConnectGraceMs: timing.channelConnectGraceMs,
             skipStaleSocketCheck: getChannelPlugin(channelId)?.status?.skipStaleSocketHealthCheck,
           };
-          const health = evaluateChannelHealth(status, healthPolicy);
+          const healthSnapshot = normalizeChannelHealthSnapshot(status);
+          const health = evaluateChannelHealth(healthSnapshot, healthPolicy);
           if (health.healthy) {
             continue;
           }
@@ -155,7 +157,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
-          const reason = resolveChannelRestartReason(status, health);
+          const reason = resolveChannelRestartReason(healthSnapshot, health);
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
