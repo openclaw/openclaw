@@ -616,7 +616,6 @@ export const dispatchTelegramMessage = async ({
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
             await enqueueDraftLaneEvent(async () => {});
-            skipNextAnswerMessageStartRotation = false;
           }
           if (
             shouldSuppressLocalTelegramExecApprovalPrompt({
