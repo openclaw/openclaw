@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 
 const PRIVATE_QA_DIST_RELATIVE_PATH = path.join("dist", "plugin-sdk", "qa-lab.js");
-
 export function isPrivateQaCliEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
 }
@@ -61,5 +60,4 @@ export function loadPrivateQaCliModule(params?: {
   if (!specifier) {
     throw new Error("Private QA CLI is only available from an OpenClaw source checkout.");
   }
-  return (params?.importModule ?? dynamicImportPrivateQaCliModule)(specifier);
-}
+  return (params?.importModule ?? dynamicImportPrivateQaCliModule)(specifier);}
