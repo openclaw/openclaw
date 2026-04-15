@@ -3,8 +3,14 @@ import { closeSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
-function isPnpmExecPath(value) {
-  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
+function getPortableBasename(value) {
+  return value.split(/[/\\]/).at(-1) ?? value;
+}
+
+function isPnpmExecPath(value, platform = process.platform) {
+  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(
+    getPortableBasename(value).toLowerCase(),
+  );
 }
 
 function hasScriptShebang(value) {
@@ -26,11 +32,11 @@ function hasScriptShebang(value) {
   }
 }
 
-function isNodeRunnablePnpmExecPath(value) {
-  if (!isPnpmExecPath(value)) {
+function isNodeRunnablePnpmExecPath(value, platform = process.platform) {
+  if (!isPnpmExecPath(value, platform)) {
     return false;
   }
-  const extension = path.extname(value).toLowerCase();
+  const extension = path.posix.extname(getPortableBasename(value)).toLowerCase();
   if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
     return true;
   }
@@ -51,16 +57,19 @@ export function resolvePnpmRunner(params = {}) {
   if (
     typeof npmExecPath === "string" &&
     npmExecPath.length > 0 &&
-    isPnpmExecPath(npmExecPath)
+    isPnpmExecPath(npmExecPath, platform)
   ) {
-    if (isNodeRunnablePnpmExecPath(npmExecPath)) {
+    if (isNodeRunnablePnpmExecPath(npmExecPath, platform)) {
       return {
         command: nodeExecPath,
         args: [...nodeArgs, npmExecPath, ...pnpmArgs],
         shell: false,
       };
     }
-    if (platform === "win32" && path.extname(npmExecPath).toLowerCase() === ".exe") {
+    if (
+      platform === "win32" &&
+      path.posix.extname(getPortableBasename(npmExecPath)).toLowerCase() === ".exe"
+    ) {
       return {
         command: npmExecPath,
         args: pnpmArgs,

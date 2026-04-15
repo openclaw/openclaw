@@ -110,6 +110,27 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
+  it("uses pnpm.cjs through node for Windows-style paths", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath:
+          "C:\\Users\\test\\AppData\\Local\\node\\corepack\\v1\\pnpm\\10.32.1\\bin\\pnpm.cjs",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Users\\test\\AppData\\Local\\node\\corepack\\v1\\pnpm\\10.32.1\\bin\\pnpm.cjs",
+        "exec",
+        "vitest",
+        "run",
+      ],
+      shell: false,
+    });
+  });
+
   it("falls back to bare pnpm on non-Windows when npm_execpath is missing", () => {
     expect(
       resolvePnpmRunner({
