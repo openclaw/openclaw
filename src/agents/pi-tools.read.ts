@@ -111,15 +111,24 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
 
 function createHostEditOperations(root: string, _options?: { workspaceOnly?: boolean }) {
   return {
-    readFile: (relativePath: string) => 
-      readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
-    writeFile: (relativePath: string, data: string) =>
-      writeFileWithinRoot({
+    readFile: (absolutePath: string) => {
+      // Convert absolute path to relative path from root
+      const relativePath = path.relative(root, absolutePath);
+      return readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer);
+    },
+    writeFile: (absolutePath: string, data: string) => {
+      // Convert absolute path to relative path from root
+      const relativePath = path.relative(root, absolutePath);
+      return writeFileWithinRoot({
         rootDir: root,
         relativePath,
         data,
-      }),
-    access: (relativePath: string) => fs.access(path.join(root, relativePath))
+      });
+    },
+    access: (absolutePath: string) => {
+      // For access, we can use the absolute path directly since it's not going through fs-safe
+      return fs.access(absolutePath);
+    }
   };
 }
 
