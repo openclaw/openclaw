@@ -23,6 +23,8 @@ Run the following setup in order:
 
 **Install onchainos CLI**
 
+> Security note: Review the install script before running pipe-to-shell commands. You can inspect the raw script at the URL above, or download and audit it first.
+
 ```bash
 # macOS / Linux (stable)
 curl -sSL https://raw.githubusercontent.com/okx/onchainos-skills/main/install.sh | sh
@@ -102,6 +104,6 @@ PAY_TO_ADDRESS=0xYourWalletAddress
 ## References
 
 - [OnchainOS Skills](https://github.com/okx/onchainos-skills) — Buyer CLI
-- [OKX x402 docs](https://web3.okx.com/zh-hans/onchainos/dev-docs/payments/x402-introduction)
+- [OKX x402 docs](https://web3.okx.com/onchainos/dev-docs/payments/x402-introduction)
 - [OKX Payments SDK](https://github.com/okx/payments) — TypeScript, Go, Rust
 - [OKX Developer Portal](https://web3.okx.com/onchain-os/dev-portal) — API credentials
