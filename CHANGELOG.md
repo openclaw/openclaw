@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/tools: anchor trusted local `MEDIA:` tool-result passthrough on the exact raw name of this run's registered built-in tools, and reject client tool definitions whose names normalize-collide with a built-in or with another client tool in the same request (`400 invalid_request_error` on both JSON and SSE paths), so a client-supplied tool named like a built-in can no longer inherit its local-media trust. (#67303)
+
 ## 2026.4.15-beta.1
 
 ### Changes
@@ -26,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - CLI/configure: re-read the persisted config hash after writes so config updates stop failing with stale-hash races. (#64188, #66528)
 - CLI/update: prune stale packaged `dist` chunks after npm upgrades and keep downgrade/verify inventory checks compat-safe so global upgrades stop failing on stale chunk imports. (#66959) Thanks @obviyus.
 - Onboarding/CLI: fix channel-selection crashes on globally installed CLI setups during onboarding. (#66736)
+- Video generation/live tests: bound provider polling for live video smoke, default to the fast non-FAL text-to-video path, and use a one-second lobster prompt so release validation no longer waits indefinitely on slow provider queues.
 - Memory-core/QMD `memory_get`: reject reads of arbitrary workspace markdown paths and only allow canonical memory files (`MEMORY.md`, `memory.md`, `DREAMS.md`, `dreams.md`, `memory/**`) plus exact paths of active indexed QMD workspace documents, so the QMD memory backend can no longer be used as a generic workspace-file read shim that bypasses `read` tool-policy denials. (#66026) Thanks @eleqtrizit.
 - Cron/agents: forward embedded-run tool policy and internal event params into the attempt layer so `--tools` allowlists, cron-owned message-tool suppression, explicit message targeting, and command-path internal events all take effect at runtime again. (#62675) Thanks @hexsprite.
 - Setup/providers: guard preferred-provider lookup during setup so malformed plugin metadata with a missing provider id no longer crashes the wizard with `Cannot read properties of undefined (reading 'trim')`. (#66649) Thanks @Tianworld.
@@ -64,6 +67,17 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: keep optimistic user message cards visible during active sends by deferring same-session history reloads until the active run ends, including aborted and errored runs. (#66997) Thanks @scotthuang and @vincentkoc.
 - Media/Slack: allow host-local CSV and Markdown uploads only when the fallback buffer actually decodes as text, so real plain-text files work without letting opaque non-text blobs renamed to `.csv` or `.md` slip past the host-read guard. (#67047) Thanks @Unayung.
 - Ollama/onboarding: split setup into `Cloud + Local`, `Cloud only`, and `Local only`, support direct `OLLAMA_API_KEY` cloud setup without a local daemon, and keep Ollama web search on the local-host path. (#67005) Thanks @obviyus.
+- Docker/build: verify `@matrix-org/matrix-sdk-crypto-nodejs` native bindings with `find` under `node_modules` instead of a hardcoded `.pnpm/...` path so pnpm v10+ virtual-store layouts no longer fail the image build. (#67143) Thanks @ly85206559.
+- Matrix/E2EE: keep startup bootstrap conservative for passwordless token-auth bots, still attempt the guarded repair pass without requiring `channels.matrix.password`, and document the remaining password-UIA limitation. (#66228) Thanks @SARAMALI15792.
+- Cron/announce delivery: suppress mixed-content isolated cron announce replies that end with `NO_REPLY` so trailing silent sentinels no longer leak summary text to the target channel. (#65004) Thanks @neo1027144-creator.
+- Plugins/bundled channels: partition bundled channel lazy caches by active bundled root so `OPENCLAW_BUNDLED_PLUGINS_DIR` flips stop reusing stale plugin, setup, secrets, and runtime state. (#67200) Thanks @gumadeiras.
+- Packaging/plugins: prune common test/spec cargo from bundled plugin runtime dependencies and fail npm release validation if packaged test cargo reappears, keeping published tarballs leaner without plugin-specific special cases. (#67275) Thanks @gumadeiras.
+- Agents/context + Memory: trim default startup/skills prompt budgets, cap `memory_get` excerpts by default with explicit continuation metadata, and keep QMD reads aligned with the same bounded excerpt contract so long sessions pull less context by default without losing deterministic follow-up reads.
+- Matrix/commands: skip DM pairing-store reads on room traffic now that room control-command authorization ignores pairing-store entries, keeping the room path narrower without changing room auth behavior. (#67325) Thanks @gumadeiras.
+- Matrix/security: block DM pairing-store entries from authorizing room control commands. (#67294) Thanks @pgondhi987.
+- Gateway/security: enforce `localRoots` containment on the webchat audio embedding path. (#67298) Thanks @pgondhi987.
+- Webchat/security: reject remote-host `file://` URLs in the media embedding path. (#67293) Thanks @pgondhi987.
+- Dreaming/memory-core: use the ingestion day, not the source file day, for daily recall dedupe so repeat sweeps of the same daily note can increment `dailyCount` across days instead of stalling at `1`. (#67091) Thanks @Bartok9.
 
 ## 2026.4.14
 
