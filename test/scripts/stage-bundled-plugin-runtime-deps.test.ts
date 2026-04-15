@@ -282,6 +282,60 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'second';\n");
   });
 
+  it("refuses to replace a symlinked plugin node_modules directory", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const outsideDir = path.join(repoRoot, "outside-node-modules");
+    const nodeModulesDir = path.join(pluginDir, "node_modules");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.symlinkSync(outsideDir, nodeModulesDir);
+
+    expect(() => stageBundledPluginRuntimeDeps({ cwd: repoRoot })).toThrow(
+      /refusing to replace runtime deps via symlinked path/u,
+    );
+  });
+
+  it("refuses to write a runtime deps stamp through a symlink", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const outsideStamp = path.join(repoRoot, "outside-stamp.json");
+    const stampPath = path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(outsideStamp, '{"outside":true}\n', "utf8");
+    fs.symlinkSync(outsideStamp, stampPath);
+
+    expect(() => stageBundledPluginRuntimeDeps({ cwd: repoRoot })).toThrow(
+      /refusing to write runtime deps stamp via symlinked path/u,
+    );
+  });
+
   it("stages runtime deps from the root node_modules when already installed", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {

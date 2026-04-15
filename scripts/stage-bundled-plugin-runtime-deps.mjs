@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import semverSatisfies from "semver/functions/satisfies.js";
@@ -35,18 +34,67 @@ function sanitizeTempPrefixSegment(value) {
   return normalized.length > 0 ? normalized : "plugin";
 }
 
-function replaceDir(targetPath, sourcePath) {
-  removePathIfExists(targetPath);
+function makePluginOwnedTempDir(pluginDir, label) {
+  return makeTempDir(pluginDir, `.openclaw-runtime-deps-${label}-`);
+}
+
+function assertPathIsNotSymlink(targetPath, label) {
   try {
-    fs.renameSync(sourcePath, targetPath);
-    return;
-  } catch (error) {
-    if (error?.code !== "EXDEV") {
-      throw error;
+    if (fs.lstatSync(targetPath).isSymbolicLink()) {
+      throw new Error(`refusing to ${label} via symlinked path: ${targetPath}`);
     }
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return;
+    }
+    throw error;
   }
-  fs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
-  removePathIfExists(sourcePath);
+}
+
+function replaceDirAtomically(targetPath, sourcePath) {
+  assertPathIsNotSymlink(targetPath, "replace runtime deps");
+  const targetParentDir = path.dirname(targetPath);
+  fs.mkdirSync(targetParentDir, { recursive: true });
+  const backupPath = makeTempDir(
+    targetParentDir,
+    `.openclaw-runtime-deps-backup-${sanitizeTempPrefixSegment(path.basename(targetPath))}-`,
+  );
+  removePathIfExists(backupPath);
+
+  let movedExistingTarget = false;
+  try {
+    if (fs.existsSync(targetPath)) {
+      fs.renameSync(targetPath, backupPath);
+      movedExistingTarget = true;
+    }
+    fs.renameSync(sourcePath, targetPath);
+    removePathIfExists(backupPath);
+  } catch (error) {
+    if (movedExistingTarget && !fs.existsSync(targetPath) && fs.existsSync(backupPath)) {
+      fs.renameSync(backupPath, targetPath);
+    }
+    throw error;
+  }
+}
+
+function writeJsonAtomically(targetPath, value) {
+  assertPathIsNotSymlink(targetPath, "write runtime deps stamp");
+  const targetParentDir = path.dirname(targetPath);
+  fs.mkdirSync(targetParentDir, { recursive: true });
+  const tempDir = makeTempDir(
+    targetParentDir,
+    `.openclaw-runtime-deps-stamp-${sanitizeTempPrefixSegment(path.basename(targetPath))}-`,
+  );
+  const tempPath = path.join(tempDir, path.basename(targetPath));
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    fs.renameSync(tempPath, targetPath);
+  } finally {
+    removePathIfExists(tempDir);
+  }
 }
 
 function dependencyPathSegments(depName) {
@@ -134,7 +182,7 @@ const defaultStagedRuntimeDepPruneRules = new Map([
   ["@jimp/plugin-quantize", { paths: ["src/__image_snapshots__"] }],
   ["@jimp/plugin-threshold", { paths: ["src/__image_snapshots__"] }],
 ]);
-const runtimeDepsStagingVersion = 4;
+const runtimeDepsStagingVersion = 5;
 const exactVersionSpecRe = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
 function resolveRuntimeDepPruneConfig(params = {}) {
@@ -798,10 +846,7 @@ function stageInstalledRootRuntimeDeps(params) {
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   const stampPath = resolveRuntimeDepsStampPath(pluginDir);
   const stagedNodeModulesDir = path.join(
-    makeTempDir(
-      os.tmpdir(),
-      `openclaw-runtime-deps-${sanitizeTempPrefixSegment(path.basename(pluginDir))}-`,
-    ),
+    makePluginOwnedTempDir(pluginDir, "stage"),
     "node_modules",
   );
 
@@ -830,8 +875,8 @@ function stageInstalledRootRuntimeDeps(params) {
     }
     pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
 
-    replaceDir(nodeModulesDir, stagedNodeModulesDir);
-    writeJson(stampPath, {
+    replaceDirAtomically(nodeModulesDir, stagedNodeModulesDir);
+    writeJsonAtomically(stampPath, {
       fingerprint,
       generatedAt: new Date().toISOString(),
     });
@@ -890,10 +935,7 @@ function installPluginRuntimeDeps(params) {
   } = params;
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   const stampPath = resolveRuntimeDepsStampPath(pluginDir);
-  const tempInstallDir = makeTempDir(
-    os.tmpdir(),
-    `openclaw-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}-`,
-  );
+  const tempInstallDir = makePluginOwnedTempDir(pluginDir, "install");
   const pinnedGroups = resolvePinnedRuntimeDependencyGroups(packageJson, {
     directDependencyPackageRoot,
     rootNodeModulesDir: path.join(repoRoot, "node_modules"),
@@ -927,11 +969,12 @@ function installPluginRuntimeDeps(params) {
     }
     if (fs.existsSync(stagedNodeModulesDir)) {
       pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
-      replaceDir(nodeModulesDir, stagedNodeModulesDir);
+      replaceDirAtomically(nodeModulesDir, stagedNodeModulesDir);
     } else {
+      assertPathIsNotSymlink(nodeModulesDir, "remove runtime deps");
       removePathIfExists(nodeModulesDir);
     }
-    writeJson(stampPath, {
+    writeJsonAtomically(stampPath, {
       fingerprint,
       generatedAt: new Date().toISOString(),
     });
