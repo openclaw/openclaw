@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
@@ -59,7 +59,7 @@ vi.mock("grammy", () => ({
   GrammyError: class GrammyError extends Error {
     description = "";
   },
-  InputFile: class {},
+  InputFile: function InputFile() {},
 }));
 
 let deleteMessageTelegram: typeof import("./send.js").deleteMessageTelegram;
@@ -89,14 +89,16 @@ describe("telegram proxy client", () => {
     );
   };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       deleteMessageTelegram,
       reactMessageTelegram,
       resetTelegramClientOptionsCacheForTests,
       sendMessageTelegram,
     } = await import("./send.js"));
+  });
+
+  beforeEach(() => {
     resetTelegramClientOptionsCacheForTests();
     vi.unstubAllEnvs();
     botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });

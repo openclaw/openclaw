@@ -1,6 +1,6 @@
 import type { RequestClient } from "@buape/carbon";
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockRest = vi.hoisted(() => ({
   get: vi.fn(),
@@ -43,13 +43,15 @@ function mockGuildMemberRoutes(params: RouteMockParams): void {
 }
 
 describe("discord guild permission authorization", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       fetchMemberGuildPermissionsDiscord,
       hasAllGuildPermissionsDiscord,
       hasAnyGuildPermissionDiscord,
     } = await import("./send.permissions.js"));
+  });
+
+  beforeEach(() => {
     mockRest.get.mockReset();
   });
 

@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
@@ -18,9 +19,15 @@ import {
   loadWorkspaceSkillEntries,
 } from "./skills.js";
 import { getActiveSkillEnvKeys } from "./skills/env-overrides.js";
+import {
+  restoreMockSkillsHomeEnv,
+  setMockSkillsHomeEnv,
+  type SkillsHomeEnvSnapshot,
+} from "./skills/home-env.test-support.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
+let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
 
 const resolveTestSkillDirs = (workspaceDir: string) => ({
   managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -29,6 +36,10 @@ const resolveTestSkillDirs = (workspaceDir: string) => ({
 
 const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
 const apiKeyField = ["api", "Key"].join("");
+
+function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
+  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
+}
 
 const withClearedEnv = <T>(
   keys: string[],
@@ -67,12 +78,17 @@ async function writeEnvSkill(workspaceDir: string) {
 beforeAll(async () => {
   await fixtureSuite.setup();
   tempHome = await createTempHomeEnv("openclaw-skills-home-");
+  skillsHomeEnv = setMockSkillsHomeEnv(tempHome.home);
   await fs.mkdir(path.join(tempHome.home, ".openclaw", "agents", "main", "sessions"), {
     recursive: true,
   });
 });
 
 afterAll(async () => {
+  if (skillsHomeEnv) {
+    await restoreMockSkillsHomeEnv(skillsHomeEnv);
+    skillsHomeEnv = null;
+  }
   if (tempHome) {
     await tempHome.restore();
     tempHome = null;
@@ -109,10 +125,12 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       frontmatterExtra: "user-invocable: false",
     });
 
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      ...resolveTestSkillDirs(workspaceDir),
-      reservedNames: new Set(["help"]),
-    });
+    const commands = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        reservedNames: new Set(["help"]),
+      }),
+    );
 
     const names = commands.map((entry) => entry.name).toSorted();
     expect(names).toEqual(["hello_world", "hello_world_2", "help_2"]);
@@ -164,6 +182,35 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
 
+  it("inherits agents.defaults.skills when agentId is provided", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha-skill"),
+      name: "alpha-skill",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta-skill"),
+      name: "beta-skill",
+      description: "Beta skill",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        agents: {
+          defaults: {
+            skills: ["alpha-skill"],
+          },
+          list: [{ id: "writer", workspace: workspaceDir }],
+        },
+      },
+      agentId: "writer",
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["alpha-skill"]);
+  });
+
   it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
     const workspaceDir = await makeWorkspace();
     const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
@@ -210,7 +257,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     );
     expect(
       commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
-    ).toContain("/.openclaw/extensions/compound-bundle/commands/workflows-review.md");
+    ).toContain(path.join(pluginRoot, "commands", "workflows-review.md"));
   });
 });
 
@@ -218,7 +265,9 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it("returns empty prompt when skills dirs are missing", async () => {
     const workspaceDir = await makeWorkspace();
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const prompt = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir)),
+    );
 
     expect(prompt).toBe("");
   });
@@ -242,6 +291,84 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("peekaboo");
     expect(prompt).toContain("Capture UI");
     expect(prompt).toContain(path.join(bundledSkillDir, "SKILL.md"));
+  });
+
+  it("applies per-agent skillsLimits.maxSkillsPromptChars", async () => {
+    const workspaceDir = await makeWorkspace();
+    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: "D".repeat(240),
+      });
+    }
+
+    const prompt = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        config: {
+          skills: {
+            limits: {
+              maxSkillsPromptChars: 4_000,
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "writer",
+                workspace: workspaceDir,
+                skillsLimits: {
+                  maxSkillsPromptChars: 220,
+                },
+              },
+            ],
+          },
+        },
+        agentId: "writer",
+      }),
+    );
+
+    expect(prompt).toContain("Skills truncated: included 0 of 3");
+  });
+
+  it("does not apply agents.list[].skillsLimits without an explicit agent id", async () => {
+    const workspaceDir = await makeWorkspace();
+    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: "D".repeat(240),
+      });
+    }
+
+    const prompt = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        config: {
+          skills: {
+            limits: {
+              maxSkillsPromptChars: 4_000,
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "main",
+                workspace: workspaceDir,
+                skillsLimits: {
+                  maxSkillsPromptChars: 220,
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(prompt).not.toContain("Skills truncated:");
+    expect(prompt).toContain("alpha-skill");
+    expect(prompt).toContain("beta-skill");
+    expect(prompt).toContain("gamma-skill");
   });
 
   it("loads extra skill folders from config (lowest precedence)", async () => {
@@ -302,6 +429,24 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("demo-skill");
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
+  });
+
+  it("omits disable-model-invocation skills from available_skills for freshly loaded entries", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "hidden-skill");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "hidden-skill",
+      description: "Hidden from the prompt",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    expect(prompt).not.toContain("hidden-skill");
+    expect(prompt).not.toContain("Hidden from the prompt");
+    expect(prompt).not.toContain(path.join(skillDir, "SKILL.md"));
   });
 });
 
@@ -423,6 +568,85 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("prefers resolved caller skill config when the active runtime snapshot is still raw", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "/skills/entries/env-skill/apiKey",
+            },
+          },
+        },
+      },
+    };
+    const callerConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: "resolved-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: callerConfig,
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("resolved-key");
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("does not resolve raw skill apiKey refs when the host already provides primaryEnv", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["ENV_KEY"], () => {
+      process.env.ENV_KEY = "host-key";
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "env-skill": {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("host-key");
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBe("host-key");
+        delete process.env.ENV_KEY;
+      }
+    });
+  });
+
   it("blocks unsafe env overrides but allows declared secrets", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "unsafe-env-skill");
@@ -500,6 +724,50 @@ describe("applySkillEnvOverrides", () => {
         restore();
         expect(process.env.BASH_ENV).toBeUndefined();
         expect(process.env.SHELL).toBeUndefined();
+      }
+    });
+  });
+
+  it("blocks override-only host env overrides in skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "override-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "override-env-skill",
+      description: "Needs env",
+      metadata:
+        '{"openclaw":{"requires":{"env":["HTTPS_PROXY","NODE_TLS_REJECT_UNAUTHORIZED","DOCKER_HOST"]}}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "override-env-skill": {
+                env: {
+                  HTTPS_PROXY: "http://proxy.example.test:8080",
+                  NODE_TLS_REJECT_UNAUTHORIZED: "0",
+                  DOCKER_HOST: "tcp://docker.example.test:2376",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.HTTPS_PROXY).toBeUndefined();
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+        expect(process.env.DOCKER_HOST).toBeUndefined();
+      } finally {
+        restore();
+        expect(process.env.HTTPS_PROXY).toBeUndefined();
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+        expect(process.env.DOCKER_HOST).toBeUndefined();
       }
     });
   });

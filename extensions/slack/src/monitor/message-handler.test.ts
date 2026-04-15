@@ -5,10 +5,12 @@ const flushKeyMock = vi.fn(async (_key: string) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
-let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
+const { createSlackMessageHandler } = await import("./message-handler.js");
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
   return {
     ...actual,
     createChannelInboundDebouncer: () => ({
@@ -30,6 +32,7 @@ vi.mock("./thread-resolution.js", () => ({
 
 function createContext(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   return {
     cfg: {},
@@ -40,11 +43,14 @@ function createContext(overrides?: {
     runtime: {},
     markMessageSeen: (channel: string | undefined, ts: string | undefined) =>
       overrides?.markMessageSeen?.(channel, ts) ?? false,
+    releaseSeenMessage: (channel: string | undefined, ts: string | undefined) =>
+      overrides?.releaseSeenMessage?.(channel, ts),
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
 }
 
 function createHandlerWithTracker(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   const trackEvent = vi.fn();
   const handler = createSlackMessageHandler({
@@ -70,12 +76,10 @@ async function handleDirectMessage(
 }
 
 describe("createSlackMessageHandler", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
     resolveThreadTsMock.mockClear();
-    ({ createSlackMessageHandler } = await import("./message-handler.js"));
   });
 
   it("does not track invalid non-message events from the message stream", async () => {

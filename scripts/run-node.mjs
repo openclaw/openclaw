@@ -5,14 +5,22 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { resolveGitHead, writeBuildStamp as writeDistBuildStamp } from "./build-stamp.mjs";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "./lib/bundled-plugin-paths.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 
-const runNodeSourceRoots = ["src", "extensions"];
+const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
+const ignoredRunNodeRepoPaths = new Set([
+  "src/canvas-host/a2ui/.bundle.hash",
+  "src/canvas-host/a2ui/a2ui.bundle.js",
+]);
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 
@@ -34,14 +42,17 @@ const isBuildRelevantSourcePath = (relativePath) => {
 
 export const isBuildRelevantRunNodePath = (repoPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
+    return false;
+  }
   if (runNodeConfigFiles.includes(normalizedPath)) {
     return true;
   }
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
-  if (normalizedPath.startsWith("extensions/")) {
-    return isBuildRelevantSourcePath(normalizedPath.slice("extensions/".length));
+  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return isBuildRelevantSourcePath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
@@ -56,14 +67,17 @@ const isRestartRelevantExtensionPath = (relativePath) => {
 
 export const isRestartRelevantRunNodePath = (repoPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
+    return false;
+  }
   if (runNodeConfigFiles.includes(normalizedPath)) {
     return true;
   }
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
-  if (normalizedPath.startsWith("extensions/")) {
-    return isRestartRelevantExtensionPath(normalizedPath.slice("extensions/".length));
+  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return isRestartRelevantExtensionPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
@@ -190,47 +204,78 @@ const hasSourceMtimeChanged = (stampMtime, deps) => {
   return latestSourceMtime != null && latestSourceMtime > stampMtime;
 };
 
-const shouldBuild = (deps) => {
+export const resolveBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
-    return true;
+    return { shouldBuild: true, reason: "force_build" };
+  }
+  if (
+    deps.env.OPENCLAW_BUILD_PRIVATE_QA === "1" &&
+    deps.privateQaDistEntry &&
+    statMtime(deps.privateQaDistEntry, deps.fs) == null
+  ) {
+    return { shouldBuild: true, reason: "missing_private_qa_dist" };
   }
   const stamp = readBuildStamp(deps);
   if (stamp.mtime == null) {
-    return true;
+    return { shouldBuild: true, reason: "missing_build_stamp" };
   }
   if (statMtime(deps.distEntry, deps.fs) == null) {
-    return true;
+    return { shouldBuild: true, reason: "missing_dist_entry" };
   }
 
   for (const filePath of deps.configFiles) {
     const mtime = statMtime(filePath, deps.fs);
     if (mtime != null && mtime > stamp.mtime) {
-      return true;
+      return { shouldBuild: true, reason: "config_newer" };
     }
   }
 
   const currentHead = resolveGitHead(deps);
   if (currentHead && !stamp.head) {
-    return hasSourceMtimeChanged(stamp.mtime, deps);
+    return { shouldBuild: true, reason: "build_stamp_missing_head" };
   }
   if (currentHead && stamp.head && currentHead !== stamp.head) {
-    return hasSourceMtimeChanged(stamp.mtime, deps);
+    return { shouldBuild: true, reason: "git_head_changed" };
   }
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
     if (dirty === true) {
-      return true;
+      return { shouldBuild: true, reason: "dirty_watched_tree" };
     }
     if (dirty === false) {
-      return false;
+      return { shouldBuild: false, reason: "clean" };
     }
   }
 
   if (hasSourceMtimeChanged(stamp.mtime, deps)) {
-    return true;
+    return { shouldBuild: true, reason: "source_mtime_newer" };
   }
-  return false;
+  return { shouldBuild: false, reason: "clean" };
 };
+
+const BUILD_REASON_LABELS = {
+  force_build: "forced by OPENCLAW_FORCE_BUILD",
+  missing_build_stamp: "build stamp missing",
+  missing_dist_entry: "dist entry missing",
+  config_newer: "config newer than build stamp",
+  build_stamp_missing_head: "build stamp missing git head",
+  git_head_changed: "git head changed",
+  dirty_watched_tree: "dirty watched source tree",
+  source_mtime_newer: "source mtime newer than build stamp",
+  missing_private_qa_dist: "private QA dist entry missing",
+  clean: "clean",
+};
+
+const formatBuildReason = (reason) => BUILD_REASON_LABELS[reason] ?? reason;
+
+const SIGNAL_EXIT_CODES = {
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+
+const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
+
+const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
 
 const logRunner = (message, deps) => {
   if (deps.env.OPENCLAW_RUNNER_LOG === "0") {
@@ -239,26 +284,72 @@ const logRunner = (message, deps) => {
   deps.stderr.write(`[openclaw] ${message}\n`);
 };
 
+const waitForSpawnedProcess = async (childProcess, deps) => {
+  let forwardedSignal = null;
+  let onSigInt;
+  let onSigTerm;
+
+  const cleanupSignals = () => {
+    if (onSigInt) {
+      deps.process.off("SIGINT", onSigInt);
+    }
+    if (onSigTerm) {
+      deps.process.off("SIGTERM", onSigTerm);
+    }
+  };
+
+  const forwardSignal = (signal) => {
+    if (forwardedSignal) {
+      return;
+    }
+    forwardedSignal = signal;
+    try {
+      childProcess.kill?.(signal);
+    } catch {
+      // Best-effort only. Exit handling still happens via the child "exit" event.
+    }
+  };
+
+  onSigInt = () => {
+    forwardSignal("SIGINT");
+  };
+  onSigTerm = () => {
+    forwardSignal("SIGTERM");
+  };
+
+  deps.process.on("SIGINT", onSigInt);
+  deps.process.on("SIGTERM", onSigTerm);
+
+  try {
+    return await new Promise((resolve) => {
+      childProcess.on("exit", (exitCode, exitSignal) => {
+        resolve({ exitCode, exitSignal, forwardedSignal });
+      });
+    });
+  } finally {
+    cleanupSignals();
+  }
+};
+
 const runOpenClaw = async (deps) => {
   const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
     cwd: deps.cwd,
     env: deps.env,
     stdio: "inherit",
   });
-  const res = await new Promise((resolve) => {
-    nodeProcess.on("exit", (exitCode, exitSignal) => {
-      resolve({ exitCode, exitSignal });
-    });
-  });
+  const res = await waitForSpawnedProcess(nodeProcess, deps);
   if (res.exitSignal) {
-    return 1;
+    return getSignalExitCode(res.exitSignal);
+  }
+  if (res.forwardedSignal) {
+    return getSignalExitCode(res.forwardedSignal);
   }
   return res.exitCode ?? 1;
 };
 
 const syncRuntimeArtifacts = (deps) => {
   try {
-    runRuntimePostBuild({ cwd: deps.cwd });
+    deps.runRuntimePostBuild({ cwd: deps.cwd });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -282,16 +373,20 @@ const writeBuildStamp = (deps) => {
   }
 };
 
+const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
+
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
     spawnSync: params.spawnSync ?? spawnSync,
     fs: params.fs ?? fs,
     stderr: params.stderr ?? process.stderr,
+    process: params.process ?? process,
     execPath: params.execPath ?? process.execPath,
     cwd: params.cwd ?? process.cwd(),
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
+    runRuntimePostBuild: params.runRuntimePostBuild ?? runRuntimePostBuild,
   };
 
   deps.distRoot = path.join(deps.cwd, "dist");
@@ -302,15 +397,24 @@ export async function runNodeMain(params = {}) {
     path: path.join(deps.cwd, sourceRoot),
   }));
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
+  deps.privateQaDistEntry = path.join(deps.distRoot, "extensions", "qa-lab", "cli.js");
+  if (deps.args[0] === "qa") {
+    deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
+    deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+  }
 
-  if (!shouldBuild(deps)) {
-    if (!syncRuntimeArtifacts(deps)) {
+  const buildRequirement = resolveBuildRequirement(deps);
+  if (!buildRequirement.shouldBuild) {
+    if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
       return 1;
     }
     return await runOpenClaw(deps);
   }
 
-  logRunner("Building TypeScript (dist is stale).", deps);
+  logRunner(
+    `Building TypeScript (dist is stale: ${buildRequirement.reason} - ${formatBuildReason(buildRequirement.reason)}).`,
+    deps,
+  );
   const buildCmd = deps.execPath;
   const buildArgs = compilerArgs;
   const build = deps.spawn(buildCmd, buildArgs, {
@@ -319,11 +423,12 @@ export async function runNodeMain(params = {}) {
     stdio: "inherit",
   });
 
-  const buildRes = await new Promise((resolve) => {
-    build.on("exit", (exitCode, exitSignal) => resolve({ exitCode, exitSignal }));
-  });
+  const buildRes = await waitForSpawnedProcess(build, deps);
   if (buildRes.exitSignal) {
-    return 1;
+    return getSignalExitCode(buildRes.exitSignal);
+  }
+  if (buildRes.forwardedSignal) {
+    return getSignalExitCode(buildRes.forwardedSignal);
   }
   if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
     return buildRes.exitCode;

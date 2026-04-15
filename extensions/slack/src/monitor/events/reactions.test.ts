@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reactionQueueMock = vi.hoisted(() => vi.fn());
 let registerSlackReactionEvents: typeof import("./reactions.js").registerSlackReactionEvents;
@@ -6,13 +6,18 @@ let createSlackSystemEventTestHarness: typeof import("./system-event-test-harnes
 type SlackSystemEventTestOverrides =
   import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+async function createChannelRuntimeMock() {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
   };
-});
+}
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", createChannelRuntimeMock);
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", createChannelRuntimeMock);
 
 type ReactionHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -71,11 +76,13 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
 }
 
 describe("registerSlackReactionEvents", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    reactionQueueMock.mockClear();
+  beforeAll(async () => {
     ({ registerSlackReactionEvents } = await import("./reactions.js"));
     ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    reactionQueueMock.mockClear();
   });
 
   const cases: Array<{ name: string; input: ReactionRunInput; expectedCalls: number }> = [

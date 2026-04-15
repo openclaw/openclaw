@@ -4,7 +4,7 @@ import {
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
-import { listIMessageAccountIds, resolveIMessageAccount } from "./accounts.js";
+import { resolveIMessageAccount } from "./accounts.js";
 import {
   createIMessageCliPathTextInput,
   imessageCompletionNote,
@@ -28,7 +28,8 @@ export const imessageSetupWizard: ChannelSetupWizard = {
     configuredScore: imessageSetupStatusBase.configuredScore,
     unconfiguredScore: imessageSetupStatusBase.unconfiguredScore,
     resolveConfigured: imessageSetupStatusBase.resolveConfigured,
-    resolveBinaryPath: ({ cfg }) => cfg.channels?.imessage?.cliPath ?? "imsg",
+    resolveBinaryPath: ({ cfg, accountId }) =>
+      resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
     detectBinary,
   }),
   credentials: [],

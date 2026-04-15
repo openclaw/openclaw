@@ -1,16 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
-import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
-// Mock the backoff sleep to avoid real delays in tests
-vi.mock("../../../src/infra/backoff.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/infra/backoff.js")>();
-  return {
-    ...actual,
-    sleepWithAbort: vi.fn().mockResolvedValue(undefined),
-  };
-});
+const mocks = vi.hoisted(() => ({
+  sleepWithAbort: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mock the runtime-exported backoff sleep that the handler actually imports.
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  computeBackoff: vi.fn((_policy, attempt: number) => attempt * 1000),
+  sleepWithAbort: mocks.sleepWithAbort,
+}));
+
+let createTelegramSendChatActionHandler: typeof import("./sendchataction-401-backoff.js").createTelegramSendChatActionHandler;
 
 describe("createTelegramSendChatActionHandler", () => {
+  beforeAll(async () => {
+    ({ createTelegramSendChatActionHandler } = await import("./sendchataction-401-backoff.js"));
+  });
+
   const make401Error = () => new Error("401 Unauthorized");
   const make500Error = () => new Error("500 Internal Server Error");
 

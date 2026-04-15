@@ -10,7 +10,15 @@ const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const writeConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
-  vi.fn((): { ref: unknown } => ({ ref: undefined })),
+  vi.fn((_value?: unknown): { ref: unknown } => ({ ref: undefined })),
+);
+const hasConfiguredSecretInputMock = vi.hoisted(() =>
+  vi.fn((value: unknown): boolean => {
+    if (typeof value === "string" && value.trim()) {
+      return true;
+    }
+    return resolveSecretInputRefMock(value)?.ref != null;
+  }),
 );
 const resolveGatewayAuthMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -57,19 +65,30 @@ vi.mock("../../bootstrap/node-startup-env.js", () => ({
   resolveNodeStartupTlsEnvironment: resolveNodeStartupTlsEnvironmentMock,
 }));
 
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../config/io.js", () => ({
   loadConfig: loadConfigMock,
-  readBestEffortConfig: loadConfigMock,
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  resolveGatewayPort: resolveGatewayPortMock,
-  writeConfigFile: writeConfigFileMock,
+  readConfigFileSnapshotForWrite: vi.fn(async () => ({
+    snapshot: await readConfigFileSnapshotMock(),
+    writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
+  })),
 }));
 
 vi.mock("../../config/paths.js", () => ({
+  resolveGatewayPort: resolveGatewayPortMock,
   resolveIsNixMode: resolveIsNixModeMock,
 }));
 
+vi.mock("../../commands/gateway-install-token.persist.runtime.js", () => ({
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+  readConfigFileSnapshotForWrite: vi.fn(async () => ({
+    snapshot: await readConfigFileSnapshotMock(),
+    writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
+  })),
+  writeConfigFile: writeConfigFileMock,
+}));
+
 vi.mock("../../config/types.secrets.js", () => ({
+  hasConfiguredSecretInput: hasConfiguredSecretInputMock,
   resolveSecretInputRef: resolveSecretInputRefMock,
 }));
 
@@ -81,7 +100,7 @@ vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
 
-vi.mock("../../commands/onboard-helpers.js", () => ({
+vi.mock("../../commands/random-token.js", () => ({
   randomToken: randomTokenMock,
 }));
 
@@ -175,7 +194,12 @@ describe("runDaemonInstall", () => {
     actionState.failed.length = 0;
 
     loadConfigMock.mockReturnValue({ gateway: { auth: { mode: "token" } } });
-    readConfigFileSnapshotMock.mockResolvedValue({ exists: false, valid: true, config: {} });
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      sourceConfig: { gateway: { auth: { mode: "token" } } },
+    });
     resolveGatewayPortMock.mockReturnValue(18789);
     resolveIsNixModeMock.mockReturnValue(false);
     resolveSecretInputRefMock.mockReturnValue({ ref: undefined });
@@ -259,6 +283,7 @@ describe("runDaemonInstall", () => {
       exists: true,
       valid: true,
       config: { gateway: { auth: { mode: "token" } } },
+      sourceConfig: { gateway: { auth: { mode: "token" } } },
     });
 
     await runDaemonInstall({ json: true });

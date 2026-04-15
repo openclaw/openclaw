@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
+import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -15,7 +15,10 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
-import { validateConfigObjectRaw } from "../config/validation.js";
+import {
+  collectUnsupportedSecretRefPolicyIssues,
+  validateConfigObjectRaw,
+} from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -33,6 +36,7 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -63,13 +67,12 @@ type ConfigSetOperation = {
   requestedPath: PathSegment[];
   setPath: PathSegment[];
   value: unknown;
+  schemaValidated?: boolean;
   touchedSecretTargetPath?: string;
   touchedProviderAlias?: string;
   assignedRef?: SecretRef;
 };
 
-const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
-const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
@@ -92,6 +95,7 @@ const CONFIG_SET_DESCRIPTION = [
   CONFIG_SET_EXAMPLE_PROVIDER,
   CONFIG_SET_EXAMPLE_BATCH,
 ].join("\n");
+const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
 
 class ConfigSetDryRunValidationError extends Error {
   constructor(readonly result: ConfigSetDryRunResult) {
@@ -179,6 +183,17 @@ function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
 
 function formatDoctorHint(message: string): string {
   return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
+}
+
+function formatUnsupportedSecretRefPolicyFailureMessage(issues: string[]): string {
+  const lines = [
+    "Config policy validation failed: unsupported SecretRef usage was detected.",
+    ...issues.slice(0, CONFIG_SET_POLICY_ERROR_MAX_ISSUES).map((issue) => `- ${issue}`),
+  ];
+  if (issues.length > CONFIG_SET_POLICY_ERROR_MAX_ISSUES) {
+    lines.push(`- ... ${issues.length - CONFIG_SET_POLICY_ERROR_MAX_ISSUES} more`);
+  }
+  return lines.join("\n");
 }
 
 function validatePathSegments(path: PathSegment[]): void {
@@ -336,24 +351,6 @@ function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   );
 }
 
-function ensureValidOllamaProviderForApiKeySet(
-  root: Record<string, unknown>,
-  path: PathSegment[],
-): void {
-  if (!pathEquals(path, OLLAMA_API_KEY_PATH)) {
-    return;
-  }
-  const existing = getAtPath(root, OLLAMA_PROVIDER_PATH);
-  if (existing.found) {
-    return;
-  }
-  setAtPath(root, OLLAMA_PROVIDER_PATH, {
-    baseUrl: OLLAMA_DEFAULT_BASE_URL,
-    api: "ollama",
-    models: [],
-  });
-}
-
 function pruneInactiveGatewayAuthCredentials(params: {
   root: Record<string, unknown>;
   operations: ConfigSetOperation[];
@@ -375,7 +372,7 @@ function pruneInactiveGatewayAuthCredentials(params: {
     return [];
   }
   const auth = authRaw as Record<string, unknown>;
-  const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+  const mode = normalizeOptionalString(auth.mode) ?? "";
 
   const removedPaths: string[] = [];
   const remove = (key: "token" | "password") => {
@@ -619,6 +616,7 @@ function buildRefAssignmentOperation(params: {
       requestedPath: params.requestedPath,
       setPath: resolved.refPathSegments,
       value: params.ref,
+      schemaValidated: true,
       touchedSecretTargetPath: toDotPath(resolved.pathSegments),
       assignedRef: params.ref,
       ...(resolved.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
@@ -629,6 +627,7 @@ function buildRefAssignmentOperation(params: {
     requestedPath: params.requestedPath,
     setPath: params.requestedPath,
     value: params.ref,
+    schemaValidated: true,
     touchedSecretTargetPath: resolved
       ? toDotPath(resolved.pathSegments)
       : toDotPath(params.requestedPath),
@@ -697,6 +696,7 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
         requestedPath: path,
         setPath: path,
         value: validated.data,
+        schemaValidated: true,
         touchedProviderAlias: alias,
       });
       continue;
@@ -776,6 +776,7 @@ function buildSingleSetOperations(params: {
         requestedPath: parsedPath,
         setPath: parsedPath,
         value: provider,
+        schemaValidated: true,
         touchedProviderAlias: alias,
       },
     ];
@@ -920,8 +921,13 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
   return { refsToResolve, skippedExecRefs };
 }
 
-function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRaw(config);
+function collectDryRunSchemaErrors(params: {
+  config: OpenClawConfig;
+  operations: ReadonlyArray<ConfigSetOperation>;
+}): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRaw(params.config, {
+    touchedPaths: params.operations.map((operation) => operation.setPath),
+  });
   if (validated.ok) {
     return [];
   }
@@ -929,6 +935,23 @@ function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError
     kind: "schema",
     message,
   }));
+}
+
+function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
+  const deduped: ConfigSetDryRunError[] = [];
+  const seen = new Set<string>();
+  for (const error of errors) {
+    const key =
+      error.kind === "resolvability"
+        ? `${error.kind}\u0000${error.ref ?? ""}\u0000${error.message}`
+        : `${error.kind}\u0000${error.message}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(error);
+  }
+  return deduped;
 }
 
 function formatDryRunFailureMessage(params: {
@@ -1005,7 +1028,6 @@ export async function runConfigSet(opts: {
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     for (const operation of operations) {
-      ensureValidOllamaProviderForApiKeySet(next, operation.setPath);
       setAtPath(next, operation.setPath, operation.value);
     }
     const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
@@ -1013,10 +1035,17 @@ export async function runConfigSet(opts: {
       operations,
     });
     const nextConfig = next as OpenClawConfig;
+    const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
+    const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
+      (line) => line.trim(),
+    );
 
     if (opts.cliOptions.dryRun) {
       const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
       const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
+      const requiresFullSchemaValidation = operations.some(
+        (operation) => operation.inputMode === "json" && operation.schemaValidated !== true,
+      );
       const refs =
         hasJsonMode || hasBuilderMode
           ? collectDryRunRefs({
@@ -1029,8 +1058,21 @@ export async function runConfigSet(opts: {
         allowExecInDryRun: Boolean(opts.cliOptions.allowExec),
       });
       const errors: ConfigSetDryRunError[] = [];
-      if (hasJsonMode) {
-        errors.push(...collectDryRunSchemaErrors(nextConfig));
+      if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
+        errors.push(
+          ...policyIssueLines.map((message) => ({
+            kind: "schema" as const,
+            message,
+          })),
+        );
+      }
+      if (requiresFullSchemaValidation) {
+        errors.push(
+          ...collectDryRunSchemaErrors({
+            config: nextConfig,
+            operations,
+          }),
+        );
       }
       if (hasJsonMode || hasBuilderMode) {
         errors.push(
@@ -1046,28 +1088,29 @@ export async function runConfigSet(opts: {
           })),
         );
       }
+      const dedupedErrors = dedupeDryRunErrors(errors);
       const dryRunResult: ConfigSetDryRunResult = {
-        ok: errors.length === 0,
+        ok: dedupedErrors.length === 0,
         operations: operations.length,
         configPath: shortenHomePath(snapshot.path),
         inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
         checks: {
-          schema: hasJsonMode,
+          schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
           resolvability: hasJsonMode || hasBuilderMode,
           resolvabilityComplete:
             (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
         },
         refsChecked: selectedDryRunRefs.refsToResolve.length,
         skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
-        ...(errors.length > 0 ? { errors } : {}),
+        ...(dedupedErrors.length > 0 ? { errors: dedupedErrors } : {}),
       };
-      if (errors.length > 0) {
+      if (dedupedErrors.length > 0) {
         if (opts.cliOptions.json) {
           throw new ConfigSetDryRunValidationError(dryRunResult);
         }
         throw new Error(
           formatDryRunFailureMessage({
-            errors,
+            errors: dedupedErrors,
             skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
           }),
         );
@@ -1097,12 +1140,18 @@ export async function runConfigSet(opts: {
       }
       return;
     }
+    if (policyIssueLines.length > 0) {
+      throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
+    }
 
-    await writeConfigFile(next);
+    await replaceConfigFile({
+      nextConfig: next,
+      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    });
     if (removedGatewayAuthPaths.length > 0) {
       runtime.log(
         info(
-          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${String(nextConfig.gateway?.auth?.mode ?? "<unset>")}.`,
+          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
         ),
       );
     }
@@ -1176,7 +1225,11 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
       runtime.exit(1);
       return;
     }
-    await writeConfigFile(next, { unsetPaths: [parsedPath] });
+    await replaceConfigFile({
+      nextConfig: next,
+      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      writeOptions: { unsetPaths: [parsedPath] },
+    });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
     runtime.error(danger(String(err)));
@@ -1191,6 +1244,30 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
     runtime.log(shortenHomePath(snapshot.path));
   } catch (err) {
     runtime.error(danger(String(err)));
+    runtime.exit(1);
+  }
+}
+
+async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
+  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+
+  schema.properties = {
+    $schema: { type: "string" },
+    ...schema.properties,
+  };
+
+  return schema;
+}
+
+export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    writeRuntimeJson(runtime, await buildCliConfigSchema());
+  } catch (err) {
+    runtime.error(danger(`Config schema error: ${String(err)}`));
     runtime.exit(1);
   }
 }
@@ -1250,7 +1327,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/set/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
     .addHelpText(
       "after",
@@ -1368,6 +1445,13 @@ export function registerConfigCli(program: Command) {
     .description("Print the active config file path")
     .action(async () => {
       await runConfigFile({});
+    });
+
+  cmd
+    .command("schema")
+    .description("Print the JSON schema for openclaw.json")
+    .action(async () => {
+      await runConfigSchema({});
     });
 
   cmd

@@ -1,11 +1,9 @@
+import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   formatThinkingLevels as formatThinkingLevelsFallback,
-  isBinaryThinkingProvider as isBinaryThinkingProviderFallback,
   listThinkingLevelLabels as listThinkingLevelLabelsFallback,
   listThinkingLevels as listThinkingLevelsFallback,
-  normalizeProviderId,
   resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
-  supportsBuiltInXHighThinking,
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
@@ -14,6 +12,7 @@ export {
   normalizeFastMode,
   normalizeNoticeLevel,
   normalizeReasoningLevel,
+  normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
@@ -25,6 +24,7 @@ export type {
   ElevatedMode,
   NoticeLevel,
   ReasoningLevel,
+  TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
   UsageDisplayLevel,
@@ -35,12 +35,14 @@ import {
   resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking,
 } from "../plugins/provider-thinking.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
-  if (isBinaryThinkingProviderFallback(provider)) {
-    return true;
-  }
-  const normalizedProvider = normalizeProviderId(provider);
+  const providerRaw = normalizeOptionalString(provider);
+  const normalizedProvider = providerRaw ? normalizeProviderId(providerRaw) : "";
   if (!normalizedProvider) {
     return false;
   }
@@ -49,24 +51,22 @@ export function isBinaryThinkingProvider(provider?: string | null, model?: strin
     provider: normalizedProvider,
     context: {
       provider: normalizedProvider,
-      modelId: model?.trim() ?? "",
+      modelId: normalizeOptionalString(model) ?? "",
     },
   });
   if (typeof pluginDecision === "boolean") {
     return pluginDecision;
   }
-  return isBinaryThinkingProviderFallback(provider);
+  return false;
 }
 
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  const modelKey = model?.trim().toLowerCase();
+  const modelKey = normalizeOptionalLowercaseString(model);
   if (!modelKey) {
     return false;
   }
-  if (supportsBuiltInXHighThinking(provider, modelKey)) {
-    return true;
-  }
-  const providerKey = normalizeProviderId(provider);
+  const providerRaw = normalizeOptionalString(provider);
+  const providerKey = providerRaw ? normalizeProviderId(providerRaw) : "";
   if (providerKey) {
     const pluginDecision = resolveProviderXHighThinking({
       provider: providerKey,

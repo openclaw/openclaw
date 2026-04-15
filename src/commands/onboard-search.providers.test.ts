@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -6,19 +6,10 @@ const mocks = vi.hoisted(() => ({
   resolvePluginWebSearchProviders: vi.fn<
     (params?: { config?: OpenClawConfig }) => PluginWebSearchProviderEntry[]
   >(() => []),
-  listBundledWebSearchProviders: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
-  resolveBundledWebSearchPluginId: vi.fn<(providerId?: string) => string | undefined>(
-    () => undefined,
-  ),
 }));
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: mocks.resolvePluginWebSearchProviders,
-}));
-
-vi.mock("../plugins/bundled-web-search.js", () => ({
-  listBundledWebSearchProviders: mocks.listBundledWebSearchProviders,
-  resolveBundledWebSearchPluginId: mocks.resolveBundledWebSearchPluginId,
 }));
 
 function createCustomProviderEntry(): PluginWebSearchProviderEntry {
@@ -27,6 +18,7 @@ function createCustomProviderEntry(): PluginWebSearchProviderEntry {
     pluginId: "custom-plugin",
     label: "Custom Search",
     hint: "Custom provider",
+    onboardingScopes: ["text-inference"],
     envVars: ["CUSTOM_SEARCH_API_KEY"],
     placeholder: "custom-...",
     signupUrl: "https://example.com/custom",
@@ -59,6 +51,7 @@ function createBundledFirecrawlEntry(): PluginWebSearchProviderEntry {
     pluginId: "firecrawl",
     label: "Firecrawl Search",
     hint: "Structured results",
+    onboardingScopes: ["text-inference"],
     envVars: ["FIRECRAWL_API_KEY"],
     placeholder: "fc-...",
     signupUrl: "https://example.com/firecrawl",
@@ -82,6 +75,7 @@ function createBundledDuckDuckGoEntry(): PluginWebSearchProviderEntry {
     pluginId: "duckduckgo",
     label: "DuckDuckGo Search (experimental)",
     hint: "Free fallback",
+    onboardingScopes: ["text-inference"],
     requiresCredential: false,
     envVars: [],
     placeholder: "(no key needed)",
@@ -94,8 +88,13 @@ function createBundledDuckDuckGoEntry(): PluginWebSearchProviderEntry {
 }
 
 describe("onboard-search provider resolution", () => {
+  let mod: typeof import("./onboard-search.js");
+
+  beforeAll(async () => {
+    mod = await import("./onboard-search.js");
+  });
+
   afterEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
   });
 
@@ -105,7 +104,6 @@ describe("onboard-search provider resolution", () => {
       params?.config ? [customEntry] : [],
     );
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       tools: {
         web: {
@@ -146,7 +144,6 @@ describe("onboard-search provider resolution", () => {
       params?.config ? [customEntry] : [],
     );
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       plugins: {
         installs: {
@@ -192,12 +189,8 @@ describe("onboard-search provider resolution", () => {
   });
 
   it("does not treat hard-disabled bundled providers as selectable credentials", async () => {
-    const firecrawlEntry = createBundledFirecrawlEntry();
     mocks.resolvePluginWebSearchProviders.mockReturnValue([]);
-    mocks.listBundledWebSearchProviders.mockReturnValue([firecrawlEntry]);
-    mocks.resolveBundledWebSearchPluginId.mockReturnValue("firecrawl");
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       tools: {
         web: {
@@ -231,7 +224,6 @@ describe("onboard-search provider resolution", () => {
       params?.config ? [duckduckgoEntry] : [duckduckgoEntry],
     );
 
-    const mod = await import("./onboard-search.js");
     const notes: string[] = [];
     const prompter = {
       intro: vi.fn(async () => {}),
@@ -253,5 +245,37 @@ describe("onboard-search provider resolution", () => {
     expect(result.tools?.web?.search?.provider).toBe("duckduckgo");
     expect(result.plugins?.entries?.duckduckgo?.enabled).toBe(true);
     expect(notes.some((message) => message.includes("works without an API key"))).toBe(true);
+  });
+
+  it("uses the runtime onboarding search surface when no config is present", async () => {
+    const firecrawlEntry = createBundledFirecrawlEntry();
+    const duckduckgoEntry = createBundledDuckDuckGoEntry();
+    const tavilyEntry: PluginWebSearchProviderEntry = {
+      ...firecrawlEntry,
+      id: "tavily",
+      pluginId: "tavily",
+      label: "Tavily Search",
+      hint: "Research search",
+      envVars: ["TAVILY_API_KEY"],
+      signupUrl: "https://example.com/tavily",
+      credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+    };
+    const customEntry = createCustomProviderEntry();
+
+    mocks.resolvePluginWebSearchProviders.mockReturnValue([
+      customEntry,
+      duckduckgoEntry,
+      firecrawlEntry,
+      tavilyEntry,
+    ]);
+
+    const options = mod.resolveSearchProviderOptions();
+
+    expect(options.map((entry) => entry.id)).toEqual([
+      "custom-search",
+      "duckduckgo",
+      "firecrawl",
+      "tavily",
+    ]);
   });
 });

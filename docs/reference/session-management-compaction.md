@@ -23,6 +23,8 @@ If you want a higher-level overview first, start with:
 
 - [/concepts/session](/concepts/session)
 - [/concepts/compaction](/concepts/compaction)
+- [/concepts/memory](/concepts/memory)
+- [/concepts/memory-search](/concepts/memory-search)
 - [/concepts/session-pruning](/concepts/session-pruning)
 - [/reference/transcript-hygiene](/reference/transcript-hygiene)
 
@@ -208,13 +210,30 @@ After compaction, future turns see:
 
 Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
 
+## Compaction chunk boundaries and tool pairing
+
+When OpenClaw splits a long transcript into compaction chunks, it keeps
+assistant tool calls paired with their matching `toolResult` entries.
+
+- If the token-share split lands between a tool call and its result, OpenClaw
+  shifts the boundary to the assistant tool-call message instead of separating
+  the pair.
+- If a trailing tool-result block would otherwise push the chunk over target,
+  OpenClaw preserves that pending tool block and keeps the unsummarized tail
+  intact.
+- Aborted/error tool-call blocks do not hold a pending split open.
+
 ---
 
 ## When auto-compaction happens (Pi runtime)
 
 In the embedded Pi agent, auto-compaction triggers in two cases:
 
-1. **Overflow recovery**: the model returns a context overflow error → compact → retry.
+1. **Overflow recovery**: the model returns a context overflow error
+   (`request_too_large`, `context length exceeded`, `input exceeds the maximum
+number of tokens`, `input token count exceeds the maximum number of input
+tokens`, `input is too long for the model`, `ollama error: context length
+exceeded`, and similar provider-shaped variants) → compact → retry.
 2. **Threshold maintenance**: after a successful turn, when:
 
 `contextTokens > contextWindow - reserveTokens`
@@ -256,6 +275,21 @@ Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.t
 
 ---
 
+## Pluggable compaction providers
+
+Plugins can register a compaction provider via `registerCompactionProvider()` on the plugin API. When `agents.defaults.compaction.provider` is set to a registered provider id, the safeguard extension delegates summarization to that provider instead of the built-in `summarizeInStages` pipeline.
+
+- `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization.
+- Setting a `provider` forces `mode: "safeguard"`.
+- Providers receive the same compaction instructions and identifier-preservation policy as the built-in path.
+- The safeguard still preserves recent-turn and split-turn suffix context after provider output.
+- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
+- Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
+
+Source: `src/plugins/compaction-provider.ts`, `src/agents/pi-hooks/compaction-safeguard.ts`.
+
+---
+
 ## User-visible surfaces
 
 You can observe compaction and session state via:
@@ -273,10 +307,17 @@ OpenClaw supports “silent” turns for background tasks where the user should 
 
 Convention:
 
-- The assistant starts its output with `NO_REPLY` to indicate “do not deliver a reply to the user”.
+- The assistant starts its output with the exact silent token `NO_REPLY` /
+  `no_reply` to indicate “do not deliver a reply to the user”.
 - OpenClaw strips/suppresses this in the delivery layer.
+- Exact silent-token suppression is case-insensitive, so `NO_REPLY` and
+  `no_reply` both count when the whole payload is just the silent token.
+- This is for true background/no-delivery turns only; it is not a shortcut for
+  ordinary actionable user requests.
 
-As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
+As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a
+partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial
+output mid-turn.
 
 ---
 
@@ -291,7 +332,8 @@ OpenClaw uses the **pre-threshold flush** approach:
 1. Monitor session context usage.
 2. When it crosses a “soft threshold” (below Pi’s compaction threshold), run a silent
    “write memory now” directive to the agent.
-3. Use `NO_REPLY` so the user sees nothing.
+3. Use the exact silent token `NO_REPLY` / `no_reply` so the user sees
+   nothing.
 
 Config (`agents.defaults.compaction.memoryFlush`):
 
@@ -302,7 +344,8 @@ Config (`agents.defaults.compaction.memoryFlush`):
 
 Notes:
 
-- The default prompt/system prompt include a `NO_REPLY` hint to suppress delivery.
+- The default prompt/system prompt include a `NO_REPLY` hint to suppress
+  delivery.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
 - The flush runs only for embedded Pi sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
@@ -321,4 +364,4 @@ flush logic lives on the Gateway side today.
   - model context window (too small)
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
   - tool-result bloat: enable/tune session pruning
-- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (exact token) and you’re on a build that includes the streaming suppression fix.
+- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you’re on a build that includes the streaming suppression fix.

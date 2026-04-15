@@ -8,7 +8,7 @@ import {
   setGroupIconBlueBubbles as setGroupIconBlueBubblesImpl,
   unsendBlueBubblesMessage as unsendBlueBubblesMessageImpl,
 } from "./chat.js";
-import { resolveBlueBubblesMessageId as resolveBlueBubblesMessageIdImpl } from "./monitor.js";
+import { resolveBlueBubblesMessageId as resolveBlueBubblesMessageIdImpl } from "./monitor-reply-cache.js";
 import { sendBlueBubblesReaction as sendBlueBubblesReactionImpl } from "./reactions.js";
 import {
   resolveChatGuidForTarget as resolveChatGuidForTargetImpl,

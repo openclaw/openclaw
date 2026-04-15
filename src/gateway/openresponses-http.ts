@@ -6,11 +6,13 @@
  * @see https://www.open-responses.com/
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -33,9 +35,17 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { getHeader, resolveGatewayRequestContext } from "./http-utils.js";
+import {
+  getBearerToken,
+  getHeader,
+  resolveAgentIdForRequest,
+  resolveGatewayRequestContext,
+  resolveOpenAiCompatModelOverride,
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
+} from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
@@ -45,7 +55,9 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
+import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -64,8 +76,8 @@ const DEFAULT_MAX_URL_PARTS = 8;
 const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_RESPONSE_SESSION_ENTRIES = 500;
 type ResponseSessionScope = {
+  authSubject: string;
   agentId: string;
-  user?: string;
   requestedSessionKey?: string;
 };
 
@@ -77,23 +89,40 @@ type ResponseSessionEntry = ResponseSessionScope & {
 const responseSessionMap = new Map<string, ResponseSessionEntry>();
 
 function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
-  const user = scope.user?.trim();
+  const authSubject = scope.authSubject.trim();
   const requestedSessionKey = scope.requestedSessionKey?.trim();
   return {
+    authSubject,
     agentId: scope.agentId,
-    user: user || undefined,
     requestedSessionKey: requestedSessionKey || undefined,
   };
 }
 
+function resolveResponseSessionAuthSubject(params: {
+  req: IncomingMessage;
+  auth: ResolvedGatewayAuth;
+}): string {
+  const bearer = getBearerToken(params.req);
+  if (bearer) {
+    return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
+  }
+  if (params.auth.mode === "trusted-proxy" && params.auth.trustedProxy?.userHeader) {
+    const user = getHeader(params.req, params.auth.trustedProxy.userHeader)?.trim();
+    if (user) {
+      return `trusted-proxy:${user}`;
+    }
+  }
+  return `gateway-auth:${params.auth.mode}`;
+}
+
 function createResponseSessionScope(params: {
   req: IncomingMessage;
+  auth: ResolvedGatewayAuth;
   agentId: string;
-  user?: string;
 }): ResponseSessionScope {
   return normalizeResponseSessionScope({
+    authSubject: resolveResponseSessionAuthSubject({ req: params.req, auth: params.auth }),
     agentId: params.agentId,
-    user: params.user,
     requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
   });
 }
@@ -103,8 +132,8 @@ function matchesResponseSessionScope(
   scope: ResponseSessionScope,
 ): boolean {
   return (
+    entry.authSubject === scope.authSubject &&
     entry.agentId === scope.agentId &&
-    entry.user === scope.user &&
     entry.requestedSessionKey === scope.requestedSessionKey
   );
 }
@@ -172,18 +201,19 @@ export const __testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
+  wrapUntrustedFileContent,
   storeResponseSessionAt(
     responseId: string,
     sessionKey: string,
     now: number,
-    scope: ResponseSessionScope = { agentId: "main" },
+    scope: ResponseSessionScope = { authSubject: "test", agentId: "main" },
   ) {
     storeResponseSession(responseId, sessionKey, normalizeResponseSessionScope(scope), now);
   },
   lookupResponseSessionAt(
     responseId: string | undefined,
     now: number,
-    scope: ResponseSessionScope = { agentId: "main" },
+    scope: ResponseSessionScope = { authSubject: "test", agentId: "main" },
   ) {
     return lookupResponseSession(responseId, normalizeResponseSessionScope(scope), now);
   },
@@ -232,7 +262,16 @@ function resolveResponsesLimits(
 }
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  return (body.tools ?? []) as ClientToolDefinition[];
+  // Normalize from Responses API flat format to the internal wrapped format.
+  return (body.tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    },
+  }));
 }
 
 function applyToolChoice(params: {
@@ -351,47 +390,19 @@ function createResponseResource(params: {
   };
 }
 
-function createAssistantOutputItem(params: {
-  id: string;
-  text: string;
-  status?: "in_progress" | "completed";
-}): OutputItem {
-  return {
-    type: "message",
-    id: params.id,
-    role: "assistant",
-    content: [{ type: "output_text", text: params.text }],
-    status: params.status,
-  };
-}
-
-function createFunctionCallOutputItem(params: {
-  id: string;
-  callId: string;
-  name: string;
-  arguments: string;
-  status?: "in_progress" | "completed";
-}): OutputItem {
-  return {
-    type: "function_call",
-    id: params.id,
-    call_id: params.callId,
-    name: params.name,
-    arguments: params.arguments,
-    status: params.status,
-  };
-}
-
 async function runResponsesAgentCommand(params: {
   message: string;
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
   extraSystemPrompt: string;
+  modelOverride?: string;
   streamParams: { maxTokens: number } | undefined;
   sessionKey: string;
   runId: string;
   messageChannel: string;
-  deps: ReturnType<typeof createDefaultDeps>;
+  senderIsOwner: boolean;
+  deps: CliDeps;
+  abortSignal?: AbortSignal;
 }) {
   return agentCommandFromIngress(
     {
@@ -399,15 +410,16 @@ async function runResponsesAgentCommand(params: {
       images: params.images.length > 0 ? params.images : undefined,
       clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
       extraSystemPrompt: params.extraSystemPrompt || undefined,
+      model: params.modelOverride,
       streamParams: params.streamParams ?? undefined,
       sessionKey: params.sessionKey,
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      // HTTP API callers are authenticated operator clients for this gateway context.
-      senderIsOwner: true,
+      senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
+      abortSignal: params.abortSignal,
     },
     defaultRuntime,
     params.deps,
@@ -427,6 +439,10 @@ export async function handleOpenResponsesHttpRequest(
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
+    requiredOperatorMethod: "chat.send",
+    // Compat HTTP uses a different scope model from generic HTTP helpers:
+    // shared-secret bearer auth is treated as full operator access here.
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
@@ -439,6 +455,9 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
+  // On the compat surface, shared-secret bearer auth is also treated as an
+  // owner sender so owner-only tool policy matches the documented contract.
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
 
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
@@ -455,6 +474,18 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
+  const agentId = resolveAgentIdForRequest({ req, model });
+  const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
+    req,
+    agentId,
+    model,
+  });
+  if (modelError) {
+    sendJson(res, 400, {
+      error: { message: modelError, type: "invalid_request_error" },
+    });
+    return true;
+  }
 
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
@@ -538,11 +569,12 @@ export async function handleOpenResponsesHttpRequest(
                       },
                 limits: limits.files,
               });
-              if (file.text?.trim()) {
+              const rawText = file.text;
+              if (rawText?.trim()) {
                 fileContexts.push(
                   renderFileContextBlock({
                     filename: file.filename,
-                    content: file.text,
+                    content: wrapUntrustedFileContent(rawText),
                   }),
                 );
               } else if (file.images && file.images.length > 0) {
@@ -593,15 +625,15 @@ export async function handleOpenResponsesHttpRequest(
     user,
     sessionPrefix: "openresponses",
     defaultMessageChannel: "webchat",
-    useMessageChannelHeader: false,
+    useMessageChannelHeader: true,
   });
   const responseSessionScope = createResponseSessionScope({
     req,
+    auth: opts.auth,
     agentId: resolved.agentId,
-    user,
   });
   // Resolve session key: reuse previous_response_id only when it matches the
-  // same agent/user/requested-session scope as the current request.
+  // same auth-subject/agent/requested-session scope as the current request.
   const previousSessionKey = lookupResponseSession(
     payload.previous_response_id,
     responseSessionScope,
@@ -640,24 +672,33 @@ export async function handleOpenResponsesHttpRequest(
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const abortController = new AbortController();
   const streamParams =
     typeof payload.max_output_tokens === "number"
       ? { maxTokens: payload.max_output_tokens }
       : undefined;
 
   if (!stream) {
+    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        modelOverride,
         streamParams,
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
+        abortSignal: abortController.signal,
       });
+
+      if (abortController.signal.aborted) {
+        return true;
+      }
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
@@ -683,6 +724,7 @@ export async function handleOpenResponsesHttpRequest(
             createAssistantOutputItem({
               id: outputItemId,
               text: assistantText,
+              phase: "commentary",
               status: "completed",
             }),
           );
@@ -721,7 +763,12 @@ export async function handleOpenResponsesHttpRequest(
         model,
         status: "completed",
         output: [
-          createAssistantOutputItem({ id: outputItemId, text: content, status: "completed" }),
+          createAssistantOutputItem({
+            id: outputItemId,
+            text: content,
+            phase: "final_answer",
+            status: "completed",
+          }),
         ],
         usage,
       });
@@ -729,7 +776,21 @@ export async function handleOpenResponsesHttpRequest(
       rememberResponseSession();
       sendJson(res, 200, response);
     } catch (err) {
+      if (abortController.signal.aborted) {
+        return true;
+      }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
+      if (isClientToolNameConflictError(err)) {
+        const response = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: { code: "invalid_request_error", message: "invalid tool configuration" },
+        });
+        sendJson(res, 400, response);
+        return true;
+      }
       const response = createResponseResource({
         id: responseId,
         model,
@@ -739,6 +800,8 @@ export async function handleOpenResponsesHttpRequest(
       });
       rememberResponseSession();
       sendJson(res, 500, response);
+    } finally {
+      stopWatchingDisconnect();
     }
     return true;
   }
@@ -753,6 +816,7 @@ export async function handleOpenResponsesHttpRequest(
   let sawAssistantDelta = false;
   let closed = false;
   let unsubscribe = () => {};
+  let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
@@ -769,6 +833,7 @@ export async function handleOpenResponsesHttpRequest(
     const usage = finalUsage;
 
     closed = true;
+    stopWatchingDisconnect();
     unsubscribe();
 
     writeSseEvent(res, {
@@ -790,6 +855,7 @@ export async function handleOpenResponsesHttpRequest(
     const completedItem = createAssistantOutputItem({
       id: outputItemId,
       text: finalizeRequested.text,
+      phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
       status: "completed",
     });
 
@@ -863,6 +929,11 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      const text = evt.data?.text;
+      const replace = evt.data?.replace === true;
+      if (replace && typeof text === "string") {
+        accumulatedText = text;
+      }
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
@@ -891,7 +962,7 @@ export async function handleOpenResponsesHttpRequest(
     }
   });
 
-  req.on("close", () => {
+  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
   });
@@ -903,11 +974,14 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        modelOverride,
         streamParams,
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
+        abortSignal: abortController.signal,
       });
 
       finalUsage = extractUsageFromResult(result);
@@ -953,6 +1027,7 @@ export async function handleOpenResponsesHttpRequest(
         const completedItem = createAssistantOutputItem({
           id: outputItemId,
           text: finalText,
+          phase: "commentary",
           status: "completed",
         });
         writeSseEvent(res, {
@@ -994,6 +1069,7 @@ export async function handleOpenResponsesHttpRequest(
           usage,
         });
         closed = true;
+        stopWatchingDisconnect();
         unsubscribe();
         rememberResponseSession();
         writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
@@ -1031,12 +1107,30 @@ export async function handleOpenResponsesHttpRequest(
         });
       }
     } catch (err) {
-      logWarn(`openresponses: streaming response failed: ${String(err)}`);
-      if (closed) {
+      if (closed || abortController.signal.aborted) {
         return;
       }
+      logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
+      if (isClientToolNameConflictError(err)) {
+        const errorResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: { code: "invalid_request_error", message: "invalid tool configuration" },
+          usage: finalUsage,
+        });
+
+        writeSseEvent(res, { type: "response.failed", response: errorResponse });
+        emitAgentEvent({
+          runId: responseId,
+          stream: "lifecycle",
+          data: { phase: "error" },
+        });
+        return;
+      }
       const errorResponse = createResponseResource({
         id: responseId,
         model,

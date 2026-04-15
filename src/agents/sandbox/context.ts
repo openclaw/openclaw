@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
-import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
-import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import {
+  ensureBrowserControlAuth,
+  resolveBrowserControlAuth,
+} from "../../plugin-sdk/browser-control-auth.js";
+import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
+import { canExecRequestNode } from "../exec-defaults.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { requireSandboxBackendFactory } from "./backend.js";
@@ -20,6 +25,7 @@ import { ensureSandboxWorkspace } from "./workspace.js";
 
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  agentId: string;
   rawSessionKey: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -52,6 +58,16 @@ async function ensureSandboxWorkspaceLayout(params: {
           sourceWorkspaceDir: agentWorkspaceDir,
           targetWorkspaceDir: sandboxWorkspaceDir,
           config: params.config,
+          agentId: params.agentId,
+          eligibility: {
+            remote: getRemoteSkillEligibility({
+              advertiseExecNode: canExecRequestNode({
+                cfg: params.config,
+                sessionKey: rawSessionKey,
+                agentId: params.agentId,
+              }),
+            }),
+          },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -115,12 +131,13 @@ export async function resolveSandboxContext(params: {
   if (!resolved) {
     return null;
   }
-  const { rawSessionKey, cfg } = resolved;
+  const { rawSessionKey, cfg, runtime } = resolved;
 
   await maybePruneSandboxes(cfg);
 
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
+    agentId: runtime.agentId,
     rawSessionKey,
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -221,10 +238,11 @@ export async function ensureSandboxWorkspaceForSession(params: {
   if (!resolved) {
     return null;
   }
-  const { rawSessionKey, cfg } = resolved;
+  const { rawSessionKey, cfg, runtime } = resolved;
 
   const { workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
+    agentId: runtime.agentId,
     rawSessionKey,
     config: params.config,
     workspaceDir: params.workspaceDir,

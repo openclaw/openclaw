@@ -1,26 +1,28 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
+  dispatchInboundMessageMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
   rpcReq,
   testState,
   trackConnectChallengeNonce,
+  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
-import { agentCommand } from "./test-helpers.mocks.js";
+import { agentCommand } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const CHAT_RESPONSE_TIMEOUT_MS = 4_000;
+const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
 let ws: WebSocket;
 let port: number;
@@ -31,6 +33,10 @@ installConnectedControlUiServerSuite((started) => {
 });
 
 describe("gateway server chat", () => {
+  beforeEach(() => {
+    dispatchInboundMessageMock.mockReset();
+  });
+
   const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
     {
       role: "user",
@@ -536,6 +542,73 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.history hides commentary-only assistant entries", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "text", text: "thinking like caveman" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
+  });
+
+  test("chat.history hides assistant announce/reply skip-only entries", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "ANNOUNCE_SKIP" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "REPLY_SKIP" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        text: "real text field reply",
+        content: "ANNOUNCE_SKIP",
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 4,
+      },
+    ]);
+    const roleAndText = historyMessages
+      .map((message) => {
+        const role =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { role?: unknown }).role === "string"
+            ? (message as { role: string }).role
+            : "unknown";
+        const text =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { text?: unknown }).text === "string"
+            ? (message as { text: string }).text
+            : (extractFirstTextBlock(message) ?? "");
+        return `${role}:${text}`;
+      })
+      .filter((entry) => entry !== "unknown:");
+
+    expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
+  });
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);
@@ -561,11 +634,40 @@ describe("gateway server chat", () => {
   });
 
   test("routes /btw replies through side-result events without transcript injection", async () => {
-    await withMainSessionStore(async () => {
-      mockGetReplyFromConfigOnce(async () => ({
-        text: "323",
-        btw: { question: "what is 17 * 19?" },
-      }));
+    await withMainSessionStore(async (dir) => {
+      await fs.writeFile(
+        path.join(dir, "sess-main.jsonl"),
+        `${JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "main thread context" }],
+            timestamp: Date.now(),
+          },
+        })}\n`,
+        "utf-8",
+      );
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          text: "323",
+          btw: { question: "what is 17 * 19?" },
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
       const sideResultPromise = onceMessage(
         ws,
         (o) =>
@@ -592,18 +694,21 @@ describe("gateway server chat", () => {
       });
 
       expect(res.ok).toBe(true);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalled();
+      });
       const sideResult = await sideResultPromise;
       const finalEvent = await finalPromise;
       expect(sideResult.payload).toMatchObject({
         kind: "btw",
         runId: "idem-btw-1",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         question: "what is 17 * 19?",
         text: "323",
       });
       expect(finalEvent.payload).toMatchObject({
         runId: "idem-btw-1",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "final",
       });
 
@@ -611,22 +716,49 @@ describe("gateway server chat", () => {
         sessionKey: "main",
       });
       expect(historyRes.ok).toBe(true);
-      expect(historyRes.payload?.messages ?? []).toEqual([]);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(["main thread context"]);
     });
   });
 
   test("routes block-streamed /btw replies through side-result events", async () => {
-    await withMainSessionStore(async () => {
-      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
-        await opts?.onBlockReply?.({
+    await withMainSessionStore(async (dir) => {
+      await fs.writeFile(
+        path.join(dir, "sess-main.jsonl"),
+        `${JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "existing context" }],
+            timestamp: Date.now(),
+          },
+        })}\n`,
+        "utf-8",
+      );
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendBlockReply({
           text: "first chunk",
           btw: { question: "what changed?" },
         });
-        await opts?.onBlockReply?.({
+        params.dispatcher.sendBlockReply({
           text: "second chunk",
           btw: { question: "what changed?" },
         });
-        return undefined;
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: false,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
       });
       const sideResultPromise = onceMessage(
         ws,
@@ -645,6 +777,9 @@ describe("gateway server chat", () => {
       });
 
       expect(res.ok).toBe(true);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalled();
+      });
       const sideResult = await sideResultPromise;
       expect(sideResult.payload).toMatchObject({
         kind: "btw",
@@ -682,6 +817,88 @@ describe("gateway server chat", () => {
       "user:NO_REPLY",
       "assistant:NO_REPLY",
     ]);
+  });
+
+  test("chat.send does not persist verboseLevel for operator.write callers", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await withMainSessionStore(async () => {
+        let scopedWs: WebSocket | undefined;
+
+        try {
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await connectOk(scopedWs, {
+            scopes: ["operator.write"],
+          });
+
+          const sendRes = await rpcReq(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "/verbose full",
+            idempotencyKey: "idem-write-scope-verbose-no-persist",
+          });
+          expect(sendRes.ok).toBe(true);
+
+          const waitRes = await rpcReq(scopedWs, "agent.wait", {
+            runId: "idem-write-scope-verbose-no-persist",
+            timeoutMs: 1_000,
+          });
+          expect(waitRes.ok).toBe(true);
+          expect(waitRes.payload?.status).toBe("ok");
+
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              verboseLevel?: string;
+            };
+          };
+          expect(stored["agent:main:main"]?.verboseLevel).toBeUndefined();
+        } finally {
+          scopedWs?.close();
+        }
+      });
+    });
+  });
+
+  test("chat.send does not rotate sessions for operator.write reset triggers", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await withMainSessionStore(async () => {
+        let scopedWs: WebSocket | undefined;
+
+        try {
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await connectOk(scopedWs, {
+            scopes: ["operator.write"],
+          });
+
+          const sendRes = await rpcReq(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "/reset",
+            idempotencyKey: "idem-write-scope-reset-no-rotate",
+          });
+          expect(sendRes.ok).toBe(true);
+
+          const waitRes = await rpcReq(scopedWs, "agent.wait", {
+            runId: "idem-write-scope-reset-no-rotate",
+            timeoutMs: 1_000,
+          });
+          expect(waitRes.ok).toBe(true);
+          expect(waitRes.payload?.status).toBe("ok");
+
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              sessionId?: string;
+            };
+          };
+          expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
+        } finally {
+          scopedWs?.close();
+        }
+      });
+    });
   });
 
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {

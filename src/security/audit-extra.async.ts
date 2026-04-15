@@ -11,19 +11,26 @@ import { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "../agents/sandbox/constants
 import { execDockerRaw, type ExecDockerRawResult } from "../agents/sandbox/docker.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
+import { resolveSkillSource } from "../agents/skills/source.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
-import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   formatPermissionDetail,
   formatPermissionRemediation,
@@ -73,7 +80,7 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   if (!p.startsWith("~")) {
     return p;
   }
-  const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME.trim() : null;
+  const home = normalizeOptionalString(env.HOME) ?? null;
   if (!home) {
     return null;
   }
@@ -100,7 +107,7 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
   if (!Array.isArray(extensions)) {
     return [];
   }
-  return extensions.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return extensions.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
 }
 
 function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
@@ -115,6 +122,85 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
       return `  - [${finding.ruleId}] ${finding.message} (${normalizedPath}:${finding.line})`;
     })
     .join("\n");
+}
+
+function readChannelCommandSetting(
+  cfg: OpenClawConfig,
+  channelId: string,
+  key: "native" | "nativeSkills",
+): unknown {
+  const channelCfg = cfg.channels?.[channelId as keyof NonNullable<OpenClawConfig["channels"]>];
+  if (!channelCfg || typeof channelCfg !== "object" || Array.isArray(channelCfg)) {
+    return undefined;
+  }
+  const commands = (channelCfg as { commands?: unknown }).commands;
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
+    return undefined;
+  }
+  return (commands as Record<string, unknown>)[key];
+}
+
+async function isChannelPluginConfigured(
+  cfg: OpenClawConfig,
+  plugin: ReturnType<typeof listChannelPlugins>[number],
+): Promise<boolean> {
+  const accountIds = plugin.config.listAccountIds(cfg);
+  const candidates = accountIds.length > 0 ? accountIds : [undefined];
+  for (const accountId of candidates) {
+    const inspected =
+      plugin.config.inspectAccount?.(cfg, accountId) ??
+      (await inspectReadOnlyChannelAccount({
+        channelId: plugin.id,
+        cfg,
+        accountId,
+      }));
+    const inspectedRecord =
+      inspected && typeof inspected === "object" && !Array.isArray(inspected)
+        ? (inspected as Record<string, unknown>)
+        : null;
+    let resolvedAccount: unknown = inspected;
+    if (!resolvedAccount) {
+      try {
+        resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
+      } catch {
+        resolvedAccount = null;
+      }
+    }
+    let enabled =
+      typeof inspectedRecord?.enabled === "boolean"
+        ? inspectedRecord.enabled
+        : resolvedAccount != null;
+    if (
+      typeof inspectedRecord?.enabled !== "boolean" &&
+      resolvedAccount != null &&
+      plugin.config.isEnabled
+    ) {
+      try {
+        enabled = plugin.config.isEnabled(resolvedAccount, cfg);
+      } catch {
+        enabled = false;
+      }
+    }
+    let configured =
+      typeof inspectedRecord?.configured === "boolean"
+        ? inspectedRecord.configured
+        : resolvedAccount != null;
+    if (
+      typeof inspectedRecord?.configured !== "boolean" &&
+      resolvedAccount != null &&
+      plugin.config.isConfigured
+    ) {
+      try {
+        configured = await plugin.config.isConfigured(resolvedAccount, cfg);
+      } catch {
+        configured = false;
+      }
+    }
+    if (enabled && configured) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function listInstalledPluginDirs(params: {
@@ -157,7 +243,11 @@ function resolveToolPolicies(params: {
 }
 
 function normalizePluginIdSet(entries: string[]): Set<string> {
-  return new Set(entries.map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+  return new Set(
+    entries
+      .map((entry) => normalizeOptionalLowercaseString(entry))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
 }
 
 function resolveEnabledExtensionPluginIds(params: {
@@ -173,12 +263,16 @@ function resolveEnabledExtensionPluginIds(params: {
   const denySet = normalizePluginIdSet(normalized.deny);
   const entryById = new Map<string, { enabled?: boolean }>();
   for (const [id, entry] of Object.entries(normalized.entries)) {
-    entryById.set(id.trim().toLowerCase(), entry);
+    const normalizedId = normalizeOptionalLowercaseString(id);
+    if (!normalizedId) {
+      continue;
+    }
+    entryById.set(normalizedId, entry);
   }
 
   const enabled: string[] = [];
   for (const id of params.pluginDirs) {
-    const normalizedId = id.trim().toLowerCase();
+    const normalizedId = normalizeOptionalLowercaseString(id);
     if (!normalizedId) {
       continue;
     }
@@ -204,7 +298,9 @@ function collectAllowEntries(config?: { allow?: string[]; alsoAllow?: string[] }
   if (Array.isArray(config?.alsoAllow)) {
     out.push(...config.alsoAllow);
   }
-  return out.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  return out
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 function hasExplicitPluginAllow(params: {
@@ -247,16 +343,6 @@ function isPinnedRegistrySpec(spec: string): boolean {
   }
   const version = value.slice(at + 1).trim();
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
-}
-
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  try {
-    const raw = await fs.readFile(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function buildCodeSafetySummaryCacheKey(params: {
@@ -351,7 +437,7 @@ async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<st
 // --------------------------------------------------------------------------
 
 function normalizeDockerLabelValue(raw: string | undefined): string | null {
-  const trimmed = raw?.trim() ?? "";
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed || trimmed === "<no value>") {
     return null;
   }
@@ -407,8 +493,10 @@ async function readSandboxBrowserHashLabels(params: {
 }
 
 function parsePublishedHostFromDockerPortLine(line: string): string | null {
-  const trimmed = line.trim();
-  const rhs = trimmed.includes("->") ? (trimmed.split("->").at(-1)?.trim() ?? "") : trimmed;
+  const trimmed = normalizeOptionalString(line) ?? "";
+  const rhs = trimmed.includes("->")
+    ? (normalizeOptionalString(trimmed.split("->").at(-1)) ?? "")
+    : trimmed;
   if (!rhs) {
     return null;
   }
@@ -424,7 +512,7 @@ function parsePublishedHostFromDockerPortLine(line: string): string | null {
 }
 
 function isLoopbackPublishHost(host: string): boolean {
-  const normalized = host.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(host);
   return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
 }
 
@@ -543,75 +631,29 @@ export async function collectPluginsTrustFindings(params: {
     const allow = params.cfg.plugins?.allow;
     const allowConfigured = Array.isArray(allow) && allow.length > 0;
     if (!allowConfigured) {
-      const hasString = (value: unknown) => typeof value === "string" && value.trim().length > 0;
-      const hasSecretInput = (value: unknown) =>
-        hasConfiguredSecretInput(value, params.cfg.secrets?.defaults);
-      const hasAccountStringKey = (account: unknown, key: string) =>
-        Boolean(
-          account &&
-          typeof account === "object" &&
-          hasString((account as Record<string, unknown>)[key]),
-        );
-      const hasAccountSecretInputKey = (account: unknown, key: string) =>
-        Boolean(
-          account &&
-          typeof account === "object" &&
-          hasSecretInput((account as Record<string, unknown>)[key]),
-        );
-
-      const discordConfigured =
-        hasSecretInput(params.cfg.channels?.discord?.token) ||
-        Boolean(
-          params.cfg.channels?.discord?.accounts &&
-          Object.values(params.cfg.channels.discord.accounts).some((a) =>
-            hasAccountSecretInputKey(a, "token"),
-          ),
-        ) ||
-        hasString(process.env.DISCORD_BOT_TOKEN);
-
-      const telegramConfigured =
-        hasSecretInput(params.cfg.channels?.telegram?.botToken) ||
-        hasString(params.cfg.channels?.telegram?.tokenFile) ||
-        Boolean(
-          params.cfg.channels?.telegram?.accounts &&
-          Object.values(params.cfg.channels.telegram.accounts).some(
-            (a) => hasAccountSecretInputKey(a, "botToken") || hasAccountStringKey(a, "tokenFile"),
-          ),
-        ) ||
-        hasString(process.env.TELEGRAM_BOT_TOKEN);
-
-      const slackConfigured =
-        hasSecretInput(params.cfg.channels?.slack?.botToken) ||
-        hasSecretInput(params.cfg.channels?.slack?.appToken) ||
-        Boolean(
-          params.cfg.channels?.slack?.accounts &&
-          Object.values(params.cfg.channels.slack.accounts).some(
-            (a) =>
-              hasAccountSecretInputKey(a, "botToken") || hasAccountSecretInputKey(a, "appToken"),
-          ),
-        ) ||
-        hasString(process.env.SLACK_BOT_TOKEN) ||
-        hasString(process.env.SLACK_APP_TOKEN);
-
-      const skillCommandsLikelyExposed =
-        (discordConfigured &&
-          resolveNativeSkillsEnabled({
-            providerId: "discord",
-            providerSetting: params.cfg.channels?.discord?.commands?.nativeSkills,
-            globalSetting: params.cfg.commands?.nativeSkills,
-          })) ||
-        (telegramConfigured &&
-          resolveNativeSkillsEnabled({
-            providerId: "telegram",
-            providerSetting: params.cfg.channels?.telegram?.commands?.nativeSkills,
-            globalSetting: params.cfg.commands?.nativeSkills,
-          })) ||
-        (slackConfigured &&
-          resolveNativeSkillsEnabled({
-            providerId: "slack",
-            providerSetting: params.cfg.channels?.slack?.commands?.nativeSkills,
-            globalSetting: params.cfg.commands?.nativeSkills,
-          }));
+      const skillCommandsLikelyExposed = (
+        await Promise.all(
+          listChannelPlugins().map(async (plugin) => {
+            if (
+              plugin.capabilities.nativeCommands !== true &&
+              plugin.commands?.nativeSkillsAutoEnabled !== true
+            ) {
+              return false;
+            }
+            if (!(await isChannelPluginConfigured(params.cfg, plugin))) {
+              return false;
+            }
+            return resolveNativeSkillsEnabled({
+              providerId: plugin.id,
+              providerSetting: readChannelCommandSetting(params.cfg, plugin.id, "nativeSkills") as
+                | "auto"
+                | boolean
+                | undefined,
+              globalSetting: params.cfg.commands?.nativeSkills,
+            });
+          }),
+        )
+      ).some(Boolean);
 
       findings.push({
         checkId: "plugins.extensions_no_allowlist",
@@ -741,7 +783,6 @@ export async function collectPluginsTrustFindings(params: {
         continue;
       }
       const installPath = record.installPath ?? path.join(params.stateDir, "extensions", pluginId);
-      // eslint-disable-next-line no-await-in-loop
       const installedVersion = await readInstalledPackageVersion(installPath);
       if (!installedVersion || installedVersion === recordedVersion) {
         continue;
@@ -804,7 +845,6 @@ export async function collectPluginsTrustFindings(params: {
         continue;
       }
       const installPath = record.installPath ?? path.join(params.stateDir, "hooks", hookId);
-      // eslint-disable-next-line no-await-in-loop
       const installedVersion = await readInstalledPackageVersion(installPath);
       if (!installedVersion || installedVersion === recordedVersion) {
         continue;
@@ -921,7 +961,6 @@ export async function collectIncludeFilePermFindings(params: {
   }
 
   for (const p of includePaths) {
-    // eslint-disable-next-line no-await-in-loop
     const perms = await inspectPathPermissions(p, {
       env: params.env,
       platform: params.platform,
@@ -1027,7 +1066,12 @@ export async function collectStateDeepFilesystemFindings(params: {
 
   const agentIds = Array.isArray(params.cfg.agents?.list)
     ? params.cfg.agents?.list
-        .map((a) => (a && typeof a === "object" && typeof a.id === "string" ? a.id.trim() : ""))
+        .map(
+          (a) =>
+            normalizeOptionalString(
+              a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
+            ) ?? "",
+        )
         .filter(Boolean)
     : [];
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
@@ -1036,7 +1080,6 @@ export async function collectStateDeepFilesystemFindings(params: {
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
     const authPath = path.join(agentDir, "auth-profiles.json");
-    // eslint-disable-next-line no-await-in-loop
     const authPerms = await inspectPathPermissions(authPath, {
       env: params.env,
       platform: params.platform,
@@ -1075,7 +1118,6 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
 
     const storePath = path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
-    // eslint-disable-next-line no-await-in-loop
     const storePerms = await inspectPathPermissions(storePath, {
       env: params.env,
       platform: params.platform,
@@ -1100,8 +1142,7 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const logFile =
-    typeof params.cfg.logging?.file === "string" ? params.cfg.logging.file.trim() : "";
+  const logFile = normalizeOptionalString(params.cfg.logging?.file) ?? "";
   if (logFile) {
     const expanded = logFile.startsWith("~") ? expandTilde(logFile, params.env) : logFile;
     if (expanded) {
@@ -1261,7 +1302,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
     for (const entry of entries) {
-      if (entry.skill.source === "openclaw-bundled") {
+      if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
         continue;
       }
 

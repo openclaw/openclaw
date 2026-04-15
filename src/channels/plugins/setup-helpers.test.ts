@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   applySetupAccountConfigPatch,
+  clearSetupPromotionRuntimeModuleCache,
   createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -13,23 +19,91 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+const matrixSingleAccountKeysToMove = [
+  "allowBots",
+  "deviceId",
+  "deviceName",
+  "encryption",
+] as const;
+const matrixNamedAccountPromotionKeys = [
+  "accessToken",
+  "deviceId",
+  "deviceName",
+  "encryption",
+  "homeserver",
+  "userId",
+] as const;
+const telegramSingleAccountKeysToMove = ["streaming"] as const;
+
+function resolveMatrixSingleAccountPromotionTarget(params: {
+  channel: { defaultAccount?: string; accounts?: Record<string, unknown> };
+}): string {
+  const accounts = params.channel.accounts ?? {};
+  const normalizedDefaultAccount = params.channel.defaultAccount?.trim()
+    ? normalizeAccountId(params.channel.defaultAccount)
+    : undefined;
+  if (normalizedDefaultAccount) {
+    return (
+      Object.keys(accounts).find(
+        (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
+      ) ?? DEFAULT_ACCOUNT_ID
+    );
+  }
+  const namedAccounts = Object.keys(accounts).filter(Boolean);
+  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+}
+
+beforeAll(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          setup: {
+            singleAccountKeysToMove: matrixSingleAccountKeysToMove,
+            namedAccountPromotionKeys: matrixNamedAccountPromotionKeys,
+            resolveSingleAccountPromotionTarget: resolveMatrixSingleAccountPromotionTarget,
+          },
+        },
+      },
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          setup: {
+            singleAccountKeysToMove: telegramSingleAccountKeysToMove,
+          },
+        },
+      },
+    ]),
+  );
+});
+
+afterAll(() => {
+  clearSetupPromotionRuntimeModuleCache();
+  resetPluginRuntimeStateForTest();
+});
+
 describe("applySetupAccountConfigPatch", () => {
   it("patches top-level config for default account and enables channel", () => {
     const next = applySetupAccountConfigPatch({
       cfg: asConfig({
         channels: {
-          zalo: {
+          "demo-setup": {
             webhookPath: "/old",
             enabled: false,
           },
         },
       }),
-      channelKey: "zalo",
+      channelKey: "demo-setup",
       accountId: DEFAULT_ACCOUNT_ID,
       patch: { webhookPath: "/new", botToken: "tok" },
     });
 
-    expect(next.channels?.zalo).toMatchObject({
+    expect(next.channels?.["demo-setup"]).toMatchObject({
       enabled: true,
       webhookPath: "/new",
       botToken: "tok",
@@ -40,7 +114,7 @@ describe("applySetupAccountConfigPatch", () => {
     const next = applySetupAccountConfigPatch({
       cfg: asConfig({
         channels: {
-          zalo: {
+          "demo-setup": {
             enabled: false,
             accounts: {
               work: { botToken: "old", enabled: false },
@@ -48,12 +122,12 @@ describe("applySetupAccountConfigPatch", () => {
           },
         },
       }),
-      channelKey: "zalo",
+      channelKey: "demo-setup",
       accountId: "work",
       patch: { botToken: "new" },
     });
 
-    expect(next.channels?.zalo).toMatchObject({
+    expect(next.channels?.["demo-setup"]).toMatchObject({
       enabled: true,
       accounts: {
         work: { enabled: false, botToken: "new" },
@@ -65,19 +139,19 @@ describe("applySetupAccountConfigPatch", () => {
     const next = applySetupAccountConfigPatch({
       cfg: asConfig({
         channels: {
-          zalo: {
+          "demo-setup": {
             accounts: {
               personal: { botToken: "personal-token" },
             },
           },
         },
       }),
-      channelKey: "zalo",
+      channelKey: "demo-setup",
       accountId: "Work Team",
       patch: { botToken: "work-token" },
     });
 
-    expect(next.channels?.zalo).toMatchObject({
+    expect(next.channels?.["demo-setup"]).toMatchObject({
       accounts: {
         personal: { botToken: "personal-token" },
         "work-team": { enabled: true, botToken: "work-token" },
@@ -89,17 +163,17 @@ describe("applySetupAccountConfigPatch", () => {
 describe("createPatchedAccountSetupAdapter", () => {
   it("stores default-account patch at channel root", () => {
     const adapter = createPatchedAccountSetupAdapter({
-      channelKey: "zalo",
+      channelKey: "demo-setup",
       buildPatch: (input) => ({ botToken: input.token }),
     });
 
     const next = adapter.applyAccountConfig({
-      cfg: asConfig({ channels: { zalo: { enabled: false } } }),
+      cfg: asConfig({ channels: { "demo-setup": { enabled: false } } }),
       accountId: DEFAULT_ACCOUNT_ID,
       input: { name: "Personal", token: "tok" },
     });
 
-    expect(next.channels?.zalo).toMatchObject({
+    expect(next.channels?.["demo-setup"]).toMatchObject({
       enabled: true,
       name: "Personal",
       botToken: "tok",
@@ -108,14 +182,14 @@ describe("createPatchedAccountSetupAdapter", () => {
 
   it("migrates base name into the default account before patching a named account", () => {
     const adapter = createPatchedAccountSetupAdapter({
-      channelKey: "zalo",
+      channelKey: "demo-setup",
       buildPatch: (input) => ({ botToken: input.token }),
     });
 
     const next = adapter.applyAccountConfig({
       cfg: asConfig({
         channels: {
-          zalo: {
+          "demo-setup": {
             name: "Personal",
             accounts: {
               work: { botToken: "old" },
@@ -127,30 +201,30 @@ describe("createPatchedAccountSetupAdapter", () => {
       input: { name: "Work", token: "new" },
     });
 
-    expect(next.channels?.zalo).toMatchObject({
+    expect(next.channels?.["demo-setup"]).toMatchObject({
       accounts: {
         default: { name: "Personal" },
         work: { botToken: "old" },
         "work-team": { enabled: true, name: "Work", botToken: "new" },
       },
     });
-    expect(next.channels?.zalo).not.toHaveProperty("name");
+    expect(next.channels?.["demo-setup"]).not.toHaveProperty("name");
   });
 
   it("can store the default account in accounts.default", () => {
     const adapter = createPatchedAccountSetupAdapter({
-      channelKey: "whatsapp",
+      channelKey: "demo-accounts",
       alwaysUseAccounts: true,
       buildPatch: (input) => ({ authDir: input.authDir }),
     });
 
     const next = adapter.applyAccountConfig({
-      cfg: asConfig({ channels: { whatsapp: {} } }),
+      cfg: asConfig({ channels: { "demo-accounts": {} } }),
       accountId: DEFAULT_ACCOUNT_ID,
       input: { name: "Phone", authDir: "/tmp/auth" },
     });
 
-    expect(next.channels?.whatsapp).toMatchObject({
+    expect(next.channels?.["demo-accounts"]).toMatchObject({
       accounts: {
         default: {
           enabled: true,
@@ -159,8 +233,8 @@ describe("createPatchedAccountSetupAdapter", () => {
         },
       },
     });
-    expect(next.channels?.whatsapp).not.toHaveProperty("enabled");
-    expect(next.channels?.whatsapp).not.toHaveProperty("authDir");
+    expect(next.channels?.["demo-accounts"]).not.toHaveProperty("enabled");
+    expect(next.channels?.["demo-accounts"]).not.toHaveProperty("authDir");
   });
 });
 
@@ -270,7 +344,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
 describe("createEnvPatchedAccountSetupAdapter", () => {
   it("rejects env mode for named accounts and requires credentials otherwise", () => {
     const adapter = createEnvPatchedAccountSetupAdapter({
-      channelKey: "telegram",
+      channelKey: "demo-env",
       defaultAccountOnlyEnvError: "env only on default",
       missingCredentialError: "token required",
       hasCredentials: (input) => Boolean(input.token || input.tokenFile),
@@ -308,35 +382,35 @@ describe("prepareScopedSetupConfig", () => {
     const next = prepareScopedSetupConfig({
       cfg: asConfig({
         channels: {
-          bluebubbles: {
+          "demo-scoped": {
             name: "Personal",
           },
         },
       }),
-      channelKey: "bluebubbles",
+      channelKey: "demo-scoped",
       accountId: "Work Team",
       name: "Work",
       migrateBaseName: true,
     });
 
-    expect(next.channels?.bluebubbles).toMatchObject({
+    expect(next.channels?.["demo-scoped"]).toMatchObject({
       accounts: {
         default: { name: "Personal" },
         "work-team": { name: "Work" },
       },
     });
-    expect(next.channels?.bluebubbles).not.toHaveProperty("name");
+    expect(next.channels?.["demo-scoped"]).not.toHaveProperty("name");
   });
 
   it("keeps the base shape for the default account when migration is disabled", () => {
     const next = prepareScopedSetupConfig({
-      cfg: asConfig({ channels: { irc: { enabled: true } } }),
-      channelKey: "irc",
+      cfg: asConfig({ channels: { "demo-base": { enabled: true } } }),
+      channelKey: "demo-base",
       accountId: DEFAULT_ACCOUNT_ID,
       name: "Libera",
     });
 
-    expect(next.channels?.irc).toMatchObject({
+    expect(next.channels?.["demo-base"]).toMatchObject({
       enabled: true,
       name: "Libera",
     });

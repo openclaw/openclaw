@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import {
   type ActionGate,
@@ -8,6 +9,7 @@ import {
   readStringArrayParam,
   readStringParam,
   type DiscordActionConfig,
+  type OpenClawConfig,
 } from "../runtime-api.js";
 import {
   addRoleDiscord,
@@ -28,6 +30,7 @@ import {
   setChannelPermissionDiscord,
   uploadEmojiDiscord,
   uploadStickerDiscord,
+  resolveEventCoverImage,
 } from "../send.js";
 import { readDiscordParentIdParam } from "./runtime.shared.js";
 
@@ -35,6 +38,7 @@ export const discordGuildActionRuntime = {
   addRoleDiscord,
   createChannelDiscord,
   createScheduledEventDiscord,
+  resolveEventCoverImage,
   deleteChannelDiscord,
   editChannelDiscord,
   fetchChannelInfoDiscord,
@@ -92,6 +96,8 @@ export async function handleDiscordGuildAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
+  cfg?: OpenClawConfig,
+  options?: { mediaLocalRoots?: readonly string[] },
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
   switch (action) {
@@ -105,10 +111,14 @@ export async function handleDiscordGuildAction(
       const userId = readStringParam(params, "userId", {
         required: true,
       });
-      const member = accountId
-        ? await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId, { accountId })
+      const effectiveAccountId =
+        accountId ?? (cfg ? resolveDefaultDiscordAccountId(cfg) : undefined);
+      const member = effectiveAccountId
+        ? await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId, {
+            accountId: effectiveAccountId,
+          })
         : await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId);
-      const presence = getPresence(accountId, userId);
+      const presence = getPresence(effectiveAccountId, userId);
       const activities = presence?.activities ?? undefined;
       const status = presence?.status ?? undefined;
       return jsonResult({ ok: true, member, ...(presence ? { status, activities } : {}) });
@@ -292,8 +302,14 @@ export async function handleDiscordGuildAction(
       const description = readStringParam(params, "description");
       const channelId = readStringParam(params, "channelId");
       const location = readStringParam(params, "location");
+      const imageUrl = readStringParam(params, "image", { trim: false });
       const entityTypeRaw = readStringParam(params, "entityType");
       const entityType = entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
+      const image = imageUrl
+        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, {
+            localRoots: options?.mediaLocalRoots,
+          })
+        : undefined;
       const payload = {
         name,
         description,
@@ -302,6 +318,7 @@ export async function handleDiscordGuildAction(
         entity_type: entityType,
         channel_id: channelId,
         entity_metadata: entityType === 3 && location ? { location } : undefined,
+        image,
         privacy_level: 2,
       };
       const event = accountId

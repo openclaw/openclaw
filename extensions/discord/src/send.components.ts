@@ -7,7 +7,6 @@ import {
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
@@ -17,10 +16,12 @@ import {
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
+import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { sendMessageDiscord } from "./send.outbound.js";
 import {
   buildDiscordSendError,
   createDiscordClient,
-  parseAndResolveRecipient,
   resolveChannelId,
   resolveDiscordChannelType,
   toDiscordFileBlob,
@@ -41,6 +42,104 @@ function extractComponentAttachmentNames(spec: DiscordComponentMessageSpec): str
   return names;
 }
 
+function hasComponentAttachmentBlock(spec: DiscordComponentMessageSpec): boolean {
+  return (spec.blocks ?? []).some((block) => block.type === "file");
+}
+
+function withImplicitComponentAttachmentBlock(
+  spec: DiscordComponentMessageSpec,
+  attachmentName: string | undefined,
+): DiscordComponentMessageSpec {
+  if (!attachmentName || hasComponentAttachmentBlock(spec)) {
+    return spec;
+  }
+  // Discord File components must point at the uploaded attachment name. Add the
+  // matching file block automatically so callers do not have to duplicate it.
+  return {
+    ...spec,
+    blocks: [
+      ...(spec.blocks ?? []),
+      {
+        type: "file",
+        file: `attachment://${attachmentName}`,
+      },
+    ],
+  };
+}
+
+function hasClassicOnlyBlocks(spec: DiscordComponentMessageSpec): boolean {
+  return (spec.blocks ?? []).every((block) => block.type === "text" || block.type === "file");
+}
+
+function hasUnsupportedClassicFeatures(spec: DiscordComponentMessageSpec): boolean {
+  return Boolean(spec.modal || spec.container);
+}
+
+function hasAtMostOneNonSpoilerFile(spec: DiscordComponentMessageSpec): boolean {
+  let fileBlockCount = 0;
+  for (const block of spec.blocks ?? []) {
+    if (block.type !== "file") {
+      continue;
+    }
+    fileBlockCount += 1;
+    if (block.spoiler) {
+      return false;
+    }
+  }
+  return fileBlockCount <= 1;
+}
+
+type ClassicDiscordMessageDecision =
+  | {
+      mode: "classic";
+      reason: "plain-text-single-file";
+    }
+  | {
+      mode: "components";
+      reason: "unsupported-feature" | "unsupported-block" | "multiple-or-spoiler-files";
+    };
+
+/**
+ * Keep the downgrade rules explicit because this path is only safe when the
+ * spec means exactly what a plain Discord message can represent.
+ */
+function getClassicDiscordMessageDecision(
+  spec: DiscordComponentMessageSpec,
+): ClassicDiscordMessageDecision {
+  if (hasUnsupportedClassicFeatures(spec)) {
+    return { mode: "components", reason: "unsupported-feature" };
+  }
+  if (!hasClassicOnlyBlocks(spec)) {
+    return { mode: "components", reason: "unsupported-block" };
+  }
+  if (!hasAtMostOneNonSpoilerFile(spec)) {
+    return { mode: "components", reason: "multiple-or-spoiler-files" };
+  }
+  return { mode: "classic", reason: "plain-text-single-file" };
+}
+
+function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string {
+  const parts: string[] = [];
+  const addPart = (value: string | undefined) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || parts.includes(trimmed)) {
+      return;
+    }
+    parts.push(trimmed);
+  };
+
+  addPart(spec.text);
+  for (const block of spec.blocks ?? []) {
+    if (block.type === "text") {
+      addPart(block.text);
+    }
+  }
+  return parts.join("\n\n");
+}
+
 type DiscordComponentSendOpts = {
   cfg?: OpenClawConfig;
   accountId?: string;
@@ -51,7 +150,12 @@ type DiscordComponentSendOpts = {
   sessionKey?: string;
   agentId?: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   filename?: string;
 };
 
@@ -74,8 +178,47 @@ async function buildDiscordComponentPayload(params: {
   body: ReturnType<typeof stripUndefinedFields>;
   buildResult: ReturnType<typeof buildDiscordComponentMessage>;
 }> {
+  const messageReference = params.opts.replyTo
+    ? { message_id: params.opts.replyTo, fail_if_not_exists: false }
+    : undefined;
+
+  let spec = params.spec;
+  let resolvedFileName: string | undefined;
+  let files: MessagePayloadFile[] | undefined;
+  if (params.opts.mediaUrl) {
+    const media = await loadOutboundMediaFromUrl(params.opts.mediaUrl, {
+      mediaAccess: params.opts.mediaAccess,
+      mediaLocalRoots: params.opts.mediaLocalRoots,
+      mediaReadFile: params.opts.mediaReadFile,
+    });
+    const filenameOverride = params.opts.filename?.trim();
+    resolvedFileName = filenameOverride || media.fileName || "upload";
+    spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
+    const fileData = toDiscordFileBlob(media.buffer);
+    files = [{ data: fileData, name: resolvedFileName }];
+  }
+
+  const attachmentNames = extractComponentAttachmentNames(spec);
+  const uniqueAttachmentNames = [...new Set(attachmentNames)];
+  if (uniqueAttachmentNames.length > 1) {
+    throw new Error(
+      "Discord component attachments currently support a single file. Use media-gallery for multiple files.",
+    );
+  }
+  const expectedAttachmentName = uniqueAttachmentNames[0];
+  if (expectedAttachmentName && resolvedFileName && expectedAttachmentName !== resolvedFileName) {
+    throw new Error(
+      `Component file block expects attachment "${expectedAttachmentName}", but the uploaded file is "${resolvedFileName}". Update components.blocks[].file or provide a matching filename.`,
+    );
+  }
+  if (!params.opts.mediaUrl && expectedAttachmentName) {
+    throw new Error(
+      "Discord component file blocks require a media attachment (media/path/filePath).",
+    );
+  }
+
   const buildResult = buildDiscordComponentMessage({
-    spec: params.spec,
+    spec,
     sessionKey: params.opts.sessionKey,
     agentId: params.opts.agentId,
     accountId: params.accountId,
@@ -84,37 +227,6 @@ async function buildDiscordComponentPayload(params: {
   const finalFlags = params.opts.silent
     ? (flags ?? 0) | SUPPRESS_NOTIFICATIONS_FLAG
     : (flags ?? undefined);
-  const messageReference = params.opts.replyTo
-    ? { message_id: params.opts.replyTo, fail_if_not_exists: false }
-    : undefined;
-
-  const attachmentNames = extractComponentAttachmentNames(params.spec);
-  const uniqueAttachmentNames = [...new Set(attachmentNames)];
-  if (uniqueAttachmentNames.length > 1) {
-    throw new Error(
-      "Discord component attachments currently support a single file. Use media-gallery for multiple files.",
-    );
-  }
-  const expectedAttachmentName = uniqueAttachmentNames[0];
-  let files: MessagePayloadFile[] | undefined;
-  if (params.opts.mediaUrl) {
-    const media = await loadWebMedia(params.opts.mediaUrl, {
-      localRoots: params.opts.mediaLocalRoots,
-    });
-    const filenameOverride = params.opts.filename?.trim();
-    const fileName = filenameOverride || media.fileName || "upload";
-    if (expectedAttachmentName && expectedAttachmentName !== fileName) {
-      throw new Error(
-        `Component file block expects attachment "${expectedAttachmentName}", but the uploaded file is "${fileName}". Update components.blocks[].file or provide a matching filename.`,
-      );
-    }
-    const fileData = toDiscordFileBlob(media.buffer);
-    files = [{ data: fileData, name: fileName }];
-  } else if (expectedAttachmentName) {
-    throw new Error(
-      "Discord component file blocks require a media attachment (media/path/filePath).",
-    );
-  }
 
   const payload: MessagePayloadObject = {
     components: buildResult.components,
@@ -134,6 +246,23 @@ export async function sendDiscordComponentMessage(
   spec: DiscordComponentMessageSpec,
   opts: DiscordComponentSendOpts = {},
 ): Promise<DiscordSendResult> {
+  const classicDecision = getClassicDiscordMessageDecision(spec);
+  if (opts.mediaUrl && classicDecision.mode === "classic") {
+    return await sendMessageDiscord(to, collapseClassicComponentText(spec), {
+      cfg: opts.cfg,
+      accountId: opts.accountId,
+      token: opts.token,
+      rest: opts.rest,
+      mediaUrl: opts.mediaUrl,
+      filename: opts.filename,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+      mediaAccess: opts.mediaAccess,
+      replyTo: opts.replyTo,
+      silent: opts.silent,
+    });
+  }
+
   const cfg = opts.cfg ?? loadConfig();
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient(opts, cfg);

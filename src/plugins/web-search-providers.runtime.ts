@@ -1,99 +1,57 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { createPluginLoaderLogger } from "./logger.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import { type PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
+import {
+  mapRegistryProviders,
+  resolveManifestDeclaredWebProviderCandidatePluginIds,
+} from "./web-provider-resolution-shared.js";
+import {
+  createWebProviderSnapshotCache,
+  resolvePluginWebProviders,
+  resolveRuntimeWebProviders,
+} from "./web-provider-runtime-shared.js";
 import {
   resolveBundledWebSearchResolutionConfig,
   sortWebSearchProviders,
 } from "./web-search-providers.shared.js";
 
-const log = createSubsystemLogger("plugins");
-type WebSearchProviderSnapshotCacheEntry = {
-  expiresAt: number;
-  providers: PluginWebSearchProviderEntry[];
-};
-const webSearchProviderSnapshotCache = new WeakMap<
-  OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, Map<string, WebSearchProviderSnapshotCacheEntry>>
->();
+let webSearchProviderSnapshotCache = createWebProviderSnapshotCache<PluginWebSearchProviderEntry>();
 
-const DEFAULT_DISCOVERY_CACHE_MS = 1000;
-const DEFAULT_MANIFEST_CACHE_MS = 1000;
-
-function shouldUseWebSearchProviderSnapshotCache(env: NodeJS.ProcessEnv): boolean {
-  if (env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim()) {
-    return false;
-  }
-  if (env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim()) {
-    return false;
-  }
-  const discoveryCacheMs = env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS?.trim();
-  if (discoveryCacheMs === "0") {
-    return false;
-  }
-  const manifestCacheMs = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
-  if (manifestCacheMs === "0") {
-    return false;
-  }
-  return true;
+function resetWebSearchProviderSnapshotCacheForTests() {
+  webSearchProviderSnapshotCache = createWebProviderSnapshotCache<PluginWebSearchProviderEntry>();
 }
 
-function resolveWebSearchProviderSnapshotCacheTtlMs(env: NodeJS.ProcessEnv): number {
-  const discoveryCacheMs = resolveCacheMs(
-    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS,
-    DEFAULT_DISCOVERY_CACHE_MS,
-  );
-  const manifestCacheMs = resolveCacheMs(
-    env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
-    DEFAULT_MANIFEST_CACHE_MS,
-  );
-  return Math.min(discoveryCacheMs, manifestCacheMs);
-}
+export const __testing = {
+  resetWebSearchProviderSnapshotCacheForTests,
+} as const;
 
-function resolveCacheMs(rawValue: string | undefined, defaultMs: number): number {
-  const raw = rawValue?.trim();
-  if (raw === "" || raw === "0") {
-    return 0;
-  }
-  if (!raw) {
-    return defaultMs;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
-    return defaultMs;
-  }
-  return Math.max(0, parsed);
-}
-
-function buildWebSearchSnapshotCacheKey(params: {
-  config?: OpenClawConfig;
+function resolveWebSearchCandidatePluginIds(params: {
+  config?: PluginLoadOptions["config"];
   workspaceDir?: string;
-  bundledAllowlistCompat?: boolean;
-  env: NodeJS.ProcessEnv;
-}): string {
-  const effectiveVitest = params.env.VITEST ?? process.env.VITEST ?? "";
-  return JSON.stringify({
-    workspaceDir: params.workspaceDir ?? "",
-    bundledAllowlistCompat: params.bundledAllowlistCompat === true,
-    config: params.config ?? null,
-    env: {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE:
-        params.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE ?? "",
-      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE:
-        params.env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE ?? "",
-      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: params.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS ?? "",
-      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: params.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ?? "",
-      OPENCLAW_HOME: params.env.OPENCLAW_HOME ?? "",
-      OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR ?? "",
-      OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH ?? "",
-      HOME: params.env.HOME ?? "",
-      USERPROFILE: params.env.USERPROFILE ?? "",
-      VITEST: effectiveVitest,
-    },
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+  origin?: PluginManifestRecord["origin"];
+}): string[] | undefined {
+  return resolveManifestDeclaredWebProviderCandidatePluginIds({
+    contract: "webSearchProviders",
+    configKey: "webSearch",
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
+    origin: params.origin,
+  });
+}
+
+function mapRegistryWebSearchProviders(params: {
+  registry: ReturnType<typeof loadOpenClawPlugins>;
+  onlyPluginIds?: readonly string[];
+}): PluginWebSearchProviderEntry[] {
+  return mapRegistryProviders({
+    entries: params.registry.webSearchProviders,
+    onlyPluginIds: params.onlyPluginIds,
+    sortProviders: sortWebSearchProviders,
   });
 }
 
@@ -102,69 +60,18 @@ export function resolvePluginWebSearchProviders(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
+  onlyPluginIds?: readonly string[];
   activate?: boolean;
   cache?: boolean;
+  mode?: "runtime" | "setup";
+  origin?: PluginManifestRecord["origin"];
 }): PluginWebSearchProviderEntry[] {
-  const env = params.env ?? process.env;
-  const cacheOwnerConfig = params.config;
-  const shouldMemoizeSnapshot =
-    params.activate !== true &&
-    params.cache !== true &&
-    shouldUseWebSearchProviderSnapshotCache(env);
-  const cacheKey = buildWebSearchSnapshotCacheKey({
-    config: cacheOwnerConfig,
-    workspaceDir: params.workspaceDir,
-    bundledAllowlistCompat: params.bundledAllowlistCompat,
-    env,
+  return resolvePluginWebProviders(params, {
+    snapshotCache: webSearchProviderSnapshotCache,
+    resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
+    resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
+    mapRegistryProviders: mapRegistryWebSearchProviders,
   });
-  if (cacheOwnerConfig && shouldMemoizeSnapshot) {
-    const configCache = webSearchProviderSnapshotCache.get(cacheOwnerConfig);
-    const envCache = configCache?.get(env);
-    const cached = envCache?.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.providers;
-    }
-  }
-  const { config } = resolveBundledWebSearchResolutionConfig({
-    ...params,
-    env,
-  });
-  const registry = loadOpenClawPlugins({
-    config,
-    workspaceDir: params.workspaceDir,
-    env,
-    cache: params.cache ?? false,
-    activate: params.activate ?? false,
-    logger: createPluginLoaderLogger(log),
-  });
-
-  const resolved = sortWebSearchProviders(
-    registry.webSearchProviders.map((entry) => ({
-      ...entry.provider,
-      pluginId: entry.pluginId,
-    })),
-  );
-  if (cacheOwnerConfig && shouldMemoizeSnapshot) {
-    const ttlMs = resolveWebSearchProviderSnapshotCacheTtlMs(env);
-    let configCache = webSearchProviderSnapshotCache.get(cacheOwnerConfig);
-    if (!configCache) {
-      configCache = new WeakMap<
-        NodeJS.ProcessEnv,
-        Map<string, WebSearchProviderSnapshotCacheEntry>
-      >();
-      webSearchProviderSnapshotCache.set(cacheOwnerConfig, configCache);
-    }
-    let envCache = configCache.get(env);
-    if (!envCache) {
-      envCache = new Map<string, WebSearchProviderSnapshotCacheEntry>();
-      configCache.set(env, envCache);
-    }
-    envCache.set(cacheKey, {
-      expiresAt: Date.now() + ttlMs,
-      providers: resolved,
-    });
-  }
-  return resolved;
 }
 
 export function resolveRuntimeWebSearchProviders(params: {
@@ -172,15 +79,13 @@ export function resolveRuntimeWebSearchProviders(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
+  onlyPluginIds?: readonly string[];
+  origin?: PluginManifestRecord["origin"];
 }): PluginWebSearchProviderEntry[] {
-  const runtimeProviders = getActivePluginRegistry()?.webSearchProviders ?? [];
-  if (runtimeProviders.length > 0) {
-    return sortWebSearchProviders(
-      runtimeProviders.map((entry) => ({
-        ...entry.provider,
-        pluginId: entry.pluginId,
-      })),
-    );
-  }
-  return resolvePluginWebSearchProviders(params);
+  return resolveRuntimeWebProviders(params, {
+    snapshotCache: webSearchProviderSnapshotCache,
+    resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
+    resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
+    mapRegistryProviders: mapRegistryWebSearchProviders,
+  });
 }

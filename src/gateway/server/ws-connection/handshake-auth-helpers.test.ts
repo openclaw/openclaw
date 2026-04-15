@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/index.js";
+import type { ConnectParams } from "../../protocol/schema/types.js";
 import {
+  BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX,
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
   resolveHandshakeBrowserSecurityContext,
+  resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
-  shouldSkipBackendSelfPairing,
+  shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 
 function createRateLimiter(): AuthRateLimiter {
@@ -35,9 +37,18 @@ describe("handshake auth helpers", () => {
     expect(resolved).toMatchObject({
       hasBrowserOriginHeader: true,
       enforceOriginCheckForAnyClient: true,
-      rateLimitClientIp: BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
+      rateLimitClientIp: `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}https://app.example`,
       authRateLimiter: browserRateLimiter,
     });
+  });
+
+  it("falls back to the legacy synthetic ip when the browser origin is invalid", () => {
+    const resolved = resolveHandshakeBrowserSecurityContext({
+      requestOrigin: "not a url",
+      clientIp: "127.0.0.1",
+    });
+
+    expect(resolved.rateLimitClientIp).toBe(BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP);
   });
 
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {
@@ -68,10 +79,10 @@ describe("handshake auth helpers", () => {
     });
   });
 
-  it("allows silent local pairing only for not-paired and scope upgrades", () => {
+  it("allows silent local pairing for not-paired, scope-upgrade and role-upgrade", () => {
     expect(
       shouldAllowSilentLocalPairing({
-        isLocalClient: true,
+        locality: "direct_local",
         hasBrowserOriginHeader: false,
         isControlUi: false,
         isWebchat: false,
@@ -80,7 +91,34 @@ describe("handshake auth helpers", () => {
     ).toBe(true);
     expect(
       shouldAllowSilentLocalPairing({
-        isLocalClient: true,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "role-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "browser_container_local",
+        hasBrowserOriginHeader: true,
+        isControlUi: true,
+        isWebchat: true,
+        reason: "not-paired",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "direct_local",
         hasBrowserOriginHeader: false,
         isControlUi: false,
         isWebchat: false,
@@ -88,38 +126,316 @@ describe("handshake auth helpers", () => {
       }),
     ).toBe(false);
   });
+  it("rejects silent role-upgrade for remote clients", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "role-upgrade",
+      }),
+    ).toBe(false);
+  });
 
-  it("skips backend self-pairing for local trusted backend clients", () => {
+  it("classifies direct local requests ahead of any Docker CLI fallback", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    } as ConnectParams;
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: true,
+        requestHost: "gateway.example",
+        remoteAddress: "203.0.113.20",
+        hasProxyHeaders: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "token",
+      }),
+    ).toBe("direct_local");
+  });
+
+  it("classifies Docker-published loopback Control UI as browser-container-local", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    } as ConnectParams;
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "127.0.0.1:18789",
+        requestOrigin: "http://127.0.0.1:18789",
+        remoteAddress: "172.17.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("browser_container_local");
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "localhost:18789",
+        requestOrigin: "http://localhost:18789",
+        remoteAddress: "172.17.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: true,
+        authMethod: "password",
+      }),
+    ).toBe("browser_container_local");
+  });
+
+  it("keeps Docker-published non-loopback Control UI origins remote", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    } as ConnectParams;
+    const base = {
+      connectParams,
+      isLocalClient: false,
+      remoteAddress: "172.17.0.1",
+      hasProxyHeaders: false,
+      hasBrowserOriginHeader: true,
+      sharedAuthOk: true,
+      authMethod: "token" as const,
+    };
+
+    expect(
+      resolvePairingLocality({
+        ...base,
+        requestHost: "192.168.1.10:18789",
+        requestOrigin: "http://192.168.1.10:18789",
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        ...base,
+        requestHost: "127.0.0.1:18789",
+        requestOrigin: "https://app.example",
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        ...base,
+        requestHost: "127.0.0.1:18789",
+        requestOrigin: "http://127.0.0.1:18789",
+        hasProxyHeaders: true,
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        ...base,
+        requestHost: "127.0.0.1:18789",
+        requestOrigin: "http://127.0.0.1:18789",
+        sharedAuthOk: false,
+      }),
+    ).toBe("remote");
+  });
+
+  it("keeps non-Control-UI clients remote for browser-container-local conditions", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
         mode: GATEWAY_CLIENT_MODES.BACKEND,
       },
     } as ConnectParams;
-
     expect(
-      shouldSkipBackendSelfPairing({
+      resolvePairingLocality({
         connectParams,
-        isLocalClient: true,
+        isLocalClient: false,
+        requestHost: "127.0.0.1:18789",
+        requestOrigin: "http://127.0.0.1:18789",
+        remoteAddress: "172.17.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+  });
+
+  it("classifies CLI loopback/private-host connects as cli_container_local only with shared auth", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    } as ConnectParams;
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "172.17.0.2:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("cli_container_local");
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "172.17.0.2:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "gateway.example",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "172.17.0.2:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "device-token",
+      }),
+    ).toBe("remote");
+  });
+
+  it("keeps non-CLI clients remote when only the Docker CLI fallback conditions match", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "172.17.0.2:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+  });
+
+  it("skips backend self-pairing only for direct-local backend clients", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
         authMethod: "token",
       }),
     ).toBe(true);
     expect(
-      shouldSkipBackendSelfPairing({
+      shouldSkipLocalBackendSelfPairing({
         connectParams,
-        isLocalClient: true,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "password",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
         hasBrowserOriginHeader: false,
         sharedAuthOk: false,
         authMethod: "device-token",
       }),
     ).toBe(true);
     expect(
-      shouldSkipBackendSelfPairing({
+      shouldSkipLocalBackendSelfPairing({
         connectParams,
-        isLocalClient: false,
+        locality: "remote",
         hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "device-token",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "cli_container_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not skip backend self-pairing for CLI clients", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    } as ConnectParams;
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects pairing bypass when browser origin header is present", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: true,
         sharedAuthOk: true,
         authMethod: "token",
       }),

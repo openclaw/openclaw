@@ -5,13 +5,15 @@ import {
   normalizePluginDiscoveryResult,
   runProviderCatalog,
 } from "./provider-discovery.js";
-import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
   id: string;
   label?: string;
   order?: ProviderDiscoveryOrder;
   mode?: "catalog" | "discovery";
+  aliases?: string[];
+  hookAliases?: string[];
 }): ProviderPlugin {
   const hook = {
     ...(params.order ? { order: params.order } : {}),
@@ -21,6 +23,8 @@ function makeProvider(params: {
     id: params.id,
     label: params.label ?? params.id,
     auth: [],
+    ...(params.aliases ? { aliases: params.aliases } : {}),
+    ...(params.hookAliases ? { hookAliases: params.hookAliases } : {}),
     ...(params.mode === "discovery" ? { discovery: hook } : { catalog: hook }),
   };
 }
@@ -33,55 +37,160 @@ function makeModelProviderConfig(overrides?: Partial<ModelProviderConfig>): Mode
   };
 }
 
+function expectGroupedProviderIds(
+  providers: readonly ProviderPlugin[],
+  expected: Record<ProviderDiscoveryOrder | "late", readonly string[]>,
+) {
+  const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
+  const actual = {
+    simple: grouped.simple.map((provider) => provider.id),
+    profile: grouped.profile.map((provider) => provider.id),
+    paired: grouped.paired.map((provider) => provider.id),
+    late: grouped.late.map((provider) => provider.id),
+  };
+  expect(actual).toEqual(expected);
+}
+
+function createCatalogRuntimeContext() {
+  return {
+    config: {},
+    env: {},
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    resolveProviderAuth: () => ({
+      apiKey: undefined,
+      discoveryApiKey: undefined,
+      mode: "none" as const,
+      source: "none" as const,
+    }),
+  };
+}
+
+function createCatalogProvider(params: {
+  id?: string;
+  catalogRun?: () => Promise<ProviderCatalogResult>;
+  discoveryRun?: () => Promise<ProviderCatalogResult>;
+}) {
+  return {
+    id: params.id ?? "demo",
+    label: "Demo",
+    auth: [],
+    ...(params.catalogRun ? { catalog: { run: params.catalogRun } } : {}),
+    ...(params.discoveryRun ? { discovery: { run: params.discoveryRun } } : {}),
+  };
+}
+
+function expectNormalizedDiscoveryResult(params: {
+  provider: ProviderPlugin;
+  result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
+  expected: Record<string, unknown>;
+}) {
+  expect(
+    normalizePluginDiscoveryResult({
+      provider: params.provider,
+      result: params.result,
+    }),
+  ).toEqual(params.expected);
+}
+
+async function expectProviderCatalogResult(params: {
+  provider: ProviderPlugin;
+  expected: Record<string, unknown>;
+}) {
+  await expect(
+    runProviderCatalog({
+      provider: params.provider,
+      ...createCatalogRuntimeContext(),
+    }),
+  ).resolves.toEqual(params.expected);
+}
+
 describe("groupPluginDiscoveryProvidersByOrder", () => {
-  it("groups providers by declared order and sorts labels within each group", () => {
-    const grouped = groupPluginDiscoveryProvidersByOrder([
-      makeProvider({ id: "late-b", label: "Zulu" }),
-      makeProvider({ id: "late-a", label: "Alpha" }),
-      makeProvider({ id: "paired", label: "Paired", order: "paired" }),
-      makeProvider({ id: "profile", label: "Profile", order: "profile" }),
-      makeProvider({ id: "simple", label: "Simple", order: "simple" }),
-    ]);
-
-    expect(grouped.simple.map((provider) => provider.id)).toEqual(["simple"]);
-    expect(grouped.profile.map((provider) => provider.id)).toEqual(["profile"]);
-    expect(grouped.paired.map((provider) => provider.id)).toEqual(["paired"]);
-    expect(grouped.late.map((provider) => provider.id)).toEqual(["late-a", "late-b"]);
-  });
-
-  it("uses the legacy discovery hook when catalog is absent", () => {
-    const grouped = groupPluginDiscoveryProvidersByOrder([
-      makeProvider({ id: "legacy", label: "Legacy", order: "profile", mode: "discovery" }),
-    ]);
-
-    expect(grouped.profile.map((provider) => provider.id)).toEqual(["legacy"]);
+  it.each([
+    {
+      name: "groups providers by declared order and sorts labels within each group",
+      providers: [
+        makeProvider({ id: "late-b", label: "Zulu" }),
+        makeProvider({ id: "late-a", label: "Alpha" }),
+        makeProvider({ id: "paired", label: "Paired", order: "paired" }),
+        makeProvider({ id: "profile", label: "Profile", order: "profile" }),
+        makeProvider({ id: "simple", label: "Simple", order: "simple" }),
+      ],
+      expected: {
+        simple: ["simple"],
+        profile: ["profile"],
+        paired: ["paired"],
+        late: ["late-a", "late-b"],
+      },
+    },
+    {
+      name: "uses the legacy discovery hook when catalog is absent",
+      providers: [
+        makeProvider({ id: "legacy", label: "Legacy", order: "profile", mode: "discovery" }),
+      ],
+      expected: {
+        simple: [],
+        profile: ["legacy"],
+        paired: [],
+        late: [],
+      },
+    },
+  ] as const)("$name", ({ providers, expected }) => {
+    expectGroupedProviderIds(providers, expected);
   });
 });
 
 describe("normalizePluginDiscoveryResult", () => {
-  it("maps a single provider result to the plugin id", () => {
-    const provider = makeProvider({ id: "Ollama" });
-    const normalized = normalizePluginDiscoveryResult({
-      provider,
+  it.each([
+    {
+      name: "maps a single provider result to the plugin id",
+      provider: makeProvider({ id: "Ollama" }),
       result: {
         provider: makeModelProviderConfig({
           baseUrl: "http://127.0.0.1:11434",
           api: "ollama",
         }),
       },
-    });
-
-    expect(normalized).toEqual({
-      ollama: {
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
-        models: [],
+      expected: {
+        ollama: {
+          baseUrl: "http://127.0.0.1:11434",
+          api: "ollama",
+          models: [],
+        },
       },
-    });
-  });
-
-  it("normalizes keys for multi-provider discovery results", () => {
-    const normalized = normalizePluginDiscoveryResult({
+    },
+    {
+      name: "maps a single provider result to aliases and hook aliases",
+      provider: makeProvider({
+        id: "Anthropic",
+        aliases: ["anthropic-api"],
+        hookAliases: ["claude-cli"],
+      }),
+      result: {
+        provider: makeModelProviderConfig({
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+        }),
+      },
+      expected: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [],
+        },
+        "anthropic-api": {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [],
+        },
+        "claude-cli": {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [],
+        },
+      },
+    },
+    {
+      name: "normalizes keys for multi-provider discovery results",
       provider: makeProvider({ id: "ignored" }),
       result: {
         providers: {
@@ -89,14 +198,15 @@ describe("normalizePluginDiscoveryResult", () => {
           "": makeModelProviderConfig({ baseUrl: "http://ignored" }),
         },
       },
-    });
-
-    expect(normalized).toEqual({
-      vllm: {
-        baseUrl: "http://127.0.0.1:8000/v1",
-        models: [],
+      expected: {
+        vllm: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          models: [],
+        },
       },
-    });
+    },
+  ] as const)("$name", ({ provider, result, expected }) => {
+    expectNormalizedDiscoveryResult({ provider, result, expected });
   });
 });
 
@@ -109,29 +219,16 @@ describe("runProviderCatalog", () => {
       provider: makeModelProviderConfig({ baseUrl: "http://discovery.example/v1" }),
     });
 
-    const result = await runProviderCatalog({
-      provider: {
-        id: "demo",
-        label: "Demo",
-        auth: [],
-        catalog: { run: catalogRun },
-        discovery: { run: discoveryRun },
-      },
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({
-        apiKey: undefined,
-        discoveryApiKey: undefined,
-        mode: "none",
-        source: "none",
+    await expectProviderCatalogResult({
+      provider: createCatalogProvider({
+        catalogRun,
+        discoveryRun,
       }),
-    });
-
-    expect(result).toEqual({
-      provider: {
-        baseUrl: "http://catalog.example/v1",
-        models: [],
+      expected: {
+        provider: {
+          baseUrl: "http://catalog.example/v1",
+          models: [],
+        },
       },
     });
   });

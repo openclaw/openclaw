@@ -5,7 +5,12 @@ import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
-const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const probeGatewayReachable = vi.hoisted(() =>
+  vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
+);
+const waitForGatewayReachable = vi.hoisted(() =>
+  vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
+);
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -58,7 +63,7 @@ vi.mock("../commands/onboard-helpers.js", () => ({
     httpUrl: "http://127.0.0.1:18789",
     wsUrl: "ws://127.0.0.1:18789",
   })),
-  waitForGatewayReachable: vi.fn(async () => {}),
+  waitForGatewayReachable,
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
@@ -84,7 +89,7 @@ vi.mock("../commands/health.js", () => ({
 }));
 
 vi.mock("../commands/onboard-search.js", () => ({
-  SEARCH_PROVIDER_OPTIONS: [],
+  listSearchProviderOptions: () => [],
   resolveSearchProviderOptions: () => [],
   hasExistingKey,
   hasKeyInEnv,
@@ -176,10 +181,65 @@ function expectFirstOnboardingInstallPlanCallOmitsToken() {
   expect(firstArg && "token" in firstArg).toBe(false);
 }
 
+type AdvancedFinalizeArgs = {
+  nextConfig?: OpenClawConfig;
+  prompter?: ReturnType<typeof buildWizardPrompter>;
+  runtime?: RuntimeEnv;
+  installDaemon?: boolean;
+};
+
+function createLaterPrompter() {
+  return buildWizardPrompter({
+    select: vi.fn(async () => "later") as never,
+    confirm: vi.fn(async () => false),
+  });
+}
+
+function createEnabledFirecrawlSearchConfig(): OpenClawConfig {
+  return {
+    tools: {
+      web: {
+        search: {
+          provider: "firecrawl",
+          enabled: true,
+        },
+      },
+    },
+  };
+}
+
+function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
+  return {
+    flow: "advanced" as const,
+    opts: {
+      acceptRisk: true,
+      authChoice: "skip" as const,
+      installDaemon: params.installDaemon ?? false,
+      skipHealth: true,
+      skipUi: true,
+    },
+    baseConfig: {},
+    nextConfig: params.nextConfig ?? {},
+    workspaceDir: "/tmp",
+    settings: {
+      port: 18789,
+      bind: "loopback" as const,
+      authMode: "token" as const,
+      gatewayToken: undefined,
+      tailscaleMode: "off" as const,
+      tailscaleResetOnExit: false,
+    },
+    prompter: params.prompter ?? createLaterPrompter(),
+    runtime: params.runtime ?? createRuntime(),
+  };
+}
+
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     runTui.mockClear();
     probeGatewayReachable.mockClear();
+    waitForGatewayReachable.mockReset();
+    waitForGatewayReachable.mockResolvedValue({ ok: true });
     setupWizardShellCompletion.mockClear();
     buildGatewayInstallPlan.mockClear();
     gatewayServiceInstall.mockClear();
@@ -381,43 +441,14 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("reports selected providers blocked by plugin policy as unavailable", async () => {
-    const prompter = buildWizardPrompter({
-      select: vi.fn(async () => "later") as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {
-        tools: {
-          web: {
-            search: {
-              provider: "firecrawl",
-              enabled: true,
-            },
-          },
-        },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(
+      createAdvancedFinalizeArgs({
+        nextConfig: createEnabledFirecrawlSearchConfig(),
+        prompter,
+      }),
+    );
 
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("selected but unavailable under the current plugin policy"),
@@ -441,34 +472,9 @@ describe("finalizeSetupWizard", () => {
     ]);
     hasExistingKey.mockImplementation((_config, provider) => provider === "perplexity");
 
-    const prompter = buildWizardPrompter({
-      select: vi.fn(async () => "later") as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
 
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Web search is available via Perplexity Search (auto-detected)."),
@@ -490,7 +496,71 @@ describe("finalizeSetupWizard", () => {
     ]);
     hasExistingKey.mockImplementation((_config, provider) => provider === "firecrawl");
 
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard(
+      createAdvancedFinalizeArgs({
+        nextConfig: createEnabledFirecrawlSearchConfig(),
+        prompter,
+      }),
+    );
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Web search is enabled, so your agent can look things up online when needed.",
+      ),
+      "Web search",
+    );
+  });
+
+  it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {
+    waitForGatewayReachable.mockResolvedValue({
+      ok: false,
+      detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+    });
+    probeGatewayReachable.mockResolvedValue({
+      ok: false,
+      detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+    });
+    const prompter = createLaterPrompter();
+    const runtime = createRuntime();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: false,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "test-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalledWith("health failed");
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("Setup was run without Gateway service install"),
+      "Gateway",
+    );
+    expect(prompter.note).not.toHaveBeenCalledWith(expect.any(String), "Dashboard ready");
+  });
+
+  it("does not show a Codex native search summary when web search is globally disabled", async () => {
+    const note = vi.fn(async () => {});
     const prompter = buildWizardPrompter({
+      note,
       select: vi.fn(async () => "later") as never,
       confirm: vi.fn(async () => false),
     });
@@ -509,8 +579,11 @@ describe("finalizeSetupWizard", () => {
         tools: {
           web: {
             search: {
-              provider: "firecrawl",
-              enabled: true,
+              enabled: false,
+              openaiCodex: {
+                enabled: true,
+                mode: "cached",
+              },
             },
           },
         },
@@ -528,11 +601,9 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Web search is enabled, so your agent can look things up online when needed.",
-      ),
-      "Web search",
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Codex native search:"),
+      "Codex native search",
     );
   });
 });

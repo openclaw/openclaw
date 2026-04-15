@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __test, loadUsage, type UsageState } from "./usage.ts";
+import {
+  __test,
+  loadSessionLogs,
+  loadSessionTimeSeries,
+  loadUsage,
+  type UsageState,
+} from "./usage.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -160,6 +166,38 @@ describe("usage controller date interpretation params", () => {
 
     vi.unstubAllGlobals();
   });
+  it("keeps optional loaders resilient when requests fail", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.usage.timeseries" || method === "sessions.usage.logs") {
+        throw new Error("optional endpoint unavailable");
+      }
+      return {};
+    });
+    const state = createState(request);
+
+    await loadSessionTimeSeries(state, "session-1");
+    await loadSessionLogs(state, "session-1");
+
+    expect(state.usageTimeSeries).toBeNull();
+    expect(state.usageSessionLogs).toBeNull();
+    expect(state.usageTimeSeriesLoading).toBe(false);
+    expect(state.usageSessionLogsLoading).toBe(false);
+  });
+
+  it("normalizes usage logs payloads when logs is not an array", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.usage.logs") {
+        return { logs: "unexpected-shape" };
+      }
+      return {};
+    });
+    const state = createState(request);
+
+    await loadSessionLogs(state, "session-1");
+
+    expect(state.usageSessionLogs).toBeNull();
+    expect(state.usageSessionLogsLoading).toBe(false);
+  });
 });
 
 function createStorageMock() {
@@ -169,7 +207,7 @@ function createStorageMock() {
       return store.get(key) ?? null;
     },
     setItem(key: string, value: string) {
-      store.set(key, String(value));
+      store.set(key, value);
     },
     removeItem(key: string) {
       store.delete(key);

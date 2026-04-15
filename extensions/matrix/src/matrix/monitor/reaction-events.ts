@@ -1,11 +1,17 @@
-import { getSessionBindingService } from "../../runtime-api.js";
-import type { PluginRuntime } from "../../runtime-api.js";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { matrixApprovalCapability } from "../../approval-native.js";
+import {
+  resolveMatrixApprovalReactionTarget,
+  unregisterMatrixApprovalReactionTarget,
+} from "../../approval-reactions.js";
+import { isApprovalNotFoundError, resolveMatrixApproval } from "../../exec-approval-resolver.js";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
-import { resolveMatrixThreadRootId } from "./threads.js";
+import type { PluginRuntime } from "./runtime-api.js";
+import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 export type MatrixReactionNotificationMode = "off" | "own";
@@ -22,6 +28,58 @@ export function resolveMatrixReactionNotificationMode(params: {
   return accountConfig.reactionNotifications ?? matrixConfig?.reactionNotifications ?? "own";
 }
 
+async function maybeResolveMatrixApprovalReaction(params: {
+  cfg: CoreConfig;
+  accountId: string;
+  senderId: string;
+  target: ReturnType<typeof resolveMatrixApprovalReactionTarget>;
+  targetEventId: string;
+  roomId: string;
+  logVerboseMessage: (message: string) => void;
+}): Promise<boolean> {
+  if (!params.target) {
+    return false;
+  }
+  if (
+    !matrixApprovalCapability.authorizeActorAction?.({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      senderId: params.senderId,
+      action: "approve",
+      approvalKind: params.target.approvalId.startsWith("plugin:") ? "plugin" : "exec",
+    })?.authorized
+  ) {
+    return false;
+  }
+  try {
+    await resolveMatrixApproval({
+      cfg: params.cfg,
+      approvalId: params.target.approvalId,
+      decision: params.target.decision,
+      senderId: params.senderId,
+    });
+    params.logVerboseMessage(
+      `matrix: approval reaction resolved id=${params.target.approvalId} sender=${params.senderId} decision=${params.target.decision}`,
+    );
+    return true;
+  } catch (err) {
+    if (isApprovalNotFoundError(err)) {
+      unregisterMatrixApprovalReactionTarget({
+        roomId: params.roomId,
+        eventId: params.targetEventId,
+      });
+      params.logVerboseMessage(
+        `matrix: approval reaction ignored for expired approval id=${params.target.approvalId} sender=${params.senderId}`,
+      );
+      return true;
+    }
+    params.logVerboseMessage(
+      `matrix: approval reaction failed id=${params.target.approvalId} sender=${params.senderId}: ${String(err)}`,
+    );
+    return true;
+  }
+}
+
 export async function handleInboundMatrixReaction(params: {
   client: MatrixClient;
   core: PluginRuntime;
@@ -35,16 +93,36 @@ export async function handleInboundMatrixReaction(params: {
   isDirectMessage: boolean;
   logVerboseMessage: (message: string) => void;
 }): Promise<void> {
+  const reaction = extractMatrixReactionAnnotation(params.event.content);
+  if (!reaction?.eventId) {
+    return;
+  }
+  if (params.senderId === params.selfUserId) {
+    return;
+  }
+  const approvalTarget = resolveMatrixApprovalReactionTarget({
+    roomId: params.roomId,
+    eventId: reaction.eventId,
+    reactionKey: reaction.key,
+  });
+  if (
+    await maybeResolveMatrixApprovalReaction({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      senderId: params.senderId,
+      target: approvalTarget,
+      targetEventId: reaction.eventId,
+      roomId: params.roomId,
+      logVerboseMessage: params.logVerboseMessage,
+    })
+  ) {
+    return;
+  }
   const notificationMode = resolveMatrixReactionNotificationMode({
     cfg: params.cfg,
     accountId: params.accountId,
   });
   if (notificationMode === "off") {
-    return;
-  }
-
-  const reaction = extractMatrixReactionAnnotation(params.event.content);
-  if (!reaction?.eventId) {
     return;
   }
 
@@ -73,14 +151,25 @@ export async function handleInboundMatrixReaction(params: {
         content: targetContent,
       })
     : undefined;
+  const accountConfig = resolveMatrixAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const thread = resolveMatrixThreadRouting({
+    isDirectMessage: params.isDirectMessage,
+    threadReplies: accountConfig.threadReplies ?? "inbound",
+    dmThreadReplies: accountConfig.dm?.threadReplies,
+    messageId: reaction.eventId,
+    threadRootId,
+  });
   const { route, runtimeBindingId } = resolveMatrixInboundRoute({
     cfg: params.cfg,
     accountId: params.accountId,
     roomId: params.roomId,
     senderId: params.senderId,
     isDirectMessage: params.isDirectMessage,
-    messageId: reaction.eventId,
-    threadRootId,
+    dmSessionScope: accountConfig.dm?.sessionScope ?? "per-user",
+    threadId: thread.threadId,
     eventTs: params.event.origin_server_ts,
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });

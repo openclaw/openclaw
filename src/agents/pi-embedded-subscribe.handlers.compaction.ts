@@ -6,6 +6,7 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.compactionInFlight = true;
+  ctx.state.livenessState = "paused";
   ctx.ensureCompactionPromise();
   ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId}`);
   emitAgentEvent({
@@ -51,13 +52,25 @@ export function handleAutoCompactionEnd(
   const hasResult = evt.result != null;
   const wasAborted = Boolean(evt.aborted);
   if (hasResult && !wasAborted) {
-    ctx.incrementCompactionCount?.();
+    ctx.incrementCompactionCount();
+    const observedCompactionCount = ctx.getCompactionCount();
+    void reconcileSessionStoreCompactionCountAfterSuccess({
+      sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
+      configStore: ctx.params.config?.session?.store,
+      observedCompactionCount,
+    }).catch((err) => {
+      ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
+    });
   }
   if (willRetry) {
     ctx.noteCompactionRetry();
     ctx.resetForCompactionRetry();
     ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
+    if (!wasAborted) {
+      ctx.state.livenessState = "working";
+    }
     ctx.maybeResolveCompactionWait();
     clearStaleAssistantUsageOnSessionMessages(ctx);
   }
@@ -89,6 +102,18 @@ export function handleAutoCompactionEnd(
         });
     }
   }
+}
+
+export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+  sessionKey?: string;
+  agentId?: string;
+  configStore?: string;
+  observedCompactionCount: number;
+  now?: number;
+}): Promise<number | undefined> {
+  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
+    await import("./pi-embedded-subscribe.handlers.compaction.runtime.js");
+  return reconcile(params);
 }
 
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeContext): void {

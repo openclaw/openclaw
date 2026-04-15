@@ -1,7 +1,8 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
+  createSignalToolResultConfig,
   createMockSignalDaemonHandle,
   config,
   getSignalToolResultTestMocks,
@@ -11,14 +12,13 @@ import {
 
 installSignalToolResultTestHooks();
 
-vi.resetModules();
 const { monitorSignalProvider } = await import("./monitor.js");
 
 const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
   getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
-type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
+type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
 
 function createMonitorRuntime() {
   return {
@@ -30,27 +30,8 @@ function createMonitorRuntime() {
   };
 }
 
-function createSignalConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const base = config as OpenClawConfig;
-  const channels = (base.channels ?? {}) as Record<string, unknown>;
-  const signal = (channels.signal ?? {}) as Record<string, unknown>;
-  return {
-    ...base,
-    channels: {
-      ...channels,
-      signal: {
-        ...signal,
-        autoStart: true,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        ...overrides,
-      },
-    },
-  };
-}
-
 function setSignalAutoStartConfig(overrides: Record<string, unknown> = {}) {
-  setSignalToolResultTestConfig(createSignalConfig(overrides));
+  setSignalToolResultTestConfig(createSignalToolResultConfig(overrides));
 }
 
 function createAutoAbortController() {
@@ -65,7 +46,8 @@ function createAutoAbortController() {
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
     config: config as OpenClawConfig,
-    waitForTransportReady: waitForTransportReadyMock as any,
+    waitForTransportReady:
+      waitForTransportReadyMock as MonitorSignalProviderOptions["waitForTransportReady"],
     ...opts,
   });
 }
