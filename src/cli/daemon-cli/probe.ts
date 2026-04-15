@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withProgress } from "../progress.js";
 
 function resolveProbeFailureMessage(result: {
@@ -67,7 +68,7 @@ export async function probeGatewayStatus(opts: {
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     } as const;
   }
 }

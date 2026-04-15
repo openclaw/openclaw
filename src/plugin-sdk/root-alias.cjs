@@ -7,6 +7,8 @@ let monolithicSdk = null;
 let diagnosticEventsModule = null;
 const jitiLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
+const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
+const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const isDistRootAlias = __filename.includes(
   `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
 );
@@ -89,7 +91,9 @@ function getPackageRoot() {
 function findDistChunkByPrefix(prefix) {
   const distRoot = path.join(getPackageRoot(), "dist");
   try {
-    const entries = fs.readdirSync(distRoot, { withFileTypes: true });
+    const entries = fs
+      .readdirSync(distRoot, { withFileTypes: true })
+      .toSorted((left, right) => left.name.localeCompare(right.name));
     const match = entries.find(
       (entry) =>
         entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith(".js"),
@@ -112,7 +116,9 @@ function listPluginSdkExportedSubpaths() {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
     subpaths = Object.keys(packageJson.exports ?? {})
       .filter((key) => key.startsWith("./plugin-sdk/"))
-      .map((key) => key.slice("./plugin-sdk/".length));
+      .map((key) => key.slice("./plugin-sdk/".length))
+      .filter((subpath) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath))
+      .toSorted();
   } catch {
     subpaths = [];
   }
@@ -124,15 +130,31 @@ function listPluginSdkExportedSubpaths() {
 function buildPluginSdkAliasMap(useDist) {
   const packageRoot = getPackageRoot();
   const pluginSdkDir = path.join(packageRoot, useDist ? "dist" : "src", "plugin-sdk");
-  const ext = useDist ? ".js" : ".ts";
-  const aliasMap = {
-    "openclaw/plugin-sdk": __filename,
-  };
+  const normalizeTarget = (target) =>
+    process.platform === "win32" ? target.replace(/\\/g, "/") : target;
+  const aliasMap = Object.fromEntries(
+    pluginSdkPackageNames.map((packageName) => [packageName, normalizeTarget(__filename)]),
+  );
 
   for (const subpath of listPluginSdkExportedSubpaths()) {
-    const candidate = path.join(pluginSdkDir, `${subpath}${ext}`);
-    if (fs.existsSync(candidate)) {
-      aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+    if (useDist) {
+      const candidate = path.join(pluginSdkDir, `${subpath}.js`);
+      if (fs.existsSync(candidate)) {
+        for (const packageName of pluginSdkPackageNames) {
+          aliasMap[`${packageName}/${subpath}`] = normalizeTarget(candidate);
+        }
+      }
+      continue;
+    }
+    for (const ext of pluginSdkSourceExtensions) {
+      const candidate = path.join(pluginSdkDir, `${subpath}${ext}`);
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+      for (const packageName of pluginSdkPackageNames) {
+        aliasMap[`${packageName}/${subpath}`] = normalizeTarget(candidate);
+      }
+      break;
     }
   }
 
@@ -140,20 +162,22 @@ function buildPluginSdkAliasMap(useDist) {
 }
 
 function getJiti(tryNative) {
-  if (jitiLoaders.has(tryNative)) {
-    return jitiLoaders.get(tryNative);
+  const effectiveTryNative = process.platform === "win32" ? false : tryNative;
+
+  if (jitiLoaders.has(effectiveTryNative)) {
+    return jitiLoaders.get(effectiveTryNative);
   }
 
   const { createJiti } = require("jiti");
   const jitiLoader = createJiti(__filename, {
-    alias: buildPluginSdkAliasMap(tryNative),
+    alias: buildPluginSdkAliasMap(effectiveTryNative),
     interopDefault: true,
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
-    tryNative,
+    tryNative: effectiveTryNative,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  jitiLoaders.set(tryNative, jitiLoader);
+  jitiLoaders.set(effectiveTryNative, jitiLoader);
   return jitiLoader;
 }
 

@@ -4,8 +4,10 @@ import {
   readCronRunLogEntriesPageAll,
   resolveCronRunLogPath,
 } from "../../cron/run-log.js";
+import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ErrorCodes,
   errorShape,
@@ -105,7 +107,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid cron.add params: ${err instanceof Error ? err.message : String(err)}`,
+          `invalid cron.add params: ${formatErrorMessage(err)}`,
         ),
       );
       return;
@@ -145,7 +147,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid cron.update params: ${err instanceof Error ? err.message : String(err)}`,
+          `invalid cron.update params: ${formatErrorMessage(err)}`,
         ),
       );
       return;
@@ -245,7 +247,16 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
+    try {
+      result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    } catch (error) {
+      if (isInvalidCronSessionTargetIdError(error)) {
+        respond(true, { ok: true, ran: false, reason: "invalid-spec" }, undefined);
+        return;
+      }
+      throw error;
+    }
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {

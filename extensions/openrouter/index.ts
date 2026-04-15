@@ -1,4 +1,3 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   definePluginEntry,
   type ProviderResolveDynamicModelContext,
@@ -6,14 +5,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
+  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  buildProviderStreamFamilyHooks,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-family";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";
@@ -34,10 +32,6 @@ export default definePluginEntry({
   name: "OpenRouter Provider",
   description: "Bundled OpenRouter provider plugin",
   register(api) {
-    const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-      family: "passthrough-gemini",
-    });
-    const OPENROUTER_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("openrouter-thinking");
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {

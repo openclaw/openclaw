@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   listQQBotAccountIds,
@@ -28,7 +29,7 @@ function clearQQBotCredentialField(
   field: QQBotEnvCredentialField,
 ): OpenClawConfig {
   const next = { ...cfg };
-  const qqbot = { ...((next.channels?.qqbot as Record<string, unknown>) || {}) };
+  const qqbot = { ...(next.channels?.qqbot as Record<string, unknown> | undefined) };
 
   const clearField = (entry: Record<string, unknown>) => {
     if (field === "appId") {
@@ -42,7 +43,7 @@ function clearQQBotCredentialField(
   if (accountId === DEFAULT_ACCOUNT_ID) {
     clearField(qqbot);
   } else {
-    const accounts = { ...((qqbot.accounts as Record<string, Record<string, unknown>>) || {}) };
+    const accounts = { ...(qqbot.accounts as Record<string, Record<string, unknown>> | undefined) };
     if (accounts[accountId]) {
       const entry = { ...accounts[accountId] };
       clearField(entry);
@@ -102,7 +103,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
         const resolved = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
         const hasConfiguredValue = Boolean(
           hasConfiguredSecretInput(resolved.config.clientSecret) ||
-          resolved.config.clientSecretFile?.trim() ||
+          normalizeOptionalString(resolved.config.clientSecretFile) ||
           resolved.clientSecret,
         );
         return {
@@ -111,7 +112,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
           resolvedValue: resolved.appId || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.QQBOT_APP_ID?.trim() || undefined
+              ? normalizeOptionalString(process.env.QQBOT_APP_ID)
               : undefined,
         };
       },
@@ -135,7 +136,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
         const resolved = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
         const hasConfiguredValue = Boolean(
           hasConfiguredSecretInput(resolved.config.clientSecret) ||
-          resolved.config.clientSecretFile?.trim() ||
+          normalizeOptionalString(resolved.config.clientSecretFile) ||
           resolved.clientSecret,
         );
         return {
@@ -144,7 +145,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
           resolvedValue: resolved.clientSecret || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.QQBOT_CLIENT_SECRET?.trim() || undefined
+              ? normalizeOptionalString(process.env.QQBOT_CLIENT_SECRET)
               : undefined,
         };
       },

@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { URL } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
   appendFileWithinRoot,
   SafeOpenError,
@@ -9,18 +11,17 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
-import { trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
-  CLAUDE_PARAM_GROUPS,
+  REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
-  wrapToolParamNormalization,
+  getToolParamsRecord,
+  wrapToolParamValidation,
 } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -28,15 +29,14 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
-  CLAUDE_PARAM_GROUPS,
+  REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
-  wrapToolParamNormalization,
+  getToolParamsRecord,
+  wrapToolParamValidation,
 } from "./pi-tools.params.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
-// to normalize payloads and sanitize oversized images before they hit providers.
+// to sanitize oversized images before they hit providers.
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
@@ -375,10 +375,41 @@ function mapContainerPathToWorkspaceRoot(params: {
   let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
-    if (!localFilePath) {
-      return params.filePath;
+    if (localFilePath) {
+      candidate = localFilePath;
+    } else {
+      // Windows rejects posix-style file:///workspace/... in fileURLToPath; map via URL pathname
+      // when it clearly refers to the container workdir (same idea as sandbox-paths).
+      let parsed: URL;
+      try {
+        parsed = new URL(candidate);
+      } catch {
+        return params.filePath;
+      }
+      if (parsed.protocol !== "file:") {
+        return params.filePath;
+      }
+      const host = parsed.hostname.trim().toLowerCase();
+      if (host && host !== "localhost") {
+        return params.filePath;
+      }
+      if (hasEncodedFileUrlSeparator(parsed.pathname)) {
+        return params.filePath;
+      }
+      let normalizedPathname: string;
+      try {
+        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      } catch {
+        return params.filePath;
+      }
+      if (
+        normalizedPathname !== normalizedWorkdir &&
+        !normalizedPathname.startsWith(`${normalizedWorkdir}/`)
+      ) {
+        return params.filePath;
+      }
+      candidate = normalizedPathname;
     }
-    candidate = localFilePath;
   }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
@@ -403,9 +434,13 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
 }): string {
   const mapped = mapContainerPathToWorkspaceRoot(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
-  return path.isAbsolute(candidate)
-    ? path.resolve(candidate)
-    : path.resolve(params.root, candidate || ".");
+  if (isWindowsDrivePath(candidate)) {
+    return path.win32.normalize(candidate);
+  }
+  if (path.isAbsolute(candidate)) {
+    return path.resolve(candidate);
+  }
+  return path.resolve(params.root, candidate || ".");
 }
 
 type MemoryFlushAppendOnlyWriteOptions = {
@@ -509,16 +544,13 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
     ...tool,
     description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const normalized = normalizeToolParams(args);
-      const record =
-        normalized ??
-        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
-      assertRequiredParams(record, CLAUDE_PARAM_GROUPS.write, tool.name);
+      const record = getToolParamsRecord(args);
+      assertRequiredParams(record, REQUIRED_PARAM_GROUPS.write, tool.name);
       const filePath =
         typeof record?.path === "string" && record.path.trim() ? record.path : undefined;
       const content = typeof record?.content === "string" ? record.content : undefined;
       if (!filePath || content === undefined) {
-        return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+        return tool.execute(toolCallId, args, signal, onUpdate);
       }
 
       const resolvedPath = resolveToolPathAgainstWorkspaceRoot({
@@ -556,25 +588,34 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   root: string,
   options?: {
     containerWorkdir?: string;
+    pathParamKeys?: readonly string[];
+    normalizeGuardedPathParams?: boolean;
   },
 ): AnyAgentTool {
+  const pathParamKeys =
+    options?.pathParamKeys && options.pathParamKeys.length > 0 ? options.pathParamKeys : ["path"];
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const normalized = normalizeToolParams(args);
-      const record =
-        normalized ??
-        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
-      const filePath = record?.path;
-      if (typeof filePath === "string" && filePath.trim()) {
+      const record = getToolParamsRecord(args);
+      let normalizedRecord: Record<string, unknown> | undefined;
+      for (const key of pathParamKeys) {
+        const filePath = record?.[key];
+        if (typeof filePath !== "string" || !filePath.trim()) {
+          continue;
+        }
         const sandboxPath = mapContainerPathToWorkspaceRoot({
           filePath,
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        if (options?.normalizeGuardedPathParams && record) {
+          normalizedRecord ??= { ...record };
+          normalizedRecord[key] = sandboxResult.resolved;
+        }
       }
-      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+      return tool.execute(toolCallId, normalizedRecord ?? args, signal, onUpdate);
     },
   };
 }
@@ -600,7 +641,7 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
@@ -612,14 +653,14 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
     readFile: async (absolutePath: string) =>
       (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
   });
-  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -630,30 +671,26 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
     root,
     readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
   });
-  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
-  const patched = patchToolSchemaForClaudeCompatibility(base);
   return {
-    ...patched,
+    ...base,
     execute: async (toolCallId, params, signal) => {
-      const normalized = normalizeToolParams(params);
-      const record =
-        normalized ??
-        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
-      assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+      const record = getToolParamsRecord(params);
+      assertRequiredParams(record, REQUIRED_PARAM_GROUPS.read, base.name);
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
-        args: (normalized ?? params ?? {}) as Record<string, unknown>,
+        args: record ?? {},
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
       });
-      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
+      const filePath = typeof record?.path === "string" ? record.path : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
       return sanitizeToolResultImages(

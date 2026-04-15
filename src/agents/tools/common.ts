@@ -1,15 +1,25 @@
 import fs from "node:fs/promises";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { TSchema } from "@sinclair/typebox";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
-// oxlint-disable-next-line typescript/no-explicit-any
-export type AnyAgentTool = AgentTool<any, unknown> & {
+export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
+  TParameters,
+  TResult
+> & {
   ownerOnly?: boolean;
   displaySummary?: string;
 };
+
+// Cross-package tool registration still mixes concrete schema-typed tools with
+// plugin/runtime factories that are effectively existential over params/details.
+// Tightening this alias without a dedicated adapter seam blows up plugin tool
+// factories and embedded-runner tool plumbing.
+// oxlint-disable-next-line typescript/no-explicit-any
+export type AnyAgentTool = AgentToolWithMeta<any, unknown>;
 
 export type StringParamOptions = {
   required?: boolean;

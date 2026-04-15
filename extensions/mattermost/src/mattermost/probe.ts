@@ -1,4 +1,8 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
 
@@ -33,7 +37,7 @@ export async function probeMattermost(
         signal: controller?.signal,
       },
       auditContext: "mattermost-probe",
-      policy: allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+      policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
     });
     try {
       const elapsedMs = Date.now() - start;
@@ -57,7 +61,7 @@ export async function probeMattermost(
       await release();
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return {
       ok: false,
       status: null,

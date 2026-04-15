@@ -1,25 +1,22 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { getBootstrapChannelSecrets } from "../channels/plugins/bootstrap-registry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import { type ResolverContext, type SecretDefaults } from "./runtime-shared.js";
-
-type ChannelRuntimeConfigCollectorSurface = {
-  collectRuntimeConfigAssignments?: (params: {
-    config: OpenClawConfig;
-    defaults: SecretDefaults | undefined;
-    context: ResolverContext;
-  }) => void;
-};
-
-function listChannelRuntimeConfigCollectorSurfaces(): ChannelRuntimeConfigCollectorSurface[] {
-  return getBundledChannelContractSurfaces() as ChannelRuntimeConfigCollectorSurface[];
-}
 
 export function collectChannelConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  for (const surface of listChannelRuntimeConfigCollectorSurfaces()) {
-    surface.collectRuntimeConfigAssignments?.(params);
+  const channelIds = Object.keys(params.config.channels ?? {});
+  if (channelIds.length === 0) {
+    return;
+  }
+  for (const channelId of channelIds) {
+    const contract = loadBundledChannelSecretContractApi(channelId);
+    const collectRuntimeConfigAssignments =
+      contract?.collectRuntimeConfigAssignments ??
+      getBootstrapChannelSecrets(channelId)?.collectRuntimeConfigAssignments;
+    collectRuntimeConfigAssignments?.(params);
   }
 }

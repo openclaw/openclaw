@@ -17,6 +17,7 @@ import {
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
@@ -64,7 +65,7 @@ function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefin
 
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
   const configuredBaseUrl = config?.models?.providers?.ollama?.baseUrl;
-  if (typeof configuredBaseUrl === "string" && configuredBaseUrl.trim()) {
+  if (normalizeOptionalString(configuredBaseUrl)) {
     return resolveOllamaApiBase(configuredBaseUrl);
   }
   return OLLAMA_DEFAULT_BASE_URL;
@@ -73,14 +74,14 @@ function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
 function normalizeOllamaWebSearchResult(
   result: OllamaWebSearchResult,
 ): { title: string; url: string; content: string } | null {
-  const url = typeof result.url === "string" ? result.url.trim() : "";
+  const url = normalizeOptionalString(result.url) ?? "";
   if (!url) {
     return null;
   }
   return {
-    title: typeof result.title === "string" ? result.title.trim() : "",
+    title: normalizeOptionalString(result.title) ?? "",
     url,
-    content: typeof result.content === "string" ? result.content.trim() : "",
+    content: normalizeOptionalString(result.content) ?? "",
   };
 }
 

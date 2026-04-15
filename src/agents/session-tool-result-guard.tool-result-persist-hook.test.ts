@@ -12,6 +12,7 @@ import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
+const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
   const pluginDir = path.join(params.dir, params.id);
@@ -46,7 +47,6 @@ function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>)
     isError: false,
     content: [{ type: "text", text: "ok" }],
     details: { big: "x".repeat(10_000) },
-    // oxlint-disable-next-line typescript/no-explicit-any
   } as any);
 }
 
@@ -56,12 +56,16 @@ function getPersistedToolResult(sm: ReturnType<typeof SessionManager.inMemory>) 
     .filter((e) => e.type === "message")
     .map((e) => (e as { message: AgentMessage }).message);
 
-  // oxlint-disable-next-line typescript/no-explicit-any
   return messages.find((m) => (m as any).role === "toolResult") as any;
 }
 
 afterEach(() => {
   resetGlobalHookRunner();
+  if (originalBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+  }
 });
 
 describe("tool_result_persist hook", () => {

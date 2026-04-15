@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   XAI_TOOL_SCHEMA_PROFILE,
-} from "../plugin-sdk/xai.js";
+} from "../plugin-sdk/provider-tools.js";
 import { __testing } from "./pi-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
@@ -114,5 +114,57 @@ describe("applyModelProviderToolPolicy", () => {
     });
 
     expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
+  });
+
+  it("drops heavyweight tools when lean local-model mode is enabled", () => {
+    const filtered = __testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              localModelMode: "lean",
+            },
+          },
+        },
+        modelProvider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+  });
+
+  it("keeps heavyweight tools when lean local-model mode is not enabled", () => {
+    const filtered = __testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              localModelMode: "default",
+            },
+          },
+        },
+        modelProvider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "browser", "cron", "message", "exec"]);
   });
 });

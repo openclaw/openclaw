@@ -27,6 +27,11 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "uniqueItems",
   "minProperties",
   "maxProperties",
+
+  // JSON Schema composition keywords not supported by OpenAPI 3.0 subset.
+  // `const` is handled separately (converted to enum) in the cleaning loop,
+  // but `not` has no safe equivalent and must be stripped.
+  "not",
 ]);
 
 const SCHEMA_META_KEYS = ["description", "title", "default"] as const;
@@ -207,6 +212,37 @@ function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants:
   return { variants: stripped ? nonNullVariants : variants };
 }
 
+// Gemini rejects object schemas whose `required` entries do not exist in `properties`.
+function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(schema.required)) {
+    return schema;
+  }
+
+  if (
+    !schema.properties ||
+    typeof schema.properties !== "object" ||
+    Array.isArray(schema.properties)
+  ) {
+    if (schema.type === "object") {
+      delete schema.required;
+    }
+    return schema;
+  }
+
+  const properties = schema.properties as Record<string, unknown>;
+  const required = schema.required.filter(
+    (key): key is string => typeof key === "string" && Object.hasOwn(properties, key),
+  );
+
+  if (required.length > 0) {
+    schema.required = required;
+  } else {
+    delete schema.required;
+  }
+
+  return schema;
+}
+
 function cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
@@ -357,17 +393,17 @@ function cleanSchemaForGeminiWithDefs(
   if (cleaned.anyOf && Array.isArray(cleaned.anyOf)) {
     const flattened = flattenUnionFallback(cleaned, cleaned.anyOf);
     if (flattened) {
-      return flattened;
+      return sanitizeRequiredFields(flattened);
     }
   }
   if (cleaned.oneOf && Array.isArray(cleaned.oneOf)) {
     const flattened = flattenUnionFallback(cleaned, cleaned.oneOf);
     if (flattened) {
-      return flattened;
+      return sanitizeRequiredFields(flattened);
     }
   }
 
-  return cleaned;
+  return sanitizeRequiredFields(cleaned);
 }
 
 /**

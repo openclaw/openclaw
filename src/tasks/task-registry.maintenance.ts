@@ -4,6 +4,7 @@ import { isCronJobActive } from "../cron/active-jobs.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -14,7 +15,11 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
-import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
+import {
+  configureTaskAuditTaskProvider,
+  listTaskAuditFindings,
+  summarizeTaskAuditFindings,
+} from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
@@ -33,6 +38,43 @@ let sweeper: NodeJS.Timeout | null = null;
 let deferredSweep: NodeJS.Timeout | null = null;
 let sweepInProgress = false;
 
+type TaskRegistryMaintenanceRuntime = {
+  readAcpSessionEntry: typeof readAcpSessionEntry;
+  loadSessionStore: typeof loadSessionStore;
+  resolveStorePath: typeof resolveStorePath;
+  isCronJobActive: typeof isCronJobActive;
+  getAgentRunContext: typeof getAgentRunContext;
+  parseAgentSessionKey: typeof parseAgentSessionKey;
+  deleteTaskRecordById: typeof deleteTaskRecordById;
+  ensureTaskRegistryReady: typeof ensureTaskRegistryReady;
+  getTaskById: typeof getTaskById;
+  listTaskRecords: typeof listTaskRecords;
+  markTaskLostById: typeof markTaskLostById;
+  maybeDeliverTaskTerminalUpdate: typeof maybeDeliverTaskTerminalUpdate;
+  resolveTaskForLookupToken: typeof resolveTaskForLookupToken;
+  setTaskCleanupAfterById: typeof setTaskCleanupAfterById;
+};
+
+const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
+  readAcpSessionEntry,
+  loadSessionStore,
+  resolveStorePath,
+  isCronJobActive,
+  getAgentRunContext,
+  parseAgentSessionKey,
+  deleteTaskRecordById,
+  ensureTaskRegistryReady,
+  getTaskById,
+  listTaskRecords,
+  markTaskLostById,
+  maybeDeliverTaskTerminalUpdate,
+  resolveTaskForLookupToken,
+  setTaskCleanupAfterById,
+};
+
+let taskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime =
+  defaultTaskRegistryMaintenanceRuntime;
+
 export type TaskRegistryMaintenanceSummary = {
   reconciled: number;
   cleanupStamped: number;
@@ -44,9 +86,9 @@ function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: strin
   if (direct) {
     return direct;
   }
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   for (const [key, entry] of Object.entries(store)) {
-    if (key.toLowerCase() === normalized) {
+    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
       return entry;
     }
   }
@@ -70,7 +112,7 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   const candidateRunIds = [task.sourceId, task.runId];
   for (const candidate of candidateRunIds) {
     const runId = candidate?.trim();
-    if (runId && getAgentRunContext(runId)) {
+    if (runId && taskRegistryMaintenanceRuntime.getAgentRunContext(runId)) {
       return true;
     }
   }
@@ -80,7 +122,7 @@ function hasActiveCliRun(task: TaskRecord): boolean {
 function hasBackingSession(task: TaskRecord): boolean {
   if (task.runtime === "cron") {
     const jobId = task.sourceId?.trim();
-    return jobId ? isCronJobActive(jobId) : false;
+    return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
   }
 
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
@@ -92,7 +134,7 @@ function hasBackingSession(task: TaskRecord): boolean {
     return true;
   }
   if (task.runtime === "acp") {
-    const acpEntry = readAcpSessionEntry({
+    const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
       sessionKey: childSessionKey,
     });
     if (!acpEntry || acpEntry.storeReadFailed) {
@@ -107,9 +149,9 @@ function hasBackingSession(task: TaskRecord): boolean {
         return false;
       }
     }
-    const agentId = parseAgentSessionKey(childSessionKey)?.agentId;
-    const storePath = resolveStorePath(undefined, { agentId });
-    const store = loadSessionStore(storePath);
+    const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
+    const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
+    const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
     return Boolean(findSessionEntryByKey(store, childSessionKey));
   }
 
@@ -149,14 +191,14 @@ function resolveCleanupAfter(task: TaskRecord): number {
 function markTaskLost(task: TaskRecord, now: number): TaskRecord {
   const cleanupAfter = task.cleanupAfter ?? projectTaskLost(task, now).cleanupAfter;
   const updated =
-    markTaskLostById({
+    taskRegistryMaintenanceRuntime.markTaskLostById({
       taskId: task.taskId,
       endedAt: task.endedAt ?? now,
       lastEventAt: now,
       error: task.error ?? "backing session missing",
       cleanupAfter,
     }) ?? task;
-  void maybeDeliverTaskTerminalUpdate(updated.taskId);
+  void taskRegistryMaintenanceRuntime.maybeDeliverTaskTerminalUpdate(updated.taskId);
   return updated;
 }
 
@@ -185,9 +227,13 @@ export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): Task
 }
 
 export function reconcileInspectableTasks(): TaskRecord[] {
-  ensureTaskRegistryReady();
-  return listTaskRecords().map((task) => reconcileTaskRecordForOperatorInspection(task));
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  return taskRegistryMaintenanceRuntime
+    .listTaskRecords()
+    .map((task) => reconcileTaskRecordForOperatorInspection(task));
 }
+
+configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());
@@ -199,18 +245,18 @@ export function getInspectableTaskAuditSummary(): TaskAuditSummary {
 }
 
 export function reconcileTaskLookupToken(token: string): TaskRecord | undefined {
-  ensureTaskRegistryReady();
-  const task = resolveTaskForLookupToken(token);
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  const task = taskRegistryMaintenanceRuntime.resolveTaskForLookupToken(token);
   return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
 }
 
 export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
-  ensureTaskRegistryReady();
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
   let reconciled = 0;
   let cleanupStamped = 0;
   let pruned = 0;
-  for (const task of listTaskRecords()) {
+  for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
     if (shouldMarkLost(task, now)) {
       reconciled += 1;
       continue;
@@ -240,21 +286,22 @@ function startScheduledSweep() {
     return;
   }
   sweepInProgress = true;
-  void sweepTaskRegistry().finally(() => {
+  const clearSweepInProgress = () => {
     sweepInProgress = false;
-  });
+  };
+  sweepTaskRegistry().then(clearSweepInProgress, clearSweepInProgress);
 }
 
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {
-  ensureTaskRegistryReady();
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
   let reconciled = 0;
   let cleanupStamped = 0;
   let pruned = 0;
-  const tasks = listTaskRecords();
+  const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
   let processed = 0;
   for (const task of tasks) {
-    const current = getTaskById(task.taskId);
+    const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
     if (!current) {
       continue;
     }
@@ -269,7 +316,10 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
-    if (shouldPruneTerminalTask(current, now) && deleteTaskRecordById(current.taskId)) {
+    if (
+      shouldPruneTerminalTask(current, now) &&
+      taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)
+    ) {
       pruned += 1;
       processed += 1;
       if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
@@ -279,7 +329,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     }
     if (
       shouldStampCleanupAfter(current) &&
-      setTaskCleanupAfterById({
+      taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
         taskId: current.taskId,
         cleanupAfter: resolveCleanupAfter(current),
       })
@@ -299,7 +349,7 @@ export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummar
 }
 
 export function startTaskRegistryMaintenance() {
-  ensureTaskRegistryReady();
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   deferredSweep = setTimeout(() => {
     deferredSweep = null;
     startScheduledSweep();
@@ -312,7 +362,7 @@ export function startTaskRegistryMaintenance() {
   sweeper.unref?.();
 }
 
-export function stopTaskRegistryMaintenanceForTests() {
+export function stopTaskRegistryMaintenance() {
   if (deferredSweep) {
     clearTimeout(deferredSweep);
     deferredSweep = null;
@@ -322,6 +372,18 @@ export function stopTaskRegistryMaintenanceForTests() {
     sweeper = null;
   }
   sweepInProgress = false;
+}
+
+export const stopTaskRegistryMaintenanceForTests = stopTaskRegistryMaintenance;
+
+export function setTaskRegistryMaintenanceRuntimeForTests(
+  runtime: TaskRegistryMaintenanceRuntime,
+): void {
+  taskRegistryMaintenanceRuntime = runtime;
+}
+
+export function resetTaskRegistryMaintenanceRuntimeForTests(): void {
+  taskRegistryMaintenanceRuntime = defaultTaskRegistryMaintenanceRuntime;
 }
 
 export function getReconciledTaskById(taskId: string): TaskRecord | undefined {

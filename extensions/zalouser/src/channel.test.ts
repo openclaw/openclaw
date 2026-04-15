@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserPlugin } from "./channel.js";
+import {
+  zalouserAuthAdapter,
+  zalouserGroupsAdapter,
+  zalouserMessageActions,
+  zalouserOutboundAdapter,
+  zalouserPairingTextAdapter,
+  zalouserResolverAdapter,
+  zalouserSecurityAdapter,
+} from "./channel.adapters.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import {
@@ -27,7 +35,7 @@ const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendReaction = vi.mocked(sendReactionZalouser);
 
 function requireZalouserSendText() {
-  const sendText = zalouserPlugin.outbound?.sendText;
+  const sendText = zalouserOutboundAdapter.sendText;
   if (!sendText) {
     throw new Error("zalouser outbound.sendText unavailable");
   }
@@ -35,7 +43,7 @@ function requireZalouserSendText() {
 }
 
 function getResolveToolPolicy() {
-  const resolveToolPolicy = zalouserPlugin.groups?.resolveToolPolicy;
+  const resolveToolPolicy = zalouserGroupsAdapter.resolveToolPolicy;
   if (!resolveToolPolicy) {
     throw new Error("resolveToolPolicy unavailable");
   }
@@ -43,7 +51,7 @@ function getResolveToolPolicy() {
 }
 
 function requireZalouserResolveRequireMention() {
-  const resolveRequireMention = zalouserPlugin.groups?.resolveRequireMention;
+  const resolveRequireMention = zalouserGroupsAdapter.resolveRequireMention;
   if (!resolveRequireMention) {
     throw new Error("resolveRequireMention unavailable");
   }
@@ -51,7 +59,7 @@ function requireZalouserResolveRequireMention() {
 }
 
 function requireZalouserPairingNormalizer() {
-  const normalizeAllowEntry = zalouserPlugin.pairing?.normalizeAllowEntry;
+  const normalizeAllowEntry = zalouserPairingTextAdapter.normalizeAllowEntry;
   if (!normalizeAllowEntry) {
     throw new Error("pairing.normalizeAllowEntry unavailable");
   }
@@ -122,7 +130,7 @@ describe("zalouser outbound", () => {
 
 describe("zalouser outbound chunking", () => {
   it("chunks outbound text without requiring Zalouser runtime initialization", () => {
-    const chunker = zalouserPlugin.outbound?.chunker;
+    const chunker = zalouserOutboundAdapter.chunker;
     if (!chunker) {
       throw new Error("zalouser outbound.chunker unavailable");
     }
@@ -138,7 +146,7 @@ describe("zalouser channel policies", () => {
   });
 
   it("normalizes dm allowlist entries after trimming channel prefixes", () => {
-    const resolveDmPolicy = zalouserPlugin.security?.resolveDmPolicy;
+    const resolveDmPolicy = zalouserSecurityAdapter.resolveDmPolicy;
     if (!resolveDmPolicy) {
       throw new Error("resolveDmPolicy unavailable");
     }
@@ -209,7 +217,7 @@ describe("zalouser channel policies", () => {
   });
 
   it("handles react action", async () => {
-    const actions = zalouserPlugin.actions;
+    const actions = zalouserMessageActions;
     expect(
       actions?.describeMessageTool?.({ cfg: { channels: { zalouser: { enabled: true } } } })
         ?.actions,
@@ -252,7 +260,7 @@ describe("zalouser channel policies", () => {
   });
 
   it("honors the selected Zalouser account during discovery", () => {
-    const actions = zalouserPlugin.actions;
+    const actions = zalouserMessageActions;
     const cfg = {
       channels: {
         zalouser: {
@@ -285,7 +293,7 @@ describe("zalouser account resolution", () => {
   });
 
   it("uses the configured default account for omitted target lookup", async () => {
-    const resolveTargets = zalouserPlugin.resolver?.resolveTargets;
+    const resolveTargets = zalouserResolverAdapter.resolveTargets;
     if (!resolveTargets) {
       throw new Error("zalouser resolver.resolveTargets unavailable");
     }
@@ -324,7 +332,7 @@ describe("zalouser account resolution", () => {
   });
 
   it("uses the configured default account for omitted qr login", async () => {
-    const login = zalouserPlugin.auth?.login;
+    const login = zalouserAuthAdapter.login;
     if (!login) {
       throw new Error("zalouser auth.login unavailable");
     }

@@ -6,10 +6,7 @@
  * yet ship a dedicated provider plugin hook surface.
  */
 
-import {
-  classifyProviderFailoverReasonWithPlugin,
-  matchesProviderContextOverflowWithPlugin,
-} from "../../plugins/provider-runtime.js";
+import { resolveNodeRequireFromMeta } from "../../logging/node-require.js";
 import type { FailoverReason } from "./types.js";
 
 type ProviderErrorPattern = {
@@ -37,6 +34,13 @@ export const PROVIDER_CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
 
   // Cohere does not currently ship a bundled provider hook.
   /\btotal tokens?.*exceeds? (?:the )?(?:model(?:'s)? )?(?:max|maximum|limit)/i,
+
+  // llama.cpp HTTP server (often used directly or behind an OpenAI-compatible
+  // shim) returns "request (N tokens) exceeds the available context size
+  // (M tokens), try increasing it" when the prompt overshoots a slot's
+  // ctx-size. Wording is from the upstream slot manager and is stable.
+  // Example: "400 request (66202 tokens) exceeds the available context size (65536 tokens), try increasing it"
+  /\b(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size\b/i,
 
   // Generic "input too long" pattern that isn't covered by existing checks
   /\binput (?:is )?too long for (?:the )?model\b/i,
@@ -71,15 +75,66 @@ export const PROVIDER_SPECIFIC_PATTERNS: readonly ProviderErrorPattern[] = [
   },
 ];
 
+type ProviderRuntimeHooks = {
+  classifyProviderFailoverReasonWithPlugin: (params: {
+    context: { errorMessage: string };
+  }) => FailoverReason | null;
+  matchesProviderContextOverflowWithPlugin: (params: {
+    context: { errorMessage: string };
+  }) => boolean;
+};
+
+const requireProviderRuntime = resolveNodeRequireFromMeta(import.meta.url);
+let cachedProviderRuntimeHooks: ProviderRuntimeHooks | null | undefined;
+
+const PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE =
+  /\b(?:context|window|prompt|token|tokens|input|request|model)\b/i;
+const PROVIDER_CONTEXT_OVERFLOW_ACTION_RE =
+  /\b(?:too\s+(?:large|long|many)|exceed(?:s|ed|ing)?|overflow|limit|maximum|max)\b/i;
+
+function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
+  if (cachedProviderRuntimeHooks !== undefined) {
+    return cachedProviderRuntimeHooks;
+  }
+  if (!requireProviderRuntime) {
+    cachedProviderRuntimeHooks = null;
+    return cachedProviderRuntimeHooks;
+  }
+  try {
+    const loaded = requireProviderRuntime(
+      "../../plugins/provider-runtime.js",
+    ) as unknown as ProviderRuntimeHooks;
+    cachedProviderRuntimeHooks = {
+      classifyProviderFailoverReasonWithPlugin: ({ context }) =>
+        loaded.classifyProviderFailoverReasonWithPlugin({ context }) ?? null,
+      matchesProviderContextOverflowWithPlugin: loaded.matchesProviderContextOverflowWithPlugin,
+    };
+  } catch {
+    cachedProviderRuntimeHooks = null;
+  }
+  return cachedProviderRuntimeHooks ?? null;
+}
+
+function looksLikeProviderContextOverflowCandidate(errorMessage: string): boolean {
+  return (
+    PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE.test(errorMessage) &&
+    PROVIDER_CONTEXT_OVERFLOW_ACTION_RE.test(errorMessage)
+  );
+}
+
 /**
  * Check if an error message matches any provider-specific context overflow pattern.
  * Called from `isContextOverflowError()` to catch provider-specific wording.
  */
 export function matchesProviderContextOverflow(errorMessage: string): boolean {
+  if (!looksLikeProviderContextOverflowCandidate(errorMessage)) {
+    return false;
+  }
+  const runtimeHooks = resolveProviderRuntimeHooks();
   return (
-    matchesProviderContextOverflowWithPlugin({
+    runtimeHooks?.matchesProviderContextOverflowWithPlugin({
       context: { errorMessage },
-    }) || PROVIDER_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage))
+    }) === true || PROVIDER_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage))
   );
 }
 
@@ -88,9 +143,11 @@ export function matchesProviderContextOverflow(errorMessage: string): boolean {
  * Returns null if no provider-specific pattern matches (fall through to generic classification).
  */
 export function classifyProviderSpecificError(errorMessage: string): FailoverReason | null {
-  const pluginReason = classifyProviderFailoverReasonWithPlugin({
-    context: { errorMessage },
-  });
+  const runtimeHooks = resolveProviderRuntimeHooks();
+  const pluginReason =
+    runtimeHooks?.classifyProviderFailoverReasonWithPlugin({
+      context: { errorMessage },
+    }) ?? null;
   if (pluginReason) {
     return pluginReason;
   }

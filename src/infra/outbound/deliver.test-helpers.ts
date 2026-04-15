@@ -1,6 +1,11 @@
 import { vi } from "vitest";
 import { createIMessageTestPlugin } from "../../../test/helpers/channels/imessage-test-plugin.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import {
+  imessageOutboundForTest,
+  signalOutbound,
+  whatsappOutbound,
+} from "../../../test/helpers/infra/deliver-test-outbounds.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
@@ -8,11 +13,6 @@ import {
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { DeliverOutboundPayloadsParams, OutboundDeliveryResult } from "./deliver.js";
-import {
-  imessageOutboundForTest,
-  signalOutbound,
-  whatsappOutbound,
-} from "./deliver.test-outbounds.js";
 
 type DeliverMockState = {
   sessions: {

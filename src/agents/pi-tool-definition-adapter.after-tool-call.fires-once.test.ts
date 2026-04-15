@@ -8,7 +8,7 @@
  */
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -61,7 +61,6 @@ function createToolHandlerCtx() {
     },
     hookRunner: hookMocks.runner,
     state: {
-      toolMetaById: new Map<string, unknown>(),
       ...createBaseToolHandlerState(),
       successfulCronAdds: 0,
     },
@@ -80,12 +79,13 @@ let handleToolExecutionStart: typeof import("./pi-embedded-subscribe.handlers.to
 let handleToolExecutionEnd: typeof import("./pi-embedded-subscribe.handlers.tools.js").handleToolExecutionEnd;
 
 async function loadFreshAfterToolCallModulesForTest() {
-  vi.resetModules();
   vi.doMock("../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: () => hookMocks.runner,
   }));
   vi.doMock("../infra/agent-events.js", () => ({
+    emitAgentCommandOutputEvent: vi.fn(),
     emitAgentEvent: vi.fn(),
+    emitAgentItemEvent: vi.fn(),
   }));
   vi.doMock("./pi-tools.before-tool-call.js", () => ({
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
@@ -98,7 +98,9 @@ async function loadFreshAfterToolCallModulesForTest() {
 }
 
 describe("after_tool_call fires exactly once in embedded runs", () => {
-  beforeEach(async () => {
+  beforeAll(loadFreshAfterToolCallModulesForTest);
+
+  beforeEach(() => {
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(true);
     hookMocks.runner.runAfterToolCall.mockClear();
@@ -114,7 +116,6 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
       blocked: false,
       params,
     }));
-    await loadFreshAfterToolCallModulesForTest();
   });
 
   function resolveAdapterDefinition(tool: Parameters<typeof toToolDefinitions>[0][number]) {

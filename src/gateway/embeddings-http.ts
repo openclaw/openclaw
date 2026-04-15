@@ -3,13 +3,21 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
-  type MemoryEmbeddingProvider,
-  type MemoryEmbeddingProviderAdapter,
+} from "../plugins/memory-embedding-provider-runtime.js";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
 } from "../plugins/memory-embedding-providers.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson } from "./http-common.js";
@@ -83,13 +91,9 @@ function validateInputTexts(texts: string[]): string | undefined {
   return undefined;
 }
 
-function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-function resolveAutoExplicitProviders(): Set<string> {
+function resolveAutoExplicitProviders(cfg: OpenClawConfig): Set<string> {
   return new Set(
-    listMemoryEmbeddingProviders()
+    listMemoryEmbeddingProviders(cfg)
       .filter((adapter) => adapter.allowExplicitWhenConfiguredAuto)
       .map((adapter) => adapter.id),
   );
@@ -103,7 +107,7 @@ function shouldContinueAutoSelection(
 }
 
 async function createConfiguredEmbeddingProvider(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentDir: string;
   provider: EmbeddingProviderRequest;
   model: string;
@@ -131,7 +135,7 @@ async function createConfiguredEmbeddingProvider(params: {
   };
 
   if (params.provider === "auto") {
-    const adapters = listMemoryEmbeddingProviders()
+    const adapters = listMemoryEmbeddingProviders(params.cfg)
       .filter((adapter) => typeof adapter.autoSelectPriority === "number")
       .toSorted(
         (a, b) =>
@@ -154,7 +158,7 @@ async function createConfiguredEmbeddingProvider(params: {
     throw new Error("No embeddings provider available.");
   }
 
-  const adapter = getMemoryEmbeddingProvider(params.provider);
+  const adapter = getMemoryEmbeddingProvider(params.provider, params.cfg);
   if (!adapter) {
     throw new Error(`Unknown memory embedding provider: ${params.provider}`);
   }
@@ -168,6 +172,7 @@ async function createConfiguredEmbeddingProvider(params: {
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: EmbeddingProviderRequest;
+  cfg: OpenClawConfig;
 }): { provider: EmbeddingProviderRequest; model: string } | { errorMessage: string } {
   const raw = params.requestModel.trim();
   const slash = raw.indexOf("/");
@@ -175,14 +180,14 @@ function resolveEmbeddingsTarget(params: {
     return { provider: params.configuredProvider, model: raw };
   }
 
-  const provider = raw.slice(0, slash).trim().toLowerCase();
+  const provider = normalizeLowercaseStringOrEmpty(raw.slice(0, slash));
   const model = raw.slice(slash + 1).trim();
   if (!model) {
     return { errorMessage: "Unsupported embedding model reference." };
   }
 
   if (params.configuredProvider === "auto") {
-    const safeAutoExplicitProviders = resolveAutoExplicitProviders();
+    const safeAutoExplicitProviders = resolveAutoExplicitProviders(params.cfg);
     if (provider === "auto") {
       return { provider: "auto", model };
     }
@@ -226,7 +231,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   }
 
   const payload = coerceRequest(handled.body);
-  const requestModel = typeof payload.model === "string" ? payload.model.trim() : "";
+  const requestModel = normalizeOptionalString(payload.model) ?? "";
   if (!requestModel) {
     sendJson(res, 400, {
       error: { message: "Missing `model`.", type: "invalid_request_error" },
@@ -267,8 +272,15 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const agentDir = resolveAgentDir(cfg, agentId);
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);
   const configuredProvider = memorySearch?.provider ?? "openai";
-  const overrideModel = getHeader(req, "x-openclaw-model")?.trim() || memorySearch?.model || "";
-  const target = resolveEmbeddingsTarget({ requestModel: overrideModel, configuredProvider });
+  const overrideModel =
+    normalizeOptionalString(getHeader(req, "x-openclaw-model")) ||
+    normalizeOptionalString(memorySearch?.model) ||
+    "";
+  const target = resolveEmbeddingsTarget({
+    requestModel: overrideModel,
+    configuredProvider,
+    cfg,
+  });
   if ("errorMessage" in target) {
     sendJson(res, 400, {
       error: {

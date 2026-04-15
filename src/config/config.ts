@@ -10,6 +10,7 @@ export {
   projectConfigOntoRuntimeSourceSnapshot,
   loadConfig,
   readBestEffortConfig,
+  readSourceConfigBestEffort,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
@@ -22,7 +23,6 @@ export {
   writeConfigFile,
 } from "./io.js";
 export type { ConfigWriteNotification } from "./io.js";
-export { migrateLegacyConfig } from "./legacy-migrate.js";
 export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
 export * from "./paths.js";
 export * from "./runtime-overrides.js";

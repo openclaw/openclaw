@@ -1,16 +1,15 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
+import { CONFIG_PATH } from "../config/paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { probeGateway } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
@@ -20,11 +19,12 @@ import {
 import { detectBinary } from "../infra/detect-binary.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { CONFIG_DIR, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, openUrlInBackground, resolveBrowserOpenCommand };
@@ -67,10 +67,6 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
     rows.push(shortenHomeInString(`skills.nodeManager: ${config.skills.install.nodeManager}`));
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
-}
-
-export function randomToken(): string {
-  return crypto.randomBytes(24).toString("hex");
 }
 
 export function normalizeGatewayTokenInput(value: unknown): string {
@@ -117,7 +113,8 @@ export function applyWizardMetadata(
   cfg: OpenClawConfig,
   params: { command: string; mode: OnboardMode },
 ): OpenClawConfig {
-  const commit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
+  const commit =
+    normalizeOptionalString(process.env.GIT_COMMIT) ?? normalizeOptionalString(process.env.GIT_SHA);
   return {
     ...cfg,
     wizard: {
@@ -228,16 +225,16 @@ export async function probeGatewayReachable(params: {
   const url = params.url.trim();
   const timeoutMs = params.timeoutMs ?? 1500;
   try {
-    await callGateway({
+    const probe = await probeGateway({
       url,
-      token: params.token,
-      password: params.password,
-      method: "health",
       timeoutMs,
-      clientName: GATEWAY_CLIENT_NAMES.PROBE,
-      mode: GATEWAY_CLIENT_MODES.PROBE,
+      auth: {
+        token: params.token,
+        password: params.password,
+      },
+      detailLevel: "none",
     });
-    return { ok: true };
+    return probe.ok ? { ok: true } : { ok: false, detail: probe.error ?? undefined };
   } catch (err) {
     return { ok: false, detail: summarizeError(err) };
   }

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { t } from "../../i18n/index.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -7,6 +8,7 @@ import type {
 } from "../controllers/skills.ts";
 import { clampText } from "../format.ts";
 import { resolveSafeExternalUrl } from "../open-external-url.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
@@ -80,6 +82,7 @@ function skillMatchesStatus(skill: SkillStatusEntry, status: SkillsStatusFilter)
     case "disabled":
       return skill.disabled;
   }
+  throw new Error("Unsupported skills status filter");
 }
 
 function skillStatusClass(skill: SkillStatusEntry): string {
@@ -113,10 +116,12 @@ export function renderSkills(props: SkillsProps) {
       ? skills
       : skills.filter((s) => skillMatchesStatus(s, props.statusFilter));
 
-  const filter = props.filter.trim().toLowerCase();
+  const filter = normalizeLowercaseStringOrEmpty(props.filter);
   const filtered = filter
     ? afterStatus.filter((skill) =>
-        [skill.name, skill.description, skill.source].join(" ").toLowerCase().includes(filter),
+        normalizeLowercaseStringOrEmpty(
+          [skill.name, skill.description, skill.source].join(" "),
+        ).includes(filter),
       )
     : afterStatus;
   const groups = groupSkills(filtered);
@@ -137,7 +142,7 @@ export function renderSkills(props: SkillsProps) {
           ?disabled=${props.loading || !props.connected}
           @click=${props.onRefresh}
         >
-          ${props.loading ? "Loading\u2026" : "Refresh"}
+          ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
 
@@ -320,7 +325,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
         </div>
         <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
           ${props.clawhubDetailLoading
-            ? html`<div class="muted">Loading…</div>`
+            ? html`<div class="muted">${t("common.loading")}</div>`
             : props.clawhubDetailError
               ? html`<div class="callout danger">${props.clawhubDetailError}</div>`
               : detail?.skill

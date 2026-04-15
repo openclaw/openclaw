@@ -10,6 +10,7 @@ import {
   withStrictWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
+import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveFirecrawlApiKey,
@@ -89,6 +90,7 @@ async function postFirecrawlJson<T>(
   },
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const apiKey = normalizeSecretInput(params.apiKey);
   return await withStrictWebToolsEndpoint(
     {
       url: params.url,
@@ -96,7 +98,7 @@ async function postFirecrawlJson<T>(
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${params.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(params.body),
@@ -139,7 +141,7 @@ async function postFirecrawlJson<T>(
             detail = errorBody.text;
           }
         }
-        const safeDetail = wrapWebContent(String(detail).slice(0, 1_000), "web_fetch");
+        const safeDetail = wrapWebContent(detail.slice(0, 1_000), "web_fetch");
         throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
       }
       return await parse(response);

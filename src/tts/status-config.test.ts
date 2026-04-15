@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
 
 describe("resolveStatusTtsSnapshot", () => {
@@ -60,5 +60,45 @@ describe("resolveStatusTtsSnapshot", () => {
         summarize: true,
       });
     });
+  });
+
+  it("derives the default prefs path from OPENCLAW_CONFIG_PATH when set", async () => {
+    await withTempHome(
+      async (home) => {
+        const stateDir = path.join(home, ".openclaw-dev");
+        const prefsPath = path.join(stateDir, "settings", "tts.json");
+        fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+        fs.writeFileSync(
+          prefsPath,
+          JSON.stringify({
+            tts: {
+              auto: "always",
+              provider: "openai",
+            },
+          }),
+        );
+
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+        try {
+          expect(
+            resolveStatusTtsSnapshot({
+              cfg: {
+                messages: {
+                  tts: {},
+                },
+              } as OpenClawConfig,
+            }),
+          ).toEqual({
+            autoMode: "always",
+            provider: "openai",
+            maxLength: 1500,
+            summarize: true,
+          });
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      },
+      { env: { OPENCLAW_STATE_DIR: undefined } },
+    );
   });
 });

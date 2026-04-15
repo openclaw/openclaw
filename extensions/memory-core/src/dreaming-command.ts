@@ -1,61 +1,26 @@
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
-
-type DreamingMode = "off" | "core" | "rem" | "deep";
-
-const DREAMING_MODE_LIST = [
-  "off",
-  "core",
-  "rem",
-  "deep",
-] as const satisfies readonly DreamingMode[];
-const DEFAULT_DREAMING_MODE: DreamingMode = "off";
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function normalizeDreamingMode(value: unknown): DreamingMode | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "off" ||
-    normalized === "core" ||
-    normalized === "rem" ||
-    normalized === "deep"
-  ) {
-    return normalized;
-  }
-  return null;
-}
 
 function resolveMemoryCorePluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
   const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
   return asRecord(entry?.config) ?? {};
 }
 
-function resolveDreamingModeFromConfig(pluginConfig: Record<string, unknown>): DreamingMode {
-  const dreaming = asRecord(pluginConfig.dreaming);
-  return normalizeDreamingMode(dreaming?.mode) ?? DEFAULT_DREAMING_MODE;
-}
-
-function updateDreamingModeInConfig(cfg: OpenClawConfig, mode: DreamingMode): OpenClawConfig {
-  const entries = { ...(cfg.plugins?.entries ?? {}) };
+function updateDreamingEnabledInConfig(cfg: OpenClawConfig, enabled: boolean): OpenClawConfig {
+  const entries = { ...cfg.plugins?.entries };
   const existingEntry = asRecord(entries["memory-core"]) ?? {};
   const existingConfig = asRecord(existingEntry.config) ?? {};
-  const existingDreaming = asRecord(existingConfig.dreaming) ?? {};
+  const existingSleep = asRecord(existingConfig.dreaming) ?? {};
   entries["memory-core"] = {
     ...existingEntry,
     config: {
       ...existingConfig,
       dreaming: {
-        ...existingDreaming,
-        mode,
+        ...existingSleep,
+        enabled,
       },
     },
   };
@@ -69,74 +34,69 @@ function updateDreamingModeInConfig(cfg: OpenClawConfig, mode: DreamingMode): Op
   };
 }
 
-function formatModeGuideLine(mode: DreamingMode): string {
-  if (mode === "off") {
-    return "- off: disable automatic short-term to long-term promotion.";
-  }
-  const resolved = resolveShortTermPromotionDreamingConfig({
-    pluginConfig: {
-      dreaming: {
-        mode,
-      },
-    },
-  });
-  return (
-    `- ${mode}: cadence=${resolved.cron}; ` +
-    `minScore=${resolved.minScore}, minRecallCount=${resolved.minRecallCount}, ` +
-    `minUniqueQueries=${resolved.minUniqueQueries}.`
-  );
+function formatEnabled(value: boolean): string {
+  return value ? "on" : "off";
 }
 
-function formatModeGuide(): string {
-  return DREAMING_MODE_LIST.map((mode) => formatModeGuideLine(mode)).join("\n");
+function formatPhaseGuide(): string {
+  return [
+    "- implementation detail: each sweep runs light -> REM -> deep.",
+    "- deep is the only stage that writes durable entries to MEMORY.md.",
+    "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
+  ].join("\n");
 }
 
 function formatStatus(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryCorePluginConfig(cfg);
-  const mode = resolveDreamingModeFromConfig(pluginConfig);
-  const resolved = resolveShortTermPromotionDreamingConfig({
+  const dreaming = resolveMemoryDreamingConfig({
     pluginConfig,
     cfg,
   });
-  const cadence = resolved.enabled ? resolved.cron : "disabled";
-  const timezone = resolved.enabled && resolved.timezone ? ` (${resolved.timezone})` : "";
+  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
 
   return [
     "Dreaming status:",
-    `- mode: ${mode}`,
-    `- cadence: ${cadence}${timezone}`,
-    `- limit: ${resolved.limit}`,
-    `- thresholds: minScore=${resolved.minScore}, minRecallCount=${resolved.minRecallCount}, minUniqueQueries=${resolved.minUniqueQueries}`,
+    `- enabled: ${formatEnabled(dreaming.enabled)}${timezone}`,
+    `- sweep cadence: ${dreaming.frequency}`,
+    `- promotion policy: score>=${deep.minScore}, recalls>=${deep.minRecallCount}, uniqueQueries>=${deep.minUniqueQueries}`,
   ].join("\n");
 }
 
 function formatUsage(includeStatus: string): string {
   return [
-    "Usage: /dreaming off|core|rem|deep",
-    "Use /dreaming status for current settings.",
+    "Usage: /dreaming status",
+    "Usage: /dreaming on|off",
     "",
     includeStatus,
     "",
-    "Modes:",
-    formatModeGuide(),
+    "Phases:",
+    formatPhaseGuide(),
   ].join("\n");
+}
+
+function requiresAdminToMutateDreaming(gatewayClientScopes?: readonly string[]): boolean {
+  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
 }
 
 export function registerDreamingCommand(api: OpenClawPluginApi): void {
   api.registerCommand({
     name: "dreaming",
-    description: "Configure memory dreaming mode (off|core|rem|deep).",
+    description: "Enable or disable memory dreaming.",
     acceptsArgs: true,
     handler: async (ctx) => {
       const args = ctx.args?.trim() ?? "";
-      const firstToken = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
+      const [firstToken = ""] = args
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((token) => normalizeLowercaseStringOrEmpty(token));
       const currentConfig = api.runtime.config.loadConfig();
 
       if (
         !firstToken ||
         firstToken === "help" ||
         firstToken === "options" ||
-        firstToken === "modes"
+        firstToken === "phases"
       ) {
         return { text: formatUsage(formatStatus(currentConfig)) };
       }
@@ -145,24 +105,23 @@ export function registerDreamingCommand(api: OpenClawPluginApi): void {
         return { text: formatStatus(currentConfig) };
       }
 
-      const requestedMode = normalizeDreamingMode(firstToken);
-      if (!requestedMode) {
-        return { text: formatUsage(formatStatus(currentConfig)) };
+      if (firstToken === "on" || firstToken === "off") {
+        if (requiresAdminToMutateDreaming(ctx.gatewayClientScopes)) {
+          return { text: "⚠️ /dreaming on|off requires operator.admin for gateway clients." };
+        }
+        const enabled = firstToken === "on";
+        const nextConfig = updateDreamingEnabledInConfig(currentConfig, enabled);
+        await api.runtime.config.writeConfigFile(nextConfig);
+        return {
+          text: [
+            `Dreaming ${enabled ? "enabled" : "disabled"}.`,
+            "",
+            formatStatus(nextConfig),
+          ].join("\n"),
+        };
       }
 
-      const nextConfig = updateDreamingModeInConfig(currentConfig, requestedMode);
-      await api.runtime.config.writeConfigFile(nextConfig);
-
-      return {
-        text: [
-          `Dreaming mode set to ${requestedMode}.`,
-          "",
-          formatStatus(nextConfig),
-          "",
-          "Modes:",
-          formatModeGuide(),
-        ].join("\n"),
-      };
+      return { text: formatUsage(formatStatus(currentConfig)) };
     },
   });
 }

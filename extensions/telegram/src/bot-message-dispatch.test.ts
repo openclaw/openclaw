@@ -139,34 +139,63 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   beforeEach(() => {
-    createTelegramDraftStream.mockClear();
-    dispatchReplyWithBufferedBlockDispatcher.mockClear();
-    deliverReplies.mockClear();
-    emitInternalMessageSentHook.mockClear();
-    createForumTopicTelegram.mockClear();
-    deleteMessageTelegram.mockClear();
-    editForumTopicTelegram.mockClear();
-    editMessageTelegram.mockClear();
-    reactMessageTelegram.mockClear();
-    sendMessageTelegram.mockClear();
-    sendPollTelegram.mockClear();
-    sendStickerTelegram.mockClear();
-    loadConfig.mockClear();
-    readChannelAllowFromStore.mockClear();
-    upsertChannelPairingRequest.mockClear();
-    enqueueSystemEvent.mockClear();
-    buildModelsProviderData.mockClear();
-    listSkillCommandsForAgents.mockClear();
-    createChannelReplyPipeline.mockClear();
-    wasSentByBot.mockClear();
-    loadSessionStore.mockClear();
-    resolveStorePath.mockClear();
-    generateTopicLabel.mockClear();
+    createTelegramDraftStream.mockReset();
+    dispatchReplyWithBufferedBlockDispatcher.mockReset();
+    deliverReplies.mockReset();
+    emitInternalMessageSentHook.mockReset();
+    createForumTopicTelegram.mockReset();
+    deleteMessageTelegram.mockReset();
+    editForumTopicTelegram.mockReset();
+    editMessageTelegram.mockReset();
+    reactMessageTelegram.mockReset();
+    sendMessageTelegram.mockReset();
+    sendPollTelegram.mockReset();
+    sendStickerTelegram.mockReset();
+    loadConfig.mockReset();
+    readChannelAllowFromStore.mockReset();
+    upsertChannelPairingRequest.mockReset();
+    enqueueSystemEvent.mockReset();
+    buildModelsProviderData.mockReset();
+    listSkillCommandsForAgents.mockReset();
+    createChannelReplyPipeline.mockReset();
+    wasSentByBot.mockReset();
+    loadSessionStore.mockReset();
+    resolveStorePath.mockReset();
+    generateTopicLabel.mockReset();
     loadConfig.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
     });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    emitInternalMessageSentHook.mockResolvedValue(undefined);
+    createForumTopicTelegram.mockResolvedValue({ message_thread_id: 777 });
+    deleteMessageTelegram.mockResolvedValue(true);
+    editForumTopicTelegram.mockResolvedValue(true);
+    editMessageTelegram.mockResolvedValue({ ok: true });
+    reactMessageTelegram.mockResolvedValue(true);
+    sendMessageTelegram.mockResolvedValue({ message_id: 1001 });
+    sendPollTelegram.mockResolvedValue({ message_id: 1001 });
+    sendStickerTelegram.mockResolvedValue({ message_id: 1001 });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({
+      code: "PAIRCODE",
+      created: true,
+    });
+    enqueueSystemEvent.mockResolvedValue(undefined);
+    buildModelsProviderData.mockResolvedValue({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-test" },
+      modelNames: new Map<string, string>(),
+    });
+    listSkillCommandsForAgents.mockReturnValue([]);
+    createChannelReplyPipeline.mockReturnValue({
+      responsePrefix: undefined,
+      responsePrefixContextProvider: () => ({ identityName: undefined }),
+      onModelSelected: () => undefined,
+    });
+    wasSentByBot.mockReturnValue(false);
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
     generateTopicLabel.mockResolvedValue("Topic label");
@@ -405,7 +434,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({
       context: createContext(),
-      telegramCfg: { blockStreaming: true },
+      telegramCfg: { streaming: { block: { enabled: true } } },
     });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
@@ -539,6 +568,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
   });
 
+  it("does not expose reasoning preview callbacks unless session reasoning is stream", async () => {
+    let seenReasoningCallback: unknown;
+    const answerDraftStream = createDraftStream(999);
+    createTelegramDraftStream.mockImplementationOnce(() => answerDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      seenReasoningCallback = replyOptions?.onReasoningStream;
+      await replyOptions?.onPartialReply?.({
+        text: "<think>internal chain of thought</think>Visible answer",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(seenReasoningCallback).toBeUndefined();
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Visible answer");
+  });
+
   it("does not overwrite finalized preview when additional final payloads are sent", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -636,7 +684,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it.each([
     { label: "default account config", telegramCfg: {} },
-    { label: "account blockStreaming override", telegramCfg: { blockStreaming: true } },
+    {
+      label: "account blockStreaming override",
+      telegramCfg: { streaming: { block: { enabled: true } } },
+    },
   ])("disables block streaming when streamMode is off ($label)", async ({ telegramCfg }) => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
@@ -1940,7 +1991,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(answerDraftStream.update).toHaveBeenCalledWith("3");
     expect(
-      answerDraftStream.update.mock.calls.some((call) => String(call[0] ?? "").includes("<think>")),
+      answerDraftStream.update.mock.calls.some((call) => (call[0] ?? "").includes("<think>")),
     ).toBe(false);
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "3", expect.any(Object));
   });
@@ -1970,9 +2021,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.update).toHaveBeenCalledWith(
       "Reasoning:\n_Counting letters in strawberry_",
     );
-    expect(
-      answerDraftStream.update.mock.calls.some((call) => String(call[0] ?? "").includes("<")),
-    ).toBe(false);
+    expect(answerDraftStream.update.mock.calls.some((call) => (call[0] ?? "").includes("<"))).toBe(
+      false,
+    );
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       999,

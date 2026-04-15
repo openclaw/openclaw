@@ -5,10 +5,6 @@ import { telegramMessagingForTest } from "../../infra/outbound/targets.test-help
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-const whatsappAccountMocks = vi.hoisted(() => ({
-  resolveWhatsAppAccount: vi.fn<() => { allowFrom: string[] }>(() => ({ allowFrom: [] })),
-}));
-
 vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
 }));
@@ -27,16 +23,12 @@ vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
     .mockResolvedValue({ channel: "telegram", configured: ["telegram"] }),
 }));
 
-vi.mock("../../infra/outbound/target-resolver.js", () => ({
+vi.mock("../../infra/outbound/target-id-resolution.js", () => ({
   maybeResolveIdLikeTarget: vi.fn(),
 }));
 
-vi.mock("../../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStoreSync: vi.fn(() => []),
-}));
-
-vi.mock("../../plugin-sdk/whatsapp-surface.js", () => ({
-  resolveWhatsAppAccount: whatsappAccountMocks.resolveWhatsAppAccount,
+vi.mock("../../pairing/allow-from-store-read.js", () => ({
+  readChannelAllowFromStoreEntriesSync: vi.fn(() => []),
 }));
 
 vi.mock("../../infra/outbound/targets.runtime.js", () => ({
@@ -48,16 +40,15 @@ const mockedModuleIds = [
   "../../config/sessions/store-load.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
-  "../../infra/outbound/target-resolver.js",
-  "../../pairing/pairing-store.js",
-  "../../plugin-sdk/whatsapp-surface.js",
+  "../../infra/outbound/target-id-resolution.js",
+  "../../pairing/allow-from-store-read.js",
 ];
 
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
-import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
-import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
+import { readChannelAllowFromStoreEntriesSync } from "../../pairing/allow-from-store-read.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
 afterAll(() => {
@@ -187,7 +178,7 @@ function setLastSessionEntry(params: {
 }
 
 function setStoredWhatsAppAllowFrom(allowFrom: string[]) {
-  vi.mocked(readChannelAllowFromStoreSync).mockReturnValue(allowFrom);
+  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue(allowFrom);
 }
 
 async function resolveForAgent(params: {

@@ -1,8 +1,17 @@
 import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
-import { buildTalkConfigResponse, resolveActiveTalkProviderConfig } from "../../config/talk.js";
-import type { TalkProviderConfig } from "../../config/types.gateway.js";
+import {
+  buildTalkConfigResponse,
+  normalizeTalkSection,
+  resolveActiveTalkProviderConfig,
+} from "../../config/talk.js";
+import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
 import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
@@ -16,6 +25,7 @@ import {
   validateTalkSpeakParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import { asRecord } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type TalkSpeakReason =
@@ -34,22 +44,22 @@ function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null):
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
 }
 
-function trimString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
+function asStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = asRecord(value);
+  if (!record) {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  const next: Record<string, string> = {};
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (typeof entryValue === "string") {
+      next[key] = entryValue;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function normalizeAliasKey(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function resolveTalkVoiceId(
@@ -59,7 +69,7 @@ function resolveTalkVoiceId(
   if (!requested) {
     return undefined;
   }
-  const aliases = providerConfig.voiceAliases;
+  const aliases = asStringRecord(providerConfig.voiceAliases);
   if (!aliases) {
     return requested;
   }
@@ -167,7 +177,10 @@ function buildTalkSpeakOverrides(
     return { provider };
   }
   const resolvedSpeed = resolveTalkSpeed(params);
-  const resolvedVoiceId = resolveTalkVoiceId(providerConfig, trimString(params.voiceId));
+  const resolvedVoiceId = resolveTalkVoiceId(
+    providerConfig,
+    normalizeOptionalString(params.voiceId),
+  );
   const providerOverrides = speechProvider.resolveTalkOverrides({
     talkProviderConfig: providerConfig,
     params: {
@@ -191,8 +204,8 @@ function inferMimeType(
   outputFormat: string | undefined,
   fileExtension: string | undefined,
 ): string | undefined {
-  const normalizedOutput = outputFormat?.trim().toLowerCase();
-  const normalizedExtension = fileExtension?.trim().toLowerCase();
+  const normalizedOutput = normalizeOptionalLowercaseString(outputFormat);
+  const normalizedExtension = normalizeOptionalLowercaseString(fileExtension);
   if (
     normalizedOutput === "mp3" ||
     normalizedOutput?.startsWith("mp3_") ||
@@ -216,6 +229,60 @@ function inferMimeType(
     return "audio/webm";
   }
   return undefined;
+}
+
+function resolveTalkResponseFromConfig(params: {
+  includeSecrets: boolean;
+  sourceConfig: OpenClawConfig;
+  runtimeConfig: OpenClawConfig;
+}): TalkConfigResponse | undefined {
+  const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
+  if (!normalizedTalk) {
+    return undefined;
+  }
+
+  const payload = buildTalkConfigResponse(normalizedTalk);
+  if (!payload) {
+    return undefined;
+  }
+
+  if (params.includeSecrets) {
+    return payload;
+  }
+
+  const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
+  const runtimeResolved = resolveActiveTalkProviderConfig(params.runtimeConfig.talk);
+  const activeProviderId = sourceResolved?.provider ?? runtimeResolved?.provider;
+  const provider = canonicalizeSpeechProviderId(activeProviderId, params.runtimeConfig);
+  if (!provider) {
+    return payload;
+  }
+
+  const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
+  const sourceBaseTts = asRecord(params.sourceConfig.messages?.tts) ?? {};
+  const runtimeBaseTts = asRecord(params.runtimeConfig.messages?.tts) ?? {};
+  const talkProviderConfig = sourceResolved?.config ?? runtimeResolved?.config ?? {};
+  const resolvedConfig =
+    speechProvider?.resolveTalkConfig?.({
+      cfg: params.runtimeConfig,
+      baseTtsConfig: Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
+      talkProviderConfig,
+      timeoutMs:
+        typeof sourceBaseTts.timeoutMs === "number"
+          ? sourceBaseTts.timeoutMs
+          : typeof runtimeBaseTts.timeoutMs === "number"
+            ? runtimeBaseTts.timeoutMs
+            : 30_000,
+    }) ?? talkProviderConfig;
+
+  return {
+    ...payload,
+    provider,
+    resolved: {
+      provider,
+      config: resolvedConfig,
+    },
+  };
 }
 
 export const talkHandlers: GatewayRequestHandlers = {
@@ -243,14 +310,16 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     const snapshot = await readConfigFileSnapshot();
+    const runtimeConfig = loadConfig();
     const configPayload: Record<string, unknown> = {};
 
-    const talkSource = includeSecrets
-      ? snapshot.config.talk
-      : redactConfigObject(snapshot.config.talk);
-    const talk = buildTalkConfigResponse(talkSource);
+    const talk = resolveTalkResponseFromConfig({
+      includeSecrets,
+      sourceConfig: snapshot.config,
+      runtimeConfig,
+    });
     if (talk) {
-      configPayload.talk = talk;
+      configPayload.talk = includeSecrets ? talk : redactConfigObject(talk);
     }
 
     const sessionMainKey = snapshot.config.session?.mainKey;
@@ -279,7 +348,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     const typedParams = params;
-    const text = trimString(typedParams.text);
+    const text = normalizeOptionalString(typedParams.text);
     if (!text) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "talk.speak requires text"));
       return;

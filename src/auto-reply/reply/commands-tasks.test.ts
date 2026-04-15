@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   completeTaskRunByRunId,
@@ -7,8 +8,19 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
+
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
+  };
+});
 
 const baseCfg = {
   commands: { text: true },
@@ -24,13 +36,34 @@ async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
   });
 }
 
+function configureInMemoryTaskRegistryStoreForTests(): void {
+  configureTaskRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({
+        tasks: new Map(),
+        deliveryStates: new Map(),
+      }),
+      saveSnapshot: () => {},
+      upsertTaskWithDeliveryState: () => {},
+      upsertTask: () => {},
+      deleteTaskWithDeliveryState: () => {},
+      deleteTask: () => {},
+      upsertDeliveryState: () => {},
+      deleteDeliveryState: () => {},
+      close: () => {},
+    },
+  });
+}
+
 describe("buildTasksReply", () => {
   beforeEach(() => {
-    resetTaskRegistryForTests();
+    vi.clearAllMocks();
+    resetTaskRegistryForTests({ persist: false });
+    configureInMemoryTaskRegistryStoreForTests();
   });
 
   afterEach(() => {
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
   });
 
   it("lists active and recent tasks for the current session", async () => {
@@ -102,6 +135,32 @@ describe("buildTasksReply", () => {
     expect(reply.text).not.toContain("Internal task completion event");
   });
 
+  it("sanitizes inline internal runtime fences from visible task titles", async () => {
+    createRunningTaskRun({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:main",
+      runId: "run-tasks-inline-fence",
+      task: [
+        "[Mon 2026-04-06 02:42 GMT+1] <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+      ].join("\n"),
+      progressSummary: "done",
+    });
+    completeTaskRunByRunId({
+      runId: "run-tasks-inline-fence",
+      endedAt: Date.now(),
+      terminalSummary: "Finished.",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("[Mon 2026-04-06 02:42 GMT+1]");
+    expect(reply.text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+    expect(reply.text).not.toContain("OpenClaw runtime context (internal):");
+  });
+
   it("hides stale completed tasks from the task board", async () => {
     createQueuedTaskRun({
       runtime: "cron",
@@ -142,6 +201,30 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden background task");
     expect(reply.text).not.toContain("hidden progress detail");
+  });
+
+  it("uses the canonical target session agent for agent-local fallback counts", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:target:other-session",
+      childSessionKey: "agent:target:subagent:tasks-target-fallback",
+      runId: "run-tasks-target-fallback",
+      agentId: "target",
+      task: "target hidden background task",
+      progressSummary: "hidden target progress detail",
+    });
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+
+    const commandParams = buildCommandTestParams("/tasks", baseCfg);
+    const reply = await buildTasksReply({
+      ...commandParams,
+      agentId: "main",
+      sessionKey: "agent:target:empty-session",
+    });
+
+    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Agent-local: 1 active · 1 total");
+    expect(reply.text).not.toContain("target hidden background task");
   });
 });
 

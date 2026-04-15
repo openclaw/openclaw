@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   cancelTaskById,
@@ -84,6 +84,7 @@ function ensureSingleTaskFlow(params: {
 
 export function createQueuedTaskRun(params: {
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;
@@ -116,6 +117,7 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
 
 export function createRunningTaskRun(params: {
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;

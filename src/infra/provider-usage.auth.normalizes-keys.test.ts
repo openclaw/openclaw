@@ -6,10 +6,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
 vi.mock("../agents/auth-profiles.js", () => {
   const normalizeProvider = (provider?: string | null): string =>
-    String(provider ?? "")
+    (provider ?? "")
       .trim()
       .toLowerCase()
       .replace(/^z-ai$/, "zai");
@@ -152,6 +153,80 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderStreamFn: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
+    resolveProviderUsageAuthWithPlugin: vi.fn(async (params) => {
+      const resolveToken = (options?: {
+        providerIds?: string[];
+        envDirect?: Array<string | undefined>;
+      }) => params.context.resolveApiKeyFromConfigAndStore(options);
+      const resolveLegacyZaiToken = (): string | null => {
+        const home = params.context.env?.HOME ?? params.context.env?.USERPROFILE;
+        if (!home) {
+          return null;
+        }
+        try {
+          const parsed = JSON.parse(
+            nodeFs.readFileSync(path.join(home, ".pi", "agent", "auth.json"), "utf8"),
+          ) as {
+            "z-ai"?: { access?: string };
+          };
+          return parsed["z-ai"]?.access ?? null;
+        } catch {
+          return null;
+        }
+      };
+
+      if (params.provider === "zai") {
+        const token = resolveToken({
+          providerIds: ["zai", "z-ai"],
+          envDirect: [params.context.env?.ZAI_API_KEY, params.context.env?.Z_AI_API_KEY],
+        });
+        return token
+          ? { token }
+          : resolveLegacyZaiToken()
+            ? { token: resolveLegacyZaiToken()! }
+            : null;
+      }
+
+      if (params.provider === "minimax") {
+        const token = resolveToken({
+          providerIds: ["minimax"],
+          envDirect: [
+            params.context.env?.MINIMAX_CODE_PLAN_KEY,
+            params.context.env?.MINIMAX_CODING_API_KEY,
+            params.context.env?.MINIMAX_API_KEY,
+          ],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "xiaomi") {
+        const token = resolveToken({
+          providerIds: ["xiaomi"],
+          envDirect: [params.context.env?.XIAOMI_API_KEY],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "google-gemini-cli") {
+        const resolved = await params.context.resolveOAuthToken({
+          provider: "google-gemini-cli",
+        });
+        if (!resolved?.token) {
+          return null;
+        }
+        try {
+          const parsed = JSON.parse(resolved.token) as { token?: string };
+          const token = parsed.token ?? resolved.token;
+          return resolved.accountId ? { token, accountId: resolved.accountId } : { token };
+        } catch {
+          return resolved.accountId
+            ? { token: resolved.token, accountId: resolved.accountId }
+            : { token: resolved.token };
+        }
+      }
+
+      return null;
+    }),
     resolveProviderXHighThinking: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
@@ -191,10 +266,9 @@ let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProvi
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-provider-auth-suite-" });
 
 describe("resolveProviderAuths key normalization", () => {
-  let suiteRoot = "";
-  let suiteCase = 0;
   const EMPTY_PROVIDER_ENV = {
     ZAI_API_KEY: undefined,
     Z_AI_API_KEY: undefined,
@@ -205,16 +279,14 @@ describe("resolveProviderAuths key normalization", () => {
   } satisfies Record<string, string | undefined>;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+    await suiteRootTracker.setup();
     ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
     ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   afterAll(async () => {
-    await fs.rm(suiteRoot, { recursive: true, force: true });
-    suiteRoot = "";
-    suiteCase = 0;
+    await suiteRootTracker.cleanup();
   });
 
   beforeEach(() => {
@@ -231,8 +303,7 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const base = path.join(suiteRoot, `case-${++suiteCase}`);
-    nodeFs.mkdirSync(base, { recursive: true });
+    const base = await suiteRootTracker.make("case");
     const stateDir = path.join(base, ".openclaw");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     nodeFs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
@@ -478,8 +549,11 @@ describe("resolveProviderAuths key normalization", () => {
       expectedToken: "plain-google-token",
     },
   ])("$name", async ({ token, expectedToken }) => {
+    const googleGeminiCliUsageProvider = "google-gemini-cli" as unknown as Parameters<
+      typeof resolveProviderAuths
+    >[0]["providers"][number];
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["google-gemini-cli"],
+      providers: [googleGeminiCliUsageProvider],
       setup: async (home) => {
         await writeAuthProfiles(home, {
           "google-gemini-cli:default": {
@@ -489,7 +563,7 @@ describe("resolveProviderAuths key normalization", () => {
           },
         });
       },
-      expected: [{ provider: "google-gemini-cli", token: expectedToken }],
+      expected: [{ provider: googleGeminiCliUsageProvider, token: expectedToken }],
     });
   });
 

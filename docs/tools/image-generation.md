@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, MiniMax)"
+summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, MiniMax, ComfyUI, Vydra)"
 read_when:
   - Generating images via the agent
   - Configuring image generation providers and models
@@ -24,7 +24,9 @@ The tool only appears when at least one image generation provider is available. 
 {
   agents: {
     defaults: {
-      imageGenerationModel: "openai/gpt-image-1",
+      imageGenerationModel: {
+        primary: "openai/gpt-image-1",
+      },
     },
   },
 }
@@ -36,12 +38,14 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 ## Supported providers
 
-| Provider | Default model                    | Edit support            | API key                                               |
-| -------- | -------------------------------- | ----------------------- | ----------------------------------------------------- |
-| OpenAI   | `gpt-image-1`                    | Yes (up to 5 images)    | `OPENAI_API_KEY`                                      |
-| Google   | `gemini-3.1-flash-image-preview` | Yes                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
-| fal      | `fal-ai/flux/dev`                | Yes                     | `FAL_KEY`                                             |
-| MiniMax  | `image-01`                       | Yes (subject reference) | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
+| Provider | Default model                    | Edit support                       | API key                                               |
+| -------- | -------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| OpenAI   | `gpt-image-1`                    | Yes (up to 5 images)               | `OPENAI_API_KEY`                                      |
+| Google   | `gemini-3.1-flash-image-preview` | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| fal      | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
+| MiniMax  | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
+| ComfyUI  | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
+| Vydra    | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -64,7 +68,9 @@ Use `action: "list"` to inspect available providers and models at runtime:
 | `count`       | number   | Number of images to generate (1–4)                                                    |
 | `filename`    | string   | Output filename hint                                                                  |
 
-Not all providers support all parameters. The tool passes what each provider supports and ignores the rest.
+Not all providers support all parameters. When a fallback provider supports a nearby geometry option instead of the exact requested one, OpenClaw remaps to the closest supported size, aspect ratio, or resolution before submission. Truly unsupported overrides are still reported in the tool result.
+
+Tool results report the applied settings. When OpenClaw remaps geometry during provider fallback, the returned `size`, `aspectRatio`, and `resolution` values reflect what was actually sent, and `details.normalization` captures the requested-to-applied translation.
 
 ## Configuration
 
@@ -74,10 +80,6 @@ Not all providers support all parameters. The tool passes what each provider sup
 {
   agents: {
     defaults: {
-      // String form: primary model only
-      imageGenerationModel: "google/gemini-3.1-flash-image-preview",
-
-      // Object form: primary + ordered fallbacks
       imageGenerationModel: {
         primary: "openai/gpt-image-1",
         fallbacks: ["google/gemini-3.1-flash-image-preview", "fal/fal-ai/flux/dev"],
@@ -104,18 +106,22 @@ Notes:
 
 - Auto-detection is auth-aware. A provider default only enters the candidate list
   when OpenClaw can actually authenticate that provider.
+- Auto-detection is enabled by default. Set
+  `agents.defaults.mediaGenerationAutoProviderFallback: false` if you want image
+  generation to use only the explicit `model`, `primary`, and `fallbacks`
+  entries.
 - Use `action: "list"` to inspect the currently registered providers, their
   default models, and auth env-var hints.
 
 ### Image editing
 
-OpenAI, Google, fal, and MiniMax support editing reference images. Pass a reference image path or URL:
+OpenAI, Google, fal, MiniMax, and ComfyUI support editing reference images. Pass a reference image path or URL:
 
 ```
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-OpenAI and Google support up to 5 reference images via the `images` parameter. fal and MiniMax support 1.
+OpenAI and Google support up to 5 reference images via the `images` parameter. fal, MiniMax, and ComfyUI support 1.
 
 MiniMax image generation is available through both bundled MiniMax auth paths:
 
@@ -124,16 +130,22 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 
 ## Provider capabilities
 
-| Capability            | OpenAI               | Google               | fal                 | MiniMax                    |
-| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- |
-| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              |
-| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) |
-| Size control          | Yes                  | Yes                  | Yes                 | No                         |
-| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        |
-| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         |
+| Capability            | OpenAI               | Google               | fal                 | MiniMax                    | ComfyUI                            | Vydra   |
+| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- | ---------------------------------- | ------- |
+| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              | Yes (workflow-defined outputs)     | Yes (1) |
+| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) | No      |
+| Size control          | Yes                  | Yes                  | Yes                 | No                         | No                                 | No      |
+| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        | No                                 | No      |
+| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         | No                                 | No      |
 
 ## Related
 
 - [Tools Overview](/tools) — all available agent tools
+- [fal](/providers/fal) — fal image and video provider setup
+- [ComfyUI](/providers/comfy) — local ComfyUI and Comfy Cloud workflow setup
+- [Google (Gemini)](/providers/google) — Gemini image provider setup
+- [MiniMax](/providers/minimax) — MiniMax image provider setup
+- [OpenAI](/providers/openai) — OpenAI Images provider setup
+- [Vydra](/providers/vydra) — Vydra image, video, and speech setup
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults) — `imageGenerationModel` config
 - [Models](/concepts/models) — model configuration and failover

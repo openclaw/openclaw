@@ -12,9 +12,13 @@ import {
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
 } from "../../../test/helpers/plugins/start-account-lifecycle.js";
-import type { ResolvedIrcAccount } from "./accounts.js";
-import { ircPlugin } from "./channel.js";
-import { setIrcRuntime } from "./runtime.js";
+import {
+  listIrcAccountIds,
+  resolveDefaultIrcAccountId,
+  type ResolvedIrcAccount,
+} from "./accounts.js";
+import { startIrcGatewayAccount } from "./gateway.js";
+import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
   parsePort,
@@ -24,22 +28,35 @@ import {
   setIrcNickServ,
   updateIrcAccountConfig,
 } from "./setup-core.js";
+import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorIrcProvider: vi.fn(),
+  sendMessageIrc: vi.fn(),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+vi.mock("./channel-runtime.js", () => {
   return {
-    ...actual,
     monitorIrcProvider: hoisted.monitorIrcProvider,
+    sendMessageIrc: hoisted.sendMessageIrc,
   };
 });
 
-const ircConfigureAdapter = createPluginSetupWizardAdapter(ircPlugin);
-const ircStatus = createPluginSetupWizardStatus(ircPlugin);
+const ircSetupPlugin = {
+  id: "irc",
+  meta: {
+    label: "IRC",
+  },
+  config: {
+    defaultAccountId: resolveDefaultIrcAccountId,
+    listAccountIds: listIrcAccountIds,
+  },
+  setupWizard: ircSetupWizard,
+} as never;
+
+const ircConfigureAdapter = createPluginSetupWizardAdapter(ircSetupPlugin);
+const ircStatus = createPluginSetupWizardStatus(ircSetupPlugin);
 
 function buildAccount(): ResolvedIrcAccount {
   return {
@@ -82,6 +99,7 @@ function installIrcRuntime() {
 describe("irc setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    clearIrcRuntime();
   });
 
   it("parses valid ports and falls back for invalid values", () => {
@@ -275,7 +293,7 @@ describe("irc setup", () => {
     ).toBeNull();
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: { channels: { irc: {} } },
         accountId: "default",
         input: {
@@ -404,13 +422,15 @@ describe("irc setup", () => {
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
-    vi.resetModules();
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
     installIrcRuntime();
-    const { ircPlugin: runtimeMockedPlugin } = await import("./channel.js");
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: runtimeMockedPlugin.gateway!.startAccount!,
+      startAccount: async (ctx) =>
+        await startIrcGatewayAccount({
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
+        }),
       account: buildAccount(),
     });
 

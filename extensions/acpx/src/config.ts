@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { z } from "openclaw/plugin-sdk/zod";
-import { AcpxPluginConfigSchema } from "./config-schema.js";
+import { AcpxPluginConfigSchema, DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import type {
   AcpxPluginConfig,
   AcpxPermissionMode,
@@ -23,9 +24,7 @@ export {
   createAcpxPluginConfigSchema,
 } from "./config-schema.js";
 
-export const ACPX_VERSION_ANY = "any";
 export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
-const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 
 function isAcpxPluginRoot(dir: string): boolean {
   return (
@@ -62,27 +61,47 @@ function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
   return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
 }
 
+function resolveRepoAcpxPluginRoot(currentRoot: string): string | null {
+  const workspaceRoot = path.join(currentRoot, "extensions", "acpx");
+  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
+}
+
+function resolveAcpxPluginRootFromOpenClawLayout(moduleUrl: string): string | null {
+  let cursor = path.dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 5; i += 1) {
+    const candidates = [
+      path.join(cursor, "extensions", "acpx"),
+      path.join(cursor, "dist", "extensions", "acpx"),
+      path.join(cursor, "dist-runtime", "extensions", "acpx"),
+    ];
+    for (const candidate of candidates) {
+      if (isAcpxPluginRoot(candidate)) {
+        return candidate;
+      }
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return null;
+}
 export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
   const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
   // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
   // Prefer the stable source plugin root when a built extension is running beside it.
-  return resolveWorkspaceAcpxPluginRoot(resolvedRoot) ?? resolvedRoot;
+  return (
+    resolveWorkspaceAcpxPluginRoot(resolvedRoot) ??
+    resolveRepoAcpxPluginRoot(resolvedRoot) ??
+    // Shared dist/dist-runtime chunks can load this module outside the plugin tree.
+    // Scan common OpenClaw layouts before falling back to the nearest path guess.
+    resolveAcpxPluginRootFromOpenClawLayout(moduleUrl) ??
+    resolvedRoot
+  );
 }
 
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
-const pluginPkg = JSON.parse(fs.readFileSync(path.join(ACPX_PLUGIN_ROOT, "package.json"), "utf8"));
-const acpxVersion: unknown = pluginPkg?.dependencies?.acpx;
-if (typeof acpxVersion !== "string" || acpxVersion.trim() === "") {
-  throw new Error(
-    `Could not read acpx version from ${path.join(ACPX_PLUGIN_ROOT, "package.json")} — expected a non-empty string at dependencies.acpx`,
-  );
-}
-export const ACPX_PINNED_VERSION: string = acpxVersion.replace(/^[^0-9]*/, "");
-export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
-export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
-  return `npm install --omit=dev --no-save --package-lock=false acpx@${version}`;
-}
-export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
@@ -118,18 +137,6 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     ok: true,
     value: parsed.data as AcpxPluginConfig,
   };
-}
-
-function resolveConfiguredCommand(params: { configured?: string; workspaceDir?: string }): string {
-  const configured = params.configured?.trim();
-  if (!configured) {
-    return ACPX_BUNDLED_BIN;
-  }
-  if (path.isAbsolute(configured) || configured.includes(path.sep) || configured.includes("/")) {
-    const baseDir = params.workspaceDir?.trim() || process.cwd();
-    return path.resolve(baseDir, configured);
-  }
-  return configured;
 }
 
 function resolveOpenClawRoot(currentRoot: string): string {
@@ -170,7 +177,7 @@ function resolveConfiguredMcpServers(params: {
   pluginToolsMcpBridge: boolean;
   moduleUrl?: string;
 }): Record<string, McpServerConfig> {
-  const resolved = { ...(params.mcpServers ?? {}) };
+  const resolved = { ...params.mcpServers };
   if (!params.pluginToolsMcpBridge) {
     return resolved;
   }
@@ -205,42 +212,39 @@ export function resolveAcpxPluginConfig(params: {
     throw new Error(parsed.message);
   }
   const normalized = parsed.value ?? {};
-  const fallbackCwd = params.workspaceDir?.trim() || process.cwd();
+  const workspaceDir = params.workspaceDir?.trim() || process.cwd();
+  const fallbackCwd = workspaceDir;
   const cwd = path.resolve(normalized.cwd?.trim() || fallbackCwd);
-  const command = resolveConfiguredCommand({
-    configured: normalized.command,
-    workspaceDir: params.workspaceDir,
-  });
-  const allowPluginLocalInstall = command === ACPX_BUNDLED_BIN;
-  const stripProviderAuthEnvVars = command === ACPX_BUNDLED_BIN;
-  const configuredExpectedVersion = normalized.expectedVersion;
-  const expectedVersion =
-    configuredExpectedVersion === ACPX_VERSION_ANY
-      ? undefined
-      : (configuredExpectedVersion ?? (allowPluginLocalInstall ? ACPX_PINNED_VERSION : undefined));
-  const installCommand = buildAcpxLocalInstallCommand(expectedVersion ?? ACPX_PINNED_VERSION);
+  const stateDir = path.resolve(normalized.stateDir?.trim() || path.join(workspaceDir, "state"));
   const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
   const mcpServers = resolveConfiguredMcpServers({
     mcpServers: normalized.mcpServers,
     pluginToolsMcpBridge,
     moduleUrl: params.moduleUrl,
   });
+  const agents = Object.fromEntries(
+    Object.entries(normalized.agents ?? {}).map(([name, entry]) => [
+      normalizeLowercaseStringOrEmpty(name),
+      entry.command.trim(),
+    ]),
+  );
 
   return {
-    command,
-    expectedVersion,
-    allowPluginLocalInstall,
-    stripProviderAuthEnvVars,
-    installCommand,
     cwd,
+    stateDir,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
     pluginToolsMcpBridge,
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
-    timeoutSeconds: normalized.timeoutSeconds,
+    timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    legacyCompatibilityConfig: {
+      strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
+      queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds,
+    },
     mcpServers,
+    agents,
   };
 }

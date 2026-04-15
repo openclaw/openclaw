@@ -1,17 +1,13 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
-import { normalizeProviderSpecificConfig } from "../agents/models-config.providers.policy.js";
-import { applyProviderConfigDefaultsWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import {
-  LEGACY_TALK_PROVIDER_ID,
-  normalizeTalkConfig,
-  resolveActiveTalkProviderConfig,
-  resolveTalkApiKey,
-} from "./talk.js";
-import type { OpenClawConfig } from "./types.js";
+  applyProviderConfigDefaultsForConfig,
+  normalizeProviderConfigForConfigDefaults,
+} from "./provider-policy.js";
+import { normalizeTalkConfig } from "./talk.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
-import { hasConfiguredSecretInput } from "./types.secrets.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 type WarnState = { warned: boolean };
 
@@ -133,40 +129,6 @@ export function applySessionDefaults(
   return next;
 }
 
-export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
-  const normalized = normalizeTalkConfig(config);
-  const resolved = resolveTalkApiKey();
-  if (!resolved) {
-    return normalized;
-  }
-
-  const talk = normalized.talk;
-  const active = resolveActiveTalkProviderConfig(talk);
-  if (!active || active.provider !== LEGACY_TALK_PROVIDER_ID) {
-    return normalized;
-  }
-
-  const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active?.config?.apiKey);
-  if (existingProviderApiKeyConfigured) {
-    return normalized;
-  }
-
-  const providerId = active.provider;
-  const providers = { ...talk?.providers };
-  const providerConfig = { ...providers[providerId], apiKey: resolved };
-  providers[providerId] = providerConfig;
-
-  const nextTalk = {
-    ...talk,
-    providers,
-  };
-
-  return {
-    ...normalized,
-    talk: nextTalk,
-  };
-}
-
 export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
   return normalizeTalkConfig(config);
 }
@@ -179,7 +141,10 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   if (providerConfig) {
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
-      const normalizedProvider = normalizeProviderSpecificConfig(providerId, provider);
+      const normalizedProvider = normalizeProviderConfigForConfigDefaults({
+        provider: providerId,
+        providerConfig: provider,
+      });
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
         if (normalizedProvider !== provider) {
@@ -375,14 +340,14 @@ export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  if (!cfg.agents?.defaults) {
+    return cfg;
+  }
   return (
-    applyProviderConfigDefaultsWithPlugin({
+    applyProviderConfigDefaultsForConfig({
       provider: "anthropic",
-      context: {
-        provider: "anthropic",
-        config: cfg,
-        env: process.env,
-      },
+      config: cfg,
+      env: process.env,
     }) ?? cfg
   );
 }

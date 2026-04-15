@@ -242,6 +242,59 @@ describe("config cli", () => {
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
+    it("writes agents.defaults.videoGenerationModel.primary without disturbing sibling defaults", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            imageGenerationModel: {
+              primary: "openai/gpt-image-1",
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.videoGenerationModel.primary",
+        "qwen/wan2.6-t2v",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.model).toBe("openai/gpt-5.4");
+      expect(written.agents?.defaults?.imageGenerationModel).toEqual({
+        primary: "openai/gpt-image-1",
+      });
+      expect(written.agents?.defaults?.videoGenerationModel).toEqual({
+        primary: "qwen/wan2.6-t2v",
+      });
+    });
+
+    it("writes agents.defaults.llm.idleTimeoutSeconds without disturbing sibling defaults", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            timeoutSeconds: 300,
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "agents.defaults.llm.idleTimeoutSeconds", "900"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.model).toBe("openai/gpt-5.4");
+      expect(written.agents?.defaults?.timeoutSeconds).toBe(300);
+      expect(written.agents?.defaults?.llm).toEqual({
+        idleTimeoutSeconds: 900,
+      });
+    });
+
     it("drops gateway.auth.password when switching mode to token", async () => {
       const resolved: OpenClawConfig = {
         gateway: {

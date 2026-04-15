@@ -1,15 +1,18 @@
-import { fileURLToPath } from "node:url";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
-import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "../../plugins/bundled-plugin-metadata.js";
+import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
   type ParsedThreadSessionSuffix,
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
-import { getChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
+import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
 export type ResolvedSessionConversation = {
   id: string;
@@ -47,25 +50,38 @@ type BundledSessionKeyModule = {
   ) => SessionConversationHookResult | null;
 };
 
-const OPENCLAW_PACKAGE_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
+type SessionConversationResolutionOptions = {
+  bundledFallback?: boolean;
+};
 
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
   hasExplicitParentConversationCandidates: boolean;
 };
 
+type BundledSessionConversationFallbackCacheEntry = {
+  version: number;
+  resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"] | null;
+};
+
+const bundledSessionConversationFallbackCache = new Map<
+  string,
+  BundledSessionConversationFallbackCacheEntry
+>();
+
 function normalizeResolvedChannel(channel: string): string {
   return (
     normalizeAnyChannelId(channel) ??
     normalizeChatChannelId(channel) ??
-    channel.trim().toLowerCase()
+    normalizeOptionalLowercaseString(channel) ??
+    ""
   );
 }
 
 function getMessagingAdapter(channel: string) {
   const normalizedChannel = normalizeResolvedChannel(channel);
   try {
-    return getChannelPlugin(normalizedChannel)?.messaging;
+    return getLoadedChannelPlugin(normalizedChannel)?.messaging;
   } catch {
     return undefined;
   }
@@ -119,10 +135,10 @@ function normalizeSessionConversationResolution(
 
   return {
     id: resolved.id.trim(),
-    threadId: resolved.threadId?.trim() || undefined,
+    threadId: normalizeOptionalString(resolved.threadId),
     baseConversationId:
-      resolved.baseConversationId?.trim() ||
-      dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ||
+      normalizeOptionalString(resolved.baseConversationId) ??
+      dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ??
       resolved.id.trim(),
     parentConversationCandidates: dedupeConversationIds(
       resolved.parentConversationCandidates ?? [],
@@ -139,42 +155,66 @@ function resolveBundledSessionConversationFallback(params: {
   kind: "group" | "channel";
   rawId: string;
 }): NormalizedSessionConversationResolution | null {
+  if (isBundledSessionConversationFallbackDisabled(params.channel)) {
+    return null;
+  }
   const dirName = normalizeResolvedChannel(params.channel);
-  if (
-    !resolveBundledPluginPublicSurfacePath({
-      rootDir: OPENCLAW_PACKAGE_ROOT,
-      bundledPluginsDir: resolveBundledPluginsDir(),
-      dirName,
-      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-    })
-  ) {
-    return null;
+  const version = getActivePluginChannelRegistryVersion();
+  let cached = bundledSessionConversationFallbackCache.get(dirName);
+  if (!cached || cached.version !== version) {
+    let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"] | null =
+      null;
+    try {
+      const loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+        dirName,
+        artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+      });
+      resolveSessionConversation =
+        typeof loaded?.resolveSessionConversation === "function"
+          ? loaded.resolveSessionConversation
+          : null;
+    } catch {
+      resolveSessionConversation = null;
+    }
+    cached = {
+      version,
+      resolveSessionConversation,
+    };
+    bundledSessionConversationFallbackCache.set(dirName, cached);
   }
-  let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
-  try {
-    resolveSessionConversation = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-      dirName,
-      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-    })?.resolveSessionConversation;
-  } catch {
-    return null;
-  }
-  if (typeof resolveSessionConversation !== "function") {
+  if (typeof cached.resolveSessionConversation !== "function") {
     return null;
   }
 
   return normalizeSessionConversationResolution(
-    resolveSessionConversation({
+    cached.resolveSessionConversation({
       kind: params.kind,
       rawId: params.rawId,
     }),
   );
 }
 
+function isBundledSessionConversationFallbackDisabled(channel: string): boolean {
+  const snapshot = getRuntimeConfigSnapshot();
+  if (!snapshot?.plugins) {
+    return false;
+  }
+  if (snapshot.plugins.enabled === false) {
+    return true;
+  }
+  const entry = snapshot.plugins.entries?.[normalizeResolvedChannel(channel)];
+  return !!entry && typeof entry === "object" && entry.enabled === false;
+}
+
+function shouldProbeBundledSessionConversationFallback(rawId: string): boolean {
+  return rawId.includes(":");
+}
+
 function resolveSessionConversationResolution(params: {
   channel: string;
   kind: "group" | "channel";
   rawId: string;
+  bundledFallback?: boolean;
 }): ResolvedSessionConversation | null {
   const rawId = params.rawId.trim();
   if (!rawId) {
@@ -188,13 +228,19 @@ function resolveSessionConversationResolution(params: {
       rawId,
     }),
   );
+  const shouldTryBundledFallback =
+    params.bundledFallback !== false &&
+    !messaging &&
+    shouldProbeBundledSessionConversationFallback(rawId);
   const resolved =
     pluginResolved ??
-    resolveBundledSessionConversationFallback({
-      channel: params.channel,
-      kind: params.kind,
-      rawId,
-    }) ??
+    (shouldTryBundledFallback
+      ? resolveBundledSessionConversationFallback({
+          channel: params.channel,
+          kind: params.kind,
+          rawId,
+        })
+      : null) ??
     buildGenericConversationResolution(rawId);
   if (!resolved) {
     return null;
@@ -222,6 +268,7 @@ export function resolveSessionConversation(params: {
   channel: string;
   kind: "group" | "channel";
   rawId: string;
+  bundledFallback?: boolean;
 }): ResolvedSessionConversation | null {
   return resolveSessionConversationResolution(params);
 }
@@ -232,13 +279,17 @@ function buildBaseSessionKey(raw: RawSessionConversationRef, id: string): string
 
 export function resolveSessionConversationRef(
   sessionKey: string | undefined | null,
+  opts: SessionConversationResolutionOptions = {},
 ): ResolvedSessionConversationRef | null {
   const raw = parseRawSessionConversationRef(sessionKey);
   if (!raw) {
     return null;
   }
 
-  const resolved = resolveSessionConversation(raw);
+  const resolved = resolveSessionConversation({
+    ...raw,
+    bundledFallback: opts.bundledFallback,
+  });
   if (!resolved) {
     return null;
   }
@@ -257,14 +308,17 @@ export function resolveSessionConversationRef(
 
 export function resolveSessionThreadInfo(
   sessionKey: string | undefined | null,
+  opts: SessionConversationResolutionOptions = {},
 ): ParsedThreadSessionSuffix {
-  const resolved = resolveSessionConversationRef(sessionKey);
+  const resolved = resolveSessionConversationRef(sessionKey, opts);
   if (!resolved) {
     return parseThreadSessionSuffix(sessionKey);
   }
 
   return {
-    baseSessionKey: resolved.threadId ? resolved.baseSessionKey : sessionKey?.trim() || undefined,
+    baseSessionKey: resolved.threadId
+      ? resolved.baseSessionKey
+      : normalizeOptionalString(sessionKey),
     threadId: resolved.threadId,
   };
 }

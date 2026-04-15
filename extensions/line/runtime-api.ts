@@ -26,9 +26,7 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-// Keep named exports explicit here so the runtime barrel stays self-contained
-// and plugin-sdk can re-export this file directly without reaching into
-// extension internals.
+export { setLineRuntime } from "./src/runtime.js";
 export {
   firstDefined,
   isSenderAllowed,

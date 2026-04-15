@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
@@ -12,6 +13,7 @@ import {
   type ProfileContext,
 } from "./server-context.js";
 import {
+  hasVerifiedBrowserAuth,
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
@@ -33,8 +35,9 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
     autoconnect: "1",
     resize: "remote",
   });
-  if (params.password?.trim()) {
-    hash.set("password", params.password);
+  const password = normalizeOptionalString(params.password);
+  if (password) {
+    hash.set("password", password);
   }
   const targetUrl = `http://127.0.0.1:${params.noVncPort}/vnc.html#${hash.toString()}`;
   const encodedTarget = JSON.stringify(targetUrl);
@@ -74,13 +77,24 @@ export async function startBrowserBridgeServer(params: {
   const app = express();
   installBrowserCommonMiddleware(app);
 
+  const authToken = normalizeOptionalString(params.authToken);
+  const authPassword = normalizeOptionalString(params.authPassword);
+  if (!authToken && !authPassword) {
+    throw new Error("bridge server requires auth (authToken/authPassword missing)");
+  }
+  installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
+
   if (params.resolveSandboxNoVncToken) {
     app.get("/sandbox/novnc", (req, res) => {
+      if (!hasVerifiedBrowserAuth(req)) {
+        res.status(401).send("Unauthorized");
+        return;
+      }
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
       res.setHeader("Referrer-Policy", "no-referrer");
-      const rawToken = typeof req.query?.token === "string" ? req.query.token.trim() : "";
+      const rawToken = normalizeOptionalString(req.query?.token);
       if (!rawToken) {
         res.status(400).send("Missing token");
         return;
@@ -93,13 +107,6 @@ export async function startBrowserBridgeServer(params: {
       res.type("html").status(200).send(buildNoVncBootstrapHtml(resolved));
     });
   }
-
-  const authToken = params.authToken?.trim() || undefined;
-  const authPassword = params.authPassword?.trim() || undefined;
-  if (!authToken && !authPassword) {
-    throw new Error("bridge server requires auth (authToken/authPassword missing)");
-  }
-  installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
 
   const state: BrowserServerState = {
     server: null as unknown as Server,

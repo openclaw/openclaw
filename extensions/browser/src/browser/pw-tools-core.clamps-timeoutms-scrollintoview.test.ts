@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
@@ -6,13 +6,9 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-let mod: typeof import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  beforeAll(async () => {
-    mod = await import("./pw-tools-core.js");
-  });
-
   it("clamps timeoutMs for scrollIntoView", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {});
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
@@ -69,7 +65,7 @@ describe("pw-tools-core", () => {
       throw new Error(errorMessage);
     });
     setPwToolsCoreCurrentRefLocator({ click });
-    setPwToolsCoreCurrentPage({});
+    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
 
     await expect(
       mod.clickViaPlaywright({
@@ -86,7 +82,7 @@ describe("pw-tools-core", () => {
       );
     });
     setPwToolsCoreCurrentRefLocator({ click });
-    setPwToolsCoreCurrentPage({});
+    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
 
     await expect(
       mod.clickViaPlaywright({

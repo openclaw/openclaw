@@ -51,18 +51,15 @@ openclaw onboard --non-interactive \
 ## Provider-specific examples
 
 <AccordionGroup>
-  <Accordion title="Anthropic Claude CLI example">
+  <Accordion title="Anthropic API key example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
-      --auth-choice anthropic-cli \
+      --auth-choice apiKey \
+      --anthropic-api-key "$ANTHROPIC_API_KEY" \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```
-
-    Requires Claude CLI already installed and signed in on the same gateway
-    host.
-
   </Accordion>
   <Accordion title="Gemini example">
     ```bash
@@ -195,9 +192,8 @@ openclaw onboard --non-interactive \
   </Accordion>
 </AccordionGroup>
 
-Anthropic setup-token is available again as a legacy/manual onboarding path.
-Use it with the expectation that Anthropic told OpenClaw users the OpenClaw
-Claude-login path requires **Extra Usage**.
+Anthropic setup-token remains available as a supported onboarding token path, but OpenClaw now prefers Claude CLI reuse when available.
+For production, prefer an Anthropic API key.
 
 ## Add another agent
 

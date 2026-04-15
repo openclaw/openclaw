@@ -3,15 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  escapeNextcloudTalkMarkdown,
-  formatNextcloudTalkCodeBlock,
-  formatNextcloudTalkInlineCode,
-  formatNextcloudTalkMention,
-  markdownToNextcloudTalk,
-  stripNextcloudTalkFormatting,
-  truncateNextcloudTalkText,
-} from "./format.js";
-import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
   stripNextcloudTalkTargetPrefix,
@@ -73,30 +64,6 @@ async function makeTempDir(): Promise<string> {
 }
 
 describe("nextcloud talk core", () => {
-  it("accepts SecretRef botSecret and apiPassword at top-level", () => {
-    expect(markdownToNextcloudTalk("  **hello**  ")).toBe("**hello**");
-  });
-
-  it("escapes markdown-sensitive characters", () => {
-    expect(escapeNextcloudTalkMarkdown("*hello* [x](y)")).toBe("\\*hello\\* \\[x\\]\\(y\\)");
-  });
-
-  it("formats mentions and code consistently", () => {
-    expect(formatNextcloudTalkMention("@alice")).toBe("@alice");
-    expect(formatNextcloudTalkMention("bob")).toBe("@bob");
-    expect(formatNextcloudTalkCodeBlock("const x = 1;", "ts")).toBe("```ts\nconst x = 1;\n```");
-    expect(formatNextcloudTalkInlineCode("x")).toBe("`x`");
-    expect(formatNextcloudTalkInlineCode("x ` y")).toBe("`` x ` y ``");
-  });
-
-  it("strips markdown formatting and truncates on word boundaries", () => {
-    expect(stripNextcloudTalkFormatting("**bold** [link](https://example.com) `code`")).toBe(
-      "bold link",
-    );
-    expect(truncateNextcloudTalkText("alpha beta gamma delta", 14)).toBe("alpha beta...");
-    expect(truncateNextcloudTalkText("short", 14)).toBe("short");
-  });
-
   it("builds an outbound session route for normalized room targets", () => {
     const route = resolveNextcloudTalkOutboundSessionRoute({
       cfg: {},
@@ -238,6 +205,39 @@ describe("nextcloud talk core", () => {
 
     expect(accountAFirst).toBe(true);
     expect(accountBFirst).toBe(true);
+  });
+
+  it("releases in-flight replay claims when processing fails", async () => {
+    const stateDir = await makeTempDir();
+    const guard = createNextcloudTalkReplayGuard({ stateDir });
+
+    const firstClaim = await guard.claimMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+    });
+    const secondClaim = await guard.claimMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+    });
+
+    expect(firstClaim).toBe("claimed");
+    expect(secondClaim).toBe("inflight");
+
+    guard.releaseMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+      error: new Error("transient"),
+    });
+
+    const retryClaim = await guard.claimMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+    });
+    expect(retryClaim).toBe("claimed");
   });
 
   it("resolves allowlist matches and group policy decisions", () => {

@@ -2,6 +2,7 @@
 // Keep this barrel thin and aligned with the local extension surface.
 
 export * from "./api.js";
+export { setZalouserRuntime } from "./src/runtime.js";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type {
   BaseProbeResult,
@@ -40,7 +41,7 @@ export {
   summarizeMapping,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/allow-from";
-export { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-inbound";
+export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 export { buildBaseAccountStatusSnapshot } from "openclaw/plugin-sdk/status-helpers";
@@ -57,4 +58,4 @@ export {
   sendPayloadWithChunkedTextAndMedia,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-export { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/browser-support";
+export { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/browser-security-runtime";

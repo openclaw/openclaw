@@ -1,25 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  installRemoteProfileTestLifecycle,
   loadRemoteProfileTestDeps,
   type RemoteProfileTestDeps,
-} from "./server-context.remote-profile-tab-ops.shared.js";
+} from "./server-context.remote-profile-tab-ops.test-helpers.js";
 
-let deps: RemoteProfileTestDeps;
-
-beforeAll(async () => {
-  deps = await loadRemoteProfileTestDeps();
-});
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  globalThis.fetch = deps.originalFetch;
-});
-
-afterEach(async () => {
-  await deps.closePlaywrightBrowserConnection().catch(() => {});
-  globalThis.fetch = deps.originalFetch;
-  vi.restoreAllMocks();
-});
+const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
+installRemoteProfileTestLifecycle(deps);
 
 describe("browser remote profile fallback and attachOnly behavior", () => {
   it("uses profile-level attachOnly when global attachOnly is false", async () => {
@@ -93,7 +80,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
-    state.resolved.ssrfPolicy = {};
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
 
     await expect(remote.openTab("https://example.com")).rejects.toBeInstanceOf(
       deps.InvalidBrowserNavigationUrlError,

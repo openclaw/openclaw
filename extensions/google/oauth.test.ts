@@ -25,6 +25,92 @@ const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
 const mockRealpathSync = vi.fn();
 const mockReaddirSync = vi.fn();
+const mockSettingsExistsSync = vi.fn();
+const mockSettingsReadFileSync = vi.fn();
+
+describe("resolveGeminiCliSelectedAuthType", () => {
+  const ENV_KEYS = ["GOOGLE_GENAI_USE_GCA"] as const;
+
+  let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+  let resolveGeminiCliSelectedAuthType: typeof import("./oauth.settings.js").resolveGeminiCliSelectedAuthType;
+  let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
+
+  beforeAll(async () => {
+    ({ resolveGeminiCliSelectedAuthType, setOAuthSettingsFsForTest } =
+      await import("./oauth.settings.js"));
+  });
+
+  beforeEach(() => {
+    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    delete process.env.GOOGLE_GENAI_USE_GCA;
+    mockSettingsExistsSync.mockReset();
+    mockSettingsReadFileSync.mockReset();
+    setOAuthSettingsFsForTest({
+      existsSync: (...args) => mockSettingsExistsSync(...args),
+      readFileSync: (...args) => mockSettingsReadFileSync(...args),
+      homedir: () => "/mock/home",
+    });
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    setOAuthSettingsFsForTest();
+  });
+
+  it("uses GOOGLE_GENAI_USE_GCA as an oauth-personal fallback when settings are absent", () => {
+    process.env.GOOGLE_GENAI_USE_GCA = "true";
+    mockSettingsExistsSync.mockReturnValue(false);
+
+    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+  });
+
+  it("prefers settings auth selection over the GOOGLE_GENAI_USE_GCA fallback", () => {
+    process.env.GOOGLE_GENAI_USE_GCA = "true";
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-code-assist",
+          },
+        },
+      }),
+    );
+
+    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-code-assist");
+  });
+
+  it("reads the nested security auth selection from ~/.gemini/settings.json", () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+  });
+
+  it("falls back to legacy top-level selectedAuthType keys", () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({ selectedAuthType: "oauth-personal" }),
+    );
+
+    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+  });
+});
 
 describe("extractGeminiCliCredentials", () => {
   const normalizePath = (value: string) =>
@@ -154,6 +240,39 @@ describe("extractGeminiCliCredentials", () => {
     if (params.oauth2Content !== undefined) {
       mockReadFileSync.mockReturnValue(params.oauth2Content);
     }
+  }
+
+  function installBundledNpmLayout(params: { bundleContent: string }) {
+    const binDir = join(rootDir, "fake", "npm-bundle-bin");
+    const geminiPath = join(binDir, "gemini");
+    const resolvedPath = geminiPath;
+    const geminiCliDir = join(binDir, "node_modules", "@google", "gemini-cli");
+    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
+    const bundleDir = join(geminiCliDir, "bundle");
+    const chunkPath = join(bundleDir, "chunk-ABC123.js");
+
+    process.env.PATH = binDir;
+    mockExistsSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      return (
+        normalized === normalizePath(geminiPath) ||
+        normalized === packageJsonPath ||
+        normalized === normalizePath(bundleDir)
+      );
+    });
+    mockRealpathSync.mockReturnValue(resolvedPath);
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (normalizePath(p) === normalizePath(bundleDir)) {
+        return [dirent("chunk-ABC123.js", false)];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (normalizePath(p) === normalizePath(chunkPath)) {
+        return params.bundleContent;
+      }
+      throw new Error(`Unexpected read for ${p}`);
+    });
   }
 
   function installHomebrewLibexecLayout(params: { oauth2Content: string }) {
@@ -339,6 +458,20 @@ describe("extractGeminiCliCredentials", () => {
     expectFakeCliCredentials(result);
   });
 
+  it("extracts credentials from bundled npm installs", async () => {
+    installBundledNpmLayout({
+      bundleContent: `
+        const OAUTH_CLIENT_ID = "${FAKE_CLIENT_ID}";
+        const OAUTH_CLIENT_SECRET = "${FAKE_CLIENT_SECRET}";
+      `,
+    });
+
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expectFakeCliCredentials(result);
+  });
+
   it("extracts credentials from Homebrew libexec installs", async () => {
     installHomebrewLibexecLayout({ oauth2Content: FAKE_OAUTH2_CONTENT });
 
@@ -411,6 +544,7 @@ describe("loginGeminiCliOAuth", () => {
     "GEMINI_CLI_OAUTH_CLIENT_SECRET",
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_PROJECT_ID",
+    "GOOGLE_GENAI_USE_GCA",
   ] as const;
 
   const EXPECTED_LOAD_CODE_ASSIST_METADATA = {
@@ -420,7 +554,13 @@ describe("loginGeminiCliOAuth", () => {
   } as const;
 
   function getRequestUrl(input: string | URL | Request): string {
-    return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (typeof input === "string") {
+      return input;
+    }
+    if (input instanceof URL) {
+      return input.toString();
+    }
+    return input.url;
   }
 
   function getHeaderValue(headers: HeadersInit | undefined, name: string): string | undefined {
@@ -433,7 +573,7 @@ describe("loginGeminiCliOAuth", () => {
     if (Array.isArray(headers)) {
       return headers.find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
     }
-    return (headers as Record<string, string>)[name];
+    return headers[name];
   }
 
   function responseJson(body: unknown, status = 200): Response {
@@ -450,6 +590,13 @@ describe("loginGeminiCliOAuth", () => {
     return body.get(name);
   }
 
+  function parseJsonString(value: unknown, label: string): unknown {
+    if (typeof value !== "string") {
+      throw new Error(`Expected ${label} JSON string`);
+    }
+    return JSON.parse(value);
+  }
+
   type LoginGeminiCliOAuthFn = (options: {
     isRemote: boolean;
     openUrl: () => Promise<void>;
@@ -457,7 +604,7 @@ describe("loginGeminiCliOAuth", () => {
     note: () => Promise<void>;
     prompt: () => Promise<string>;
     progress: { update: () => void; stop: () => void };
-  }) => Promise<{ projectId: string }>;
+  }) => Promise<{ projectId?: string }>;
 
   async function runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth: LoginGeminiCliOAuthFn) {
     let authUrl = "";
@@ -473,7 +620,7 @@ describe("loginGeminiCliOAuth", () => {
       note: async () => {},
       prompt: async () => {
         const state = new URL(authUrl).searchParams.get("state");
-        return `${"http://localhost:8085/oauth2callback"}?code=oauth-code&state=${state}`;
+        return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
       },
       progress: { update: () => {}, stop: () => {} },
     });
@@ -489,6 +636,12 @@ describe("loginGeminiCliOAuth", () => {
   }
 
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+  let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
+
+  beforeAll(async () => {
+    ({ setOAuthSettingsFsForTest } = await import("./oauth.settings.js"));
+  });
+
   beforeEach(() => {
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_ID = "test-client-id.apps.googleusercontent.com";
@@ -497,6 +650,15 @@ describe("loginGeminiCliOAuth", () => {
     delete process.env.GEMINI_CLI_OAUTH_CLIENT_SECRET;
     delete process.env.GOOGLE_CLOUD_PROJECT;
     delete process.env.GOOGLE_CLOUD_PROJECT_ID;
+    delete process.env.GOOGLE_GENAI_USE_GCA;
+    mockSettingsExistsSync.mockReset();
+    mockSettingsReadFileSync.mockReset();
+    setOAuthSettingsFsForTest({
+      existsSync: (...args) => mockSettingsExistsSync(...args),
+      readFileSync: (...args) => mockSettingsReadFileSync(...args),
+      homedir: () => "/mock/home",
+    });
+    mockSettingsExistsSync.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -508,6 +670,7 @@ describe("loginGeminiCliOAuth", () => {
         process.env[key] = value;
       }
     }
+    setOAuthSettingsFsForTest();
     vi.unstubAllGlobals();
   });
 
@@ -554,9 +717,12 @@ describe("loginGeminiCliOAuth", () => {
 
     const clientMetadata = getHeaderValue(firstHeaders, "Client-Metadata");
     expect(clientMetadata).toBeDefined();
-    expect(JSON.parse(clientMetadata as string)).toEqual(EXPECTED_LOAD_CODE_ASSIST_METADATA);
+    expect(parseJsonString(clientMetadata, "Client-Metadata")).toEqual(
+      EXPECTED_LOAD_CODE_ASSIST_METADATA,
+    );
 
-    const body = JSON.parse(String(loadRequests[0]?.init?.body));
+    const loadBody = loadRequests[0]?.init?.body;
+    const body = parseJsonString(loadBody, "loadCodeAssist body");
     expect(body).toEqual({
       metadata: EXPECTED_LOAD_CODE_ASSIST_METADATA,
     });
@@ -646,5 +812,43 @@ describe("loginGeminiCliOAuth", () => {
     await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "env-project");
     expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
+  });
+
+  it("skips loadCodeAssist entirely when Gemini CLI is configured for personal OAuth", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    const requests: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+      requests.push(url);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(result.projectId).toBeUndefined();
+    expect(requests).toEqual([TOKEN_URL, USERINFO_URL]);
   });
 });

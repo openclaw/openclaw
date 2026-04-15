@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "../../../test/helpers/plugins/contracts-testkit.js";
 import { getRegisteredMemoryEmbeddingProvider } from "../memory-embedding-providers.js";
-import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./testkit.js";
 
 describe("memory embedding provider registration", () => {
-  it("only allows memory plugins to register adapters", () => {
+  it("rejects non-memory plugins that did not declare the capability contract", () => {
     const { config, registry } = createPluginRegistryFixture();
 
     registerVirtualTestPlugin({
@@ -24,10 +27,36 @@ describe("memory embedding provider registration", () => {
       expect.arrayContaining([
         expect.objectContaining({
           pluginId: "not-memory",
-          message: "only memory plugins can register memory embedding providers",
+          message:
+            "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: forbidden",
         }),
       ]),
     );
+  });
+
+  it("allows non-memory plugins that declare the capability contract", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "ollama",
+      name: "Ollama",
+      contracts: {
+        memoryEmbeddingProviders: ["ollama"],
+      },
+      register(api) {
+        api.registerMemoryEmbeddingProvider({
+          id: "ollama",
+          create: async () => ({ provider: null }),
+        });
+      },
+    });
+
+    expect(getRegisteredMemoryEmbeddingProvider("ollama")).toEqual({
+      adapter: expect.objectContaining({ id: "ollama" }),
+      ownerPluginId: "ollama",
+    });
   });
 
   it("records the owning memory plugin id for registered adapters", () => {

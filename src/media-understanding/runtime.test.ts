@@ -1,90 +1,143 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
+import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
+import { describeImageFile, runMediaUnderstandingFile } from "./runtime.js";
 
-const hoisted = vi.hoisted(() => ({
-  describeImageFile: vi.fn(),
-  runMediaUnderstandingFile: vi.fn(),
+const mocks = vi.hoisted(() => {
+  const cleanup = vi.fn(async () => {});
+  return {
+    buildProviderRegistry: vi.fn(() => new Map()),
+    createMediaAttachmentCache: vi.fn(() => ({ cleanup })),
+    normalizeMediaAttachments: vi.fn<() => MediaAttachment[]>(() => []),
+    normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
+    runCapability: vi.fn(),
+    cleanup,
+  };
+});
+
+vi.mock("./runner.js", () => ({
+  buildProviderRegistry: mocks.buildProviderRegistry,
+  createMediaAttachmentCache: mocks.createMediaAttachmentCache,
+  normalizeMediaAttachments: mocks.normalizeMediaAttachments,
+  runCapability: mocks.runCapability,
 }));
 
-vi.mock("../plugin-sdk/media-understanding-runtime.js", () => ({
-  describeImageFile: hoisted.describeImageFile,
-  describeImageFileWithModel: vi.fn(),
-  describeVideoFile: vi.fn(),
-  runMediaUnderstandingFile: hoisted.runMediaUnderstandingFile,
-  transcribeAudioFile: vi.fn(),
+vi.mock("./provider-registry.js", () => ({
+  normalizeMediaProviderId: mocks.normalizeMediaProviderId,
 }));
 
-let describeImageFile: typeof import("./runtime.js").describeImageFile;
-let runMediaUnderstandingFile: typeof import("./runtime.js").runMediaUnderstandingFile;
-
-describe("media-understanding runtime facade", () => {
-  beforeAll(async () => {
-    ({ describeImageFile, runMediaUnderstandingFile } = await import("./runtime.js"));
-  });
-
+describe("media-understanding runtime", () => {
   afterEach(() => {
-    hoisted.describeImageFile.mockReset();
-    hoisted.runMediaUnderstandingFile.mockReset();
+    mocks.buildProviderRegistry.mockReset();
+    mocks.createMediaAttachmentCache.mockReset();
+    mocks.normalizeMediaAttachments.mockReset();
+    mocks.normalizeMediaProviderId.mockReset();
+    mocks.runCapability.mockReset();
+    mocks.cleanup.mockReset();
+    mocks.cleanup.mockResolvedValue(undefined);
   });
 
-  it("delegates describeImageFile to the plugin-sdk runtime", async () => {
-    const params = {
-      filePath: "/tmp/sample.jpg",
-      mime: "image/jpeg",
-      cfg: {
-        tools: {
-          media: {
-            image: {
-              models: [{ provider: "vision-plugin", model: "vision-v1" }],
+  it("returns disabled state without loading providers", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+
+    await expect(
+      runMediaUnderstandingFile({
+        capability: "image",
+        filePath: "/tmp/sample.jpg",
+        mime: "image/jpeg",
+        cfg: {
+          tools: {
+            media: {
+              image: {
+                enabled: false,
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      agentDir: "/tmp/agent",
-    };
-    const result = {
-      text: "image ok",
-      provider: "vision-plugin",
-      model: "vision-v1",
-      output: {
-        kind: "image.description" as const,
-        attachmentIndex: 0,
-        text: "image ok",
-        provider: "vision-plugin",
-        model: "vision-v1",
-      },
-    };
-    hoisted.describeImageFile.mockResolvedValue(result);
-
-    await expect(describeImageFile(params)).resolves.toEqual(result);
-    expect(hoisted.describeImageFile).toHaveBeenCalledWith(params);
-  });
-
-  it("delegates runMediaUnderstandingFile to the plugin-sdk runtime", async () => {
-    const params = {
-      capability: "image" as const,
-      filePath: "/tmp/sample.jpg",
-      mime: "image/jpeg",
-      cfg: {
-        tools: {
-          media: {
-            image: {
-              enabled: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
-      agentDir: "/tmp/agent",
-    };
-    const result = {
+        } as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
       text: undefined,
       provider: undefined,
       model: undefined,
       output: undefined,
-    };
-    hoisted.runMediaUnderstandingFile.mockResolvedValue(result);
+    });
 
-    await expect(runMediaUnderstandingFile(params)).resolves.toEqual(result);
-    expect(hoisted.runMediaUnderstandingFile).toHaveBeenCalledWith(params);
+    expect(mocks.buildProviderRegistry).not.toHaveBeenCalled();
+    expect(mocks.runCapability).not.toHaveBeenCalled();
+  });
+
+  it("returns the matching capability output", async () => {
+    const output: MediaUnderstandingOutput = {
+      kind: "image.description",
+      attachmentIndex: 0,
+      provider: "vision-plugin",
+      model: "vision-v1",
+      text: "image ok",
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+    });
+
+    await expect(
+      describeImageFile({
+        filePath: "/tmp/sample.jpg",
+        mime: "image/jpeg",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
+      text: "image ok",
+      provider: "vision-plugin",
+      model: "vision-v1",
+      output,
+    });
+
+    expect(mocks.runCapability).toHaveBeenCalledTimes(1);
+    expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the underlying provider failure when media understanding fails", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: {
+        capability: "audio",
+        outcome: "failed",
+        attachments: [
+          {
+            attachmentIndex: 0,
+            attempts: [
+              {
+                type: "provider",
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                outcome: "failed",
+                reason: "Error: Audio transcription response missing text",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      runMediaUnderstandingFile({
+        capability: "audio",
+        filePath: "/tmp/sample.ogg",
+        mime: "audio/ogg",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).rejects.toThrow("Audio transcription response missing text");
+
+    expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
 });

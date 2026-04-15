@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const ANTHROPIC_VERTEX_DEFAULT_REGION = "global";
 const ANTHROPIC_VERTEX_REGION_RE = /^[a-z0-9-]+$/;
@@ -64,7 +65,10 @@ export function resolveAnthropicVertexClientRegion(params?: {
 
 function hasAnthropicVertexMetadataServerAdc(env: NodeJS.ProcessEnv = process.env): boolean {
   const explicitMetadataOptIn = normalizeOptionalSecretInput(env.ANTHROPIC_VERTEX_USE_GCP_METADATA);
-  return explicitMetadataOptIn === "1" || explicitMetadataOptIn?.toLowerCase() === "true";
+  return (
+    explicitMetadataOptIn === "1" ||
+    normalizeLowercaseStringOrEmpty(explicitMetadataOptIn) === "true"
+  );
 }
 
 function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -79,15 +83,22 @@ function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.e
 
 function resolveAnthropicVertexAdcCredentialsPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
-): string {
-  return (
-    normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS) ??
-    resolveAnthropicVertexDefaultAdcPath(env)
-  );
+): string | undefined {
+  const explicit = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
+  if (explicit) {
+    return explicit;
+  }
+  if (env !== process.env) {
+    return undefined;
+  }
+  return resolveAnthropicVertexDefaultAdcPath(env);
 }
 
 function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolean {
   const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
+  if (!credentialsPath) {
+    return false;
+  }
   try {
     readFileSync(credentialsPath, "utf8");
     return true;
@@ -100,6 +111,9 @@ function resolveAnthropicVertexProjectIdFromAdc(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
+  if (!credentialsPath) {
+    return undefined;
+  }
   try {
     const parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as AdcProjectFile;
     return (

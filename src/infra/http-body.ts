@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { formatErrorMessage } from "./errors.js";
 
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -242,7 +243,7 @@ export async function readJsonBodyWithLimit(
       return {
         ok: false,
         code: "INVALID_JSON",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       };
     }
   } catch (error) {
@@ -252,7 +253,7 @@ export async function readJsonBodyWithLimit(
     return {
       ok: false,
       code: "INVALID_JSON",
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     };
   }
 }

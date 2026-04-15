@@ -1,12 +1,10 @@
 import { Type } from "@sinclair/typebox";
-import { buildStatusText } from "../../auto-reply/reply/commands-status.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -14,6 +12,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,
@@ -22,6 +21,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -32,6 +32,10 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../model-selection.js";
+import {
+  describeSessionStatusTool,
+  SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
@@ -49,6 +53,43 @@ const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
+
+type CommandsStatusRuntimeModule = {
+  buildStatusText: (params: {
+    cfg: OpenClawConfig;
+    sessionEntry?: SessionEntry;
+    sessionKey: string;
+    parentSessionKey?: string;
+    sessionScope?: "global" | "per-sender" | "per-thread" | "shared";
+    storePath?: string;
+    statusChannel: string;
+    provider: string;
+    model: string;
+    contextTokens?: number;
+    resolvedThinkLevel?: ThinkLevel;
+    resolvedFastMode?: boolean;
+    resolvedVerboseLevel: VerboseLevel;
+    resolvedReasoningLevel: ReasoningLevel;
+    resolvedElevatedLevel?: ElevatedLevel;
+    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+    isGroup: boolean;
+    defaultGroupActivation: () => "always" | "mention";
+    taskLineOverride?: string;
+    skipDefaultTaskLookup?: boolean;
+    primaryModelLabelOverride?: string;
+    modelAuthOverride?: string;
+    activeModelAuthOverride?: string;
+    includeTranscriptUsage?: boolean;
+  }) => Promise<string>;
+};
+
+let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
+
+function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
+  commandsStatusRuntimePromise ??=
+    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
+  return commandsStatusRuntimePromise;
+}
 
 function resolveSessionEntry(params: {
   store: Record<string, SessionEntry>;
@@ -158,7 +199,7 @@ async function resolveModelOverride(params: {
   if (!raw) {
     return { kind: "reset" };
   }
-  if (raw.toLowerCase() === "default") {
+  if (normalizeOptionalLowercaseString(raw) === "default") {
     return { kind: "reset" };
   }
 
@@ -212,8 +253,8 @@ export function createSessionStatusTool(opts?: {
   return {
     label: "Session Status",
     name: "session_status",
-    description:
-      "Show a /status-equivalent session status card (usage + time + cost when available), including linked background task context when present. Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+    displaySummary: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionStatusTool(),
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -474,6 +515,7 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
+      const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,
         sessionEntry: statusSessionEntry,

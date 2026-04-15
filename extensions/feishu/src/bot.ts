@@ -19,6 +19,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
@@ -49,9 +50,12 @@ import {
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
 } from "./policy.js";
+import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
+export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
+import type { FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageContext, FeishuMessageInfo } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -61,58 +65,19 @@ export { toMessageResourceType } from "./bot-content.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-export type FeishuMessageEvent = {
-  sender: {
-    sender_id: {
-      open_id?: string;
-      user_id?: string;
-      union_id?: string;
-    };
-    sender_type?: string;
-    tenant_key?: string;
-  };
-  message: {
-    message_id: string;
-    root_id?: string;
-    parent_id?: string;
-    thread_id?: string;
-    chat_id: string;
-    chat_type: "p2p" | "group" | "private";
-    message_type: string;
-    content: string;
-    create_time?: string;
-    mentions?: Array<{
-      key: string;
-      id: {
-        open_id?: string;
-        user_id?: string;
-        union_id?: string;
-      };
-      name: string;
-      tenant_key?: string;
-    }>;
-  };
-};
-
-export type FeishuBotAddedEvent = {
-  chat_id: string;
-  operator_id: {
-    open_id?: string;
-    user_id?: string;
-    union_id?: string;
-  };
-  external: boolean;
-  operator_tenant_key?: string;
-};
 
 // --- Broadcast support ---
 // Resolve broadcast agent list for a given peer (group) ID.
 // Returns null if no broadcast config exists or the peer is not in the broadcast list.
 export function resolveBroadcastAgents(cfg: ClawdbotConfig, peerId: string): string[] | null {
   const broadcast = (cfg as Record<string, unknown>).broadcast;
-  if (!broadcast || typeof broadcast !== "object") return null;
+  if (!broadcast || typeof broadcast !== "object") {
+    return null;
+  }
   const agents = (broadcast as Record<string, unknown>)[peerId];
-  if (!Array.isArray(agents) || agents.length === 0) return null;
+  if (!Array.isArray(agents) || agents.length === 0) {
+    return null;
+  }
   return agents as string[];
 }
 
@@ -339,7 +304,7 @@ export async function handleFeishuMessage(params: {
   let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
-  const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
+  const senderUserId = normalizeOptionalString(event.sender.sender_id.user_id);
 
   // Handle merge_forward messages: fetch full message via API then expand sub-messages
   if (event.message.message_type === "merge_forward") {
@@ -382,7 +347,9 @@ export async function handleFeishuMessage(params: {
       senderId: ctx.senderOpenId,
       log,
     });
-    if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };
+    if (senderResult.name) {
+      ctx = { ...ctx, senderName: senderResult.name };
+    }
 
     // Track permission error to inform agent later (with cooldown to avoid repetition)
     if (senderResult.permissionError) {
@@ -1053,7 +1020,7 @@ export async function handleFeishuMessage(params: {
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
-        GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt?.trim() || undefined : undefined,
+        GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
         ...mediaPayload,
       });
     };
@@ -1091,9 +1058,10 @@ export async function handleFeishuMessage(params: {
       }
 
       // --- Broadcast dispatch: send message to all configured agents ---
-      const strategy =
-        ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
-          ?.strategy || "parallel";
+      const rawStrategy = (
+        (cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined
+      )?.strategy;
+      const strategy = rawStrategy === "sequential" ? "sequential" : "parallel";
       const activeAgentId =
         ctx.mentionedBot || !requireMention ? normalizeAgentId(route.agentId) : null;
       const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => normalizeAgentId(a.id));
@@ -1112,6 +1080,10 @@ export async function handleFeishuMessage(params: {
         }
 
         const agentSessionKey = buildBroadcastSessionKey(route.sessionKey, route.agentId, agentId);
+        const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+          storePath: core.channel.session.resolveStorePath(cfg.session?.store, { agentId }),
+          sessionKey: agentSessionKey,
+        });
         const agentCtx = await buildCtxPayloadForAgent(
           agentId,
           agentSessionKey,
@@ -1127,6 +1099,7 @@ export async function handleFeishuMessage(params: {
             agentId,
             runtime: runtime as RuntimeEnv,
             chatId: ctx.chatId,
+            allowReasoningPreview,
             replyToMessageId: replyTargetMessageId,
             skipReplyToInMessages: !isGroup,
             replyInThread,
@@ -1224,11 +1197,18 @@ export async function handleFeishuMessage(params: {
       );
 
       const identity = resolveAgentOutboundIdentity(cfg, route.agentId);
+      const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+        storePath: core.channel.session.resolveStorePath(cfg.session?.store, {
+          agentId: route.agentId,
+        }),
+        sessionKey: route.sessionKey,
+      });
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
         cfg,
         agentId: route.agentId,
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
+        allowReasoningPreview,
         replyToMessageId: replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
         replyInThread,

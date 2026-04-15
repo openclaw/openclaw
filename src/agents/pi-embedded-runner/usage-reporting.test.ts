@@ -18,9 +18,12 @@ function makeAttemptResult(
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
+    idleTimedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "test-session",
     messagesSnapshot: [],
     assistantTexts: [],
@@ -33,6 +36,11 @@ function makeAttemptResult(
         didSendViaMessagingTool,
         successfulCronAdds,
       }),
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
     didSendViaMessagingTool,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],

@@ -418,7 +418,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    await result.replyOptions.onPartialReply?.({ text: "hello" });
+    result.replyOptions.onPartialReply?.({ text: "hello" });
     await options.deliver({ text: "lo world" }, { kind: "block" });
     await options.onIdle?.();
 
@@ -524,6 +524,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("streams reasoning content as blockquote before answer", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -538,7 +539,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) =>
-      String(c[0] ?? ""),
+      typeof c[0] === "string" ? c[0] : "",
     );
     const reasoningUpdate = updateCalls.find((c) => c.includes("Thinking"));
     expect(reasoningUpdate).toContain("> 💭 **Thinking**");
@@ -557,13 +558,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(closeArg).toContain("answer part final");
   });
 
-  it("provides onReasoningStream and onReasoningEnd when streaming is enabled", () => {
+  it("provides onReasoningStream and onReasoningEnd when reasoning previews are allowed", () => {
     const { result } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     expect(result.replyOptions.onReasoningStream).toBeTypeOf("function");
     expect(result.replyOptions.onReasoningEnd).toBeTypeOf("function");
+  });
+
+  it("omits reasoning callbacks unless reasoning previews are allowed", () => {
+    const { result } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    expect(result.replyOptions.onReasoningStream).toBeUndefined();
+    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
   });
 
   it("omits reasoning callbacks when streaming is disabled", () => {
@@ -589,6 +600,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("renders reasoning-only card when no answer text arrives", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -608,6 +620,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("ignores empty reasoning payloads", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -624,6 +637,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("deduplicates final text by raw answer payload, not combined card text", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();

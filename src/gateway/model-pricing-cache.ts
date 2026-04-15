@@ -7,10 +7,12 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginWebSearchConfig } from "../config/legacy-web-search.js";
+import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
@@ -65,15 +67,6 @@ function clearRefreshTimer(): void {
   refreshTimer = null;
 }
 
-function listLikePrimary(value: ModelListLike): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  const trimmed = value?.primary?.trim();
-  return trimmed || undefined;
-}
-
 function listLikeFallbacks(value: ModelListLike): string[] {
   if (!value || typeof value !== "object") {
     return [];
@@ -81,8 +74,8 @@ function listLikeFallbacks(value: ModelListLike): string[] {
   return Array.isArray(value.fallbacks)
     ? value.fallbacks
         .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
+        .map((entry) => normalizeOptionalString(entry))
+        .filter((entry): entry is string => Boolean(entry))
     : [];
 }
 
@@ -224,7 +217,7 @@ function addModelListLike(params: {
   refs: Map<string, ModelRef>;
 }): void {
   addResolvedModelRef({
-    raw: listLikePrimary(params.value),
+    raw: resolvePrimaryStringValue(params.value),
     aliasIndex: params.aliasIndex,
     refs: params.refs,
   });
@@ -249,6 +242,23 @@ function addProviderModelPair(params: {
   }
   const normalized = normalizeModelRef(provider, model);
   params.refs.set(modelKey(normalized.provider, normalized.model), normalized);
+}
+
+function addConfiguredWebSearchPluginModels(params: {
+  config: OpenClawConfig;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+  refs: Map<string, ModelRef>;
+}): void {
+  for (const pluginId of resolveManifestContractPluginIds({
+    contract: "webSearchProviders",
+    config: params.config,
+  })) {
+    addResolvedModelRef({
+      raw: resolvePluginWebSearchConfig(params.config, pluginId)?.model as string | undefined,
+      aliasIndex: params.aliasIndex,
+      refs: params.refs,
+    });
+  }
 }
 
 export function collectConfiguredModelPricingRefs(config: OpenClawConfig): ModelRef[] {
@@ -290,26 +300,7 @@ export function collectConfiguredModelPricingRefs(config: OpenClawConfig): Model
     }
   }
 
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "google")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "xai")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "moonshot")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "perplexity")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
+  addConfiguredWebSearchPluginModels({ config, aliasIndex, refs });
 
   for (const entry of config.tools?.media?.models ?? []) {
     addProviderModelPair({ provider: entry.provider, model: entry.model, refs });
@@ -342,7 +333,7 @@ async function fetchOpenRouterPricingCatalog(
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {
     const obj = entry as OpenRouterModelPayload;
-    const id = typeof obj.id === "string" ? obj.id.trim() : "";
+    const id = normalizeOptionalString(obj.id) ?? "";
     const pricing = parseOpenRouterPricing(obj.pricing);
     if (!id || !pricing) {
       continue;

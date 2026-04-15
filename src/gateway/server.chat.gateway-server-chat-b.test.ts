@@ -1,24 +1,35 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test, vi } from "vitest";
-import type { GetReplyOptions } from "../auto-reply/types.js";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import {
   connectOk,
+  createGatewaySuiteHarness,
   getReplyFromConfig,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
   rpcReq,
-  startServerWithClient,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 250, interval: 2 } as const;
+type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
+let harness: GatewayHarness;
+
+beforeAll(async () => {
+  harness = await createGatewaySuiteHarness();
+});
+
+afterAll(async () => {
+  await harness.close();
+});
 
 const sendReq = (
   ws: { send: (payload: string) => void },
@@ -37,13 +48,10 @@ const sendReq = (
 };
 
 async function withGatewayChatHarness(
-  run: (ctx: {
-    ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
-    createSessionDir: () => Promise<string>;
-  }) => Promise<void>,
+  run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
 ) {
   const tempDirs: string[] = [];
-  const { server, ws } = await startServerWithClient();
+  const ws = await harness.openWs();
   const createSessionDir = async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     tempDirs.push(sessionDir);
@@ -58,7 +66,6 @@ async function withGatewayChatHarness(
     clearConfigCache();
     testState.sessionStorePath = undefined;
     ws.close();
-    await server.close();
     await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
   }
 }
@@ -86,7 +93,7 @@ async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
 }
 
 async function fetchHistoryMessages(
-  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
+  ws: GatewaySocket,
   params?: {
     limit?: number;
     maxChars?: number;
@@ -102,7 +109,7 @@ async function fetchHistoryMessages(
 }
 
 async function prepareMainHistoryHarness(params: {
-  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+  ws: GatewaySocket;
   createSessionDir: () => Promise<string>;
   historyMaxBytes?: number;
 }) {
