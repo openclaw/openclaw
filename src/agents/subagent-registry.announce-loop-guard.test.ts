@@ -53,6 +53,12 @@ vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
 }));
 
+vi.mock("./subagent-announce.js", () => ({
+  buildSubagentSystemPrompt: vi.fn(() => ""),
+  runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+  captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+}));
+
 vi.mock("./subagent-registry.store.js", () => ({
   loadSubagentRegistryFromDisk: mocks.loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk: mocks.saveSubagentRegistryToDisk,

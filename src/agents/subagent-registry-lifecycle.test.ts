@@ -53,6 +53,7 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 vi.mock("./subagent-announce.js", () => ({
+  buildSubagentSystemPrompt: vi.fn(() => ""),
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: vi.fn(async () => false),
 }));

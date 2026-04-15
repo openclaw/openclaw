@@ -12,8 +12,9 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("./subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(async () => true),
   buildSubagentSystemPrompt: vi.fn(() => "test prompt"),
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
+  runSubagentAnnounceFlow: vi.fn(async () => true),
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({

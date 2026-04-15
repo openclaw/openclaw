@@ -74,6 +74,7 @@ vi.mock("./subagent-announce-queue.js", () => ({
 }));
 
 vi.mock("./subagent-announce.js", () => ({
+  buildSubagentSystemPrompt: vi.fn(() => ""),
   captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
   runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
 }));

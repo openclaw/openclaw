@@ -39,6 +39,8 @@ const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
 }));
 vi.mock("./subagent-announce.js", () => ({
+  buildSubagentSystemPrompt: vi.fn(() => ""),
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: announceSpy,
 }));
 

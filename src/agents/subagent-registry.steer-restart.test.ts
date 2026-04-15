@@ -74,6 +74,7 @@ const noopContextEngine = {
   compact: async () => ({ ok: true, compacted: false }),
 } satisfies ContextEngine;
 vi.mock("./subagent-announce.js", () => ({
+  buildSubagentSystemPrompt: vi.fn(() => ""),
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: announceSpy,
 }));
