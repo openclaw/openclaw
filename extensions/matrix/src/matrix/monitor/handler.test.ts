@@ -449,7 +449,7 @@ describe("matrix monitor handler pairing account scope", () => {
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({
         isDirectMessage: false,
-        storeAllowFrom: ["@user:example.org"],
+        readAllowFromStore: vi.fn(async () => ["@user:example.org"]),
         roomsConfig: {
           "!room:example.org": { requireMention: false },
         },
