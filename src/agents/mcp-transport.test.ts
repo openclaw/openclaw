@@ -17,6 +17,8 @@ vi.mock("../logger.js", () => ({ logDebug: vi.fn() }));
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
+const MockTransport = StreamableHTTPClientTransport as ReturnType<typeof vi.fn>;
+
 describe("resolveMcpTransport — streamable-http Accept header", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -28,8 +30,8 @@ describe("resolveMcpTransport — streamable-http Accept header", () => {
       transport: "streamable-http",
     });
 
-    expect(StreamableHTTPClientTransport).toHaveBeenCalledOnce();
-    const [, options] = (StreamableHTTPClientTransport as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(MockTransport).toHaveBeenCalledOnce();
+    const [, options] = MockTransport.mock.calls[0];
     expect(options.requestInit.headers).toMatchObject({
       Accept: "application/json, text/event-stream",
     });
@@ -42,7 +44,7 @@ describe("resolveMcpTransport — streamable-http Accept header", () => {
       headers: { Authorization: "Bearer token" },
     });
 
-    const [, options] = (StreamableHTTPClientTransport as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, options] = MockTransport.mock.calls[0];
     expect(options.requestInit.headers).toMatchObject({
       Authorization: "Bearer token",
       Accept: "application/json, text/event-stream",
@@ -56,7 +58,7 @@ describe("resolveMcpTransport — streamable-http Accept header", () => {
       headers: { Accept: "application/json" },
     });
 
-    const [, options] = (StreamableHTTPClientTransport as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, options] = MockTransport.mock.calls[0];
     expect(options.requestInit.headers["Accept"]).toBe("application/json");
   });
 
@@ -67,8 +69,18 @@ describe("resolveMcpTransport — streamable-http Accept header", () => {
       headers: { accept: "application/json" },
     });
 
-    const [, options] = (StreamableHTTPClientTransport as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, options] = MockTransport.mock.calls[0];
     expect(options.requestInit.headers["accept"]).toBe("application/json");
     expect(options.requestInit.headers["Accept"]).toBeUndefined();
+  });
+
+  it("does not inject Accept header into SSE transport", () => {
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/sse",
+      // no transport field → resolves as SSE, not streamable-http
+    });
+
+    // StreamableHTTPClientTransport must NOT have been called
+    expect(MockTransport).not.toHaveBeenCalled();
   });
 });
