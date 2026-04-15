@@ -40,7 +40,7 @@ async function checkHealth() {
     } else {
       throw new Error("unhealthy");
     }
-  } catch (_e) {
+  } catch {
     statusIndicator.textContent = 'OFFLINE';
     statusIndicator.className = 'indicator offline';
     startBtn.classList.remove('hidden');
