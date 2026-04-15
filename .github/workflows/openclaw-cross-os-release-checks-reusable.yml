@@ -288,16 +288,24 @@ jobs:
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENCLAW_RELEASE_CHECK_OS: ${{ matrix.os_id }}
           OPENCLAW_RELEASE_CHECK_RUNNER: ${{ matrix.runner }}
+          CANDIDATE_FILE_NAME: ${{ needs.prepare.outputs.candidate_file_name }}
+          CANDIDATE_VERSION: ${{ needs.prepare.outputs.candidate_version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          BASELINE_SPEC: ${{ needs.prepare.outputs.baseline_spec }}
+          BASELINE_FILE_NAME: ${{ needs.prepare.outputs.baseline_file_name }}
+          INPUT_PROVIDER: ${{ inputs.provider }}
+          MATRIX_LANE: ${{ matrix.lane }}
+          MATRIX_ARTIFACT_NAME: ${{ matrix.artifact_name }}
         run: |
           node --disable-warning=ExperimentalWarning scripts/openclaw-cross-os-release-checks.ts \
-            --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}" \
-            --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
-            --source-sha "${{ needs.prepare.outputs.source_sha }}" \
-            --baseline-spec "${{ needs.prepare.outputs.baseline_spec }}" \
-            --baseline-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}" \
-            --provider "${{ inputs.provider }}" \
-            --mode "${{ matrix.lane }}" \
-            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.lane }}"
+            --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${CANDIDATE_FILE_NAME}" \
+            --candidate-version "${CANDIDATE_VERSION}" \
+            --source-sha "${SOURCE_SHA}" \
+            --baseline-spec "${BASELINE_SPEC}" \
+            --baseline-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/baseline/${BASELINE_FILE_NAME}" \
+            --provider "${INPUT_PROVIDER}" \
+            --mode "${MATRIX_LANE}" \
+            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${MATRIX_ARTIFACT_NAME}-${MATRIX_LANE}"
 
       - name: Summarize release checks
         if: always()
