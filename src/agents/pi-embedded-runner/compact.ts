@@ -835,6 +835,8 @@ export async function compactEmbeddedPiSessionDirect(
           extensionFactories,
         });
         await resourceLoader.reload();
+        // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
+        // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
         applyPiCompactionSettingsFromConfig({
           settingsManager,
           cfg: params.config,
