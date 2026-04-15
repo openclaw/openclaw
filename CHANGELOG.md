@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - QQBot/cron: guard against undefined `event.content` in `parseFaceTags` and `filterInternalMarkers` so cron-triggered agent turns with no content payload no longer crash with `TypeError: Cannot read properties of undefined (reading 'startsWith')`. (#66302) Thanks @xinmotlanthua.
 - CLI/plugins: stop `--dangerously-force-unsafe-install` plugin installs from falling back to hook-pack installs after security scan failures, while still preserving non-security fallback behavior for real hook packs. (#58909) Thanks @hxy91819.
 - Claude CLI/sessions: classify `No conversation found with session ID` as `session_expired` so expired CLI-backed conversations clear the stale binding and recover on the next turn. (#65028) thanks @Ivan-Fn.
+- Context Engine: gracefully fall back to the legacy engine when a third-party context engine plugin fails at resolution time (unregistered id, factory throw, or contract violation), preventing a full gateway outage on every channel. (#66930) Thanks @openperf.
 
 ## 2026.4.14
 
