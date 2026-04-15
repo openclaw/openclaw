@@ -3,6 +3,9 @@ import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
   createPinnedLookup,
   hasEnvHttpProxyConfigured,
   resolveFetch,
@@ -275,7 +278,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       : policy.proxyUrl;
     try {
       return {
-        dispatcher: new ProxyAgent(proxyOptions),
+        dispatcher: createHttp1ProxyAgent(proxyOptions),
         mode: "explicit-proxy",
         effectivePolicy: policy,
       };
@@ -297,7 +300,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         : undefined;
     try {
       return {
-        dispatcher: new EnvHttpProxyAgent(proxyOptions),
+        dispatcher: createHttp1EnvHttpProxyAgent(proxyOptions),
         mode: "env-proxy",
         effectivePolicy: policy,
       };
@@ -310,7 +313,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         ...(connectOptions ? { connect: connectOptions } : {}),
       };
       return {
-        dispatcher: new Agent(
+        dispatcher: createHttp1Agent(
           directPolicy.connect
             ? ({ connect: directPolicy.connect } satisfies ConstructorParameters<typeof Agent>[0])
             : undefined,
@@ -323,7 +326,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
 
   const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
   return {
-    dispatcher: new Agent(
+    dispatcher: createHttp1Agent(
       connectOptions
         ? ({
             connect: connectOptions,

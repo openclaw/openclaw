@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const loggerInfo = vi.hoisted(() => vi.fn());
@@ -118,10 +120,17 @@ beforeEach(() => {
   }
   loggerInfo.mockReset();
   loggerDebug.mockReset();
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: AgentCtor,
+    EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+    ProxyAgent: ProxyAgentCtor,
+    fetch: undiciFetch,
+  };
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
 });
 
 function resolveTelegramFetchOrThrow(
@@ -146,6 +155,14 @@ function getDispatcherFromUndiciCall(nth: number) {
         };
       }
     | undefined;
+}
+
+function expectHttp1OnlyDispatcherOptions(options: unknown) {
+  expect(options).toEqual(
+    expect.objectContaining({
+      allowH2: false,
+    }),
+  );
 }
 
 function buildFetchFallbackError(code: string) {
@@ -316,6 +333,7 @@ describe("resolveTelegramFetch", () => {
 
     expect(AgentCtor).toHaveBeenCalledTimes(1);
     expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
+    expectHttp1OnlyDispatcherOptions(AgentCtor.mock.calls[0]?.[0]);
 
     const dispatcher = getDispatcherFromUndiciCall(1);
     expect(dispatcher).toBeDefined();
@@ -352,6 +370,7 @@ describe("resolveTelegramFetch", () => {
 
     expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
     expect(AgentCtor).not.toHaveBeenCalled();
+    expectHttp1OnlyDispatcherOptions(EnvHttpProxyAgentCtor.mock.calls[0]?.[0]);
 
     const dispatcher = getDispatcherFromUndiciCall(1);
     expect(dispatcher?.options?.connect).toEqual(
@@ -379,6 +398,7 @@ describe("resolveTelegramFetch", () => {
     expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
     expect(ProxyAgentCtor).toHaveBeenCalledWith(
       expect.objectContaining({
+        allowH2: false,
         uri: "http://127.0.0.1:7777",
       }),
     );
