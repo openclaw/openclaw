@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../../scripts/lib/npm-update-compat-sidecars.mjs";
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -27,6 +28,7 @@ import {
 } from "./update-global.js";
 
 const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
+const QA_CHANNEL_RUNTIME_API = bundledDistPluginFile("qa-channel", "runtime-api.js");
 
 describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -405,7 +407,7 @@ describe("update global helpers", () => {
         JSON.stringify({ name: "openclaw", version: "1.0.0" }),
         "utf-8",
       );
-      for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+      for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
         const absolutePath = path.join(packageRoot, relativePath);
         await fs.mkdir(path.dirname(absolutePath), { recursive: true });
         await fs.writeFile(absolutePath, "export {};\n", "utf-8");
@@ -413,9 +415,9 @@ describe("update global helpers", () => {
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
 
-      await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
+      await fs.rm(path.join(packageRoot, QA_CHANNEL_RUNTIME_API));
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+        `missing bundled runtime sidecar ${QA_CHANNEL_RUNTIME_API}`,
       );
     });
   });
