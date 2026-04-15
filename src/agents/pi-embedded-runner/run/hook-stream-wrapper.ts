@@ -234,7 +234,7 @@ function fireAfterLlmCallGate(
   const hookPromise = hookRunner.runAfterLlmCall(
     {
       runId: runId ?? "",
-      response: finalMessage,
+      response: structuredClone(finalMessage),
       toolCalls,
       iteration,
       model: modelId,
