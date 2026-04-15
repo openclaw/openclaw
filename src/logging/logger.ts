@@ -57,6 +57,12 @@ type ResolvedSettings = {
   level: LogLevel;
   file: string;
   maxFileBytes: number;
+  /** True when settings were resolved from user config (logging.file was set). False when
+   * falling back to the default rolling path because config was not yet available at init
+   * time. A provisional entry must not be permanently cached — it should be re-resolved on
+   * the next call so that the configured file path is picked up once the gateway has loaded
+   * its config. See #67168. */
+  provisional?: boolean;
 };
 export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
@@ -124,9 +130,14 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const configuredFile = cfg?.file;
+  const file = configuredFile ?? defaultRollingPathForToday();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
-  return { level, file, maxFileBytes };
+  // Mark as provisional when the file path came from the default (no config was available).
+  // Provisional settings are not permanently cached so the next log call re-resolves them,
+  // picking up the user-configured path once the gateway finishes loading its config (#67168).
+  const provisional = !configuredFile && !loggingState.overrideSettings;
+  return { level, file, maxFileBytes, provisional };
 }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
@@ -137,8 +148,11 @@ function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
-  const settings = (loggingState.cachedSettings as ResolvedSettings | null) ?? resolveSettings();
-  if (!loggingState.cachedSettings) {
+  const cached = loggingState.cachedSettings as ResolvedSettings | null;
+  // Do not use a provisional cache entry — re-resolve so we pick up the user-configured
+  // logging.file path once the gateway has finished loading its config. (#67168)
+  const settings = (cached && !cached.provisional) ? cached : resolveSettings();
+  if (!loggingState.cachedSettings || (loggingState.cachedSettings as ResolvedSettings).provisional) {
     loggingState.cachedSettings = settings;
   }
   if (level === "silent") {
