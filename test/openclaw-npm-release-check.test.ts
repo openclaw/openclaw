@@ -8,6 +8,7 @@ import {
   collectControlUiPackErrors,
   collectForbiddenPackedContentErrors,
   collectForbiddenPackedPathErrors,
+  collectPackedTestCargoErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
@@ -377,6 +378,55 @@ describe("collectForbiddenPackedPathErrors", () => {
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("collectPackedTestCargoErrors", () => {
+  it("rejects packed test files and test directories", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts",
+        "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js",
+        "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap",
+        "dist/index.js",
+      ]),
+    ).toEqual([
+      'npm package must not include test cargo "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js".',
+    ]);
+  });
+
+  it("allows normal runtime files", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/index.js",
+        "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
+        "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("allows legitimate package roots named test under node_modules", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("normalizes Windows or mixed separators before classifying test cargo", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        String.raw`dist\extensions\fixture-plugin\node_modules\direct\__tests__\index.js`,
+        String.raw`dist/extensions/fixture-plugin\node_modules/direct/src/runtime.spec.ts`,
+        String.raw`dist\extensions\fixture-plugin\node_modules\direct\node_modules\test\index.js`,
+      ]),
+    ).toEqual([
+      `npm package must not include test cargo "${String.raw`dist/extensions/fixture-plugin\node_modules/direct/src/runtime.spec.ts`}".`,
+      `npm package must not include test cargo "${String.raw`dist\extensions\fixture-plugin\node_modules\direct\__tests__\index.js`}".`,
+    ]);
   });
 });
 
