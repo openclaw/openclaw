@@ -18,12 +18,13 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
 ];
 
-export const browserSecurityAuditCollectors = [
-  async (...args: unknown[]) => {
-    const { collectBrowserSecurityAuditFindings } = await import("./register.runtime.js");
-    return (collectBrowserSecurityAuditFindings as (...args: unknown[]) => unknown)(...args);
-  },
-];
+export const browserSecurityAuditCollectors: import("openclaw/plugin-sdk/plugin-entry").OpenClawPluginSecurityAuditCollector[] =
+  [
+    async (ctx) => {
+      const { collectBrowserSecurityAuditFindings } = await import("./register.runtime.js");
+      return collectBrowserSecurityAuditFindings(ctx);
+    },
+  ];
 
 export async function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerTool((async (ctx: OpenClawPluginToolContext) => {
@@ -50,9 +51,9 @@ export async function registerBrowserPlugin(api: OpenClawPluginApi) {
       ],
     },
   );
-  api.registerGatewayMethod("browser.request", async (...args) => {
+  api.registerGatewayMethod("browser.request", async (opts) => {
     const { handleBrowserGatewayRequest } = await import("./register.runtime.js");
-    return (handleBrowserGatewayRequest as (...args: unknown[]) => unknown)(...args);
+    return handleBrowserGatewayRequest(opts);
   }, {
     scope: "operator.write",
   });
