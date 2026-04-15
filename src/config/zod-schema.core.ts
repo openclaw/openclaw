@@ -732,6 +732,7 @@ const MediaUnderstandingRuntimeFields = {
   providerOptions: ProviderOptionsSchema,
   deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
+  apiKey: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   request: ConfiguredProviderRequestSchema,
 };
