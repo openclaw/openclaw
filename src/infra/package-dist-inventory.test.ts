@@ -34,6 +34,27 @@ describe("package dist inventory", () => {
     });
   });
 
+  it("keeps npm-omitted dist artifacts out of the inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-pack-" }, async (packageRoot) => {
+      const packagedQaRuntime = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "qa-channel",
+        "runtime-api.js",
+      );
+      const omittedQaChunk = path.join(packageRoot, "dist", "extensions", "qa-channel", "cli.js");
+      const omittedMap = path.join(packageRoot, "dist", "feature.runtime.js.map");
+      await fs.mkdir(path.dirname(packagedQaRuntime), { recursive: true });
+      await fs.writeFile(packagedQaRuntime, "export {};\n", "utf8");
+      await fs.writeFile(omittedQaChunk, "export {};\n", "utf8");
+      await fs.writeFile(omittedMap, "{}", "utf8");
+
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/extensions/qa-channel/runtime-api.js",
+      ]);
+    });
+  });
   it("fails closed when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-missing-" }, async (packageRoot) => {
       await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });

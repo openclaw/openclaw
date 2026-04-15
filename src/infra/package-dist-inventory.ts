@@ -2,11 +2,36 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const PACKAGED_QA_RUNTIME_PATHS = new Set([
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+]);
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
+function isPackagedDistPath(relativePath: string): boolean {
+  if (!relativePath.startsWith("dist/")) {
+    return false;
+  }
+  if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
+    return false;
+  }
+  if (relativePath.endsWith(".map")) {
+    return false;
+  }
+  if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
+    return false;
+  }
+  if (
+    relativePath.startsWith("dist/extensions/qa-channel/") ||
+    relativePath.startsWith("dist/extensions/qa-lab/")
+  ) {
+    return PACKAGED_QA_RUNTIME_PATHS.has(relativePath);
+  }
+  return true;
+}
 async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(rootDir, { withFileTypes: true });
@@ -18,7 +43,7 @@ async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<s
         }
         if (entry.isFile() || entry.isSymbolicLink()) {
           const relativePath = normalizeRelativePath(path.relative(baseDir, entryPath));
-          return relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH ? [] : [relativePath];
+          return isPackagedDistPath(relativePath) ? [relativePath] : [];
         }
         return [];
       }),
