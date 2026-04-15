@@ -282,6 +282,9 @@ export function createQaBusState() {
     async waitFor(input: QaBusWaitForInput) {
       return await waiters.waitFor(input);
     },
+    async waitForCursorAdvance(afterCursor: number, timeoutMs: number) {
+      return await waiters.waitForCursorAdvance(afterCursor, timeoutMs);
+    },
   };
 }
 
