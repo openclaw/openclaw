@@ -15,12 +15,14 @@ const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
  * This stateful pass hides content from an opening tag through the matching
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
-const TOOL_CALL_QUICK_RE = /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|tool_calls)\b/i;
+const TOOL_CALL_QUICK_RE =
+  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function|tool_calls)\b/i;
 const TOOL_CALL_TAG_NAMES = new Set([
   "tool_call",
   "tool_result",
   "function_call",
   "function_calls",
+  "function",
   "tool_calls",
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
@@ -216,8 +218,12 @@ export function stripToolCallXmlTags(text: string): string {
         continue;
       }
       const payloadStart = tag.isTruncated ? tag.contentStart : tag.end;
+      // For <tool_call> and <function>, check both JSON and XML payloads.
+      // Models like Gemma emit standalone <function> blocks with nested
+      // <parameter> XML that must also be caught (#67093).
+      // For other tags keep JSON-only to avoid stripping prose examples.
       const hasToolCallPayloadStart =
-        tag.tagName === "tool_call"
+        tag.tagName === "tool_call" || tag.tagName === "function"
           ? looksLikeToolCallPayloadStart(text, payloadStart)
           : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart));
       if (!tag.isClose && hasToolCallPayloadStart) {

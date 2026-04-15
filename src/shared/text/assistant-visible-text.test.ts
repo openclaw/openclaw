@@ -234,6 +234,34 @@ describe("stripAssistantInternalScaffolding", () => {
     it("strips lone closing tool-call tags", () => {
       expectVisibleText("prefix </tool_call> suffix", "prefix  suffix");
       expectVisibleText("prefix </function_calls> suffix", "prefix  suffix");
+      expectVisibleText("prefix </function> suffix", "prefix  suffix");
+    });
+
+    it("strips standalone <function> blocks with nested <parameter> XML (#67093)", () => {
+      expectVisibleText(
+        'prefix\n<function name="sessions_spawn"><parameter name="sessionKey">agent:main</parameter><parameter name="timeout">0</parameter></function>\nsuffix',
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips Gemma-style <function> with newlines between parameters (#67093)", () => {
+      expectVisibleText(
+        [
+          "Let me check that.",
+          '<function name="read">',
+          '<parameter name="file_path">/home/user/test.md</parameter>',
+          "</function>",
+          "After the call.",
+        ].join("\n"),
+        "Let me check that.\n\nAfter the call.",
+      );
+    });
+
+    it("strips dangling <function> block to end-of-string (#67093)", () => {
+      expectVisibleText(
+        'prefix\n<function name="spawn">\n<parameter name="key">value</parameter>',
+        "prefix\n",
+      );
     });
 
     it("preserves XML-style explanations after lone <tool_call> tags", () => {
