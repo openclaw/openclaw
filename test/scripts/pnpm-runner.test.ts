@@ -131,6 +131,27 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
+  it("wraps an explicit pnpm.cmd path via cmd.exe on Windows", () => {
+    expect(
+      resolvePnpmRunner({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmExecPath: "C:\\Program Files\\pnpm\\pnpm.cmd",
+        pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '"C:\\Program Files\\pnpm\\pnpm.cmd" exec vitest run -t "path with spaces"',
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("falls back to bare pnpm on non-Windows when npm_execpath is missing", () => {
     expect(
       resolvePnpmRunner({

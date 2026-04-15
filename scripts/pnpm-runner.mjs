@@ -7,10 +7,12 @@ function getPortableBasename(value) {
   return value.split(/[/\\]/).at(-1) ?? value;
 }
 
-function isPnpmExecPath(value, platform = process.platform) {
-  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(
-    getPortableBasename(value).toLowerCase(),
-  );
+function getPortableExtension(value) {
+  return path.posix.extname(getPortableBasename(value)).toLowerCase();
+}
+
+function isPnpmExecPath(value) {
+  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(getPortableBasename(value).toLowerCase());
 }
 
 function hasScriptShebang(value) {
@@ -32,11 +34,11 @@ function hasScriptShebang(value) {
   }
 }
 
-function isNodeRunnablePnpmExecPath(value, platform = process.platform) {
-  if (!isPnpmExecPath(value, platform)) {
+function isNodeRunnablePnpmExecPath(value) {
+  if (!isPnpmExecPath(value)) {
     return false;
   }
-  const extension = path.posix.extname(getPortableBasename(value)).toLowerCase();
+  const extension = getPortableExtension(value);
   if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
     return true;
   }
@@ -57,23 +59,29 @@ export function resolvePnpmRunner(params = {}) {
   if (
     typeof npmExecPath === "string" &&
     npmExecPath.length > 0 &&
-    isPnpmExecPath(npmExecPath, platform)
+    isPnpmExecPath(npmExecPath)
   ) {
-    if (isNodeRunnablePnpmExecPath(npmExecPath, platform)) {
+    if (isNodeRunnablePnpmExecPath(npmExecPath)) {
       return {
         command: nodeExecPath,
         args: [...nodeArgs, npmExecPath, ...pnpmArgs],
         shell: false,
       };
     }
-    if (
-      platform === "win32" &&
-      path.posix.extname(getPortableBasename(npmExecPath)).toLowerCase() === ".exe"
-    ) {
+    const npmExecExtension = getPortableExtension(npmExecPath);
+    if (platform === "win32" && npmExecExtension === ".exe") {
       return {
         command: npmExecPath,
         args: pnpmArgs,
         shell: false,
+      };
+    }
+    if (platform === "win32" && npmExecExtension === ".cmd") {
+      return {
+        command: comSpec,
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmExecPath, pnpmArgs)],
+        shell: false,
+        windowsVerbatimArguments: true,
       };
     }
   }
