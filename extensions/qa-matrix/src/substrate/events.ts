@@ -49,6 +49,21 @@ function normalizeMentionUserIds(value: unknown) {
     : undefined;
 }
 
+function resolveMatrixQaMessageContent(
+  content: Record<string, unknown>,
+  relatesTo: Record<string, unknown> | null,
+) {
+  const newContentRaw = content["m.new_content"];
+  const newContent =
+    typeof newContentRaw === "object" && newContentRaw !== null
+      ? (newContentRaw as Record<string, unknown>)
+      : null;
+  if (relatesTo?.rel_type === "m.replace" && newContent) {
+    return newContent;
+  }
+  return content;
+}
+
 function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: string }) {
   if (params.type === "m.reaction") {
     return "reaction" as const;
@@ -86,7 +101,10 @@ export function normalizeMatrixQaObservedEvent(
     typeof inReplyToRaw === "object" && inReplyToRaw !== null
       ? (inReplyToRaw as Record<string, unknown>)
       : null;
-  const mentionsRaw = content["m.mentions"];
+  const messageContent = resolveMatrixQaMessageContent(content, relatesTo);
+  const normalizedMsgtype =
+    typeof messageContent.msgtype === "string" ? messageContent.msgtype : msgtype;
+  const mentionsRaw = messageContent["m.mentions"] ?? content["m.mentions"];
   const mentions =
     typeof mentionsRaw === "object" && mentionsRaw !== null
       ? (mentionsRaw as Record<string, unknown>)
@@ -100,7 +118,7 @@ export function normalizeMatrixQaObservedEvent(
       : undefined;
 
   return {
-    kind: resolveMatrixQaObservedEventKind({ msgtype, type }),
+    kind: resolveMatrixQaObservedEventKind({ msgtype: normalizedMsgtype, type }),
     roomId,
     eventId,
     sender: typeof event.sender === "string" ? event.sender : undefined,
@@ -108,9 +126,10 @@ export function normalizeMatrixQaObservedEvent(
     type,
     originServerTs:
       typeof event.origin_server_ts === "number" ? Math.floor(event.origin_server_ts) : undefined,
-    body: typeof content.body === "string" ? content.body : undefined,
-    formattedBody: typeof content.formatted_body === "string" ? content.formatted_body : undefined,
-    msgtype,
+    body: typeof messageContent.body === "string" ? messageContent.body : undefined,
+    formattedBody:
+      typeof messageContent.formatted_body === "string" ? messageContent.formatted_body : undefined,
+    msgtype: normalizedMsgtype,
     membership: typeof content.membership === "string" ? content.membership : undefined,
     ...(relatesTo
       ? {

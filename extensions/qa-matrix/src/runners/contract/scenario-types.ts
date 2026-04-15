@@ -41,6 +41,9 @@ export type MatrixQaScenarioArtifacts = {
   membershipLeaveEventId?: string;
   noticeBodyPreview?: string;
   noticeEventId?: string;
+  previewBodyPreview?: string;
+  previewEventId?: string;
+  blockEventIds?: string[];
   transportInterruption?: string;
   joinedRoomId?: string;
 };
