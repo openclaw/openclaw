@@ -1280,7 +1280,6 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(bootstrapSpy).toHaveBeenCalledTimes(1);
     expect((bootstrapSpy.mock.calls as unknown[][])[0]?.[1] ?? {}).toEqual({
       allowAutomaticCrossSigningReset: false,
-      allowSecretStorageRecreateWithoutRecoveryKey: true,
     });
   });
 
