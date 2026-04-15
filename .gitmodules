@@ -1,0 +1,3 @@
+[submodule "libsignal-node"]
+	path = libsignal-node
+	url = https://github.com/Aliciawque/libsignal-node.git
