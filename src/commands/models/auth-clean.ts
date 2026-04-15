@@ -84,7 +84,6 @@ function sanitizeProfileId(id: string): string {
       // Strip C1 8-bit control codes (U+0080–U+009F), including \x9b (C1 CSI), which can
       // construct terminal colour/cursor sequences on xterm-compatible terminals without
       // a leading ESC byte, bypassing the 7-bit escape strip above (Greptile concern).
-      // eslint-disable-next-line no-control-regex
       .replace(/[\x80-\x9f]/g, "")
       .replace(/[\r\n]/g, "")
   );
