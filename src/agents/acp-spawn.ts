@@ -1045,7 +1045,27 @@ export async function spawnAcpDirect(
     });
   }
 
-  const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
+  let sessionKey: string | undefined;
+  if (params.label && spawnMode === "session") {
+    try {
+      const resolved = await callGateway({
+        method: "sessions.resolve",
+        params: { label: params.label, agentId: targetAgentId },
+        timeoutMs: 5000,
+      });
+      if (resolved?.ok && resolved.key) {
+        const storePath = resolveStorePath(null, { agentId: targetAgentId });
+        const store = loadSessionStore(storePath);
+        const entry = store[resolved.key] as SessionEntry | undefined;
+        if (!entry?.acp?.mode || entry.acp.mode === "persistent") {
+          sessionKey = resolved.key;
+        }
+      }
+    } catch {
+      // resolve failure → fall through to new UUID
+    }
+  }
+  if (!sessionKey) sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: cfg,
