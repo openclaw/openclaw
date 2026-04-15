@@ -15,12 +15,27 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
+import {
+  createAskUserQuestionCompatTool,
+  createConfigCompatTool,
+  createEnterPlanModeCompatTool,
+  createExitPlanModeCompatTool,
+  createRemoteTriggerCompatTool,
+  createSendUserMessageCompatTool,
+  createSleepCompatTool,
+  createStructuredOutputCompatTool,
+  createTestingPermissionCompatTool,
+  createTodoWriteCompatTool,
+  createToolSearchCompatTool,
+} from "./tools/claw-compat-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createLspTool } from "./tools/lsp-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
+import { createMcpTool } from "./tools/mcp-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
@@ -250,6 +265,27 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    createMcpTool({
+      sessionId: options?.sessionId,
+      agentSessionKey: options?.agentSessionKey,
+      workspaceDir,
+      config: options?.config,
+    }),
+    createLspTool({
+      workspaceDir,
+      config: options?.config,
+    }),
+    createAskUserQuestionCompatTool(),
+    createSendUserMessageCompatTool(),
+    createEnterPlanModeCompatTool(),
+    createExitPlanModeCompatTool(),
+    createStructuredOutputCompatTool(),
+    createSleepCompatTool(),
+    createTodoWriteCompatTool(),
+    createToolSearchCompatTool(),
+    createConfigCompatTool(),
+    createRemoteTriggerCompatTool(),
+    createTestingPermissionCompatTool(),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,

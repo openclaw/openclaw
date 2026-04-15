@@ -17,6 +17,281 @@ type UnknownToolLoopGuardState = {
   countedMessages: WeakSet<object>;
 };
 
+type ClawCodeAliasResolution = {
+  toolName: string;
+  action?: string;
+};
+
+const CLAW_CODE_TOOL_ALIAS_MAP: Readonly<Record<string, ClawCodeAliasResolution>> = {
+  bash: { toolName: "exec" },
+  readfile: { toolName: "read" },
+  writefile: { toolName: "write" },
+  editfile: { toolName: "edit" },
+  globsearch: { toolName: "glob" },
+  grepsearch: { toolName: "grep" },
+  webfetch: { toolName: "web_fetch" },
+  websearch: { toolName: "web_search" },
+  taskcreate: { toolName: "task", action: "create" },
+  runtaskpacket: { toolName: "task", action: "create" },
+  taskget: { toolName: "task", action: "get" },
+  tasklist: { toolName: "task", action: "list" },
+  taskstop: { toolName: "task", action: "stop" },
+  taskupdate: { toolName: "task", action: "update" },
+  taskoutput: { toolName: "task", action: "output" },
+  teamcreate: { toolName: "team", action: "create" },
+  teamdelete: { toolName: "team", action: "delete" },
+  croncreate: { toolName: "cron", action: "add" },
+  crondelete: { toolName: "cron", action: "remove" },
+  cronlist: { toolName: "cron", action: "list" },
+  listmcpresources: { toolName: "mcp", action: "list_resources" },
+  readmcpresource: { toolName: "mcp", action: "read_resource" },
+  mcpauth: { toolName: "mcp", action: "auth" },
+  workercreate: { toolName: "sessions_spawn" },
+  workersendprompt: { toolName: "sessions_send" },
+  workerget: { toolName: "session_status" },
+  workerobserve: { toolName: "session_status" },
+  workerawaitready: { toolName: "session_status" },
+  workerobservecompletion: { toolName: "session_status" },
+  workerresolvetrust: { toolName: "session_status" },
+  workerrestart: { toolName: "sessions_spawn" },
+  workerterminate: { toolName: "subagents", action: "kill" },
+  todowrite: { toolName: "todo_write" },
+  skill: { toolName: "tool_search" },
+  agent: { toolName: "sessions_spawn" },
+  toolsearch: { toolName: "tool_search" },
+  notebookedit: { toolName: "edit" },
+  sleep: { toolName: "sleep" },
+  sendusermessage: { toolName: "send_user_message" },
+  config: { toolName: "config_compat" },
+  enterplanmode: { toolName: "enter_plan_mode" },
+  exitplanmode: { toolName: "exit_plan_mode" },
+  structuredoutput: { toolName: "structured_output" },
+  repl: { toolName: "exec" },
+  powershell: { toolName: "exec" },
+  askuserquestion: { toolName: "ask_user_question" },
+  remotetrigger: { toolName: "remote_trigger" },
+  testingpermission: { toolName: "testing_permission" },
+  mcpdemoecho: { toolName: "mcp" },
+};
+
+function canonicalizeToolName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function resolveClawCodeAlias(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+): ClawCodeAliasResolution | null {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  const alias = CLAW_CODE_TOOL_ALIAS_MAP[canonicalizeToolName(rawName)];
+  if (!alias) {
+    return null;
+  }
+  if (!resolveExactAllowedToolName(alias.toolName, allowedToolNames)) {
+    return null;
+  }
+  return alias;
+}
+
+function injectAliasActionIntoToolCallBlock(block: { input?: unknown; arguments?: unknown }, action: string) {
+  const input =
+    block.input && typeof block.input === "object" && !Array.isArray(block.input)
+      ? (block.input as Record<string, unknown>)
+      : null;
+  if (input) {
+    const existing = input.action;
+    if (typeof existing !== "string" || !existing.trim()) {
+      input.action = action;
+    }
+    return;
+  }
+
+  const argumentsPayload =
+    block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)
+      ? (block.arguments as Record<string, unknown>)
+      : null;
+  if (argumentsPayload) {
+    const existing = argumentsPayload.action;
+    if (typeof existing !== "string" || !existing.trim()) {
+      argumentsPayload.action = action;
+    }
+    return;
+  }
+
+  block.arguments = { action };
+}
+
+function resolveToolCallPayloadRecord(block: { input?: unknown; arguments?: unknown }): Record<string, unknown> {
+  if (block.input && typeof block.input === "object" && !Array.isArray(block.input)) {
+    return block.input as Record<string, unknown>;
+  }
+  if (block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)) {
+    return block.arguments as Record<string, unknown>;
+  }
+  block.arguments = {};
+  return block.arguments as Record<string, unknown>;
+}
+
+function injectClawCodeAliasArgumentShims(
+  rawName: string,
+  block: { input?: unknown; arguments?: unknown },
+): void {
+  const aliasKey = canonicalizeToolName(rawName);
+  const payload = resolveToolCallPayloadRecord(block);
+
+  if (aliasKey === "workercreate") {
+    const task = payload.task;
+    if (typeof task !== "string" || !task.trim()) {
+      const prompt = payload.prompt;
+      const message = payload.message;
+      if (typeof prompt === "string" && prompt.trim()) {
+        payload.task = prompt;
+      } else if (typeof message === "string" && message.trim()) {
+        payload.task = message;
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "workersendprompt") {
+    const message = payload.message;
+    if (typeof message !== "string" || !message.trim()) {
+      const prompt = payload.prompt;
+      if (typeof prompt === "string" && prompt.trim()) {
+        payload.message = prompt;
+      }
+    }
+    const sessionKey = payload.sessionKey;
+    if (typeof sessionKey !== "string" || !sessionKey.trim()) {
+      const workerId = payload.workerId;
+      if (typeof workerId === "string" && workerId.trim()) {
+        payload.sessionKey = workerId;
+      }
+    }
+    return;
+  }
+
+  if (
+    aliasKey === "workerget" ||
+    aliasKey === "workerobserve" ||
+    aliasKey === "workerresolvetrust" ||
+    aliasKey === "workerawaitready" ||
+    aliasKey === "workerobservecompletion"
+  ) {
+    const sessionKey = payload.sessionKey;
+    if (typeof sessionKey !== "string" || !sessionKey.trim()) {
+      const workerId = payload.workerId;
+      if (typeof workerId === "string" && workerId.trim()) {
+        payload.sessionKey = workerId;
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "workerrestart") {
+    const task = payload.task;
+    if (typeof task !== "string" || !task.trim()) {
+      const prompt = payload.prompt;
+      const message = payload.message;
+      if (typeof prompt === "string" && prompt.trim()) {
+        payload.task = prompt;
+      } else if (typeof message === "string" && message.trim()) {
+        payload.task = message;
+      } else {
+        payload.task = "Restart worker";
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "workerterminate") {
+    const target = payload.target;
+    if (typeof target !== "string" || !target.trim()) {
+      const workerId = payload.workerId;
+      if (typeof workerId === "string" && workerId.trim()) {
+        payload.target = workerId;
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "agent") {
+    const task = payload.task;
+    if (typeof task !== "string" || !task.trim()) {
+      const prompt = payload.prompt;
+      const message = payload.message;
+      if (typeof prompt === "string" && prompt.trim()) {
+        payload.task = prompt;
+      } else if (typeof message === "string" && message.trim()) {
+        payload.task = message;
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "sendusermessage") {
+    const message = payload.message;
+    if (typeof message !== "string" || !message.trim()) {
+      const text = payload.text;
+      if (typeof text === "string" && text.trim()) {
+        payload.message = text;
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "toolsearch" || aliasKey === "skill") {
+    const query = payload.query;
+    if (typeof query !== "string" || !query.trim()) {
+      const q = payload.q;
+      if (typeof q === "string" && q.trim()) {
+        payload.query = q;
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "mcpdemoecho") {
+    const name = payload.name;
+    if (typeof name !== "string" || !name.trim()) {
+      payload.name = "demo__echo";
+    }
+    if (!payload.arguments || typeof payload.arguments !== "object" || Array.isArray(payload.arguments)) {
+      const text = payload.text;
+      payload.arguments =
+        typeof text === "string" && text.trim()
+          ? { text }
+          : {};
+    }
+    const action = payload.action;
+    if (typeof action !== "string" || !action.trim()) {
+      payload.action = "call";
+    }
+    return;
+  }
+
+  if (aliasKey === "notebookedit") {
+    const oldStr = payload.oldStr;
+    if (typeof oldStr === "string" && oldStr.trim()) {
+      const oldText = payload.oldText;
+      if (typeof oldText !== "string" || !oldText.trim()) {
+        payload.oldText = oldStr;
+      }
+    }
+    const newStr = payload.newStr;
+    if (typeof newStr === "string" && newStr.trim()) {
+      const newText = payload.newText;
+      if (typeof newText !== "string" || !newText.trim()) {
+        payload.newText = newStr;
+      }
+    }
+  }
+}
 function resolveCaseInsensitiveAllowedToolName(
   rawName: string,
   allowedToolNames?: Set<string>,
@@ -198,6 +473,11 @@ function normalizeToolCallNameForDispatch(
   }
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
+  }
+
+  const clawAlias = resolveClawCodeAlias(trimmed, allowedToolNames);
+  if (clawAlias) {
+    return clawAlias.toolName;
   }
 
   const exact = resolveExactAllowedToolName(trimmed, allowedToolNames);
@@ -393,18 +673,27 @@ function sanitizeReplayToolCallInputs(
       }
 
       const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
+      injectClawCodeAliasArgumentShims(rawName, replayBlock);
       const resolvedName = resolveReplayToolCallName(rawName, replayBlock.id, allowedToolNames);
       if (!resolvedName) {
         changed = true;
         messageChanged = true;
         continue;
       }
+      const clawAlias = resolveClawCodeAlias(rawName, allowedToolNames);
 
       if (replayBlock.name !== resolvedName) {
-        nextContent.push({ ...(block as object), name: resolvedName } as typeof block);
+        const nextBlock = { ...(block as object), name: resolvedName } as ReplayToolCallBlock;
+        if (clawAlias?.action) {
+          injectAliasActionIntoToolCallBlock(nextBlock, clawAlias.action);
+        }
+        nextContent.push(nextBlock as typeof block);
         changed = true;
         messageChanged = true;
         continue;
+      }
+      if (clawAlias?.action) {
+        injectAliasActionIntoToolCallBlock(replayBlock, clawAlias.action);
       }
       nextContent.push(block);
     }
@@ -622,6 +911,11 @@ function trimWhitespaceFromToolCallNamesInMessage(
     }
     const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
     if (typeof typedBlock.name === "string") {
+      injectClawCodeAliasArgumentShims(typedBlock.name, typedBlock);
+      const clawAlias = resolveClawCodeAlias(typedBlock.name, allowedToolNames);
+      if (clawAlias?.action) {
+        injectAliasActionIntoToolCallBlock(typedBlock, clawAlias.action);
+      }
       const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames, rawId);
       if (normalized !== typedBlock.name) {
         typedBlock.name = normalized;

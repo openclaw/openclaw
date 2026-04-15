@@ -525,6 +525,164 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
+  it("maps claw-code style file/web aliases to openclaw canonical tool names", async () => {
+    const partialToolCall = { type: "toolCall", name: " read_file " };
+    const messageToolCall = { type: "toolCall", name: "WebSearch" };
+    const finalToolCall = { type: "toolCall", name: " web_fetch " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "web_search", "web_fetch"]));
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(messageToolCall.name).toBe("web_search");
+    expect(finalToolCall.name).toBe("web_fetch");
+  });
+
+  it("injects action for claw-code task aliases when remapping to task tool", async () => {
+    const partialToolCall = { type: "toolCall", name: " TaskCreate ", arguments: { task: "a" } };
+    const finalToolCall = { type: "toolCall", name: "TaskOutput", arguments: { taskId: "t-1" } };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["task"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("task");
+    expect(partialToolCall.arguments).toMatchObject({ task: "a", action: "create" });
+    expect(finalToolCall.name).toBe("task");
+    expect(finalToolCall.arguments).toMatchObject({ taskId: "t-1", action: "output" });
+  });
+
+  it("injects action for claw-code MCP aliases when remapping to mcp tool", async () => {
+    const partialToolCall = { type: "toolCall", name: "ListMcpResources", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "McpAuth", arguments: {} };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["mcp"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("mcp");
+    expect(partialToolCall.arguments).toMatchObject({ action: "list_resources" });
+    expect(finalToolCall.name).toBe("mcp");
+    expect(finalToolCall.arguments).toMatchObject({ action: "auth" });
+  });
+
+  it("maps worker aliases to openclaw sessions tools and injects prompt/session shims", async () => {
+    const partialToolCall = {
+      type: "toolCall",
+      name: "WorkerCreate",
+      arguments: { prompt: "summarize logs" },
+    };
+    const messageToolCall = {
+      type: "toolCall",
+      name: "WorkerSendPrompt",
+      arguments: { workerId: "agent:main:subagent:1", prompt: "continue" },
+    };
+    const finalToolCall = {
+      type: "toolCall",
+      name: "WorkerGet",
+      arguments: { workerId: "agent:main:subagent:1" },
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(
+      baseFn,
+      new Set(["sessions_spawn", "sessions_send", "session_status"]),
+    );
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("sessions_spawn");
+    expect(partialToolCall.arguments).toMatchObject({ task: "summarize logs" });
+    expect(messageToolCall.name).toBe("sessions_send");
+    expect(messageToolCall.arguments).toMatchObject({
+      message: "continue",
+      sessionKey: "agent:main:subagent:1",
+    });
+    expect(finalToolCall.name).toBe("session_status");
+    expect(finalToolCall.arguments).toMatchObject({ sessionKey: "agent:main:subagent:1" });
+  });
+
+  it("maps claw-code utility aliases to compatibility tools", async () => {
+    const partialToolCall = { type: "toolCall", name: "EnterPlanMode", arguments: {} };
+    const messageToolCall = { type: "toolCall", name: "ToolSearch", arguments: { q: "cron" } };
+    const finalToolCall = { type: "toolCall", name: "PowerShell", arguments: { command: "echo hi" } };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(
+      baseFn,
+      new Set(["enter_plan_mode", "tool_search", "exec"]),
+    );
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("enter_plan_mode");
+    expect(messageToolCall.name).toBe("tool_search");
+    expect(messageToolCall.arguments).toMatchObject({ query: "cron" });
+    expect(finalToolCall.name).toBe("exec");
+  });
+
   it("maps provider-prefixed tool names to allowed canonical tools", async () => {
     const partialToolCall = { type: "toolCall", name: " functions.read " };
     const messageToolCall = { type: "toolCall", name: " functions.write " };
