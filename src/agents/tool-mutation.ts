@@ -13,6 +13,7 @@ const MUTATING_TOOL_NAMES = new Set([
   "process",
   "message",
   "sessions_spawn",
+  "model_spawn",
   "sessions_send",
   "cron",
   "gateway",
