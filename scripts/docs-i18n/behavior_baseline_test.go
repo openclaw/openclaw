@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -261,6 +262,9 @@ func TestResolveFixturePathInDirRejectsSymlinkEscape(t *testing.T) {
 
 	linkPath := filepath.Join(fixtureDir, "outside-link.txt")
 	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		if os.IsPermission(err) || runtime.GOOS == "windows" {
+			t.Skipf("symlink creation unavailable in this test environment: %v", err)
+		}
 		t.Fatalf("Symlink(%q, %q): %v", outsidePath, linkPath, err)
 	}
 
