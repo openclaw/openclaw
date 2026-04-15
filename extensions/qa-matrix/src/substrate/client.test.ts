@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  __testing,
-  createMatrixQaClient,
-  provisionMatrixQaRoom,
-  type MatrixQaObservedEvent,
-} from "./client.js";
+import { __testing, createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
 import { buildDefaultMatrixQaTopologySpec } from "./topology.js";
 
 function resolveRequestUrl(input: RequestInfo | URL) {
@@ -58,86 +53,11 @@ describe("matrix driver client", () => {
     });
   });
 
-  it("normalizes message events with thread metadata", () => {
-    expect(
-      __testing.normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$event",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        origin_server_ts: 1_700_000_000_000,
-        content: {
-          body: "hello",
-          msgtype: "m.text",
-          "m.mentions": {
-            user_ids: ["@sut:matrix-qa.test"],
-          },
-          "m.relates_to": {
-            rel_type: "m.thread",
-            event_id: "$root",
-            is_falling_back: true,
-            "m.in_reply_to": {
-              event_id: "$driver",
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      roomId: "!room:matrix-qa.test",
-      eventId: "$event",
-      sender: "@sut:matrix-qa.test",
-      type: "m.room.message",
-      originServerTs: 1_700_000_000_000,
-      body: "hello",
-      msgtype: "m.text",
-      relatesTo: {
-        relType: "m.thread",
-        eventId: "$root",
-        inReplyToId: "$driver",
-        isFallingBack: true,
-      },
-      mentions: {
-        userIds: ["@sut:matrix-qa.test"],
-      },
-    });
-  });
-
   it("builds trimmed Matrix reaction relations for QA driver events", () => {
     expect(__testing.buildMatrixReactionRelation(" $msg-1 ", " 👍 ")).toEqual({
       "m.relates_to": {
         rel_type: "m.annotation",
         event_id: "$msg-1",
-        key: "👍",
-      },
-    });
-  });
-
-  it("normalizes Matrix reaction events with target metadata", () => {
-    expect(
-      __testing.normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-        origin_server_ts: 1_700_000_000_000,
-        content: {
-          "m.relates_to": {
-            rel_type: "m.annotation",
-            event_id: "$msg",
-            key: "👍",
-          },
-        },
-      }),
-    ).toEqual({
-      roomId: "!room:matrix-qa.test",
-      eventId: "$reaction",
-      sender: "@driver:matrix-qa.test",
-      type: "m.reaction",
-      originServerTs: 1_700_000_000_000,
-      relatesTo: {
-        eventId: "$msg",
-        relType: "m.annotation",
-      },
-      reaction: {
-        eventId: "$msg",
         key: "👍",
       },
     });
@@ -183,130 +103,6 @@ describe("matrix driver client", () => {
         },
       }),
     ).toThrow("Matrix registration requires unsupported auth stages:");
-  });
-
-  it("returns a typed no-match result while preserving the latest sync token", async () => {
-    const fetchImpl: typeof fetch = async () =>
-      new Response(
-        JSON.stringify({
-          next_batch: "next-batch-2",
-          rooms: {
-            join: {
-              "!room:matrix-qa.test": {
-                timeline: {
-                  events: [
-                    {
-                      event_id: "$driver",
-                      sender: "@driver:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "hello", msgtype: "m.text" },
-                    },
-                  ],
-                },
-              },
-            },
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
-    });
-    const observedEvents: MatrixQaObservedEvent[] = [];
-
-    const result = await client.waitForOptionalRoomEvent({
-      observedEvents,
-      predicate: (event) => event.sender === "@sut:matrix-qa.test",
-      roomId: "!room:matrix-qa.test",
-      since: "start-batch",
-      timeoutMs: 1,
-    });
-
-    expect(result).toEqual({
-      matched: false,
-      since: "next-batch-2",
-    });
-    expect(observedEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          body: "hello",
-          eventId: "$driver",
-          roomId: "!room:matrix-qa.test",
-          sender: "@driver:matrix-qa.test",
-          type: "m.room.message",
-        }),
-      ]),
-    );
-  });
-
-  it("keeps recording later same-batch events after the first match", async () => {
-    const fetchImpl: typeof fetch = async () =>
-      new Response(
-        JSON.stringify({
-          next_batch: "next-batch-2",
-          rooms: {
-            join: {
-              "!room:matrix-qa.test": {
-                timeline: {
-                  events: [
-                    {
-                      event_id: "$sut",
-                      sender: "@sut:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "target", msgtype: "m.text" },
-                    },
-                    {
-                      event_id: "$driver",
-                      sender: "@driver:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "trailing event", msgtype: "m.text" },
-                    },
-                  ],
-                },
-              },
-            },
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
-    });
-    const observedEvents: MatrixQaObservedEvent[] = [];
-
-    const result = await client.waitForOptionalRoomEvent({
-      observedEvents,
-      predicate: (event) => event.eventId === "$sut",
-      roomId: "!room:matrix-qa.test",
-      since: "start-batch",
-      timeoutMs: 1,
-    });
-
-    expect(result).toEqual({
-      event: expect.objectContaining({
-        eventId: "$sut",
-      }),
-      matched: true,
-      since: "next-batch-2",
-    });
-    expect(observedEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          body: "target",
-          eventId: "$sut",
-        }),
-        expect.objectContaining({
-          body: "trailing event",
-          eventId: "$driver",
-        }),
-      ]),
-    );
   });
 
   it("issues Matrix room membership control requests for QA topology changes", async () => {

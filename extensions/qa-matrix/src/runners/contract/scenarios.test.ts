@@ -49,6 +49,7 @@ describe("matrix live qa scenarios", () => {
     expect(
       scenarioTesting.buildMatrixReplyArtifact(
         {
+          kind: "message",
           roomId: "!room:matrix-qa.test",
           eventId: "$event",
           sender: "@sut:matrix-qa.test",
@@ -61,6 +62,7 @@ describe("matrix live qa scenarios", () => {
     expect(
       scenarioTesting.buildMatrixReplyArtifact(
         {
+          kind: "message",
           roomId: "!room:matrix-qa.test",
           eventId: "$event-2",
           sender: "@sut:matrix-qa.test",
