@@ -38,9 +38,14 @@ type BuildQueuedRunRecordResult =
       record: RunRecord;
     };
 
-function deriveChannelId(ctx: Pick<PluginCommandContext, "to">): string | null {
-  const candidate = typeof ctx.to === "string" ? ctx.to.trim() : "";
-  return candidate || null;
+function deriveChannelId(ctx: Pick<PluginCommandContext, "from">): string | null {
+  if (typeof ctx.from === "string") {
+    const match = ctx.from.match(/^[a-z]+:channel:([A-Z0-9]+)$/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return null;
 }
 
 function classifyRunCommand(args: string | undefined): RunCommandParseResult {
@@ -92,7 +97,7 @@ function classifyRunCommand(args: string | undefined): RunCommandParseResult {
 
 export function buildQueuedRunRecord(params: {
   args: string | undefined;
-  ctx: Pick<PluginCommandContext, "senderId" | "from" | "to">;
+  ctx: Pick<PluginCommandContext, "senderId" | "from" | "to" | "channelId" | "messageThreadId">;
   now?: Date;
   runId?: string;
 }): BuildQueuedRunRecordResult {
@@ -130,7 +135,10 @@ export function buildQueuedRunRecord(params: {
       error: null,
       retry_of: null,
       retry_count: 0,
-      slack_ts: null,
+      slack_ts:
+        params.ctx.messageThreadId == null
+          ? null
+          : String(params.ctx.messageThreadId).trim() || null,
     },
   };
 }
