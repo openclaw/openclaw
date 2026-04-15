@@ -373,16 +373,16 @@ describe("bot-native-command-menu", () => {
       nativeDisabledExplicit: false,
     });
 
-    // Wait a tick for the async sync function
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Wait for the log call to confirm the early-return path executed
+    await vi.waitFor(() => {
+      expect(runtimeLog).toHaveBeenCalledWith(
+        expect.stringContaining("command registration skipped because the resolved command list is empty"),
+      );
+    });
 
     // deleteMyCommands and setMyCommands should NOT be called
     expect(deleteMyCommands).not.toHaveBeenCalled();
     expect(setMyCommands).not.toHaveBeenCalled();
-    // Should log a warning about the transient issue
-    expect(runtimeLog).toHaveBeenCalledWith(
-      expect.stringContaining("command registration skipped because the resolved command list is empty"),
-    );
   });
 
   it("clears menu when commands are empty and native is explicitly disabled (#66958)", async () => {
