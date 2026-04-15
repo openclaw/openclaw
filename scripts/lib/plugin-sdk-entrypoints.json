@@ -118,6 +118,7 @@
   "diagnostic-runtime",
   "diagnostics-otel",
   "diffs",
+  "embeddings",
   "error-runtime",
   "extension-shared",
   "channel-config-helpers",

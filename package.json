@@ -523,6 +523,10 @@
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
     },
+    "./plugin-sdk/embeddings": {
+      "types": "./dist/plugin-sdk/embeddings.d.ts",
+      "default": "./dist/plugin-sdk/embeddings.js"
+    },
     "./plugin-sdk/error-runtime": {
       "types": "./dist/plugin-sdk/error-runtime.d.ts",
       "default": "./dist/plugin-sdk/error-runtime.js"
