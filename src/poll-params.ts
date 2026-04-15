@@ -29,13 +29,21 @@ export type SharedPollCreationParamName = keyof typeof SHARED_POLL_CREATION_PARA
 export type TelegramPollCreationParamName = keyof typeof TELEGRAM_POLL_CREATION_PARAM_DEFS;
 export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
 
-export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
-export const SHARED_POLL_CREATION_PARAM_NAMES = Object.keys(
-  SHARED_POLL_CREATION_PARAM_DEFS,
-) as SharedPollCreationParamName[];
-export const TELEGRAM_POLL_CREATION_PARAM_NAMES = Object.keys(
-  TELEGRAM_POLL_CREATION_PARAM_DEFS,
-) as TelegramPollCreationParamName[];
+export const SHARED_POLL_CREATION_PARAM_NAMES: SharedPollCreationParamName[] = [
+  "pollQuestion",
+  "pollOption",
+  "pollDurationHours",
+  "pollMulti",
+];
+export const TELEGRAM_POLL_CREATION_PARAM_NAMES: TelegramPollCreationParamName[] = [
+  "pollDurationSeconds",
+  "pollAnonymous",
+  "pollPublic",
+];
+export const POLL_CREATION_PARAM_NAMES: string[] = [
+  ...SHARED_POLL_CREATION_PARAM_NAMES,
+  ...TELEGRAM_POLL_CREATION_PARAM_NAMES,
+];
 
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
