@@ -51,6 +51,26 @@ def sanitize_hcl(value):
     return value
 
 
+def prompt_raw(question, default=None, choices=None):
+    """Interactive prompt that returns the raw string without HCL escaping.
+    Use for values like emails, ARNs, CIDRs that must not be mangled."""
+    hint = ""
+    if choices:
+        hint = f" [{'/'.join(choices)}]"
+    elif default is not None:
+        hint = f" (default: {default})"
+    while True:
+        val = input(f"  {question}{hint}: ").strip()
+        if not val and default is not None:
+            return str(default) if isinstance(default, str) else default
+        if choices and val not in choices:
+            print(f"    ⚠️  Choose one of: {', '.join(choices)}")
+            continue
+        if val:
+            return val
+        print("    ⚠️  Value required")
+
+
 def validate_dir(path_str):
     """Validate --dir is a safe path under /tmp or the user's home directory."""
     resolved = Path(path_str).resolve()
@@ -161,7 +181,7 @@ def terraform_label(value):
     return label
 
 
-def prompt_num(question, default=None, min_val=None, max_val=None):
+def prompt_num(question, default=None, min_val=None, max_val=None, integer=False):
     """Interactive prompt that validates and returns a numeric string."""
     while True:
         hint = f" (default: {default})" if default is not None else ""
@@ -170,6 +190,9 @@ def prompt_num(question, default=None, min_val=None, max_val=None):
             val = str(default)
         try:
             num = float(val)
+            if integer and num != int(num):
+                print(f"    ⚠️  Must be a whole number, got {val}")
+                continue
             if min_val is not None and num < min_val:
                 print(f"    ⚠️  Must be >= {min_val}, got {num}")
                 continue
@@ -245,14 +268,14 @@ Best practices enforced:
     policies = preset["policies"][:]
 
     if perm_choice == "8":
-        custom_arn = prompt("Managed policy ARN")
+        custom_arn = prompt_raw("Managed policy ARN")
         policies = [custom_arn]
 
     # Additional policies
     if perm_choice != "1":
         add_more = prompt("Attach additional policies?", default="no", choices=["yes", "no"])
         while add_more == "yes":
-            extra_arn = prompt("Policy ARN")
+            extra_arn = prompt_raw("Policy ARN")
             policies.append(extra_arn)
             add_more = prompt("Add another?", default="no", choices=["yes", "no"])
 
@@ -663,24 +686,34 @@ Supported runtimes: Python 3.12, Node.js 20, Go (AL2023)
         go_mod = code_dir / "go.mod"
         go_mod.write_text(f"module {name}\n\ngo 1.21\n\nrequire github.com/aws/aws-lambda-go v1.47.0\n")
         bootstrap_path = code_dir / "bootstrap"
-        print("  ⏳ Compiling Go binary (GOOS=linux GOARCH=amd64)...")
-        build_env = os.environ.copy()
-        build_env.update({"GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "0"})
-        mod_rc = subprocess.run(["go", "mod", "tidy"], cwd=str(code_dir), env=build_env)
-        if mod_rc.returncode != 0:
-            print("  ⚠️  'go mod tidy' failed. You may need to run it manually before deploy.")
-        build_rc = subprocess.run(
-            ["go", "build", "-tags", "lambda.norpc", "-o", "bootstrap", "."],
-            cwd=str(code_dir), env=build_env,
-        )
-        if build_rc.returncode != 0:
-            print("  ⚠️  Go build failed. Packaging source instead — compile and re-zip before deploy.")
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.write(code_file, rt_info["file"])
-        else:
+        go_build_ok = False
+        try:
+            import shutil
+            if not shutil.which("go"):
+                raise FileNotFoundError("go not found on PATH")
+            print("  ⏳ Compiling Go binary (GOOS=linux GOARCH=amd64)...")
+            build_env = os.environ.copy()
+            build_env.update({"GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "0"})
+            mod_rc = subprocess.run(["go", "mod", "tidy"], cwd=str(code_dir), env=build_env)
+            if mod_rc.returncode != 0:
+                print("  ⚠️  'go mod tidy' failed. You may need to run it manually before deploy.")
+            build_rc = subprocess.run(
+                ["go", "build", "-tags", "lambda.norpc", "-o", "bootstrap", "."],
+                cwd=str(code_dir), env=build_env,
+            )
+            if build_rc.returncode == 0:
+                go_build_ok = True
+            else:
+                print("  ⚠️  Go build failed. Packaging source instead — compile and re-zip before deploy.")
+        except FileNotFoundError:
+            print("  ⚠️  Go toolchain not found on PATH. Packaging source instead — install Go and compile before deploy.")
+        if go_build_ok:
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.write(bootstrap_path, "bootstrap")
             print(f"  ✅ Compiled Go bootstrap binary")
+        else:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(code_file, rt_info["file"])
     else:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(code_file, rt_info["file"])
@@ -906,7 +939,7 @@ echo
         test_content += f"""
 # API Gateway test
 echo "\n--- API Gateway Test ---"
-endpoint=$(terraform -chdir={outdir} output -raw api_endpoint 2>/dev/null || echo "")
+endpoint=$(terraform -chdir="{outdir}" output -raw api_endpoint 2>/dev/null || echo "")
 if [ -n "$endpoint" ]; then
   echo "GET $endpoint"
   curl -s "$endpoint" | python3 -m json.tool
@@ -1040,7 +1073,7 @@ data "terraform_remote_state" "vpc" {{
             print(f"  ℹ️  Auto-appended /32: {my_ip}")
         rules = [{"type": "ingress", "port": 22, "proto": "tcp", "cidr": my_ip, "desc": "SSH from trusted IP"}]
     elif preset == "6":
-        app_port = prompt_num("Application port (e.g. 8080, 3000, 8443)", min_val=1, max_val=65535)
+        app_port = prompt_num("Application port (e.g. 8080, 3000, 8443)", min_val=1, max_val=65535, integer=True)
         app_cidr = prompt("Source CIDR", default="10.0.0.0/8")
         rules = [{"type": "ingress", "port": int(app_port), "proto": "tcp", "cidr": app_cidr, "desc": f"App port {app_port}"}]
 
@@ -1055,7 +1088,7 @@ data "terraform_remote_state" "vpc" {{
         print("\n  Common ports: 22=SSH, 80=HTTP, 443=HTTPS, 3000=Node,")
         print("    3306=MySQL, 5432=PostgreSQL, 6379=Redis, 8080=Alt HTTP,")
         print("    8443=Alt HTTPS, 27017=MongoDB")
-        r_port  = prompt_num("Port number", min_val=1, max_val=65535)
+        r_port  = prompt_num("Port number", min_val=1, max_val=65535, integer=True)
         r_port_int = int(r_port)
         r_proto = prompt("Protocol", default="tcp", choices=["tcp", "udp", "icmp"])
         r_cidr  = prompt("Source CIDR", default="10.0.0.0/8")
@@ -1268,8 +1301,8 @@ Best practice:
     # Core accounts
     print("\n  Core accounts:")
     print("    These are created under the Security OU.")
-    log_email   = prompt("Log Archive account email (must be unique, not used by any AWS account)")
-    audit_email = prompt("Audit/Security account email (must be unique)")
+    log_email   = prompt_raw("Log Archive account email (must be unique, not used by any AWS account)")
+    audit_email = prompt_raw("Audit/Security account email (must be unique)")
 
     # Guardrails / SCPs
     print("\n  Service Control Policies (guardrails):")
@@ -1356,7 +1389,7 @@ Best practice:
     vpc_azs = 2
     if enable_vpc_baseline:
         vpc_cidr = prompt("VPC CIDR for workload accounts", default="10.0.0.0/16")
-        vpc_azs = int(prompt_num("Number of AZs", default=2, min_val=2, max_val=3))
+        vpc_azs = int(prompt_num("Number of AZs", default=2, min_val=2, max_val=3, integer=True))
 
     # Account Vending
     print("\n  Account Vending Machine:")
@@ -1369,7 +1402,7 @@ Best practice:
     vending_budget = "100"
     vending_email_domain = ""
     if enable_vending:
-        vending_email_domain = prompt("Email domain for new accounts (e.g. marsmovers.com)")
+        vending_email_domain = prompt_raw("Email domain for new accounts (e.g. marsmovers.com)")
         vending_budget = prompt_num("Default monthly budget per account (USD)", default=100, min_val=1)
 
     # Summary
@@ -2128,6 +2161,7 @@ Storage classes:
     tp_map = {"1": "bursting", "2": "elastic", "3": "provisioned"}
     tp_mode = tp_map[tp]
     provisioned_block = ""
+    tp_mibps = ""
     if tp_mode == "provisioned":
         tp_mibps = prompt_num("Provisioned throughput (MiB/s, min 1)", default=10, min_val=1)
         provisioned_block = f'  provisioned_throughput_in_mibps = {tp_mibps}'
@@ -2333,12 +2367,12 @@ Common alarm patterns:
     print("    Alarms need an SNS topic to send alerts.")
     sns_choice = prompt("Create new SNS topic or use existing?", default="new", choices=["new", "existing"])
     if sns_choice == "existing":
-        sns_arn = prompt("Existing SNS topic ARN")
+        sns_arn = prompt_raw("Existing SNS topic ARN")
         sns_block = ""
         sns_ref = f'"{sns_arn}"'
     else:
         sns_topic_name = f"{name}-alerts"
-        email = prompt("Alert email address")
+        email = prompt_raw("Alert email address")
         sns_block = f"""
 resource "aws_sns_topic" "alerts" {{
   name = "{sns_topic_name}"
@@ -2814,6 +2848,7 @@ resource "aws_s3_bucket_policy" "trail_logs" {{
     cw_role_block = ""
     cw_ref = ""
     cw_role_ref = ""
+    retention = ""
     if cw_logs:
         retention = prompt("CloudWatch log retention (days)", default="90", choices=["30", "60", "90", "180", "365"])
         cw_block = f"""
@@ -2984,15 +3019,24 @@ alert at 50%, 80%, and 100% thresholds.
     thresholds = []
     for t in thresholds_str.split(","):
         t = t.strip()
+        if not t:
+            continue
         try:
-            val = int(t)
+            num = float(t)
+            val = int(num)
+            if num != val:
+                print(f"  ❌ Threshold must be a whole number, got '{t}'")
+                sys.exit(1)
             if not (1 <= val <= 200):
                 print(f"  ❌ Threshold must be 1-200%, got {val}")
                 sys.exit(1)
             thresholds.append(val)
-        except ValueError:
+        except (ValueError, OverflowError):
             print(f"  ❌ Invalid threshold: '{t}'")
             sys.exit(1)
+    if not thresholds:
+        print("  ❌ At least one threshold is required.")
+        sys.exit(1)
     thresholds.sort()
 
     # Forecast alert
@@ -3000,7 +3044,7 @@ alert at 50%, 80%, and 100% thresholds.
     forecast = forecast == "yes"
     forecast_threshold = 100
     if forecast:
-        forecast_threshold = int(prompt_num("Forecast alert threshold (%)", default=100, min_val=1, max_val=200))
+        forecast_threshold = int(prompt_num("Forecast alert threshold (%)", default=100, min_val=1, max_val=200, integer=True))
 
     # Notification
     print("\n  Notification method:")
@@ -3009,11 +3053,11 @@ alert at 50%, 80%, and 100% thresholds.
     notify_type = prompt("Notification type", default="1", choices=["1", "2"])
 
     if notify_type == "1":
-        email = prompt("Alert email address")
+        email = prompt_raw("Alert email address")
         sns_block = ""
         subscriber_line = f'      subscriber_email_addresses = ["{email}"]'
     else:
-        sns_arn = prompt("SNS topic ARN (e.g. arn:aws:sns:us-east-1:123456789:alerts)")
+        sns_arn = prompt_raw("SNS topic ARN (e.g. arn:aws:sns:us-east-1:123456789:alerts)")
         sns_block = ""
         subscriber_line = f'      subscriber_sns_topic_arns  = ["{sns_arn}"]'
 
@@ -3623,6 +3667,9 @@ def cmd_generate(args):
     workspace = sanitize_hcl(args.workspace)
 
     if args.resource == "s3":
+        if not args.name:
+            print("ERROR: --name is required for s3 resource.")
+            sys.exit(1)
         name = args.name.lower().replace(" ", "-").replace("_", "-")
         if name != args.name:
             print(f"⚠️  Auto-corrected bucket name: '{args.name}' → '{name}'")
@@ -3738,6 +3785,9 @@ output "resource_group_id" {{ value = azurerm_resource_group.this.id }}
         prompt_iam_user(org, workspace, outdir)
 
     elif args.resource == "iam-role":
+        if not args.name:
+            print("ERROR: --name is required for iam-role resource.")
+            sys.exit(1)
         name = args.name
         errors = validate_iam_role_name(name)
         if errors:
@@ -3869,6 +3919,7 @@ def get_workspace_id(workspace_name):
     return data["id"]
 
 def cmd_state(args):
+    _require_requests()
     ws_id = get_workspace_id(args.workspace)
     if not ws_id:
         return
@@ -3920,6 +3971,7 @@ def cmd_state(args):
 
 
 def cmd_outputs(args):
+    _require_requests()
     import time
     ws_id = get_workspace_id(args.workspace)
     if not ws_id:
@@ -3966,8 +4018,14 @@ def cmd_list_workspaces(args):
     url = f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces?page[size]=100"
     print(f"\n--- Workspaces in {org} ---")
     while url:
-        r = requests.get(url, headers=api_headers())
-        r.raise_for_status()
+        try:
+            r = requests.get(url, headers=api_headers())
+        except requests.RequestException as exc:
+            print(f"ERROR: Failed to list workspaces: {exc}")
+            sys.exit(1)
+        if r.status_code >= 400:
+            print(f"ERROR: Failed to list workspaces (HTTP {r.status_code}).")
+            sys.exit(1)
         body = r.json()
         for ws in body.get("data", []):
             a = ws["attributes"]
