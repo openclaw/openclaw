@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 function isPnpmExecPath(value) {
-  return /^pnpm(?:-cli)?(?:\.([cm]?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
+  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
 }
 
 function hasScriptShebang(value) {
