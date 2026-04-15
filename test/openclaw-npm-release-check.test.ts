@@ -416,6 +416,15 @@ describe("collectPackedTestCargoErrors", () => {
     ).toEqual([]);
   });
 
+  it("allows leaf runtime filenames named test or tests", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/test",
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/tests",
+      ]),
+    ).toEqual([]);
+  });
+
   it("normalizes Windows or mixed separators before classifying test cargo", () => {
     expect(
       collectPackedTestCargoErrors([

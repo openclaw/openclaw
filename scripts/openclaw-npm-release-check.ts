@@ -134,6 +134,7 @@ function pathContainsPackedTestCargo(packedPath: string): boolean {
   const segments = normalizedPath.split("/").filter(Boolean);
   return segments.some(
     (segment, index) =>
+      index < segments.length - 1 &&
       PACKED_TEST_CARGO_DIRECTORY_SEGMENTS.has(segment) &&
       !isNodeModulesPackageRoot(segments, index),
   );
