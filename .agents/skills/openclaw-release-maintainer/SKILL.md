@@ -86,6 +86,19 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - For stable correction releases like `YYYY.M.D-N`, it also verifies the
   upgrade path from `YYYY.M.D` to `YYYY.M.D-N` so a correction publish cannot
   silently leave existing global installs on the old base stable payload.
+- Treat install smoke as a pack-budget gate too. `pnpm test:install:smoke`
+  now fails the candidate update tarball when npm reports an oversized
+  `unpackedSize`, so release-time e2e cannot miss pack bloat that would risk
+  low-memory install/startup failures.
+- Use `pnpm test:live:media video` for bounded video-provider smoke when video
+  generation is in release scope. The default video smoke skips `fal`, runs one
+  text-to-video attempt per provider with a one-second lobster prompt, and caps
+  each provider operation with `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS`
+  (`180000` by default).
+- Run `pnpm test:live:media video --video-providers fal` only when FAL-specific
+  proof is required. Its queue latency can dominate release time.
+- Set `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1` only when intentionally
+  validating the slower image-to-video and video-to-video transform lanes.
 
 ## Check all relevant release builds
 

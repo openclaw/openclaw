@@ -18,6 +18,7 @@ import {
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  isBinaryContent,
   normalizeForwardedContext,
   resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
@@ -32,6 +33,7 @@ export {
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  isBinaryContent,
   normalizeForwardedContext,
   resolveTelegramMediaPlaceholder,
 };

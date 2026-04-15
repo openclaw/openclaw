@@ -97,7 +97,7 @@ async function expectFirstHookDelivery(
   const first = await postAgentHookWithIdempotency(port, idempotencyKey, headers);
   const firstBody = (await first.json()) as { runId?: string };
   expect(firstBody.runId).toBeTruthy();
-  await waitForSystemEvent();
+  await waitForSystemEvent(5_000);
   drainSystemEvents(resolveMainKey());
   return firstBody;
 }
@@ -288,7 +288,7 @@ describe("gateway server hooks", () => {
     await withGatewayServer(async ({ port }) => {
       const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
       expect(direct.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       expect(peekSystemEventEntries(resolveMainKey())).toEqual([
         expect.objectContaining({
           text: "Direct wake",
@@ -299,7 +299,7 @@ describe("gateway server hooks", () => {
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       expect(peekSystemEventEntries(resolveMainKey())).toEqual([
         expect.objectContaining({
           text: "Mapped wake: Email",
