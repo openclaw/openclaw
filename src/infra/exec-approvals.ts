@@ -241,10 +241,46 @@ function ensureDir(filePath: string) {
   return dir;
 }
 
+/**
+ * On Unix, verify that the given path is owned by the current user and is not
+ * group/other-writable (rejects mode bits 0o022). On Windows this is a no-op
+ * since `process.getuid` is unavailable.
+ * @internal Exported for testing only.
+ */
+export function assertSecureOwnership(resolvedPath: string, label: string): void {
+  const currentUid = process.getuid?.();
+  if (currentUid === undefined) return; // Windows — skip
+  const stat = fs.statSync(resolvedPath);
+  if (stat.uid !== currentUid) {
+    throw new Error(
+      `Refusing to follow ${label} symlink: target not owned by current user: ${resolvedPath}`,
+    );
+  }
+  // eslint-disable-next-line no-bitwise
+  if (stat.mode & 0o022) {
+    throw new Error(
+      `Refusing to follow ${label} symlink: target is group/other-writable: ${resolvedPath}`,
+    );
+  }
+}
+
 /** @internal Exported for testing only. */
 export function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
   const resolvedTarget = path.resolve(targetPath);
   const lexicalRoot = path.resolve(trustedRoot);
+
+  // If trustedRoot itself is a symlink, resolve and validate ownership + permissions.
+  try {
+    const rootLstat = fs.lstatSync(lexicalRoot);
+    if (rootLstat.isSymbolicLink()) {
+      const resolvedRoot = fs.realpathSync(lexicalRoot);
+      assertSecureOwnership(resolvedRoot, "OPENCLAW_HOME");
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
 
   if (resolvedTarget !== lexicalRoot && !resolvedTarget.startsWith(`${lexicalRoot}${path.sep}`)) {
     return; // outside trusted root, skip check
@@ -274,18 +310,10 @@ export function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: s
             throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
           }
           // On Unix, verify the symlink target is owned by the current user
-          // to prevent tampering in multi-user setups. On Windows,
-          // process.getuid is unavailable; skip the check (NTFS symlinks
-          // already require elevated privileges to create).
-          const currentUid = process.getuid?.();
-          if (currentUid !== undefined) {
-            const resolvedStat = fs.statSync(resolved);
-            if (resolvedStat.uid !== currentUid) {
-              throw new Error(
-                `Refusing to follow .openclaw symlink: target not owned by current user: ${current}`,
-              );
-            }
-          }
+          // and is not group/other-writable, to prevent tampering in
+          // multi-user setups. On Windows, process.getuid is unavailable;
+          // skip the check (NTFS symlinks already require elevated privileges).
+          assertSecureOwnership(resolved, ".openclaw");
           current = resolved;
           continue;
         }
