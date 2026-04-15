@@ -77,6 +77,7 @@ Plugins can register additional tools. Some examples:
 - [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
 - [Diffs](/tools/diffs) — diff viewer and renderer
 - [OpenProse](/prose) — markdown-first workflow orchestration
+- [GitHub Integration](/tools/github-integration) — MCP and skill-based source control
 
 ## Tool configuration
 
