@@ -11,7 +11,11 @@ import {
   webAuthExists as webAuthExistsImpl,
 } from "./auth-store.js";
 import { monitorWebChannel as monitorWebChannelImpl } from "./auto-reply/monitor.js";
-import { loginWeb as loginWebImpl } from "./login.js";
+// Lazy-load login to keep Baileys out of the root dist import graph.
+type LoginWeb = typeof import("./login.js").loginWeb;
+function loadLoginWeb(): Promise<typeof import("./login.js")> {
+  return import("./login.js");
+}
 import { whatsappSetupWizard as whatsappSetupWizardImpl } from "./setup-surface.js";
 
 type GetActiveWebListener = typeof import("./active-listener.js").getActiveWebListener;
@@ -52,8 +56,11 @@ export function webAuthExists(...args: Parameters<WebAuthExists>): ReturnType<We
   return webAuthExistsImpl(...args);
 }
 
-export function loginWeb(...args: Parameters<LoginWeb>): ReturnType<LoginWeb> {
-  return loginWebImpl(...args);
+export async function loginWeb(
+  ...args: Parameters<LoginWeb>
+): ReturnType<LoginWeb> {
+  const { loginWeb: loginWebImpl } = await loadLoginWeb();
+  return await loginWebImpl(...args);
 }
 
 export async function startWebLoginWithQr(
