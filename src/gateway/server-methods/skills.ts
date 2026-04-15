@@ -355,7 +355,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     if (redacted.config && typeof redacted.config === "object") {
       const safeConfig: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(redacted.config as Record<string, unknown>)) {
+      for (const [key, value] of Object.entries(redacted.config)) {
         if (typeof value !== "string" || !secretKeyPattern.test(key)) {
           safeConfig[key] = value;
         }
