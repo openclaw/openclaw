@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -26,6 +26,16 @@ const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
+
+describe("package files qa-channel compatibility stub", () => {
+  it("does not exclude the qa-channel subtree before packing the legacy runtime stub", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: unknown };
+
+    expect(pkg.files).toEqual(expect.arrayContaining(LEGACY_UPDATE_COMPAT_PACKED_PATHS));
+    expect(pkg.files).not.toEqual(expect.arrayContaining(["!dist/extensions/qa-channel/**"]));
+    expect(pkg.files).not.toEqual(expect.arrayContaining(["!dist/extensions/qa-channel/**/*"]));
+  });
+});
 
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
