@@ -50,6 +50,33 @@ function dedupeSortedPluginIds(values: Iterable<string>): string[] {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectRequestedAgentHarnessRuntimes(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const runtimes = new Set<string>();
+  const pushRuntime = (value: unknown) => {
+    const normalized = typeof value === "string" ? normalizeOptionalLowercaseString(value) : null;
+    if (!normalized || normalized === "auto" || normalized === "pi") {
+      return;
+    }
+    runtimes.add(normalized);
+  };
+
+  pushRuntime(config.agents?.defaults?.embeddedHarness?.runtime);
+  if (Array.isArray(config.agents?.list)) {
+    for (const entry of config.agents.list) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      pushRuntime((entry as { embeddedHarness?: { runtime?: string } }).embeddedHarness?.runtime);
+    }
+  }
+  pushRuntime(env.OPENCLAW_AGENT_RUNTIME);
+
+  return [...runtimes].toSorted((left, right) => left.localeCompare(right));
+}
+
 function normalizeChannelIds(channelIds: Iterable<string>): string[] {
   return Array.from(
     new Set(
@@ -272,6 +299,21 @@ export function resolveGatewayStartupPluginIds(params: {
   const activationSource = createPluginActivationSource({
     config: params.activationSourceConfig ?? params.config,
   });
+  const requiredAgentHarnessPluginIds = new Set(
+    collectRequestedAgentHarnessRuntimes(params.activationSourceConfig ?? params.config, params.env)
+      .flatMap((runtime) =>
+        resolveManifestActivationPluginIds({
+          trigger: {
+            kind: "agentHarness",
+            runtime,
+          },
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          cache: true,
+        }),
+      ),
+  );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const explicitMemorySlotStartupPluginId = resolveExplicitMemorySlotStartupPluginId(
     params.activationSourceConfig ?? params.config,
@@ -284,6 +326,17 @@ export function resolveGatewayStartupPluginIds(params: {
     .plugins.filter((plugin) => {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
         return true;
+      }
+      if (requiredAgentHarnessPluginIds.has(plugin.id)) {
+        const activationState = resolveEffectivePluginActivationState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: pluginsConfig,
+          rootConfig: params.config,
+          enabledByDefault: plugin.enabledByDefault,
+          activationSource,
+        });
+        return activationState.enabled;
       }
       if (
         !shouldConsiderForGatewayStartup({
