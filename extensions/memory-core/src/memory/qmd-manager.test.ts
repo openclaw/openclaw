@@ -3598,7 +3598,7 @@ describe("QmdMemoryManager", () => {
       truncated: true,
       nextFrom: 13,
     });
-    expect(readFileSpy).toHaveBeenCalled();
+    expect(readFileSpy).not.toHaveBeenCalled();
 
     await manager.close();
     readFileSpy.mockRestore();
@@ -3645,12 +3645,12 @@ describe("QmdMemoryManager", () => {
         name: "disappears before partial read",
         request: { relPath, from: 2, lines: 1 },
         expectedPath: relPath,
-        installReadSpy: () => {
-          const realReadFile = fs.readFile;
+        installOpenSpy: () => {
+          const realOpen = fs.open;
           let injected = false;
-          const readSpy = vi
-            .spyOn(fs, "readFile")
-            .mockImplementation(async (...args: Parameters<typeof realReadFile>) => {
+          const openSpy = vi
+            .spyOn(fs, "open")
+            .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
               const [target, options] = args;
               if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
                 injected = true;
@@ -3658,21 +3658,21 @@ describe("QmdMemoryManager", () => {
                 err.code = "ENOENT";
                 throw err;
               }
-              return await realReadFile(target, options as never);
+              return await realOpen(target, options);
             });
-          return () => readSpy.mockRestore();
+          return () => openSpy.mockRestore();
         },
       },
     ] as const;
 
     for (const testCase of cases) {
       const { manager } = await createManager();
-      const restoreRead = "installReadSpy" in testCase ? testCase.installReadSpy() : undefined;
+      const restoreOpen = "installOpenSpy" in testCase ? testCase.installOpenSpy() : undefined;
       try {
         const result = await manager.readFile(testCase.request);
         expect(result, testCase.name).toEqual({ text: "", path: testCase.expectedPath });
       } finally {
-        restoreRead?.();
+        restoreOpen?.();
         await manager.close();
       }
     }

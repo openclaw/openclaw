@@ -45,32 +45,25 @@ function fitLinesToCharBudget(params: { lines: string[]; maxChars: number }): {
   };
 }
 
-export function buildMemoryReadResult(params: {
-  content: string;
+export function buildMemoryReadResultFromSlice(params: {
+  selectedLines: string[];
   relPath: string;
-  from?: number;
-  lines?: number;
-  defaultLines?: number;
+  startLine: number;
+  moreSourceLinesRemain?: boolean;
   maxChars?: number;
   suggestReadFallback?: boolean;
 }): MemoryReadResult {
-  const fileLines = params.content.split("\n");
-  const start = Math.max(1, params.from ?? 1);
-  const requestedCount = Math.max(
-    1,
-    params.lines ?? params.defaultLines ?? DEFAULT_MEMORY_READ_LINES,
-  );
-  const selectedLines = fileLines.slice(start - 1, start - 1 + requestedCount);
+  const start = Math.max(1, params.startLine);
   const fitted = fitLinesToCharBudget({
-    lines: selectedLines,
+    lines: params.selectedLines,
     maxChars: Math.max(1, params.maxChars ?? DEFAULT_MEMORY_READ_MAX_CHARS),
   });
-  const moreSourceLinesRemain = start - 1 + selectedLines.length < fileLines.length;
+  const moreSourceLinesRemain = params.moreSourceLinesRemain ?? false;
   const charCapTruncated =
-    fitted.hardTruncatedSingleLine || fitted.includedLines < selectedLines.length;
+    fitted.hardTruncatedSingleLine || fitted.includedLines < params.selectedLines.length;
   const nextFrom =
     !fitted.hardTruncatedSingleLine &&
-    (moreSourceLinesRemain || fitted.includedLines < selectedLines.length)
+    (moreSourceLinesRemain || fitted.includedLines < params.selectedLines.length)
       ? start + fitted.includedLines
       : undefined;
   const truncated = charCapTruncated || moreSourceLinesRemain;
@@ -89,4 +82,31 @@ export function buildMemoryReadResult(params: {
     ...(truncated ? { truncated: true } : {}),
     ...(typeof nextFrom === "number" ? { nextFrom } : {}),
   };
+}
+
+export function buildMemoryReadResult(params: {
+  content: string;
+  relPath: string;
+  from?: number;
+  lines?: number;
+  defaultLines?: number;
+  maxChars?: number;
+  suggestReadFallback?: boolean;
+}): MemoryReadResult {
+  const fileLines = params.content.split("\n");
+  const start = Math.max(1, params.from ?? 1);
+  const requestedCount = Math.max(
+    1,
+    params.lines ?? params.defaultLines ?? DEFAULT_MEMORY_READ_LINES,
+  );
+  const selectedLines = fileLines.slice(start - 1, start - 1 + requestedCount);
+  const moreSourceLinesRemain = start - 1 + selectedLines.length < fileLines.length;
+  return buildMemoryReadResultFromSlice({
+    selectedLines,
+    relPath: params.relPath,
+    startLine: start,
+    moreSourceLinesRemain,
+    maxChars: params.maxChars,
+    suggestReadFallback: params.suggestReadFallback,
+  });
 }

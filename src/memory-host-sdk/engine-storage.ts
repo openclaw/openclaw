@@ -18,6 +18,7 @@ export {
 export { readMemoryFile } from "./host/read-file.js";
 export {
   buildMemoryReadResult,
+  buildMemoryReadResultFromSlice,
   DEFAULT_MEMORY_READ_LINES,
   DEFAULT_MEMORY_READ_MAX_CHARS,
   type MemoryReadResult,
