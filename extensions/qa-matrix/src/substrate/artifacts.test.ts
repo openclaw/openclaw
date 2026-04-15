@@ -89,4 +89,59 @@ describe("matrix observed event artifacts", () => {
       },
     ]);
   });
+
+  it("keeps redaction metadata while still stripping Matrix event content", () => {
+    expect(
+      buildMatrixQaObservedEventsArtifact({
+        includeContent: false,
+        observedEvents: [
+          {
+            kind: "redaction",
+            roomId: "!room:matrix-qa.test",
+            eventId: "$redaction",
+            sender: "@driver:matrix-qa.test",
+            type: "m.room.redaction",
+            originServerTs: 1_700_000_000_123,
+          },
+          {
+            kind: "message",
+            roomId: "!room:matrix-qa.test",
+            eventId: "$message",
+            sender: "@sut:matrix-qa.test",
+            type: "m.room.message",
+            body: "private body",
+            formattedBody: "<p>private body</p>",
+            msgtype: "m.text",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        kind: "redaction",
+        roomId: "!room:matrix-qa.test",
+        eventId: "$redaction",
+        sender: "@driver:matrix-qa.test",
+        type: "m.room.redaction",
+        originServerTs: 1_700_000_000_123,
+        msgtype: undefined,
+        membership: undefined,
+        relatesTo: undefined,
+        mentions: undefined,
+        reaction: undefined,
+      },
+      {
+        kind: "message",
+        roomId: "!room:matrix-qa.test",
+        eventId: "$message",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        originServerTs: undefined,
+        msgtype: "m.text",
+        membership: undefined,
+        relatesTo: undefined,
+        mentions: undefined,
+        reaction: undefined,
+      },
+    ]);
+  });
 });
