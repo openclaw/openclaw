@@ -99,6 +99,55 @@ function extractProviderFromModelRef(value: string): string | null {
   return normalizeProviderId(trimmed.slice(0, slash));
 }
 
+function collectEmbeddedHarnessRuntimes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  const runtimes = new Set<string>();
+  const pushRuntime = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = normalizeOptionalLowercaseString(value);
+    if (!normalized || normalized === "auto" || normalized === "pi") {
+      return;
+    }
+    runtimes.add(normalized);
+  };
+
+  pushRuntime(cfg.agents?.defaults?.embeddedHarness?.runtime);
+  if (Array.isArray(cfg.agents?.list)) {
+    for (const agent of cfg.agents.list) {
+      if (!isRecord(agent)) {
+        continue;
+      }
+      pushRuntime((agent.embeddedHarness as Record<string, unknown> | undefined)?.runtime);
+    }
+  }
+  pushRuntime(env.OPENCLAW_AGENT_RUNTIME);
+
+  return [...runtimes].toSorted((left, right) => left.localeCompare(right));
+}
+
+function hasConfiguredEmbeddedHarnessRuntime(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  return collectEmbeddedHarnessRuntimes(cfg, env).length > 0;
+}
+
+function resolveAgentHarnessOwnerPluginIds(
+  registry: PluginManifestRegistry,
+  runtime: string,
+): string[] {
+  const normalizedRuntime = normalizeOptionalLowercaseString(runtime);
+  if (!normalizedRuntime) {
+    return [];
+  }
+  return registry.plugins
+    .filter((plugin) =>
+      (plugin.activation?.onAgentHarnesses ?? []).some(
+        (entry) => normalizeOptionalLowercaseString(entry) === normalizedRuntime,
+      ),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   const profiles = cfg.auth?.profiles;
@@ -300,7 +349,7 @@ function hasPluginEntries(cfg: OpenClawConfig): boolean {
   return !!entries && typeof entries === "object" && Object.keys(entries).length > 0;
 }
 
-function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
+function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const pluginEntries = cfg.plugins?.entries;
   if (Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg)) {
     return true;
@@ -318,6 +367,9 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
     return true;
   }
   if (collectModelRefs(cfg).length > 0) {
+    return true;
+  }
+  if (hasConfiguredEmbeddedHarnessRuntime(cfg, env)) {
     return true;
   }
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
@@ -357,6 +409,9 @@ export function configMayNeedPluginAutoEnable(
   if (collectModelRefs(cfg).length > 0) {
     return true;
   }
+  if (hasConfiguredEmbeddedHarnessRuntime(cfg, env)) {
+    return true;
+  }
   if (hasConfiguredWebSearchPluginEntry(cfg) || hasConfiguredWebFetchPluginEntry(cfg)) {
     return true;
   }
@@ -381,6 +436,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.providerId} auth configured`;
     case "provider-model-configured":
       return `${candidate.modelRef} model configured`;
+    case "agent-harness-runtime-configured":
+      return `${candidate.runtime} agent harness runtime configured`;
     case "web-fetch-provider-selected":
       return `${candidate.providerId} web fetch provider selected`;
     case "plugin-web-search-configured":
@@ -429,6 +486,17 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
         pluginId: owningPluginIds[0],
         kind: "provider-model-configured",
         modelRef,
+      });
+    }
+  }
+
+  for (const runtime of collectEmbeddedHarnessRuntimes(params.config, params.env)) {
+    const pluginIds = resolveAgentHarnessOwnerPluginIds(params.registry, runtime);
+    for (const pluginId of pluginIds) {
+      changes.push({
+        pluginId,
+        kind: "agent-harness-runtime-configured",
+        runtime,
       });
     }
   }
@@ -640,7 +708,7 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
 }): PluginManifestRegistry {
   return (
     params.manifestRegistry ??
-    (configMayNeedPluginManifestRegistry(params.config)
+    (configMayNeedPluginManifestRegistry(params.config, params.env)
       ? loadPluginManifestRegistry({ config: params.config, env: params.env })
       : EMPTY_PLUGIN_MANIFEST_REGISTRY)
   );
