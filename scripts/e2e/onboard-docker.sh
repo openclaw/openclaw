@@ -2,10 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 IMAGE_NAME="openclaw-onboard-e2e"
 
 echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+run_logged onboard-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running onboarding E2E..."
 docker run --rm -t "$IMAGE_NAME" bash -lc '
@@ -174,7 +175,7 @@ TRASH
     WIZARD_LOG_PATH="$log_path"
     export WIZARD_LOG_PATH
     # Run under script to keep an interactive TTY for clack prompts.
-    script -q -f -c "$command" "$log_path" < "$input_fifo" &
+    script -q -f -c "$command" "$log_path" < "$input_fifo" >/dev/null 2>&1 &
     wizard_pid=$!
     exec 3> "$input_fifo"
 
@@ -245,6 +246,16 @@ TRASH
     fi
   }
 
+  run_case_logged() {
+    local label="$1"
+    shift
+    local log_path="/tmp/openclaw-onboard-${label}.log"
+    if ! "$@" >"$log_path" 2>&1; then
+      cat "$log_path"
+      exit 1
+    fi
+  }
+
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
     wait_for_log "Enable hooks?" 60
@@ -275,15 +286,12 @@ TRASH
   }
 
   send_channels_flow() {
-    # Configure channels via configure wizard. Sync on prompt text so
-    # keystrokes do not drift into the wrong screen when render timing changes.
+    # Configure channels via configure wizard. Use the remove-config branch for
+    # a stable no-op smoke path when the config starts empty.
     wait_for_log "Where will the Gateway run?" 120
     send $'"'"'\r'"'"' 0.6
-    wait_for_log "Channels" 120
-    send $'"'"'\r'"'"' 0.6
-    # Select a channel -> Finished (last option; clack wraps on Up)
-    wait_for_log "Select a channel" 120
-    send $'"'"'\e[A\r'"'"' 0.8
+    wait_for_log "Configure/link" 120
+    send $'"'"'\e[B\r'"'"' 0.8
     # Keep stdin open until wizard exits.
     send "" 2.0
   }
@@ -301,7 +309,7 @@ TRASH
     local home_dir
     home_dir="$(make_home local-basic)"
     set_isolated_openclaw_env "$home_dir"
-    node "$OPENCLAW_ENTRY" onboard \
+    run_case_logged local-basic node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -377,7 +385,7 @@ NODE
     home_dir="$(make_home remote-non-interactive)"
     set_isolated_openclaw_env "$home_dir"
 	    # Smoke test non-interactive remote config write.
-	    node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
+	    run_case_logged remote-non-interactive node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
 	      --remote-url ws://gateway.local:18789 \
       --remote-token remote-token \
@@ -430,7 +438,7 @@ NODE
 }
 JSON
 
-	    node "$OPENCLAW_ENTRY" onboard \
+	    run_case_logged reset-config node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \

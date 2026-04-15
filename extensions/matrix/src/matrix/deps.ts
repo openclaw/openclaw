@@ -3,9 +3,14 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 
-const REQUIRED_MATRIX_PACKAGES = ["matrix-js-sdk", "@matrix-org/matrix-sdk-crypto-nodejs"];
+const REQUIRED_MATRIX_PACKAGES = [
+  "matrix-js-sdk",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@matrix-org/matrix-sdk-crypto-wasm",
+];
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
@@ -133,7 +138,7 @@ function defaultResolveFn(id: string): string {
 }
 
 function isMissingMatrixCryptoRuntimeError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorMessage(error);
   return (
     message.includes("@matrix-org/matrix-sdk-crypto-nodejs-") ||
     message.includes("matrix-sdk-crypto-nodejs") ||
@@ -184,11 +189,11 @@ export async function ensureMatrixSdkInstalled(params: {
   const confirm = params.confirm;
   if (confirm) {
     const ok = await confirm(
-      "Matrix requires matrix-js-sdk and @matrix-org/matrix-sdk-crypto-nodejs. Install now?",
+      "Matrix requires matrix-js-sdk, @matrix-org/matrix-sdk-crypto-nodejs, and @matrix-org/matrix-sdk-crypto-wasm. Install now?",
     );
     if (!ok) {
       throw new Error(
-        "Matrix requires matrix-js-sdk and @matrix-org/matrix-sdk-crypto-nodejs (install dependencies first).",
+        "Matrix requires matrix-js-sdk, @matrix-org/matrix-sdk-crypto-nodejs, and @matrix-org/matrix-sdk-crypto-wasm (install dependencies first).",
       );
     }
   }

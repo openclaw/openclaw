@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HealthSummary } from "./health.js";
 import { healthCommand } from "./health.js";
 
 const callGatewayMock = vi.fn();
+const buildGatewayConnectionDetailsMock = vi.fn(() => ({
+  message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+}));
 const logWebSelfIdMock = vi.fn();
 
 function createRecentSessionRows(now = Date.now()) {
@@ -16,14 +17,37 @@ function createRecentSessionRows(now = Date.now()) {
 }
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  callGateway: (...args: [unknown, ...unknown[]]) =>
+    Reflect.apply(callGatewayMock, undefined, args),
+  buildGatewayConnectionDetails: (...args: [unknown, ...unknown[]]) =>
+    Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
 }));
 
-vi.mock("../../extensions/whatsapp/src/auth-store.js", () => ({
-  webAuthExists: vi.fn(async () => true),
-  getWebAuthAgeMs: vi.fn(() => 0),
-  logWebSelfId: (...args: unknown[]) => logWebSelfIdMock(...args),
-}));
+vi.mock("../channels/plugins/index.js", () => {
+  const whatsappPlugin = {
+    id: "whatsapp",
+    meta: {
+      id: "whatsapp",
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "WhatsApp test stub.",
+    },
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    status: {
+      logSelfId: () => logWebSelfIdMock(),
+    },
+  };
+
+  return {
+    getChannelPlugin: (channelId: string) => (channelId === "whatsapp" ? whatsappPlugin : null),
+    listChannelPlugins: () => [whatsappPlugin],
+  };
+});
 
 describe("healthCommand (coverage)", () => {
   const runtime = {
@@ -34,32 +58,9 @@ describe("healthCommand (coverage)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: {
-            id: "whatsapp",
-            meta: {
-              id: "whatsapp",
-              label: "WhatsApp",
-              selectionLabel: "WhatsApp",
-              docsPath: "/channels/whatsapp",
-              blurb: "WhatsApp test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "group"] },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-            status: {
-              logSelfId: () => logWebSelfIdMock(),
-            },
-          },
-        },
-      ]),
-    );
+    buildGatewayConnectionDetailsMock.mockReturnValue({
+      message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+    });
   });
 
   it("prints the rich text summary when linked and configured", async () => {
@@ -130,5 +131,33 @@ describe("healthCommand (coverage)", () => {
       /WhatsApp: linked/i,
     );
     expect(logWebSelfIdMock).toHaveBeenCalled();
+  });
+
+  it("prints gateway connection details in verbose mode", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      ts: Date.now(),
+      durationMs: 5,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: {
+        path: "/tmp/sessions.json",
+        count: 0,
+        recent: [],
+      },
+    } satisfies HealthSummary);
+
+    await healthCommand({ json: false, verbose: true, timeoutMs: 1000 }, runtime as never);
+
+    expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
+      ["Gateway connection:"],
+      ["  Gateway mode: local"],
+      ["  Gateway target: ws://127.0.0.1:18789"],
+    ]);
+    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
   });
 });

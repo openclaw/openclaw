@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
@@ -11,16 +12,25 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { writeJsonAtomic } from "openclaw/plugin-sdk/infra-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 const STORE_VERSION = 1;
+
+let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
+
+async function loadTelegramSendModule() {
+  telegramSendModulePromise ??= import("./send.js");
+  return await telegramSendModulePromise;
+}
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
@@ -77,16 +87,20 @@ type TelegramThreadBindingsState = {
  * binding lookups, and binding mutations all observe the same live registry.
  */
 const TELEGRAM_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.telegramThreadBindingsState");
-const threadBindingsState = resolveGlobalSingleton<TelegramThreadBindingsState>(
-  TELEGRAM_THREAD_BINDINGS_STATE_KEY,
-  () => ({
-    managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
-    bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
-    persistQueueByAccountId: new Map<string, Promise<void>>(),
-  }),
-);
+let threadBindingsState: TelegramThreadBindingsState | undefined;
 
 function getThreadBindingsState(): TelegramThreadBindingsState {
+  if (!threadBindingsState) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    threadBindingsState = (globalStore[TELEGRAM_THREAD_BINDINGS_STATE_KEY] as
+      | TelegramThreadBindingsState
+      | undefined) ?? {
+      managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
+      bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
+      persistQueueByAccountId: new Map<string, Promise<void>>(),
+    };
+    globalStore[TELEGRAM_THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
+  }
   return threadBindingsState;
 }
 
@@ -95,14 +109,6 @@ function normalizeDurationMs(raw: unknown, fallback: number): number {
     return fallback;
   }
   return Math.max(0, Math.floor(raw));
-}
-
-function normalizeConversationId(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed || undefined;
 }
 
 function resolveBindingKey(params: { accountId: string; conversationId: string }): string {
@@ -246,9 +252,8 @@ function loadBindingsFromDisk(accountId: string): TelegramThreadBindingRecord[] 
     }
     const bindings: TelegramThreadBindingRecord[] = [];
     for (const entry of parsed.bindings) {
-      const conversationId = normalizeConversationId(entry?.conversationId);
-      const targetSessionKey =
-        typeof entry?.targetSessionKey === "string" ? entry.targetSessionKey.trim() : "";
+      const conversationId = normalizeOptionalString(entry?.conversationId);
+      const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
       const targetKind = entry?.targetKind === "subagent" ? "subagent" : "acp";
       if (!conversationId || !targetSessionKey) {
         continue;
@@ -315,11 +320,7 @@ async function persistBindingsToDisk(params: {
         (entry) => entry.accountId === params.accountId,
       ),
   };
-  await writeJsonAtomic(resolveBindingsPath(params.accountId), payload, {
-    mode: 0o600,
-    trailingNewline: true,
-    ensureDirMode: 0o700,
-  });
+  await writeJsonFileAtomically(resolveBindingsPath(params.accountId), payload);
 }
 
 function listBindingsForAccount(accountId: string): TelegramThreadBindingRecord[] {
@@ -344,11 +345,12 @@ function enqueuePersistBindings(params: {
       await persistBindingsToDisk(params);
     });
   getThreadBindingsState().persistQueueByAccountId.set(params.accountId, next);
-  void next.finally(() => {
+  const cleanup = () => {
     if (getThreadBindingsState().persistQueueByAccountId.get(params.accountId) === next) {
       getThreadBindingsState().persistQueueByAccountId.delete(params.accountId);
     }
-  });
+  };
+  next.then(cleanup, cleanup);
   return next;
 }
 
@@ -446,7 +448,7 @@ export function createTelegramThreadBindingManager(
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
     getByConversationId: (conversationIdRaw) => {
-      const conversationId = normalizeConversationId(conversationIdRaw);
+      const conversationId = normalizeOptionalString(conversationIdRaw);
       if (!conversationId) {
         return undefined;
       }
@@ -468,7 +470,7 @@ export function createTelegramThreadBindingManager(
     },
     listBindings: () => listBindingsForAccount(accountId),
     touchConversation: (conversationIdRaw, at) => {
-      const conversationId = normalizeConversationId(conversationIdRaw);
+      const conversationId = normalizeOptionalString(conversationIdRaw);
       if (!conversationId) {
         return null;
       }
@@ -491,7 +493,7 @@ export function createTelegramThreadBindingManager(
       return nextRecord;
     },
     unbindConversation: (unbindParams) => {
-      const conversationId = normalizeConversationId(unbindParams.conversationId);
+      const conversationId = normalizeOptionalString(unbindParams.conversationId);
       if (!conversationId) {
         return null;
       }
@@ -557,18 +559,64 @@ export function createTelegramThreadBindingManager(
     channel: "telegram",
     accountId,
     capabilities: {
-      placements: ["current"],
+      placements: ["current", "child"],
     },
     bind: async (input) => {
       if (input.conversation.channel !== "telegram") {
         return null;
       }
-      if (input.placement === "child") {
+      const targetSessionKey = input.targetSessionKey.trim();
+      if (!targetSessionKey) {
         return null;
       }
-      const conversationId = normalizeConversationId(input.conversation.conversationId);
-      const targetSessionKey = input.targetSessionKey.trim();
-      if (!conversationId || !targetSessionKey) {
+      const placement = input.placement === "child" ? "child" : "current";
+      const metadata = input.metadata ?? {};
+      let conversationId: string | undefined;
+
+      if (placement === "child") {
+        const rawConversationId = input.conversation.conversationId?.trim() ?? "";
+        const rawParent = input.conversation.parentConversationId?.trim() ?? "";
+        const cfg = loadConfig();
+        let chatId = rawParent || rawConversationId;
+        if (!chatId) {
+          logVerbose(
+            `telegram: child bind failed: could not resolve group chat ID from conversationId=${rawConversationId}`,
+          );
+          return null;
+        }
+        if (!chatId.startsWith("-")) {
+          logVerbose(
+            `telegram: child bind failed: conversationId "${chatId}" looks like a bare topic ID, not a group chat ID (expected to start with "-"). Provide a full chatId:topic:topicId conversationId or set parentConversationId to the group chat ID.`,
+          );
+          return null;
+        }
+        const threadName =
+          (normalizeOptionalString(metadata.threadName) ?? "") ||
+          (normalizeOptionalString(metadata.label) ?? "") ||
+          `Agent: ${targetSessionKey.split(":").pop()}`;
+        try {
+          const tokenResolution = resolveTelegramToken(cfg, { accountId });
+          if (!tokenResolution.token) {
+            return null;
+          }
+          const { createForumTopicTelegram } = await loadTelegramSendModule();
+          const result = await createForumTopicTelegram(chatId, threadName, {
+            cfg,
+            token: tokenResolution.token,
+            accountId,
+          });
+          conversationId = `${result.chatId}:topic:${result.topicId}`;
+        } catch (err) {
+          logVerbose(
+            `telegram: child thread-binding failed for ${chatId}: ${formatErrorMessage(err)}`,
+          );
+          return null;
+        }
+      } else {
+        conversationId = normalizeOptionalString(input.conversation.conversationId);
+      }
+
+      if (!conversationId) {
         return null;
       }
       const record = fromSessionBindingInput({
@@ -619,7 +667,7 @@ export function createTelegramThreadBindingManager(
       if (ref.channel !== "telegram") {
         return null;
       }
-      const conversationId = normalizeConversationId(ref.conversationId);
+      const conversationId = normalizeOptionalString(ref.conversationId);
       if (!conversationId) {
         return null;
       }
@@ -805,14 +853,19 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
   });
 }
 
+export async function resetTelegramThreadBindingsForTests() {
+  for (const manager of getThreadBindingsState().managersByAccountId.values()) {
+    manager.stop();
+  }
+  const pendingPersists = [...getThreadBindingsState().persistQueueByAccountId.values()];
+  if (pendingPersists.length > 0) {
+    await Promise.allSettled(pendingPersists);
+  }
+  getThreadBindingsState().persistQueueByAccountId.clear();
+  getThreadBindingsState().managersByAccountId.clear();
+  getThreadBindingsState().bindingsByAccountConversation.clear();
+}
+
 export const __testing = {
-  async resetTelegramThreadBindingsForTests() {
-    for (const manager of getThreadBindingsState().managersByAccountId.values()) {
-      manager.stop();
-    }
-    await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
-    getThreadBindingsState().persistQueueByAccountId.clear();
-    getThreadBindingsState().managersByAccountId.clear();
-    getThreadBindingsState().bindingsByAccountConversation.clear();
-  },
+  resetTelegramThreadBindingsForTests,
 };

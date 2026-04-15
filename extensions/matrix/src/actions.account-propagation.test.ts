@@ -91,6 +91,7 @@ describe("matrixMessageActions account propagation", () => {
     await matrixMessageActions.handleAction?.(
       createContext({
         action: profileAction,
+        senderIsOwner: true,
         accountId: "ops",
         params: {
           displayName: "Ops Bot",
@@ -111,10 +112,50 @@ describe("matrixMessageActions account propagation", () => {
     );
   });
 
+  it("rejects self-profile updates for non-owner callers", async () => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action: profileAction,
+          senderIsOwner: false,
+          accountId: "ops",
+          params: {
+            displayName: "Ops Bot",
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolAuthorizationError",
+      message: "Matrix profile updates require owner access.",
+    });
+
+    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects self-profile updates when owner status is unknown", async () => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action: profileAction,
+          accountId: "ops",
+          params: {
+            displayName: "Ops Bot",
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolAuthorizationError",
+      message: "Matrix profile updates require owner access.",
+    });
+
+    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
+  });
+
   it("forwards local avatar paths for self-profile updates", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({
         action: profileAction,
+        senderIsOwner: true,
         accountId: "ops",
         params: {
           path: "/tmp/avatar.jpg",

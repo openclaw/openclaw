@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
+  extractAssistantVisibleText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
@@ -9,7 +10,9 @@ import {
 
 function makeAssistantMessage(
   message: Omit<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason"> &
-    Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">>,
+    Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">> & {
+      phase?: "commentary" | "final_answer";
+    },
 ): AssistantMessage {
   return {
     api: "responses",
@@ -434,6 +437,116 @@ File contents here`,
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
 
+  it("strips raw <tool_call> XML blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Let me check.\n\n<tool_call> {"name": "read", "arguments": {"file_path": "test.md"}} </tool_call> Done.',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Let me check.\n\n Done.");
+  });
+
+  it("strips raw <tool_result> XML blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Prefix\n<tool_result> {"output": "file contents"} </tool_result>\nSuffix',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
+  });
+
+  it("strips dangling <tool_call> XML content to end-of-string", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Let me run.\n<tool_call>\n{"name": "find", "arguments": {}}\n',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Let me run.");
+  });
+
+  it("strips mixed <tool_call> and <tool_result> XML blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "I will read the file.",
+            '<tool_call>{"name":"read","arguments":{"path":"/tmp/x"}}</tool_call>',
+            '<tool_result>{"output":"hello world"}</tool_result>',
+            "The file contains: hello world",
+          ].join("\n"),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe(
+      "I will read the file.\n\n\nThe file contains: hello world",
+    );
+  });
+
+  it("strips <tool_result> closed with mismatched </tool_call> tag and preserves trailing text", () => {
+    // Issue #61688: gateway sometimes emits <tool_result>...</tool_call>
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Prefix\n<tool_result> {"output": "data"} </tool_call>\nSuffix',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    // The mismatched closing tag should still exit the block, stripping the
+    // tool XML while preserving legitimate trailing prose.
+    expect(result).not.toContain("<tool_result>");
+    expect(result).not.toContain("output");
+    expect(result).toContain("Prefix");
+    expect(result).toContain("Suffix");
+  });
+
+  it("does not let </tool_result> close a <tool_call> block (prevents payload leak)", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Prefix\n<tool_call>{"name":"x"}</tool_result>LEAK</tool_call>\nSuffix',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    // </tool_result> must NOT exit a <tool_call> block; the block should
+    // continue until the matching </tool_call>, preventing payload leaks.
+    expect(result).not.toContain("LEAK");
+    expect(result).not.toContain("<tool_call>");
+    expect(result).toContain("Prefix");
+    expect(result).toContain("Suffix");
+  });
+
   it("strips reasoning/thinking tag variants", () => {
     const cases = [
       {
@@ -460,6 +573,11 @@ File contents here`,
         name: "antthinking tag",
         text: "<antthinking>Some reasoning</antthinking>The actual answer.",
         expected: "The actual answer.",
+      },
+      {
+        name: "antml namespaced thinking tag",
+        text: "<antml:thinking>This shows Robin Waslander DMing maintainers o...</antml:thinking>Actual reply.",
+        expected: "Actual reply.",
       },
       {
         name: "final wrapper",
@@ -561,6 +679,95 @@ describe("stripDowngradedToolCallText", () => {
     for (const testCase of cases) {
       expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("extractAssistantVisibleText", () => {
+  it("prefers non-empty final_answer text over commentary", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Working...",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Done.");
+  });
+
+  it("does not fall back to commentary when final_answer is empty", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Working...",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "   ",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("");
+  });
+
+  it("does not fall back to unphased legacy text when an empty final_answer block exists", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Legacy answer" },
+        {
+          type: "text",
+          text: "   ",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("");
+  });
+
+  it("falls back to legacy unphased text when phased text is absent", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Legacy answer" }],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Legacy answer");
+  });
+
+  it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      phase: "final_answer",
+      content: [
+        { type: "text", text: "Legacy." },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Done.");
   });
 });
 

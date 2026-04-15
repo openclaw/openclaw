@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_ACCOUNT_ID,
   getAuthDir,
+  getMonitorWebInbox,
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
@@ -10,8 +11,10 @@ import {
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
   return {
     ...actual,
     getChildLogger: () => ({
@@ -26,10 +29,9 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     inboundLoggerInfoMock.mockReset();
-    ({ monitorWebInbox } = await import("./inbound.js"));
+    monitorWebInbox = getMonitorWebInbox();
   });
 
   async function openMonitor(onMessage = vi.fn()) {
@@ -83,7 +85,7 @@ describe("web monitor inbox", () => {
         fromMe: false,
       },
     ]);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     await listener.close();
   });
 

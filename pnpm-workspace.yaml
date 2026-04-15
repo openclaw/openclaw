@@ -4,7 +4,32 @@ packages:
   - packages/*
   - extensions/*
 
+minimumReleaseAge: 2880
+
+minimumReleaseAgeExclude:
+  - "acpx"
+  - "axios"
+  - "basic-ftp"
+  - "hono"
+  - "openclaw"
+  - "@buape/carbon"
+  - "vite"
+  - "@cloudflare/workers-types"
+  - "@hono/node-server"
+  - "@mariozechner/*"
+  - "@typescript/native-preview*"
+  - "@types/node"
+  - "@rolldown/*"
+  - "@oxlint/*"
+  - "@oxfmt/*"
+  - "axios@1.15.0"
+  - "discord-api-types"
+  - "rolldown"
+  - "sqlite-vec"
+  - "sqlite-vec-*"
+
 onlyBuiltDependencies:
+  - "@discordjs/opus"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"
@@ -17,5 +42,4 @@ onlyBuiltDependencies:
   - sharp
 
 ignoredBuiltDependencies:
-  - "@discordjs/opus"
   - koffi

@@ -4,7 +4,11 @@ import { streamAnthropic, type AnthropicOptions, type Model } from "@mariozechne
 import {
   resolveAnthropicVertexClientRegion,
   resolveAnthropicVertexProjectId,
-} from "./anthropic-vertex-provider.js";
+} from "../plugin-sdk/anthropic-vertex.js";
+import {
+  applyAnthropicPayloadPolicyToParams,
+  resolveAnthropicPayloadPolicy,
+} from "./anthropic-payload-policy.js";
 
 type AnthropicVertexEffort = NonNullable<AnthropicOptions["effort"]>;
 
@@ -31,6 +35,36 @@ function resolveAnthropicVertexMaxTokens(params: {
   return requested ?? modelMax;
 }
 
+function createAnthropicVertexOnPayload(params: {
+  model: { api: string; baseUrl?: string; provider: string };
+  cacheRetention: AnthropicOptions["cacheRetention"] | undefined;
+  onPayload: AnthropicOptions["onPayload"] | undefined;
+}): NonNullable<AnthropicOptions["onPayload"]> {
+  const policy = resolveAnthropicPayloadPolicy({
+    provider: params.model.provider,
+    api: params.model.api,
+    baseUrl: params.model.baseUrl,
+    cacheRetention: params.cacheRetention,
+    enableCacheControl: true,
+  });
+
+  function applyPolicy(payload: unknown): unknown {
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      applyAnthropicPayloadPolicyToParams(payload as Record<string, unknown>, policy);
+    }
+    return payload;
+  }
+
+  return async (payload, model) => {
+    const shapedPayload = applyPolicy(payload);
+    const nextPayload = await params.onPayload?.(shapedPayload, model);
+    if (nextPayload === undefined || nextPayload === shapedPayload) {
+      return shapedPayload;
+    }
+    return applyPolicy(nextPayload);
+  };
+}
+
 /**
  * Create a StreamFn that routes through pi-ai's `streamAnthropic` with an
  * injected `AnthropicVertex` client.  All streaming, message conversion, and
@@ -49,8 +83,13 @@ export function createAnthropicVertexStreamFn(
   });
 
   return (model, context, options) => {
+    const transportModel = model as Model<"anthropic-messages"> & {
+      api: string;
+      baseUrl?: string;
+      provider: string;
+    };
     const maxTokens = resolveAnthropicVertexMaxTokens({
-      modelMaxTokens: model.maxTokens,
+      modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
     const opts: AnthropicOptions = {
@@ -61,7 +100,11 @@ export function createAnthropicVertexStreamFn(
       cacheRetention: options?.cacheRetention,
       sessionId: options?.sessionId,
       headers: options?.headers,
-      onPayload: options?.onPayload,
+      onPayload: createAnthropicVertexOnPayload({
+        model: transportModel,
+        cacheRetention: options?.cacheRetention,
+        onPayload: options?.onPayload,
+      }),
       maxRetryDelayMs: options?.maxRetryDelayMs,
       metadata: options?.metadata,
     };
@@ -95,7 +138,7 @@ export function createAnthropicVertexStreamFn(
       opts.thinkingEnabled = false;
     }
 
-    return streamAnthropic(model as Model<"anthropic-messages">, context, opts);
+    return streamAnthropic(transportModel, context, opts);
   };
 }
 

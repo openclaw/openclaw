@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  collectPublishablePluginPackages,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
   parsePluginReleaseArgs,
@@ -9,6 +12,14 @@ import {
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
+import { bundledPluginFile, bundledPluginRoot } from "./helpers/bundled-plugin-paths.js";
+import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  cleanupTempDirs(tempDirs);
+});
 
 describe("parsePluginReleaseSelection", () => {
   it("returns an empty list for blank input", () => {
@@ -75,7 +86,7 @@ describe("collectPublishablePluginPackageErrors", () => {
     expect(
       collectPublishablePluginPackageErrors({
         extensionId: "zalo",
-        packageDir: "extensions/zalo",
+        packageDir: bundledPluginRoot("zalo"),
         packageJson: {
           name: "@openclaw/zalo",
           version: "2026.3.15",
@@ -94,7 +105,7 @@ describe("collectPublishablePluginPackageErrors", () => {
     expect(
       collectPublishablePluginPackageErrors({
         extensionId: "broken",
-        packageDir: "extensions/broken",
+        packageDir: bundledPluginRoot("broken"),
         packageJson: {
           name: "broken",
           version: "latest",
@@ -116,11 +127,43 @@ describe("collectPublishablePluginPackageErrors", () => {
   });
 });
 
+describe("collectPublishablePluginPackages", () => {
+  it("collects publishable npm plugins from extension package manifests", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10",
+      openclaw: {
+        extensions: ["./index.ts"],
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(collectPublishablePluginPackages(repoDir)).toEqual([
+      {
+        extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        packageName: "@openclaw/demo-plugin",
+        version: "2026.4.10",
+        channel: "stable",
+        publishTag: "latest",
+        installNpmSpec: "@openclaw/demo-plugin",
+      },
+    ]);
+  });
+});
+
 describe("resolveSelectedPublishablePluginPackages", () => {
   const publishablePlugins: PublishablePluginPackage[] = [
     {
       extensionId: "feishu",
-      packageDir: "extensions/feishu",
+      packageDir: bundledPluginRoot("feishu"),
       packageName: "@openclaw/feishu",
       version: "2026.3.15",
       channel: "stable",
@@ -128,7 +171,7 @@ describe("resolveSelectedPublishablePluginPackages", () => {
     },
     {
       extensionId: "zalo",
-      packageDir: "extensions/zalo",
+      packageDir: bundledPluginRoot("zalo"),
       packageName: "@openclaw/zalo",
       version: "2026.3.15-beta.1",
       channel: "beta",
@@ -168,9 +211,9 @@ describe("collectChangedExtensionIdsFromPaths", () => {
   it("extracts unique extension ids from changed extension paths", () => {
     expect(
       collectChangedExtensionIdsFromPaths([
-        "extensions/zalo/index.ts",
-        "extensions/zalo/package.json",
-        "extensions/feishu/src/client.ts",
+        bundledPluginFile("zalo", "index.ts"),
+        bundledPluginFile("zalo", "package.json"),
+        bundledPluginFile("feishu", "src/client.ts"),
         "docs/reference/RELEASING.md",
       ]),
     ).toEqual(["feishu", "zalo"]);
@@ -181,7 +224,7 @@ describe("resolveChangedPublishablePluginPackages", () => {
   const publishablePlugins: PublishablePluginPackage[] = [
     {
       extensionId: "feishu",
-      packageDir: "extensions/feishu",
+      packageDir: bundledPluginRoot("feishu"),
       packageName: "@openclaw/feishu",
       version: "2026.3.15",
       channel: "stable",
@@ -189,7 +232,7 @@ describe("resolveChangedPublishablePluginPackages", () => {
     },
     {
       extensionId: "zalo",
-      packageDir: "extensions/zalo",
+      packageDir: bundledPluginRoot("zalo"),
       packageName: "@openclaw/zalo",
       version: "2026.3.15-beta.1",
       channel: "beta",

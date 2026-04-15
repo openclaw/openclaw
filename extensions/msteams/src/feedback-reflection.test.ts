@@ -1,13 +1,15 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { storeSessionLearning } from "./feedback-reflection-store.js";
 import {
   buildFeedbackEvent,
   buildReflectionPrompt,
   clearReflectionCooldowns,
   isReflectionAllowed,
   loadSessionLearnings,
+  parseReflectionResponse,
   recordReflectionTime,
 } from "./feedback-reflection.js";
 
@@ -77,13 +79,47 @@ describe("buildReflectionPrompt", () => {
   it("works without optional params", () => {
     const prompt = buildReflectionPrompt({});
     expect(prompt).toContain("previous response wasn't helpful");
-    expect(prompt).toContain("reflect");
+    expect(prompt).toContain('"followUp":false');
+  });
+});
+
+describe("parseReflectionResponse", () => {
+  it("parses strict JSON output", () => {
+    expect(
+      parseReflectionResponse(
+        '{"learning":"Be more direct next time.","followUp":true,"userMessage":"Sorry about that. I will keep it tighter."}',
+      ),
+    ).toEqual({
+      learning: "Be more direct next time.",
+      followUp: true,
+      userMessage: "Sorry about that. I will keep it tighter.",
+    });
+  });
+
+  it("parses JSON inside markdown fences", () => {
+    expect(
+      parseReflectionResponse(
+        '```json\n{"learning":"Ask a clarifying question first.","followUp":false,"userMessage":""}\n```',
+      ),
+    ).toEqual({
+      learning: "Ask a clarifying question first.",
+      followUp: false,
+      userMessage: undefined,
+    });
+  });
+
+  it("falls back to internal-only learning when parsing fails", () => {
+    expect(parseReflectionResponse("Be more concise.\nFollow up: yes.")).toEqual({
+      learning: "Be more concise.\nFollow up: yes.",
+      followUp: false,
+    });
   });
 });
 
 describe("reflection cooldown", () => {
   afterEach(() => {
     clearReflectionCooldowns();
+    vi.restoreAllMocks();
   });
 
   it("allows first reflection", () => {
@@ -108,6 +144,18 @@ describe("reflection cooldown", () => {
     expect(isReflectionAllowed("session-1", 60_000)).toBe(false);
     expect(isReflectionAllowed("session-2", 60_000)).toBe(true);
   });
+
+  it("keeps longer custom cooldown entries during pruning", () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    recordReflectionTime("target", 600_000);
+
+    vi.spyOn(Date, "now").mockReturnValue(301_000);
+    for (let index = 0; index <= 500; index += 1) {
+      recordReflectionTime(`session-${index}`, 600_000);
+    }
+
+    expect(isReflectionAllowed("target", 600_000)).toBe(false);
+  });
 });
 
 describe("loadSessionLearnings", () => {
@@ -127,12 +175,63 @@ describe("loadSessionLearnings", () => {
 
   it("reads existing learnings", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    // Colons are sanitized to underscores in filenames (Windows compat)
-    const safeKey = "msteams_user1";
+    const safeKey = Buffer.from("msteams:user1", "utf8").toString("base64url");
     const filePath = path.join(tmpDir, `${safeKey}.learnings.json`);
     await writeFile(filePath, JSON.stringify(["Be concise", "Use examples"]), "utf-8");
 
     const learnings = await loadSessionLearnings(tmpDir, "msteams:user1");
     expect(learnings).toEqual(["Be concise", "Use examples"]);
+  });
+
+  it("keeps distinct session keys isolated across the filename persistence boundary", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+
+    await storeSessionLearning({
+      storePath: tmpDir,
+      sessionKey: "msteams:user1",
+      learning: "Use bullets",
+    });
+    await storeSessionLearning({
+      storePath: tmpDir,
+      sessionKey: "msteams/user1",
+      learning: "Avoid bullets",
+    });
+
+    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual(["Use bullets"]);
+    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual(["Avoid bullets"]);
+  });
+
+  it("reads and migrates legacy sanitized session learning files", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+    const legacyFile = path.join(tmpDir, "msteams_user1.learnings.json");
+    await writeFile(legacyFile, JSON.stringify(["Legacy learning"]), "utf-8");
+
+    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
+      "Legacy learning",
+    ]);
+
+    await storeSessionLearning({
+      storePath: tmpDir,
+      sessionKey: "msteams:user1",
+      learning: "New learning",
+    });
+
+    const migratedFile = path.join(
+      tmpDir,
+      `${Buffer.from("msteams:user1", "utf8").toString("base64url")}.learnings.json`,
+    );
+    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
+      "Legacy learning",
+      "New learning",
+    ]);
+    await expect(rm(legacyFile, { force: false })).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
+      "Legacy learning",
+      "New learning",
+    ]);
+    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual([]);
+    await expect(
+      import("node:fs/promises").then((fs) => fs.readFile(migratedFile, "utf-8")),
+    ).resolves.toContain("Legacy learning");
   });
 });

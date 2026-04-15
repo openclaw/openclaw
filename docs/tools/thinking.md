@@ -1,5 +1,5 @@
 ---
-summary: "Directive syntax for /think, /fast, /verbose, and reasoning visibility"
+summary: "Directive syntax for /think, /fast, /verbose, /trace, and reasoning visibility"
 read_when:
   - Adjusting thinking, fast-mode, or verbose directive parsing or defaults
 title: "Thinking Levels"
@@ -21,6 +21,7 @@ title: "Thinking Levels"
   - `highest`, `max` map to `high`.
 - Provider notes:
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
+  - MiniMax (`minimax/*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from MiniMax's non-native Anthropic stream format.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
   - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
@@ -54,10 +55,11 @@ title: "Thinking Levels"
   3. Per-agent default (`agents.list[].fastModeDefault`)
   4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
   5. Fallback: `off`
-- For `openai/*`, fast mode applies the OpenAI fast profile: `service_tier=priority` when supported, plus low reasoning effort and low text verbosity.
-- For `openai-codex/*`, fast mode applies the same low-latency profile on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
-- For direct `anthropic/*` API-key requests, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
-- Anthropic fast mode is API-key only. OpenClaw skips Anthropic service-tier injection for Claude setup-token / OAuth auth and for non-Anthropic proxy base URLs.
+- For `openai/*`, fast mode maps to OpenAI priority processing by sending `service_tier=priority` on supported Responses requests.
+- For `openai-codex/*`, fast mode sends the same `service_tier=priority` flag on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
+- For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
+- For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
+- Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
 
 ## Verbose directives (/verbose or /v)
 
@@ -69,6 +71,15 @@ title: "Thinking Levels"
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `on` or `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
+
+## Plugin trace directives (/trace)
+
+- Levels: `on` | `off` (default).
+- Directive-only message toggles session plugin trace output and replies `Plugin trace enabled.` / `Plugin trace disabled.`.
+- Inline directive affects only that message; session/global defaults apply otherwise.
+- Send `/trace` (or `/trace:`) with no argument to see the current trace level.
+- `/trace` is narrower than `/verbose`: it only exposes plugin-owned trace/debug lines such as Active Memory debug summaries.
+- Trace lines can appear in `/status` and as a follow-up diagnostic message after the normal assistant reply.
 
 ## Reasoning visibility (/reasoning)
 
@@ -92,5 +103,9 @@ title: "Thinking Levels"
 ## Web chat UI
 
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
-- Picking another level applies only to the next message (`thinkingOnce`); after sending, the selector snaps back to the stored session level.
-- To change the session default, send a `/think:<level>` directive (as before); the selector will reflect it after the next reload.
+- Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
+- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model: `adaptive` for Claude 4.6 on Anthropic/Bedrock, `low` for other reasoning-capable models, `off` otherwise.
+- The picker stays provider-aware:
+  - most providers show `off | minimal | low | medium | high | adaptive`
+  - Z.AI shows binary `off | on`
+- `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.

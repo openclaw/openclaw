@@ -1,19 +1,16 @@
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  addSubagentRunForTests,
-  listSubagentRunsForRequester,
-  resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => ({
@@ -32,12 +29,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-import "./test-helpers/fast-core-tools.js";
-import { __testing as openClawToolsTesting, createOpenClawTools } from "./openclaw-tools.js";
-import { __testing as subagentControlTesting } from "./subagent-control.js";
+import "./test-helpers/fast-openclaw-tools-sessions.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { __testing as agentStepTesting } from "./tools/agent-step.js";
+import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
+import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { __testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
 import { __testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
+import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const TEST_CONFIG = {
   session: {
@@ -51,6 +50,102 @@ const TEST_CONFIG = {
   },
 } as OpenClawConfig;
 
+const resolveSessionConversationStub: NonNullable<
+  ChannelMessagingAdapter["resolveSessionConversation"]
+> = ({ rawId }) => ({
+  id: rawId,
+});
+const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
+  kind,
+  id,
+  threadId,
+}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
+
+function installMessagingTestRegistry() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          id: "discord",
+          meta: {
+            id: "discord",
+            label: "Discord",
+            selectionLabel: "Discord",
+            docsPath: "/channels/discord",
+            blurb: "Discord test stub.",
+          },
+          capabilities: { chatTypes: ["direct", "channel", "thread"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "whatsapp",
+        source: "test",
+        plugin: {
+          id: "whatsapp",
+          meta: {
+            id: "whatsapp",
+            label: "WhatsApp",
+            selectionLabel: "WhatsApp",
+            docsPath: "/channels/whatsapp",
+            blurb: "WhatsApp test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+    ]),
+  );
+}
+
+function createOpenClawTools(options?: {
+  agentSessionKey?: string;
+  agentChannel?: string;
+  sandboxed?: boolean;
+  config?: OpenClawConfig;
+}) {
+  const config = options?.config ?? TEST_CONFIG;
+  const gatewayCall = (opts: unknown) => callGatewayMock(opts);
+  return [
+    createSessionsListTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config,
+      callGateway: gatewayCall,
+    }),
+    createSessionsHistoryTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config,
+      callGateway: gatewayCall,
+    }),
+    createSessionsSendTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel as never,
+      sandboxed: options?.sandboxed,
+      config,
+      callGateway: gatewayCall,
+    }),
+  ];
+}
+
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   await vi.waitFor(
     () => {
@@ -60,19 +155,10 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
   );
 };
 
-let sessionsModule: typeof import("../config/sessions.js");
-
 describe("sessions tools", () => {
-  beforeAll(async () => {
-    sessionsModule = await import("../config/sessions.js");
-  });
-
   beforeEach(() => {
     callGatewayMock.mockClear();
-    openClawToolsTesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-      config: TEST_CONFIG,
-    });
+    installMessagingTestRegistry();
     agentStepTesting.setDepsForTest({
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
@@ -80,9 +166,6 @@ describe("sessions tools", () => {
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
     sessionsSendA2ATesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    subagentControlTesting.setDepsForTest({
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
   });
@@ -122,15 +205,6 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
-    expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
-    expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
-    expect(schemaProp("sessions_spawn", "thread").type).toBe("boolean");
-    expect(schemaProp("sessions_spawn", "mode").type).toBe("string");
-    expect(schemaProp("sessions_spawn", "sandbox").type).toBe("string");
-    expect(schemaProp("sessions_spawn", "streamTo").type).toBe("string");
-    expect(schemaProp("sessions_spawn", "runtime").type).toBe("string");
-    expect(schemaProp("sessions_spawn", "cwd").type).toBe("string");
-    expect(schemaProp("subagents", "recentMinutes").type).toBe("number");
   });
 
   it("sessions_list filters kinds and includes messages", async () => {
@@ -159,6 +233,20 @@ describe("sessions tools", () => {
               runtimeMs: 42,
               estimatedCostUsd: 0.0042,
               childSessions: ["agent:main:subagent:worker"],
+            },
+            {
+              key: "agent:main:dashboard:child",
+              kind: "direct",
+              sessionId: "s-dashboard-child",
+              updatedAt: 12,
+              parentSessionKey: "agent:main:main",
+            },
+            {
+              key: "agent:main:subagent:worker",
+              kind: "direct",
+              sessionId: "s-subagent-worker",
+              updatedAt: 13,
+              spawnedBy: "agent:main:main",
             },
             {
               key: "cron:job-1",
@@ -196,15 +284,17 @@ describe("sessions tools", () => {
       sessions?: Array<{
         key?: string;
         channel?: string;
+        spawnedBy?: string;
         status?: string;
         startedAt?: number;
         runtimeMs?: number;
         estimatedCostUsd?: number;
         childSessions?: string[];
+        parentSessionKey?: string;
         messages?: Array<{ role?: string }>;
       }>;
     };
-    expect(details.sessions).toHaveLength(3);
+    expect(details.sessions).toHaveLength(5);
     const main = details.sessions?.find((s) => s.key === "main");
     expect(main?.channel).toBe("whatsapp");
     expect(main?.messages?.length).toBe(1);
@@ -216,6 +306,12 @@ describe("sessions tools", () => {
     expect(group?.runtimeMs).toBe(42);
     expect(group?.estimatedCostUsd).toBe(0.0042);
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
+
+    const dashboardChild = details.sessions?.find((s) => s.key === "agent:main:dashboard:child");
+    expect(dashboardChild?.parentSessionKey).toBe("agent:main:main");
+
+    const subagentWorker = details.sessions?.find((s) => s.key === "agent:main:subagent:worker");
+    expect(subagentWorker?.spawnedBy).toBe("agent:main:main");
 
     const cronOnly = await tool.execute("call2", { kinds: ["cron"] });
     const cronDetails = cronOnly.details as {
@@ -699,7 +795,7 @@ describe("sessions tools", () => {
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(8);
+    expect(historyOnlyCalls).toHaveLength(9);
     expect(sendCallCount).toBe(0);
   });
 
@@ -868,457 +964,132 @@ describe("sessions tools", () => {
     });
   });
 
-  it("subagents lists active and recent runs", async () => {
-    resetSubagentRegistryForTests();
-    const now = Date.now();
-    addSubagentRunForTests({
-      runId: "run-active",
-      childSessionKey: "agent:main:subagent:active",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "investigate auth",
-      cleanup: "keep",
-      createdAt: now - 2 * 60_000,
-      startedAt: now - 2 * 60_000,
-    });
-    addSubagentRunForTests({
-      runId: "run-child",
-      childSessionKey: "agent:main:subagent:active:subagent:child",
-      requesterSessionKey: "agent:main:subagent:active",
-      requesterDisplayKey: "subagent:active",
-      task: "child worker",
-      cleanup: "keep",
-      createdAt: now - 60_000,
-      startedAt: now - 60_000,
-    });
-    addSubagentRunForTests({
-      runId: "run-recent",
-      childSessionKey: "agent:main:subagent:recent",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "summarize findings",
-      cleanup: "keep",
-      createdAt: now - 15 * 60_000,
-      startedAt: now - 14 * 60_000,
-      endedAt: now - 5 * 60_000,
-      outcome: { status: "ok" },
-    });
-    addSubagentRunForTests({
-      runId: "run-old",
-      childSessionKey: "agent:main:subagent:old",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "old completed run",
-      cleanup: "keep",
-      createdAt: now - 90 * 60_000,
-      startedAt: now - 89 * 60_000,
-      endedAt: now - 80 * 60_000,
-      outcome: { status: "ok" },
-    });
+  it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "discord:group:req";
+    const targetKey = "agent:main:worker";
+    let sendParams: {
+      to?: string;
+      channel?: string;
+      accountId?: string;
+      message?: string;
+      threadId?: string;
+    } = {};
 
-    const tool = createOpenClawTools({
-      agentSessionKey: "agent:main:main",
-    }).find((candidate) => candidate.name === "subagents");
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing subagents tool");
-    }
-
-    const result = await tool.execute("call-subagents-list", { action: "list" });
-    const details = result.details as {
-      status?: string;
-      active?: Array<{ runId?: string; childSessions?: string[] }>;
-      recent?: unknown[];
-      text?: string;
-    };
-    expect(details.status).toBe("ok");
-    expect(details.active).toHaveLength(1);
-    expect(details.active?.[0]).toMatchObject({
-      runId: "run-active",
-      childSessions: ["agent:main:subagent:active:subagent:child"],
-    });
-    expect(details.recent).toHaveLength(1);
-    expect(details.text).toContain("active subagents:");
-    expect(details.text).toContain("recent (last 30m):");
-  });
-
-  it("subagents list keeps ended orchestrators active while descendants are pending", async () => {
-    resetSubagentRegistryForTests();
-    const now = Date.now();
-    addSubagentRunForTests({
-      runId: "run-orchestrator-ended",
-      childSessionKey: "agent:main:subagent:orchestrator-ended",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "orchestrate child workers",
-      cleanup: "keep",
-      createdAt: now - 5 * 60_000,
-      startedAt: now - 5 * 60_000,
-      endedAt: now - 4 * 60_000,
-      outcome: { status: "ok" },
-    });
-    addSubagentRunForTests({
-      runId: "run-orchestrator-child-active",
-      childSessionKey: "agent:main:subagent:orchestrator-ended:subagent:child",
-      requesterSessionKey: "agent:main:subagent:orchestrator-ended",
-      requesterDisplayKey: "subagent:orchestrator-ended",
-      task: "child worker still running",
-      cleanup: "keep",
-      createdAt: now - 60_000,
-      startedAt: now - 60_000,
-    });
-
-    const tool = createOpenClawTools({
-      agentSessionKey: "agent:main:main",
-    }).find((candidate) => candidate.name === "subagents");
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing subagents tool");
-    }
-
-    const result = await tool.execute("call-subagents-list-orchestrator", { action: "list" });
-    const details = result.details as {
-      status?: string;
-      active?: Array<{ runId?: string; status?: string; pendingDescendants?: number }>;
-      recent?: Array<{ runId?: string }>;
-      text?: string;
-    };
-
-    expect(details.status).toBe("ok");
-    expect(details.active).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          runId: "run-orchestrator-ended",
-          status: "active (waiting on 1 child)",
-          pendingDescendants: 1,
-        }),
-      ]),
-    );
-    expect(details.recent?.find((entry) => entry.runId === "run-orchestrator-ended")).toBeFalsy();
-    expect(details.text).toContain("active (waiting on 1 child)");
-  });
-
-  it("subagents list usage separates io tokens from prompt/cache", async () => {
-    resetSubagentRegistryForTests();
-    const now = Date.now();
-    addSubagentRunForTests({
-      runId: "run-usage-active",
-      childSessionKey: "agent:main:subagent:usage-active",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "wait and check weather",
-      cleanup: "keep",
-      createdAt: now - 2 * 60_000,
-      startedAt: now - 2 * 60_000,
-    });
-
-    const loadSessionStoreSpy = vi
-      .spyOn(sessionsModule, "loadSessionStore")
-      .mockImplementation(() => ({
-        "agent:main:subagent:usage-active": {
-          sessionId: "session-usage-active",
-          updatedAt: now,
-          modelProvider: "anthropic",
-          model: "claude-opus-4-6",
-          inputTokens: 12,
-          outputTokens: 1000,
-          totalTokens: 197000,
-        },
-      }));
-
-    try {
-      const tool = createOpenClawTools({
-        agentSessionKey: "agent:main:main",
-      }).find((candidate) => candidate.name === "subagents");
-      expect(tool).toBeDefined();
-      if (!tool) {
-        throw new Error("missing subagents tool");
-      }
-
-      const result = await tool.execute("call-subagents-list-usage", { action: "list" });
-      const details = result.details as {
-        status?: string;
-        text?: string;
-      };
-      expect(details.status).toBe("ok");
-      expect(details.text).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
-      expect(details.text).toContain("prompt/cache 197k");
-      expect(details.text).not.toContain("1.0k io");
-    } finally {
-      loadSessionStoreSpy.mockRestore();
-    }
-  });
-
-  it("subagents steer sends guidance to a running run", async () => {
-    resetSubagentRegistryForTests();
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
       if (request.method === "agent") {
-        return { runId: "run-steer-1" };
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "announce now";
+        }
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 3000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: targetKey,
+              deliveryContext: {
+                channel: "whatsapp",
+                to: "123@g.us",
+                accountId: "work",
+                threadId: 99,
+              },
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        const params = request.params as
+          | {
+              to?: string;
+              channel?: string;
+              accountId?: string;
+              message?: string;
+              threadId?: string;
+            }
+          | undefined;
+        sendParams = {
+          to: params?.to,
+          channel: params?.channel,
+          accountId: params?.accountId,
+          message: params?.message,
+          threadId: params?.threadId,
+        };
+        return { messageId: "m-threaded-announce" };
       }
       return {};
     });
-    addSubagentRunForTests({
-      runId: "run-steer",
-      childSessionKey: "agent:main:subagent:steer",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "prepare release notes",
-      cleanup: "keep",
-      createdAt: Date.now() - 60_000,
-      startedAt: Date.now() - 60_000,
-    });
-
-    const loadSessionStoreSpy = vi
-      .spyOn(sessionsModule, "loadSessionStore")
-      .mockImplementation(() => ({
-        "agent:main:subagent:steer": {
-          sessionId: "child-session-steer",
-          updatedAt: Date.now(),
-        },
-      }));
-
-    try {
-      const tool = createOpenClawTools({
-        agentSessionKey: "agent:main:main",
-      }).find((candidate) => candidate.name === "subagents");
-      expect(tool).toBeDefined();
-      if (!tool) {
-        throw new Error("missing subagents tool");
-      }
-
-      const result = await tool.execute("call-subagents-steer", {
-        action: "steer",
-        target: "1",
-        message: "skip changelog and focus on tests",
-      });
-      const details = result.details as { status?: string; runId?: string; text?: string };
-      expect(details.status).toBe("accepted");
-      expect(details.runId).toBe("run-steer-1");
-      expect(details.text).toContain("steered");
-      const steerWaitIndex = callGatewayMock.mock.calls.findIndex(
-        (call) =>
-          (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
-          (call[0] as { method?: string; params?: { runId?: string } }).params?.runId ===
-            "run-steer",
-      );
-      expect(steerWaitIndex).toBeGreaterThanOrEqual(0);
-      const steerRunIndex = callGatewayMock.mock.calls.findIndex(
-        (call) => (call[0] as { method?: string }).method === "agent",
-      );
-      expect(steerRunIndex).toBeGreaterThan(steerWaitIndex);
-      expect(callGatewayMock.mock.calls[steerWaitIndex]?.[0]).toMatchObject({
-        method: "agent.wait",
-        params: { runId: "run-steer", timeoutMs: 5_000 },
-        timeoutMs: 7_000,
-      });
-      expect(callGatewayMock.mock.calls[steerRunIndex]?.[0]).toMatchObject({
-        method: "agent",
-        params: {
-          lane: "subagent",
-          sessionKey: "agent:main:subagent:steer",
-          sessionId: "child-session-steer",
-          timeout: 0,
-        },
-      });
-
-      const trackedRuns = listSubagentRunsForRequester("agent:main:main");
-      expect(trackedRuns).toHaveLength(1);
-      expect(trackedRuns[0].runId).toBe("run-steer-1");
-      expect(trackedRuns[0].endedAt).toBeUndefined();
-    } finally {
-      loadSessionStoreSpy.mockRestore();
-    }
-  });
-
-  it("subagents numeric targets follow active-first list ordering", async () => {
-    resetSubagentRegistryForTests();
-    addSubagentRunForTests({
-      runId: "run-active",
-      childSessionKey: "agent:main:subagent:active",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "active task",
-      cleanup: "keep",
-      createdAt: Date.now() - 120_000,
-      startedAt: Date.now() - 120_000,
-    });
-    addSubagentRunForTests({
-      runId: "run-recent",
-      childSessionKey: "agent:main:subagent:recent",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "recent task",
-      cleanup: "keep",
-      createdAt: Date.now() - 30_000,
-      startedAt: Date.now() - 30_000,
-      endedAt: Date.now() - 10_000,
-      outcome: { status: "ok" },
-    });
 
     const tool = createOpenClawTools({
-      agentSessionKey: "agent:main:main",
-    }).find((candidate) => candidate.name === "subagents");
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) {
-      throw new Error("missing subagents tool");
+      throw new Error("missing sessions_send tool");
     }
 
-    const result = await tool.execute("call-subagents-kill-order", {
-      action: "kill",
-      target: "1",
+    const waited = await tool.execute("call-thread", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
     });
-    const details = result.details as { status?: string; runId?: string; text?: string };
-    expect(details.status).toBe("ok");
-    expect(details.runId).toBe("run-active");
-    expect(details.text).toContain("killed");
-  });
-
-  it("subagents numeric targets treat ended orchestrators waiting on children as active", async () => {
-    resetSubagentRegistryForTests();
-    const now = Date.now();
-    addSubagentRunForTests({
-      runId: "run-orchestrator-ended",
-      childSessionKey: "agent:main:subagent:orchestrator-ended",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "orchestrator",
-      cleanup: "keep",
-      createdAt: now - 90_000,
-      startedAt: now - 90_000,
-      endedAt: now - 60_000,
-      outcome: { status: "ok" },
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
     });
-    addSubagentRunForTests({
-      runId: "run-leaf-active",
-      childSessionKey: "agent:main:subagent:orchestrator-ended:subagent:leaf",
-      requesterSessionKey: "agent:main:subagent:orchestrator-ended",
-      requesterDisplayKey: "subagent:orchestrator-ended",
-      task: "leaf",
-      cleanup: "keep",
-      createdAt: now - 30_000,
-      startedAt: now - 30_000,
-    });
-    addSubagentRunForTests({
-      runId: "run-running",
-      childSessionKey: "agent:main:subagent:running",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "running",
-      cleanup: "keep",
-      createdAt: now - 20_000,
-      startedAt: now - 20_000,
-    });
-
-    const tool = createOpenClawTools({
-      agentSessionKey: "agent:main:main",
-    }).find((candidate) => candidate.name === "subagents");
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing subagents tool");
-    }
-
-    const list = await tool.execute("call-subagents-list-order-waiting", {
-      action: "list",
-    });
-    const listDetails = list.details as {
-      active?: Array<{ runId?: string; status?: string }>;
-    };
-    expect(listDetails.active).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          runId: "run-orchestrator-ended",
-          status: "active (waiting on 1 child)",
-        }),
-      ]),
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "send")).toHaveLength(1);
+      },
+      { timeout: 2_000, interval: 5 },
     );
 
-    const result = await tool.execute("call-subagents-kill-order-waiting", {
-      action: "kill",
-      target: "1",
+    expect(sendParams).toMatchObject({
+      to: "123@g.us",
+      channel: "whatsapp",
+      accountId: "work",
+      message: "announce now",
+      threadId: "99",
     });
-    const details = result.details as { status?: string; runId?: string };
-    expect(details.status).toBe("ok");
-    expect(details.runId).toBe("run-running");
-  });
-
-  it("subagents kill stops a running run", async () => {
-    resetSubagentRegistryForTests();
-    addSubagentRunForTests({
-      runId: "run-kill",
-      childSessionKey: "agent:main:subagent:kill",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "long running task",
-      cleanup: "keep",
-      createdAt: Date.now() - 60_000,
-      startedAt: Date.now() - 60_000,
-    });
-
-    const tool = createOpenClawTools({
-      agentSessionKey: "agent:main:main",
-    }).find((candidate) => candidate.name === "subagents");
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing subagents tool");
-    }
-
-    const result = await tool.execute("call-subagents-kill", {
-      action: "kill",
-      target: "1",
-    });
-    const details = result.details as { status?: string; text?: string };
-    expect(details.status).toBe("ok");
-    expect(details.text).toContain("killed");
-  });
-
-  it("subagents kill-all cascades through ended parents to active descendants", async () => {
-    resetSubagentRegistryForTests();
-    const now = Date.now();
-    const endedParentKey = "agent:main:subagent:parent-ended";
-    const activeChildKey = "agent:main:subagent:parent-ended:subagent:worker";
-    addSubagentRunForTests({
-      runId: "run-parent-ended",
-      childSessionKey: endedParentKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "orchestrator",
-      cleanup: "keep",
-      createdAt: now - 120_000,
-      startedAt: now - 120_000,
-      endedAt: now - 60_000,
-      outcome: { status: "ok" },
-    });
-    addSubagentRunForTests({
-      runId: "run-worker-active",
-      childSessionKey: activeChildKey,
-      requesterSessionKey: endedParentKey,
-      requesterDisplayKey: endedParentKey,
-      task: "leaf worker",
-      cleanup: "keep",
-      createdAt: now - 30_000,
-      startedAt: now - 30_000,
-    });
-
-    const tool = createOpenClawTools({
-      agentSessionKey: "agent:main:main",
-    }).find((candidate) => candidate.name === "subagents");
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing subagents tool");
-    }
-
-    const result = await tool.execute("call-subagents-kill-all-cascade-ended", {
-      action: "kill",
-      target: "all",
-    });
-    const details = result.details as { status?: string; killed?: number; text?: string };
-    expect(details.status).toBe("ok");
-    expect(details.killed).toBe(1);
-    expect(details.text).toContain("killed 1 subagent");
-
-    const descendants = listSubagentRunsForRequester(endedParentKey);
-    const worker = descendants.find((entry) => entry.runId === "run-worker-active");
-    expect(worker?.endedAt).toBeTypeOf("number");
   });
 });

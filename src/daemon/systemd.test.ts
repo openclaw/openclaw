@@ -1,22 +1,33 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  execFile: execFileMock,
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      execFile: Object.assign(execFileMock, {
+        __promisify__: vi.fn(),
+      }) as typeof import("node:child_process").execFile,
+    },
+  );
+});
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isNonFatalSystemdInstallProbeError,
+  isSystemdServiceEnabled,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
+  stageSystemdService,
   stopSystemdService,
 } from "./systemd.js";
 
@@ -71,7 +82,6 @@ function assertMachineUserSystemctlArgs(args: string[], user: string, ...command
 }
 
 async function readManagedServiceEnabled(env: NodeJS.ProcessEnv = { HOME: TEST_MANAGED_HOME }) {
-  const { isSystemdServiceEnabled } = await import("./systemd.js");
   vi.spyOn(fs, "access").mockResolvedValue(undefined);
   return isSystemdServiceEnabled({ env });
 }
@@ -161,6 +171,40 @@ describe("systemd availability", () => {
 
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
   });
+
+  it("does not fall back to machine scope when --user fails with permission denied", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "status"]);
+      cb(
+        createExecFileError("Failed to connect to bus: Permission denied", {
+          stderr: "Failed to connect to bus: Permission denied",
+          code: 1,
+        }),
+        "",
+        "",
+      );
+    });
+    // Only one call should be made: no machine-scope fallback for permission denied errors.
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back to direct --user when machine scope fails under sudo", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertMachineUserSystemctlArgs(args, "ai", "status");
+      cb(
+        createExecFileError("Failed to connect to bus: No such file or directory", {
+          stderr: "Failed to connect to bus: No such file or directory",
+          code: 1,
+        }),
+        "",
+        "",
+      );
+    });
+
+    await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
@@ -180,7 +224,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false without calling systemctl when the managed unit file is missing", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     const err = new Error("missing unit") as NodeJS.ErrnoException;
     err.code = "ENOENT";
     vi.spyOn(fs, "access").mockRejectedValueOnce(err);
@@ -286,7 +329,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -309,7 +351,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
     execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
       // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with
@@ -598,6 +639,116 @@ describe("readSystemdServiceExecStart", () => {
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
     });
+  });
+});
+
+describe("stageSystemdService", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  it("writes dotenv-backed values to a separate env file and keeps inline env minimal", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-stage-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-stage-test",
+    };
+    const unitPath = resolveSystemdUserUnitPath(env);
+    const envFilePath = path.join(stateDir, "gateway.systemd.env");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, ".env"),
+      ["OPENCLAW_GATEWAY_TOKEN=dotenv-token", "LLM_API_KEY=dotenv-key"].join("\n"),
+      "utf8",
+    );
+
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+
+    try {
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_TOKEN: "dotenv-token",
+          LLM_API_KEY: "dotenv-key",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      const [unit, envFile, envFileStat] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+        fs.stat(envFilePath),
+      ]);
+
+      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
+      expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=dotenv-token");
+      expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
+      expect(envFile).toBe("OPENCLAW_GATEWAY_TOKEN=dotenv-token\nLLM_API_KEY=dotenv-key\n");
+      expect(envFileStat.mode & 0o777).toBe(0o600);
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps inline overrides out of the generated env file", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-stage-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-stage-test",
+    };
+    const unitPath = resolveSystemdUserUnitPath(env);
+    const envFilePath = path.join(stateDir, "gateway.systemd.env");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, ".env"),
+      ["OPENCLAW_GATEWAY_TOKEN=stale-token", "LLM_API_KEY=dotenv-key"].join("\n"),
+      "utf8",
+    );
+
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+
+    try {
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_TOKEN: "fresh-token",
+          LLM_API_KEY: "dotenv-key",
+        },
+      });
+
+      const [unit, envFile] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+      ]);
+
+      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
+      expect(envFile).toBe("LLM_API_KEY=dotenv-key\n");
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
   });
 });
 

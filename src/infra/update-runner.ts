@@ -6,7 +6,6 @@ import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
 import { trimLogTail } from "./restart-sentinel.js";
@@ -28,9 +27,16 @@ import {
   globalInstallArgs,
   globalInstallFallbackArgs,
   resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
-  resolveGlobalPackageRoot,
 } from "./update-global.js";
+import {
+  managerInstallIgnoreScriptsArgs,
+  managerInstallArgs,
+  managerScriptArgs,
+  resolveUpdateBuildManager,
+  type UpdatePackageManagerFailureReason,
+} from "./update-package-manager.js";
 
 export type UpdateStepResult = {
   name: string;
@@ -86,7 +92,11 @@ type UpdateRunnerOptions = {
   progress?: UpdateStepProgress;
 };
 
-type BuildManager = "pnpm" | "bun" | "npm";
+function mapManagerResolutionFailure(
+  reason: UpdatePackageManagerFailureReason,
+): UpdateRunResult["reason"] {
+  return reason;
+}
 
 const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const MAX_LOG_CHARS = 8000;
@@ -94,6 +104,11 @@ const PREFLIGHT_MAX_COMMITS = 10;
 const START_DIRS = ["cwd", "argv1", "process"];
 const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+const PREFLIGHT_TEMP_PREFIX =
+  process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
+const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
+const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
+const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -140,6 +155,46 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
     dirs.push(proc);
   }
   return Array.from(new Set(dirs));
+}
+
+function resolvePreflightTempRootPrefix() {
+  return path.join(os.tmpdir(), PREFLIGHT_TEMP_PREFIX);
+}
+
+function resolvePreflightWorktreeDir(preflightRoot: string) {
+  return path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
+}
+
+function shouldUseNativeWindowsTempRoot() {
+  return process.platform === "win32" && path.sep === "\\";
+}
+
+async function createPreflightRoot() {
+  if (shouldUseNativeWindowsTempRoot()) {
+    const baseDir = path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR);
+    await fs.mkdir(baseDir, { recursive: true });
+    return fs.mkdtemp(path.win32.join(baseDir, PREFLIGHT_TEMP_PREFIX));
+  }
+  return fs.mkdtemp(resolvePreflightTempRootPrefix());
+}
+
+async function removePathRecursive(target: string) {
+  await fs
+    .rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+    .catch(() => {});
+}
+
+async function repairWindowsPreflightCleanup(worktreeDir: string, preflightRoot: string) {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  try {
+    await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    await fs.rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readBranchName(
@@ -247,91 +302,6 @@ async function findPackageRoot(candidates: string[]) {
   return null;
 }
 
-async function detectPackageManager(root: string): Promise<BuildManager> {
-  return (await detectPackageManagerImpl(root)) ?? "npm";
-}
-
-function managerPreferenceOrder(preferred: BuildManager): BuildManager[] {
-  if (preferred === "pnpm") {
-    return ["pnpm", "npm", "bun"];
-  }
-  if (preferred === "bun") {
-    return ["bun", "npm", "pnpm"];
-  }
-  return ["npm", "pnpm", "bun"];
-}
-
-function managerVersionArgs(manager: BuildManager): string[] {
-  if (manager === "pnpm") {
-    return ["pnpm", "--version"];
-  }
-  if (manager === "bun") {
-    return ["bun", "--version"];
-  }
-  return ["npm", "--version"];
-}
-
-async function isManagerAvailable(
-  runCommand: CommandRunner,
-  manager: BuildManager,
-  timeoutMs: number,
-): Promise<boolean> {
-  try {
-    const res = await runCommand(managerVersionArgs(manager), { timeoutMs });
-    return res.code === 0;
-  } catch {
-    return false;
-  }
-}
-
-async function isCommandAvailable(
-  runCommand: CommandRunner,
-  argv: string[],
-  timeoutMs: number,
-): Promise<boolean> {
-  try {
-    const res = await runCommand(argv, { timeoutMs });
-    return res.code === 0;
-  } catch {
-    return false;
-  }
-}
-
-async function ensurePnpmAvailable(runCommand: CommandRunner, timeoutMs: number): Promise<boolean> {
-  if (await isManagerAvailable(runCommand, "pnpm", timeoutMs)) {
-    return true;
-  }
-  if (!(await isCommandAvailable(runCommand, ["corepack", "--version"], timeoutMs))) {
-    return false;
-  }
-  try {
-    const res = await runCommand(["corepack", "enable"], { timeoutMs });
-    if (res.code !== 0) {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  return await isManagerAvailable(runCommand, "pnpm", timeoutMs);
-}
-
-async function resolveAvailableManager(
-  runCommand: CommandRunner,
-  root: string,
-  timeoutMs: number,
-): Promise<{ manager: BuildManager; fallback: boolean }> {
-  const preferred = await detectPackageManager(root);
-  if (preferred === "pnpm" && (await ensurePnpmAvailable(runCommand, timeoutMs))) {
-    return { manager: "pnpm", fallback: false };
-  }
-  for (const manager of managerPreferenceOrder(preferred)) {
-    if (await isManagerAvailable(runCommand, manager, timeoutMs)) {
-      return { manager, fallback: manager !== preferred };
-    }
-  }
-  return { manager: "npm", fallback: preferred !== "npm" };
-}
-
 type RunStepOptions = {
   runCommand: CommandRunner;
   name: string;
@@ -381,36 +351,69 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   };
 }
 
-function managerScriptArgs(manager: BuildManager, script: string, args: string[] = []) {
-  if (manager === "pnpm") {
-    return ["pnpm", script, ...args];
-  }
-  if (manager === "bun") {
-    return ["bun", "run", script, ...args];
-  }
-  if (args.length > 0) {
-    return ["npm", "run", script, "--", ...args];
-  }
-  return ["npm", "run", script];
-}
-
-function managerInstallArgs(manager: BuildManager, opts?: { compatFallback?: boolean }) {
-  if (manager === "pnpm") {
-    return ["pnpm", "install"];
-  }
-  if (manager === "bun") {
-    return ["bun", "install"];
-  }
-  if (opts?.compatFallback) {
-    // pnpm/bun workspaces can hit npm-only peer resolution conflicts and should not create
-    // a package-lock.json when npm is only acting as a compatibility fallback.
-    return ["npm", "install", "--no-package-lock", "--legacy-peer-deps"];
-  }
-  return ["npm", "install"];
-}
-
 function normalizeTag(tag?: string) {
   return normalizePackageTagInput(tag, ["openclaw", DEFAULT_PACKAGE_NAME]) ?? "latest";
+}
+
+function shouldRetryWindowsInstallIgnoringScripts(manager: "pnpm" | "bun" | "npm"): boolean {
+  return process.platform === "win32" && manager === "pnpm";
+}
+
+function shouldPreferIgnoreScriptsForWindowsPreflight(manager: "pnpm" | "bun" | "npm"): boolean {
+  return process.platform === "win32" && manager === "pnpm";
+}
+
+function resolveWindowsBuildNodeOptions(baseOptions: string | undefined): string {
+  const current = baseOptions?.trim() ?? "";
+  const desired = `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`;
+  const existingMatch = /(?:^|\s)--max-old-space-size=(\d+)(?=\s|$)/.exec(current);
+  if (!existingMatch) {
+    return current ? `${current} ${desired}` : desired;
+  }
+  const existingValue = Number(existingMatch[1]);
+  if (Number.isFinite(existingValue) && existingValue >= WINDOWS_BUILD_MAX_OLD_SPACE_MB) {
+    return current;
+  }
+  return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
+}
+
+function resolveWindowsBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+  if (process.platform !== "win32") {
+    return env;
+  }
+  const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
+  const nextNodeOptions = resolveWindowsBuildNodeOptions(currentNodeOptions);
+  if (nextNodeOptions === currentNodeOptions) {
+    return env;
+  }
+  return {
+    ...env,
+    NODE_OPTIONS: nextNodeOptions,
+  };
+}
+
+function isSupersededInstallFailure(
+  step: UpdateStepResult,
+  steps: readonly UpdateStepResult[],
+): boolean {
+  if (step.exitCode === 0) {
+    return false;
+  }
+  if (step.name === "deps install") {
+    return steps.some(
+      (candidate) => candidate.name === "deps install (ignore scripts)" && candidate.exitCode === 0,
+    );
+  }
+  const preflightMatch = /^preflight deps install \((.+)\)$/.exec(step.name);
+  if (!preflightMatch) {
+    return false;
+  }
+  const retryName = `preflight deps install (ignore scripts) (${preflightMatch[1]})`;
+  return steps.some((candidate) => candidate.name === retryName && candidate.exitCode === 0);
+}
+
+function findBlockingGitFailure(steps: readonly UpdateStepResult[]): UpdateStepResult | undefined {
+  return steps.find((step) => step.exitCode !== 0 && !isSupersededInstallFailure(step, steps));
 }
 
 function mergeCommandEnvironments(
@@ -644,9 +647,26 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const manager = await resolveAvailableManager(runCommand, gitRoot, timeoutMs);
-      const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-preflight-"));
-      const worktreeDir = path.join(preflightRoot, "worktree");
+      const manager = await resolveUpdateBuildManager(
+        (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
+        gitRoot,
+        timeoutMs,
+        defaultCommandEnv,
+        "require-preferred",
+      );
+      if (manager.kind === "missing-required") {
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: mapManagerResolutionFailure(manager.reason),
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+      const preflightRoot = await createPreflightRoot();
+      const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
       const worktreeStep = await runStep(
         step(
           "preflight worktree",
@@ -656,7 +676,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       );
       steps.push(worktreeStep);
       if (worktreeStep.exitCode !== 0) {
-        await fs.rm(preflightRoot, { recursive: true, force: true }).catch(() => {});
+        await removePathRecursive(preflightRoot);
         return {
           status: "error",
           mode: "git",
@@ -684,17 +704,44 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
+          const preflightIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(
+            manager.manager,
+          );
+          const preflightIgnoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+          const depsStepArgv =
+            preflightIgnoreScripts && preflightIgnoreScriptsArgv
+              ? preflightIgnoreScriptsArgv
+              : managerInstallArgs(manager.manager, {
+                  compatFallback: manager.fallback && manager.manager === "npm",
+                });
+          const depsStepName = preflightIgnoreScripts
+            ? `preflight deps install (ignore scripts) (${shortSha})`
+            : `preflight deps install (${shortSha})`;
           const depsStep = await runStep(
-            step(
-              `preflight deps install (${shortSha})`,
-              managerInstallArgs(manager.manager, {
-                compatFallback: manager.fallback && manager.manager === "npm",
-              }),
-              worktreeDir,
-            ),
+            step(depsStepName, depsStepArgv, worktreeDir, manager.env),
           );
           steps.push(depsStep);
-          if (depsStep.exitCode !== 0) {
+          let finalDepsStep = depsStep;
+          if (
+            depsStep.exitCode !== 0 &&
+            !preflightIgnoreScripts &&
+            shouldRetryWindowsInstallIgnoringScripts(manager.manager)
+          ) {
+            const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+            if (retryArgv) {
+              const retryStep = await runStep(
+                step(
+                  `preflight deps install (ignore scripts) (${shortSha})`,
+                  retryArgv,
+                  worktreeDir,
+                  manager.env,
+                ),
+              );
+              steps.push(retryStep);
+              finalDepsStep = retryStep;
+            }
+          }
+          if (finalDepsStep.exitCode !== 0) {
             continue;
           }
 
@@ -703,6 +750,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               `preflight build (${shortSha})`,
               managerScriptArgs(manager.manager, "build"),
               worktreeDir,
+              resolveWindowsBuildEnv(manager.env),
             ),
           );
           steps.push(buildStep);
@@ -715,6 +763,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               `preflight lint (${shortSha})`,
               managerScriptArgs(manager.manager, "lint"),
               worktreeDir,
+              manager.env,
             ),
           );
           steps.push(lintStep);
@@ -733,12 +782,25 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             gitRoot,
           ),
         );
+        if (
+          removeStep.exitCode !== 0 &&
+          (await repairWindowsPreflightCleanup(worktreeDir, preflightRoot))
+        ) {
+          removeStep.exitCode = 0;
+          removeStep.stderrTail = trimLogTail(
+            [removeStep.stderrTail, "windows fallback cleanup removed preflight tree"]
+              .filter(Boolean)
+              .join("\n"),
+            MAX_LOG_CHARS,
+          );
+        }
         steps.push(removeStep);
         await runCommand(["git", "-C", gitRoot, "worktree", "prune"], {
           cwd: gitRoot,
           timeoutMs,
         }).catch(() => null);
-        await fs.rm(preflightRoot, { recursive: true, force: true }).catch(() => {});
+        await removePathRecursive(preflightRoot);
+        await manager.cleanup?.();
       }
 
       if (!selectedSha) {
@@ -824,168 +886,209 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
     }
 
-    const manager = await resolveAvailableManager(runCommand, gitRoot, timeoutMs);
-
-    const depsStep = await runStep(
-      step(
-        "deps install",
-        managerInstallArgs(manager.manager, {
-          compatFallback: manager.fallback && manager.manager === "npm",
-        }),
-        gitRoot,
-      ),
+    const manager = await resolveUpdateBuildManager(
+      (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
+      gitRoot,
+      timeoutMs,
+      defaultCommandEnv,
+      "require-preferred",
     );
-    steps.push(depsStep);
-    if (depsStep.exitCode !== 0) {
+    if (manager.kind === "missing-required") {
       return {
         status: "error",
         mode: "git",
         root: gitRoot,
-        reason: "deps-install-failed",
+        reason: mapManagerResolutionFailure(manager.reason),
         before: { sha: beforeSha, version: beforeVersion },
         steps,
         durationMs: Date.now() - startedAt,
       };
     }
-
-    const buildStep = await runStep(
-      step("build", managerScriptArgs(manager.manager, "build"), gitRoot),
-    );
-    steps.push(buildStep);
-    if (buildStep.exitCode !== 0) {
-      return {
-        status: "error",
-        mode: "git",
-        root: gitRoot,
-        reason: "build-failed",
-        before: { sha: beforeSha, version: beforeVersion },
-        steps,
-        durationMs: Date.now() - startedAt,
-      };
-    }
-
-    const uiBuildStep = await runStep(
-      step("ui:build", managerScriptArgs(manager.manager, "ui:build"), gitRoot),
-    );
-    steps.push(uiBuildStep);
-    if (uiBuildStep.exitCode !== 0) {
-      return {
-        status: "error",
-        mode: "git",
-        root: gitRoot,
-        reason: "ui-build-failed",
-        before: { sha: beforeSha, version: beforeVersion },
-        steps,
-        durationMs: Date.now() - startedAt,
-      };
-    }
-
-    const doctorEntry = path.join(gitRoot, "openclaw.mjs");
-    const doctorEntryExists = await fs
-      .stat(doctorEntry)
-      .then(() => true)
-      .catch(() => false);
-    if (!doctorEntryExists) {
-      steps.push({
-        name: "openclaw doctor entry",
-        command: `verify ${doctorEntry}`,
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: `missing ${doctorEntry}`,
-      });
-      return {
-        status: "error",
-        mode: "git",
-        root: gitRoot,
-        reason: "doctor-entry-missing",
-        before: { sha: beforeSha, version: beforeVersion },
-        steps,
-        durationMs: Date.now() - startedAt,
-      };
-    }
-
-    // Use --fix so that doctor auto-strips unknown config keys introduced by
-    // schema changes between versions, preventing a startup validation crash.
-    const doctorNodePath = await resolveStableNodePath(process.execPath);
-    const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
-    const doctorStep = await runStep(
-      step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
-    );
-    steps.push(doctorStep);
-
-    const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
-    if (!uiIndexHealth.exists) {
-      const repairArgv = managerScriptArgs(manager.manager, "ui:build");
-      const started = Date.now();
-      const repairResult = await runCommand(repairArgv, { cwd: gitRoot, timeoutMs });
-      const repairStep: UpdateStepResult = {
-        name: "ui:build (post-doctor repair)",
-        command: repairArgv.join(" "),
-        cwd: gitRoot,
-        durationMs: Date.now() - started,
-        exitCode: repairResult.code,
-        stdoutTail: trimLogTail(repairResult.stdout, MAX_LOG_CHARS),
-        stderrTail: trimLogTail(repairResult.stderr, MAX_LOG_CHARS),
-      };
-      steps.push(repairStep);
-
-      if (repairResult.code !== 0) {
+    try {
+      const depsStep = await runStep(
+        step(
+          "deps install",
+          managerInstallArgs(manager.manager, {
+            compatFallback: manager.fallback && manager.manager === "npm",
+          }),
+          gitRoot,
+          manager.env,
+        ),
+      );
+      steps.push(depsStep);
+      let finalDepsStep = depsStep;
+      if (depsStep.exitCode !== 0 && shouldRetryWindowsInstallIgnoringScripts(manager.manager)) {
+        const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+        if (retryArgv) {
+          const retryStep = await runStep(
+            step("deps install (ignore scripts)", retryArgv, gitRoot, manager.env),
+          );
+          steps.push(retryStep);
+          finalDepsStep = retryStep;
+        }
+      }
+      if (finalDepsStep.exitCode !== 0) {
         return {
           status: "error",
           mode: "git",
           root: gitRoot,
-          reason: repairStep.name,
+          reason: "deps-install-failed",
           before: { sha: beforeSha, version: beforeVersion },
           steps,
           durationMs: Date.now() - startedAt,
         };
       }
 
-      const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
-      if (!repairedUiIndexHealth.exists) {
-        const uiIndexPath =
-          repairedUiIndexHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
+      const buildStep = await runStep(
+        step(
+          "build",
+          managerScriptArgs(manager.manager, "build"),
+          gitRoot,
+          resolveWindowsBuildEnv(manager.env),
+        ),
+      );
+      steps.push(buildStep);
+      if (buildStep.exitCode !== 0) {
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: "build-failed",
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      const uiBuildStep = await runStep(
+        step("ui:build", managerScriptArgs(manager.manager, "ui:build"), gitRoot, manager.env),
+      );
+      steps.push(uiBuildStep);
+      if (uiBuildStep.exitCode !== 0) {
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: "ui-build-failed",
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      const doctorEntry = path.join(gitRoot, "openclaw.mjs");
+      const doctorEntryExists = await fs
+        .stat(doctorEntry)
+        .then(() => true)
+        .catch(() => false);
+      if (!doctorEntryExists) {
         steps.push({
-          name: "ui assets verify",
-          command: `verify ${uiIndexPath}`,
+          name: "openclaw doctor entry",
+          command: `verify ${doctorEntry}`,
           cwd: gitRoot,
           durationMs: 0,
           exitCode: 1,
-          stderrTail: `missing ${uiIndexPath}`,
+          stderrTail: `missing ${doctorEntry}`,
         });
         return {
           status: "error",
           mode: "git",
           root: gitRoot,
-          reason: "ui-assets-missing",
+          reason: "doctor-entry-missing",
           before: { sha: beforeSha, version: beforeVersion },
           steps,
           durationMs: Date.now() - startedAt,
         };
       }
+
+      // Use --fix so that doctor auto-strips unknown config keys introduced by
+      // schema changes between versions, preventing a startup validation crash.
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
+      const doctorStep = await runStep(
+        step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+      );
+      steps.push(doctorStep);
+
+      const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+      if (!uiIndexHealth.exists) {
+        const repairArgv = managerScriptArgs(manager.manager, "ui:build");
+        const started = Date.now();
+        const repairResult = await runCommand(repairArgv, {
+          cwd: gitRoot,
+          timeoutMs,
+          env: manager.env,
+        });
+        const repairStep: UpdateStepResult = {
+          name: "ui:build (post-doctor repair)",
+          command: repairArgv.join(" "),
+          cwd: gitRoot,
+          durationMs: Date.now() - started,
+          exitCode: repairResult.code,
+          stdoutTail: trimLogTail(repairResult.stdout, MAX_LOG_CHARS),
+          stderrTail: trimLogTail(repairResult.stderr, MAX_LOG_CHARS),
+        };
+        steps.push(repairStep);
+
+        if (repairResult.code !== 0) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: repairStep.name,
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+
+        const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+        if (!repairedUiIndexHealth.exists) {
+          const uiIndexPath =
+            repairedUiIndexHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
+          steps.push({
+            name: "ui assets verify",
+            command: `verify ${uiIndexPath}`,
+            cwd: gitRoot,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: `missing ${uiIndexPath}`,
+          });
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "ui-assets-missing",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+      }
+
+      const failedStep = findBlockingGitFailure(steps);
+      const afterShaStep = await runStep(
+        step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
+      );
+      steps.push(afterShaStep);
+      const afterVersion = await readPackageVersion(gitRoot);
+
+      return {
+        status: failedStep ? "error" : "ok",
+        mode: "git",
+        root: gitRoot,
+        reason: failedStep ? failedStep.name : undefined,
+        before: { sha: beforeSha, version: beforeVersion },
+        after: {
+          sha: afterShaStep.stdoutTail?.trim() ?? null,
+          version: afterVersion,
+        },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    } finally {
+      await manager.cleanup?.();
     }
-
-    const failedStep = steps.find((s) => s.exitCode !== 0);
-    const afterShaStep = await runStep(
-      step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
-    );
-    steps.push(afterShaStep);
-    const afterVersion = await readPackageVersion(gitRoot);
-
-    return {
-      status: failedStep ? "error" : "ok",
-      mode: "git",
-      root: gitRoot,
-      reason: failedStep ? failedStep.name : undefined,
-      before: { sha: beforeSha, version: beforeVersion },
-      after: {
-        sha: afterShaStep.stdoutTail?.trim() ?? null,
-        version: afterVersion,
-      },
-      steps,
-      durationMs: Date.now() - startedAt,
-    };
   }
 
   if (!pkgRoot) {
@@ -1001,6 +1104,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    const installTarget = await resolveGlobalInstallTarget({
+      manager: globalManager,
+      runCommand,
+      timeoutMs,
+      pkgRoot,
+    });
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
@@ -1018,7 +1127,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const updateStep = await runStep({
       runCommand,
       name: "global update",
-      argv: globalInstallArgs(globalManager, spec),
+      argv: globalInstallArgs(installTarget, spec),
       cwd: pkgRoot,
       timeoutMs,
       env: globalInstallEnv,
@@ -1030,7 +1139,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     let finalStep = updateStep;
     if (updateStep.exitCode !== 0) {
-      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec);
+      const fallbackArgv = globalInstallFallbackArgs(installTarget, spec);
       if (fallbackArgv) {
         const fallbackStep = await runStep({
           runCommand,
@@ -1049,7 +1158,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     }
 
     const verifiedPackageRoot =
-      (await resolveGlobalPackageRoot(globalManager, runCommand, timeoutMs)) ?? pkgRoot;
+      (
+        await resolveGlobalInstallTarget({
+          manager: installTarget,
+          runCommand,
+          timeoutMs,
+        })
+      ).packageRoot ?? pkgRoot;
     const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
     const verificationErrors = await collectInstalledGlobalPackageErrors({
       packageRoot: verifiedPackageRoot,

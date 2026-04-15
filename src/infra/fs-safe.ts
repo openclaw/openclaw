@@ -6,10 +6,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { logWarn } from "../logger.js";
+import { resolveBoundaryPath } from "./boundary-path.js";
 import { sameFileIdentity } from "./file-identity.js";
+import { isPinnedPathHelperSpawnError, runPinnedPathHelper } from "./fs-pinned-path-helper.js";
 import { runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { assertNoPathAliasEscape } from "./path-alias-guards.js";
+import { assertNoPathAliasEscape, PATH_ALIAS_POLICIES } from "./path-alias-guards.js";
 import {
   hasNodeErrorCode,
   isNotFoundPathError,
@@ -48,8 +50,31 @@ export type SafeLocalReadResult = {
   stat: Stats;
 };
 
+export type FsSafeTestHooks = {
+  afterPreOpenLstat?: (filePath: string) => Promise<void> | void;
+  beforeOpen?: (filePath: string, flags: number) => Promise<void> | void;
+  afterOpen?: (filePath: string, handle: FileHandle) => Promise<void> | void;
+};
+
+let fsSafeTestHooks: FsSafeTestHooks | undefined;
+
+function allowFsSafeTestHooks(): boolean {
+  return process.env.NODE_ENV === "test" || process.env.VITEST === "true";
+}
+
+export function __setFsSafeTestHooksForTest(hooks?: FsSafeTestHooks): void {
+  if (hooks && !allowFsSafeTestHooks()) {
+    throw new Error("__setFsSafeTestHooksForTest is only available in tests");
+  }
+  fsSafeTestHooks = hooks;
+}
+
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const NONBLOCK_OPEN_FLAG = "O_NONBLOCK" in fsConstants ? fsConstants.O_NONBLOCK : 0;
 const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const OPEN_READ_NONBLOCK_FLAGS = OPEN_READ_FLAGS | NONBLOCK_OPEN_FLAG;
+const OPEN_READ_FOLLOW_FLAGS = fsConstants.O_RDONLY;
+const OPEN_READ_FOLLOW_NONBLOCK_FLAGS = OPEN_READ_FOLLOW_FLAGS | NONBLOCK_OPEN_FLAG;
 const OPEN_WRITE_EXISTING_FLAGS =
   fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 const OPEN_WRITE_CREATE_FLAGS =
@@ -82,6 +107,8 @@ async function openVerifiedLocalFile(
   filePath: string,
   options?: {
     rejectHardlinks?: boolean;
+    nonBlockingRead?: boolean;
+    allowSymlinkTargetWithinRoot?: boolean;
   },
 ): Promise<SafeOpenResult> {
   // Reject directories before opening so we never surface EISDIR to callers (e.g. tool
@@ -91,6 +118,7 @@ async function openVerifiedLocalFile(
     if (preStat.isDirectory()) {
       throw new SafeOpenError("not-file", "not a file");
     }
+    await fsSafeTestHooks?.afterPreOpenLstat?.(filePath);
   } catch (err) {
     if (err instanceof SafeOpenError) {
       throw err;
@@ -100,7 +128,21 @@ async function openVerifiedLocalFile(
 
   let handle: FileHandle;
   try {
-    handle = await fs.open(filePath, OPEN_READ_FLAGS);
+    const openFlags = options?.allowSymlinkTargetWithinRoot
+      ? options?.nonBlockingRead
+        ? OPEN_READ_FOLLOW_NONBLOCK_FLAGS
+        : OPEN_READ_FOLLOW_FLAGS
+      : options?.nonBlockingRead
+        ? OPEN_READ_NONBLOCK_FLAGS
+        : OPEN_READ_FLAGS;
+    await fsSafeTestHooks?.beforeOpen?.(filePath, openFlags);
+    handle = await fs.open(filePath, openFlags);
+    try {
+      await fsSafeTestHooks?.afterOpen?.(filePath, handle);
+    } catch (err) {
+      await handle.close().catch(() => {});
+      throw err;
+    }
   } catch (err) {
     if (isNotFoundPathError(err)) {
       throw new SafeOpenError("not-found", "file not found");
@@ -116,21 +158,30 @@ async function openVerifiedLocalFile(
   }
 
   try {
-    const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(filePath)]);
-    if (lstat.isSymbolicLink()) {
-      throw new SafeOpenError("symlink", "symlink not allowed");
-    }
+    const stat = await handle.stat();
     if (!stat.isFile()) {
       throw new SafeOpenError("not-file", "not a file");
     }
     if (options?.rejectHardlinks && stat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
     }
-    if (!sameFileIdentity(stat, lstat)) {
-      throw new SafeOpenError("path-mismatch", "path changed during read");
+
+    if (options?.allowSymlinkTargetWithinRoot) {
+      const pathStat = await fs.stat(filePath);
+      if (!sameFileIdentity(stat, pathStat)) {
+        throw new SafeOpenError("path-mismatch", "path changed during read");
+      }
+    } else {
+      const pathStat = await fs.lstat(filePath);
+      if (pathStat.isSymbolicLink()) {
+        throw new SafeOpenError("symlink", "symlink not allowed");
+      }
+      if (!sameFileIdentity(stat, pathStat)) {
+        throw new SafeOpenError("path-mismatch", "path changed during read");
+      }
     }
 
-    const realPath = await fs.realpath(filePath);
+    const realPath = await resolveOpenedFileRealPathForHandle(handle, filePath);
     const realStat = await fs.stat(realPath);
     if (options?.rejectHardlinks && realStat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
@@ -178,12 +229,17 @@ export async function openFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
   rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
 }): Promise<SafeOpenResult> {
   const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
 
   let opened: SafeOpenResult;
   try {
-    opened = await openVerifiedLocalFile(resolved);
+    opened = await openVerifiedLocalFile(resolved, {
+      nonBlockingRead: params.nonBlockingRead,
+      allowSymlinkTargetWithinRoot: params.allowSymlinkTargetWithinRoot,
+    });
   } catch (err) {
     if (err instanceof SafeOpenError) {
       if (err.code === "not-found") {
@@ -213,12 +269,16 @@ export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
   rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
   const opened = await openFileWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
     rejectHardlinks: params.rejectHardlinks,
+    nonBlockingRead: params.nonBlockingRead,
+    allowSymlinkTargetWithinRoot: params.allowSymlinkTargetWithinRoot,
   });
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
@@ -267,12 +327,16 @@ export async function readLocalFileSafely(params: {
   filePath: string;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
-  const opened = await openVerifiedLocalFile(params.filePath);
+  const opened = await openLocalFileSafely({ filePath: params.filePath });
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
   } finally {
     await opened.handle.close().catch(() => {});
   }
+}
+
+export async function openLocalFileSafely(params: { filePath: string }): Promise<SafeOpenResult> {
+  return await openVerifiedLocalFile(params.filePath);
 }
 
 async function readOpenedFileSafely(params: {
@@ -353,14 +417,7 @@ export async function resolveOpenedFileRealPathForHandle(
   handle: FileHandle,
   ioPath: string,
 ): Promise<string> {
-  try {
-    return await fs.realpath(ioPath);
-  } catch (err) {
-    if (!isNotFoundPathError(err)) {
-      throw err;
-    }
-  }
-
+  const handleStat = await handle.stat();
   const fdCandidates =
     process.platform === "linux"
       ? [`/proc/self/fd/${handle.fd}`, `/dev/fd/${handle.fd}`]
@@ -369,12 +426,72 @@ export async function resolveOpenedFileRealPathForHandle(
         : [`/dev/fd/${handle.fd}`];
   for (const fdPath of fdCandidates) {
     try {
-      return await fs.realpath(fdPath);
+      const fdRealPath = await fs.realpath(fdPath);
+      const fdRealStat = await fs.stat(fdRealPath);
+      if (sameFileIdentity(handleStat, fdRealStat)) {
+        return fdRealPath;
+      }
     } catch {
       // try next fd path
     }
   }
+
+  try {
+    const ioRealPath = await fs.realpath(ioPath);
+    const ioRealStat = await fs.stat(ioRealPath);
+    if (sameFileIdentity(handleStat, ioRealStat)) {
+      return ioRealPath;
+    }
+  } catch (err) {
+    if (!isNotFoundPathError(err)) {
+      throw err;
+    }
+  }
+  const parentResolved = await resolveOpenedFileRealPathFromParent(handleStat, ioPath);
+  if (parentResolved) {
+    return parentResolved;
+  }
   throw new SafeOpenError("path-mismatch", "unable to resolve opened file path");
+}
+
+async function resolveOpenedFileRealPathFromParent(
+  handleStat: Stats,
+  ioPath: string,
+): Promise<string | null> {
+  let parentReal: string;
+  try {
+    parentReal = await fs.realpath(path.dirname(ioPath));
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return null;
+    }
+    throw err;
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(parentReal);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return null;
+    }
+    throw err;
+  }
+
+  for (const entry of entries.toSorted()) {
+    const candidatePath = path.join(parentReal, entry);
+    try {
+      const candidateStat = await fs.lstat(candidatePath);
+      if (candidateStat.isFile() && sameFileIdentity(handleStat, candidateStat)) {
+        return await fs.realpath(candidatePath);
+      }
+    } catch (err) {
+      if (!isNotFoundPathError(err)) {
+        throw err;
+      }
+    }
+  }
+  return null;
 }
 
 export async function openWritableFileWithinRoot(params: {
@@ -544,6 +661,55 @@ export async function appendFileWithinRoot(params: {
   }
 }
 
+export async function removePathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<void> {
+  const resolved = await resolvePinnedRemovePathWithinRoot(params);
+  if (process.platform === "win32") {
+    await removePathWithinRootLegacy(resolved);
+    return;
+  }
+  try {
+    await runPinnedPathHelper({
+      operation: "remove",
+      rootPath: resolved.rootReal,
+      relativePath: resolved.relativePosix,
+    });
+  } catch (error) {
+    if (isPinnedPathHelperSpawnError(error)) {
+      await removePathWithinRootLegacy(resolved);
+      return;
+    }
+    throw normalizePinnedPathError(error);
+  }
+}
+
+export async function mkdirPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  allowRoot?: boolean;
+}): Promise<void> {
+  const resolved = await resolvePinnedPathWithinRoot(params);
+  if (process.platform === "win32") {
+    await mkdirPathWithinRootLegacy(resolved);
+    return;
+  }
+  try {
+    await runPinnedPathHelper({
+      operation: "mkdirp",
+      rootPath: resolved.rootReal,
+      relativePath: resolved.relativePosix,
+    });
+  } catch (error) {
+    if (isPinnedPathHelperSpawnError(error)) {
+      await mkdirPathWithinRootLegacy(resolved);
+      return;
+    }
+    throw normalizePinnedPathError(error);
+  }
+}
+
 export async function writeFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
@@ -699,6 +865,7 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
       rootDir: params.rootDir,
       relativePath: params.relativePath,
       rejectHardlinks: true,
+      nonBlockingRead: true,
     });
     try {
       mode = opened.stat.mode & 0o777;
@@ -724,6 +891,96 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
   };
 }
 
+async function resolvePinnedPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  allowRoot?: boolean;
+}): Promise<{ rootReal: string; resolved: string; relativePosix: string }> {
+  const resolved = await resolvePinnedBoundaryPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    policy: PATH_ALIAS_POLICIES.strict,
+  });
+  const relativeResolved = path.relative(resolved.rootReal, resolved.canonicalPath);
+  if ((relativeResolved === "" || relativeResolved === ".") && params.allowRoot === true) {
+    return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix: "" };
+  }
+  if (
+    relativeResolved === "" ||
+    relativeResolved === "." ||
+    relativeResolved.startsWith("..") ||
+    path.isAbsolute(relativeResolved)
+  ) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  const relativePosix = relativeResolved.split(path.sep).join(path.posix.sep);
+  if (!isPathInside(resolved.rootWithSep, resolved.canonicalPath)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix };
+}
+
+async function resolvePinnedRemovePathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<{ rootReal: string; resolved: string; relativePosix: string }> {
+  const resolved = await resolvePinnedBoundaryPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    policy: PATH_ALIAS_POLICIES.unlinkTarget,
+  });
+  const relativeResolved = path.relative(resolved.rootReal, resolved.canonicalPath);
+  if (
+    relativeResolved === "" ||
+    relativeResolved === "." ||
+    relativeResolved.startsWith("..") ||
+    path.isAbsolute(relativeResolved)
+  ) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+  const relativePosix = relativeResolved.split(path.sep).join(path.posix.sep);
+  if (!isPathInside(resolved.rootWithSep, resolved.canonicalPath)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  const parentRelative = path.posix.dirname(relativePosix);
+  if (parentRelative === "." || parentRelative === "") {
+    return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix };
+  }
+  return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix };
+}
+
+async function resolvePinnedBoundaryPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  policy: (typeof PATH_ALIAS_POLICIES)[keyof typeof PATH_ALIAS_POLICIES];
+}): Promise<{ rootReal: string; rootWithSep: string; canonicalPath: string }> {
+  const { rootReal } = await resolvePathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: ".",
+  });
+  let resolved;
+  try {
+    resolved = await resolveBoundaryPath({
+      absolutePath: path.resolve(rootReal, await expandRelativePathWithHome(params.relativePath)),
+      rootPath: rootReal,
+      rootCanonicalPath: rootReal,
+      boundaryLabel: "root",
+      policy: params.policy,
+    });
+  } catch (err) {
+    throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
+  }
+  const rootWithSep = ensureTrailingSep(resolved.rootCanonicalPath);
+  return {
+    rootReal: resolved.rootCanonicalPath,
+    rootWithSep,
+    canonicalPath: resolved.canonicalPath,
+  };
+}
+
 function normalizePinnedWriteError(error: unknown): Error {
   if (error instanceof SafeOpenError) {
     return error;
@@ -731,6 +988,40 @@ function normalizePinnedWriteError(error: unknown): Error {
   return new SafeOpenError("invalid-path", "path is not a regular file under root", {
     cause: error instanceof Error ? error : undefined,
   });
+}
+
+function normalizePinnedPathError(error: unknown): Error {
+  if (error instanceof SafeOpenError) {
+    return error;
+  }
+  if (error instanceof Error) {
+    const message = error.message;
+    if (/No such file or directory/i.test(message)) {
+      return new SafeOpenError("not-found", "file not found", { cause: error });
+    }
+    if (/Not a directory|symbolic link|Too many levels of symbolic links/i.test(message)) {
+      return new SafeOpenError("invalid-path", "path is not under root", { cause: error });
+    }
+    if (/Directory not empty/i.test(message)) {
+      return new SafeOpenError("invalid-path", "directory is not empty", { cause: error });
+    }
+    if (/Is a directory|Operation not permitted|Permission denied/i.test(message)) {
+      return new SafeOpenError("invalid-path", "path is not removable under root", {
+        cause: error,
+      });
+    }
+  }
+  return new SafeOpenError("invalid-path", "path is not under root", {
+    cause: error instanceof Error ? error : undefined,
+  });
+}
+
+async function removePathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {
+  await fs.rm(resolved.resolved);
+}
+
+async function mkdirPathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {
+  await fs.mkdir(resolved.resolved, { recursive: true });
 }
 
 async function writeFileWithinRootLegacy(params: {

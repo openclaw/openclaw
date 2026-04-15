@@ -54,4 +54,15 @@ describe("sanitizeEnvVars", () => {
     expect(result.allowed).toEqual({ NODE_ENV: "test" });
     expect(result.blocked).toEqual(["FOO"]);
   });
+
+  it("skips undefined values when sanitizing process-style env maps", () => {
+    const result = sanitizeEnvVars({
+      NODE_ENV: "test",
+      OPTIONAL_SECRET: undefined,
+      OPENAI_API_KEY: undefined,
+    });
+
+    expect(result.allowed).toEqual({ NODE_ENV: "test" });
+    expect(result.blocked).toEqual([]);
+  });
 });

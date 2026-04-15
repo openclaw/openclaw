@@ -3,8 +3,8 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import * as piCodingAgent from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof piCodingAgent>();
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof piCodingAgent>("@mariozechner/pi-coding-agent");
   return {
     ...actual,
     generateSummary: vi.fn(),
@@ -14,14 +14,8 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
 const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
 type SummarizeInStagesInput = Parameters<typeof import("./compaction.js").summarizeInStages>[0];
 
-let buildCompactionSummarizationInstructions: typeof import("./compaction.js").buildCompactionSummarizationInstructions;
-let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
-
-async function loadFreshCompactionModuleForTest() {
-  vi.resetModules();
-  ({ buildCompactionSummarizationInstructions, summarizeInStages } =
-    await import("./compaction.js"));
-}
+const { buildCompactionSummarizationInstructions, summarizeInStages } =
+  await import("./compaction.js");
 
 function makeMessage(index: number, size = 1200): AgentMessage {
   return {
@@ -46,8 +40,7 @@ describe("compaction identifier-preservation instructions", () => {
     signal: new AbortController().signal,
   };
 
-  beforeEach(async () => {
-    await loadFreshCompactionModuleForTest();
+  beforeEach(() => {
     mockGenerateSummary.mockReset();
     mockGenerateSummary.mockResolvedValue("summary");
   });
@@ -65,7 +58,7 @@ describe("compaction identifier-preservation instructions", () => {
   }
 
   function firstSummaryInstructions() {
-    return mockGenerateSummary.mock.calls[0]?.[5];
+    return extractSummaryInstructions(mockGenerateSummary.mock.calls[0]);
   }
 
   it("injects identifier-preservation guidance even without custom instructions", async () => {
@@ -101,7 +94,9 @@ describe("compaction identifier-preservation instructions", () => {
 
     expect(mockGenerateSummary.mock.calls.length).toBeGreaterThan(1);
     for (const call of mockGenerateSummary.mock.calls) {
-      expect(call[5]).toContain("Preserve all opaque identifiers exactly as written");
+      expect(extractSummaryInstructions(call)).toContain(
+        "Preserve all opaque identifiers exactly as written",
+      );
     }
   });
 
@@ -114,12 +109,30 @@ describe("compaction identifier-preservation instructions", () => {
     });
 
     const mergedCall = mockGenerateSummary.mock.calls.at(-1);
-    const instructions = mergedCall?.[5] ?? "";
+    const instructions = extractSummaryInstructions(mergedCall);
     expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");
     expect(instructions).toContain("Prioritize customer-visible regressions.");
     expect((instructions.match(/Additional focus:/g) ?? []).length).toBe(1);
   });
 });
+
+function extractSummaryInstructions(call: unknown[] | undefined): string {
+  if (!call) {
+    return "";
+  }
+  for (let index = call.length - 1; index >= 4; index -= 1) {
+    const arg = call[index];
+    if (
+      typeof arg === "string" &&
+      (arg.includes("Preserve all opaque identifiers exactly as written") ||
+        arg.includes("Merge these partial summaries into a single cohesive summary.") ||
+        arg.includes("Additional focus:"))
+    ) {
+      return arg;
+    }
+  }
+  return "";
+}
 
 describe("buildCompactionSummarizationInstructions", () => {
   it("returns base instructions when no custom text is provided", () => {

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { matrixPlugin } from "./channel.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";

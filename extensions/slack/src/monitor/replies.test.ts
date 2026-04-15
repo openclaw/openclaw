@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
 vi.mock("../send.js", () => ({
@@ -6,6 +6,7 @@ vi.mock("../send.js", () => ({
 }));
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
+let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies } from "./replies.js";
 
 function baseParams(overrides?: Record<string, unknown>) {
@@ -21,9 +22,11 @@ function baseParams(overrides?: Record<string, unknown>) {
 }
 
 describe("deliverReplies identity passthrough", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ deliverReplies } = await import("./replies.js"));
+  beforeAll(async () => {
+    ({ deliverReplies, resolveSlackThreadTs } = await import("./replies.js"));
+  });
+
+  beforeEach(() => {
     sendMock.mockReset();
   });
   it("passes identity to sendMessageSlack for text replies", async () => {
@@ -96,6 +99,115 @@ describe("deliverReplies identity passthrough", () => {
         blocks,
       }),
     );
+  });
+
+  it("renders interactive replies into Slack blocks during delivery", async () => {
+    sendMock.mockResolvedValue(undefined);
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "Choose",
+            interactive: {
+              blocks: [
+                { type: "text", text: "Choose" },
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Approve", value: "approve", style: "primary" }],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      blocks: [
+        expect.objectContaining({ type: "section" }),
+        expect.objectContaining({
+          type: "actions",
+          elements: [
+            expect.objectContaining({
+              action_id: "openclaw:reply_button:1:1",
+              style: "primary",
+              value: "approve",
+            }),
+          ],
+        }),
+      ],
+    });
+  });
+
+  it("rejects replies when merged Slack blocks exceed the platform limit", async () => {
+    sendMock.mockResolvedValue(undefined);
+
+    await expect(
+      deliverReplies(
+        baseParams({
+          replies: [
+            {
+              text: "Choose",
+              channelData: {
+                slack: {
+                  blocks: Array.from({ length: 50 }, () => ({ type: "divider" })),
+                },
+              },
+              interactive: {
+                blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+              },
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
+  });
+});
+
+describe("resolveSlackThreadTs fallback classification", () => {
+  const threadTs = "1234567890.123456";
+  const messageTs = "9999999999.999999";
+
+  it("keeps legacy thread-stickiness for genuine replies when callers omit isThreadReply", () => {
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "off",
+        incomingThreadTs: threadTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBe(threadTs);
+  });
+
+  it("respects replyToMode for auto-created top-level thread_ts when callers omit isThreadReply", () => {
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "off",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "first",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBe(messageTs);
+
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "batched",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: true,
+      }),
+    ).toBeUndefined();
   });
 });
 

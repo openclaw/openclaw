@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveNodeLaunchAgentLabel,
@@ -153,7 +153,10 @@ export async function maybeRepairGatewayDaemon(params: {
       const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
       if (!systemdAvailable) {
         const wsl = await isWSL();
-        note(renderSystemdUnavailableHints({ wsl }).join("\n"), "Gateway");
+        note(
+          renderSystemdUnavailableHints({ wsl, kind: "generic_unavailable" }).join("\n"),
+          "Gateway",
+        );
         return;
       }
     }

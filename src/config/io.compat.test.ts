@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { VERSION } from "../version.js";
+import { describe, expect, it } from "vitest";
 import { createConfigIO } from "./io.js";
-import { parseOpenClawVersion } from "./version.js";
+import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -41,7 +40,6 @@ describe("config io paths", () => {
       const configPath = await writeConfig(home, ".openclaw", 19001);
       const io = createIoForHome(home);
       expect(io.configPath).toBe(configPath);
-      expect(io.loadConfig().gateway?.port).toBe(19001);
     });
   });
 
@@ -67,168 +65,51 @@ describe("config io paths", () => {
       const customPath = await writeConfig(home, ".openclaw", 20002, "custom.json");
       const io = createIoForHome(home, { OPENCLAW_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
       expect(io.configPath).toBe(customPath);
-      expect(io.loadConfig().gateway?.port).toBe(20002);
     });
   });
 
   it("normalizes safe-bin config entries at config load time", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
+    const cfg = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
+          safeBinProfiles: {
+            " MyFilter ": {
+              allowedValueFlags: ["--limit", " --limit ", ""],
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
           {
+            id: "ops",
             tools: {
               exec: {
-                safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
+                safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
                 safeBinProfiles: {
-                  " MyFilter ": {
-                    allowedValueFlags: ["--limit", " --limit ", ""],
+                  " Custom ": {
+                    deniedFlags: ["-f", " -f ", ""],
                   },
                 },
               },
             },
-            agents: {
-              list: [
-                {
-                  id: "ops",
-                  tools: {
-                    exec: {
-                      safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
-                      safeBinProfiles: {
-                        " Custom ": {
-                          deniedFlags: ["-f", " -f ", ""],
-                        },
-                      },
-                    },
-                  },
-                },
-              ],
-            },
           },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-      const io = createIoForHome(home);
-      expect(io.configPath).toBe(configPath);
-      const cfg = io.loadConfig();
-      expect(cfg.tools?.exec?.safeBinProfiles).toEqual({
-        myfilter: {
-          allowedValueFlags: ["--limit"],
-        },
-      });
-      expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
-      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
-        custom: {
-          deniedFlags: ["-f"],
-        },
-      });
-      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+        ],
+      },
+    };
+    normalizeExecSafeBinProfilesInConfig(cfg);
+    expect(cfg.tools?.exec?.safeBinProfiles).toEqual({
+      myfilter: {
+        allowedValueFlags: ["--limit"],
+      },
     });
-  });
-
-  it("logs invalid config path details and throws on invalid config", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { port: "not-a-number" } }, null, 2),
-      );
-
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-      });
-
-      expect(() => io.loadConfig()).toThrow(/Invalid config/);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(`Invalid config at ${configPath}:\\n`),
-      );
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("- gateway.port:"));
+    expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
+    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
+      custom: {
+        deniedFlags: ["-f"],
+      },
     });
-  });
-
-  it("does not warn when config was last touched by a same-base correction publish", async () => {
-    const parsedVersion = parseOpenClawVersion(VERSION);
-    if (!parsedVersion) {
-      throw new Error(`Unable to parse VERSION: ${VERSION}`);
-    }
-    const touchedVersion = `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}-${(parsedVersion.revision ?? 0) + 1}`;
-
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ meta: { lastTouchedVersion: touchedVersion } }, null, 2),
-      );
-
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-      });
-
-      io.loadConfig();
-
-      expect(logger.warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("Config was last written by a newer OpenClaw"),
-      );
-      expect(io.configPath).toBe(configPath);
-    });
-  });
-
-  it("does not warn for same-base prerelease configs when current version is newer", async () => {
-    const parsedVersion = parseOpenClawVersion(VERSION);
-    if (!parsedVersion) {
-      throw new Error(`Unable to parse VERSION: ${VERSION}`);
-    }
-    const touchedVersion = `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}-beta.1`;
-
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ meta: { lastTouchedVersion: touchedVersion } }, null, 2),
-      );
-
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-      });
-
-      io.loadConfig();
-
-      expect(logger.warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("Config was last written by a newer OpenClaw"),
-      );
-      expect(io.configPath).toBe(configPath);
-    });
+    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
   });
 });

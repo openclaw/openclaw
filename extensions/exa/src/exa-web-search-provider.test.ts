@@ -10,6 +10,7 @@ describe("exa web search provider", () => {
     const applied = provider.applySelectionConfig({});
 
     expect(provider.id).toBe("exa");
+    expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
     expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
   });
@@ -117,6 +118,26 @@ describe("exa web search provider", () => {
 
     expect(result).toMatchObject({
       error: "conflicting_time_filters",
+    });
+  });
+
+  it("returns validation errors for invalid date input", async () => {
+    const provider = createExaWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { exa: { apiKey: "exa-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "latest gpu news",
+      date_after: "2026-02-31",
+    });
+
+    expect(result).toMatchObject({
+      error: "invalid_date",
     });
   });
 });

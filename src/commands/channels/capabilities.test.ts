@@ -10,7 +10,8 @@ const logs: string[] = [];
 const errors: string[] = [];
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 const mocks = vi.hoisted(() => ({
-  writeConfigFile: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
+  replaceConfigFile: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
 }));
 
@@ -26,11 +27,13 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    writeConfigFile: mocks.writeConfigFile,
+    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    replaceConfigFile: mocks.replaceConfigFile,
   };
 });
 
@@ -95,7 +98,8 @@ describe("channelsCapabilitiesCommand", () => {
   beforeEach(() => {
     resetOutput();
     vi.clearAllMocks();
-    mocks.writeConfigFile.mockResolvedValue(undefined);
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: {} },
       configChanged: false,
@@ -211,11 +215,12 @@ describe("channelsCapabilitiesCommand", () => {
         allowInstall: true,
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: expect.objectContaining({
         plugins: { entries: { whatsapp: { enabled: true } } },
       }),
-    );
+      baseHash: "config-1",
+    });
     expect(logs.join("\n")).toContain("Probe: linked");
   });
 });

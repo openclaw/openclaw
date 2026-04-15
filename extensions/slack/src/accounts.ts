@@ -6,6 +6,7 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
@@ -46,7 +47,9 @@ export function resolveSlackAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedSlackAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
@@ -77,7 +80,7 @@ export function resolveSlackAccount(params: {
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     botToken,
     appToken,
     userToken,
@@ -108,7 +111,7 @@ export function listEnabledSlackAccounts(cfg: OpenClawConfig): ResolvedSlackAcco
 export function resolveSlackReplyToMode(
   account: ResolvedSlackAccount,
   chatType?: string | null,
-): "off" | "first" | "all" {
+): "off" | "first" | "all" | "batched" {
   const normalized = normalizeChatType(chatType ?? undefined);
   if (normalized && account.replyToModeByChatType?.[normalized] !== undefined) {
     return account.replyToModeByChatType[normalized] ?? "off";

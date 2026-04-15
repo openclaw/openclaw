@@ -43,7 +43,16 @@ export function runVitestJsonReport({
   if (!(reportPath && fs.existsSync(resolvedReportPath))) {
     const run = spawnSync(
       "pnpm",
-      ["vitest", "run", "--config", config, "--reporter=json", "--outputFile", resolvedReportPath],
+      [
+        "exec",
+        "vitest",
+        "run",
+        "--config",
+        config,
+        "--reporter=json",
+        "--outputFile",
+        resolvedReportPath,
+      ],
       {
         stdio: "inherit",
         env: process.env,

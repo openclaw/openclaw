@@ -17,11 +17,11 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
 
 export const isNixMode = resolveIsNixMode();
 
-// Support historical (and occasionally misspelled) legacy state dirs.
-const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot"] as const;
+// Support the remaining legacy pre-rebrand state dir.
+const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
-const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json"] as const;
+const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -251,16 +251,45 @@ export function resolveOAuthPath(
   return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
+function parseGatewayPortEnvValue(raw: string | undefined): number | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    const parsed = Number.parseInt(trimmed, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  // Docker Compose publish strings can leak into host CLI env loading via repo `.env`,
+  // for example `127.0.0.1:18789` or `[::1]:18789`. Accept only explicit host:port forms.
+  const bracketedIpv6Match = trimmed.match(/^\[[^\]]+\]:(\d+)$/);
+  if (bracketedIpv6Match?.[1]) {
+    const parsed = Number.parseInt(bracketedIpv6Match[1], 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  const firstColon = trimmed.indexOf(":");
+  const lastColon = trimmed.lastIndexOf(":");
+  if (firstColon <= 0 || firstColon !== lastColon) {
+    return null;
+  }
+  const suffix = trimmed.slice(firstColon + 1);
+  if (!/^\d+$/.test(suffix)) {
+    return null;
+  }
+  const parsed = Number.parseInt(suffix, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function resolveGatewayPort(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
   const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim();
-  if (envRaw) {
-    const parsed = Number.parseInt(envRaw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
+  const envPort = parseGatewayPortEnvValue(envRaw);
+  if (envPort !== null) {
+    return envPort;
   }
   const configPort = cfg?.gateway?.port;
   if (typeof configPort === "number" && Number.isFinite(configPort)) {

@@ -1,5 +1,6 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/extensions/fetch-mock.js";
+import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import { resolveGraphChatId, uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 
 describe("graph upload helpers", () => {
@@ -33,6 +34,7 @@ describe("graph upload helpers", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer graph-token",
           "Content-Type": "application/octet-stream",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
         }),
       }),
     );
@@ -70,6 +72,7 @@ describe("graph upload helpers", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer graph-token",
           "Content-Type": "application/octet-stream",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
         }),
       }),
     );
@@ -137,7 +140,10 @@ describe("resolveGraphChatId", () => {
     expect(fetchFn).toHaveBeenCalledWith(
       expect.stringContaining("/me/chats"),
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer graph-token" }),
+        headers: expect.objectContaining({
+          Authorization: "Bearer graph-token",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
+        }),
       }),
     );
     const firstCall = fetchFn.mock.calls[0];
@@ -210,5 +216,43 @@ describe("resolveGraphChatId", () => {
     });
 
     expect(result).toBeNull();
+  });
+});
+
+describe("buildTeamsFileInfoCard", () => {
+  it("extracts a unique id from quoted etags and lowercases file extensions", () => {
+    expect(
+      buildTeamsFileInfoCard({
+        eTag: '"{ABC-123},42"',
+        name: "Quarterly.Report.PDF",
+        webDavUrl: "https://sharepoint.example.com/file.pdf",
+      }),
+    ).toEqual({
+      contentType: "application/vnd.microsoft.teams.card.file.info",
+      contentUrl: "https://sharepoint.example.com/file.pdf",
+      name: "Quarterly.Report.PDF",
+      content: {
+        uniqueId: "ABC-123",
+        fileType: "pdf",
+      },
+    });
+  });
+
+  it("keeps the raw etag when no version suffix exists and handles extensionless files", () => {
+    expect(
+      buildTeamsFileInfoCard({
+        eTag: "plain-etag",
+        name: "README",
+        webDavUrl: "https://sharepoint.example.com/readme",
+      }),
+    ).toEqual({
+      contentType: "application/vnd.microsoft.teams.card.file.info",
+      contentUrl: "https://sharepoint.example.com/readme",
+      name: "README",
+      content: {
+        uniqueId: "plain-etag",
+        fileType: "",
+      },
+    });
   });
 });

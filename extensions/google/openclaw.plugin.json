@@ -1,6 +1,9 @@
 {
   "id": "google",
+  "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli"],
+  "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
   },
@@ -40,6 +43,13 @@
       "label": "Gemini Search Model",
       "help": "Gemini model override for web search grounding."
     }
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["google"],
+    "imageGenerationProviders": ["google"],
+    "musicGenerationProviders": ["google"],
+    "videoGenerationProviders": ["google"],
+    "webSearchProviders": ["gemini"]
   },
   "configSchema": {
     "type": "object",

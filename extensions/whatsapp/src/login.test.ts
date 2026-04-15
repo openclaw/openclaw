@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderQrPngBase64 } from "./qr-image.js";
 
 vi.mock("./session.js", async () => {
@@ -26,12 +26,14 @@ let loginWeb: typeof import("./login.js").loginWeb;
 let createWaSocket: typeof import("./session.js").createWaSocket;
 
 describe("web login", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.useFakeTimers();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ loginWeb } = await import("./login.js"));
     ({ createWaSocket } = await import("./session.js"));
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -65,7 +67,7 @@ describe("renderQrPngBase64", () => {
   });
 
   it("avoids dynamic require of qrcode-terminal vendor modules", async () => {
-    const sourcePath = resolve(process.cwd(), "extensions/whatsapp/src/qr-image.ts");
+    const sourcePath = resolve(process.cwd(), "src/media/qr-image.ts");
     const source = await readFile(sourcePath, "utf-8");
     expect(source).not.toContain("createRequire(");
     expect(source).not.toContain('require("qrcode-terminal/vendor/QRCode")');

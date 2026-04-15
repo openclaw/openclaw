@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type {
   CreateSandboxBackendParams,
   OpenClawConfig,
-  RemoteShellSandboxHandle,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendFactory,
-  SandboxBackendHandle,
   SandboxBackendManager,
   SshSandboxSession,
 } from "openclaw/plugin-sdk/sandbox";
@@ -17,7 +14,10 @@ import {
   disposeSshSandboxSession,
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
+  sanitizeEnvVars,
 } from "openclaw/plugin-sdk/sandbox";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { OpenShellSandboxBackend } from "./backend.types.js";
 import {
   buildExecRemoteCommand,
   buildRemoteCommand,
@@ -27,7 +27,11 @@ import {
 } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
-import { replaceDirectoryContents } from "./mirror.js";
+import {
+  DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+  replaceDirectoryContents,
+  stageDirectoryContents,
+} from "./mirror.js";
 
 type CreateOpenShellSandboxBackendFactoryParams = {
   pluginConfig: ResolvedOpenShellPluginConfig;
@@ -37,11 +41,11 @@ type PendingExec = {
   sshSession: SshSandboxSession;
 };
 
-export type OpenShellSandboxBackend = SandboxBackendHandle &
-  RemoteShellSandboxHandle & {
-    mode: "mirror" | "remote";
-    syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void>;
-  };
+export function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
+  return sanitizeEnvVars(process.env).allowed;
+}
+
+export type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,
@@ -119,7 +123,7 @@ async function createOpenShellSandboxBackend(params: {
       const pending = await impl.prepareExec({ command, workdir, env, usePty });
       return {
         argv: pending.argv,
-        env: process.env,
+        env: buildOpenShellSshExecEnv(),
         stdinMode: "pipe-open",
         finalizeToken: pending.token,
       };
@@ -160,7 +164,6 @@ class OpenShellSandboxBackendImpl {
   ) {}
 
   asHandle(): OpenShellSandboxBackend {
-    const self = this;
     return {
       id: "openshell",
       runtimeId: this.params.execContext.sandboxName,
@@ -173,31 +176,31 @@ class OpenShellSandboxBackendImpl {
       remoteWorkspaceDir: this.params.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
-        const pending = await self.prepareExec({ command, workdir, env, usePty });
+        const pending = await this.prepareExec({ command, workdir, env, usePty });
         return {
           argv: pending.argv,
-          env: process.env,
+          env: buildOpenShellSshExecEnv(),
           stdinMode: "pipe-open",
           finalizeToken: pending.token,
         };
       },
       finalizeExec: async ({ token }) => {
-        await self.finalizeExec(token as PendingExec | undefined);
+        await this.finalizeExec(token as PendingExec | undefined);
       },
-      runShellCommand: async (command) => await self.runRemoteShellScript(command),
+      runShellCommand: async (command) => await this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
           ? createRemoteShellSandboxFsBridge({
               sandbox,
-              runtime: self.asHandle(),
+              runtime: this.asHandle(),
             })
           : createOpenShellFsBridge({
               sandbox,
-              backend: self.asHandle(),
+              backend: this.asHandle(),
             }),
-      runRemoteShellScript: async (command) => await self.runRemoteShellScript(command),
+      runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
       syncLocalPathToRemote: async (localPath, remotePath) =>
-        await self.syncLocalPathToRemote(localPath, remotePath),
+        await this.syncLocalPathToRemote(localPath, remotePath),
     };
   }
 
@@ -286,6 +289,14 @@ class OpenShellSandboxBackendImpl {
     await this.maybeSeedRemoteWorkspace();
     const stats = await fs.lstat(localPath).catch(() => null);
     if (!stats) {
+      await this.runRemoteShellScript({
+        script: 'rm -rf -- "$1"',
+        args: [remotePath],
+        allowFailure: true,
+      });
+      return;
+    }
+    if (stats.isSymbolicLink()) {
       await this.runRemoteShellScript({
         script: 'rm -rf -- "$1"',
         args: [remotePath],
@@ -421,6 +432,9 @@ class OpenShellSandboxBackendImpl {
       await replaceDirectoryContents({
         sourceDir: tmpDir,
         targetDir: this.params.createParams.workspaceDir,
+        // Never sync trusted host hook directories or repository metadata from
+        // the remote sandbox.
+        excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
       });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -428,20 +442,33 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async uploadPathToRemote(localPath: string, remotePath: string): Promise<void> {
-    const result = await runOpenShellCli({
-      context: this.params.execContext,
-      args: [
-        "sandbox",
-        "upload",
-        "--no-git-ignore",
-        this.params.execContext.sandboxName,
-        localPath,
-        remotePath,
-      ],
-      cwd: this.params.createParams.workspaceDir,
-    });
-    if (result.code !== 0) {
-      throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+    const tmpDir = await fs.mkdtemp(
+      path.join(resolveOpenShellTmpRoot(), "openclaw-openshell-upload-"),
+    );
+    try {
+      // Stage a symlink-free snapshot so upload never dereferences host paths
+      // outside the mirrored workspace tree.
+      await stageDirectoryContents({
+        sourceDir: localPath,
+        targetDir: tmpDir,
+      });
+      const result = await runOpenShellCli({
+        context: this.params.execContext,
+        args: [
+          "sandbox",
+          "upload",
+          "--no-git-ignore",
+          this.params.execContext.sandboxName,
+          tmpDir,
+          remotePath,
+        ],
+        cwd: this.params.createParams.workspaceDir,
+      });
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+      }
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   }
 
@@ -472,8 +499,7 @@ function resolveOpenShellPluginConfigFromConfig(
 
 function buildOpenShellSandboxName(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
-  const safe = trimmed
-    .toLowerCase()
+  const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);
@@ -485,5 +511,5 @@ function buildOpenShellSandboxName(scopeKey: string): string {
 }
 
 function resolveOpenShellTmpRoot(): string {
-  return path.resolve(resolvePreferredOpenClawTmpDir() ?? os.tmpdir());
+  return path.resolve(resolvePreferredOpenClawTmpDir());
 }

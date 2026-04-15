@@ -1,19 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
+const userInfoMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    username: MOCK_USERNAME,
+    uid: -1,
+    gid: -1,
+    shell: "C:\\Windows\\System32\\cmd.exe",
+    homedir: "C:\\Users\\MockUser",
+  })),
+);
 
-vi.mock("node:os", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:os")>();
-  const base = ("default" in actual ? actual.default : actual) as Record<string, unknown>;
-  return {
-    ...actual,
-    default: {
-      ...base,
-      userInfo: () => ({ username: MOCK_USERNAME }),
-    },
-    userInfo: () => ({ username: MOCK_USERNAME }),
-  };
+vi.mock("node:os", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:os")>("node:os"),
+    { userInfo: userInfoMock as unknown as typeof import("node:os").userInfo },
+    { mirrorToDefault: true },
+  );
 });
 
 let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;
@@ -24,8 +29,7 @@ let parseIcaclsOutput: typeof import("./windows-acl.js").parseIcaclsOutput;
 let resolveWindowsUserPrincipal: typeof import("./windows-acl.js").resolveWindowsUserPrincipal;
 let summarizeWindowsAcl: typeof import("./windows-acl.js").summarizeWindowsAcl;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({
     createIcaclsResetCommand,
     formatIcaclsResetCommand,
@@ -35,6 +39,10 @@ beforeEach(async () => {
     resolveWindowsUserPrincipal,
     summarizeWindowsAcl,
   } = await import("./windows-acl.js"));
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function aclEntry(params: {
@@ -58,6 +66,16 @@ function expectSinglePrincipal(entries: WindowsAclEntry[], principal: string): v
   expect(entries[0].principal).toBe(principal);
 }
 
+function expectAccessRights(
+  rights: string,
+  expected: { canWrite: boolean; canRead: boolean },
+): void {
+  const output = `C:\\test\\file.txt BUILTIN\\Users:${rights}`;
+  const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
+  expect(entries[0].canWrite, rights).toBe(expected.canWrite);
+  expect(entries[0].canRead, rights).toBe(expected.canRead);
+}
+
 function expectTrustedOnly(
   entries: WindowsAclEntry[],
   options?: { env?: NodeJS.ProcessEnv; expectedTrusted?: number },
@@ -74,6 +92,17 @@ function expectInspectSuccess(
 ): void {
   expect(result.ok).toBe(true);
   expect(result.entries).toHaveLength(expectedEntries);
+}
+
+function expectSummaryCounts(
+  entries: readonly WindowsAclEntry[],
+  expected: { trusted?: number; untrustedWorld?: number; untrustedGroup?: number },
+  env?: NodeJS.ProcessEnv,
+): void {
+  const summary = summarizeWindowsAcl([...entries], env);
+  expect(summary.trusted).toHaveLength(expected.trusted ?? 0);
+  expect(summary.untrustedWorld).toHaveLength(expected.untrustedWorld ?? 0);
+  expect(summary.untrustedGroup).toHaveLength(expected.untrustedGroup ?? 0);
 }
 
 describe("windows-acl", () => {
@@ -178,27 +207,20 @@ Successfully processed 1 files`;
       expect(entries).toHaveLength(1);
     });
 
-    it("detects write permissions correctly", () => {
+    it.each([
+      { rights: "(F)", canWrite: true, canRead: true },
+      { rights: "(M)", canWrite: true, canRead: true },
+      { rights: "(W)", canWrite: true, canRead: false },
+      { rights: "(D)", canWrite: true, canRead: false },
+      { rights: "(R)", canWrite: false, canRead: true },
+      { rights: "(RX)", canWrite: false, canRead: true },
+    ] as const)("detects write permissions correctly for %s", ({ rights, canWrite, canRead }) => {
       // F = Full control (read + write)
       // M = Modify (read + write)
       // W = Write
       // D = Delete (considered write)
       // R = Read only
-      const testCases = [
-        { rights: "(F)", canWrite: true, canRead: true },
-        { rights: "(M)", canWrite: true, canRead: true },
-        { rights: "(W)", canWrite: true, canRead: false },
-        { rights: "(D)", canWrite: true, canRead: false },
-        { rights: "(R)", canWrite: false, canRead: true },
-        { rights: "(RX)", canWrite: false, canRead: true },
-      ];
-
-      for (const tc of testCases) {
-        const output = `C:\\test\\file.txt BUILTIN\\Users:${tc.rights}`;
-        const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
-        expect(entries[0].canWrite).toBe(tc.canWrite);
-        expect(entries[0].canRead).toBe(tc.canRead);
-      }
+      expectAccessRights(rights, { canWrite, canRead });
     });
   });
 
@@ -259,121 +281,108 @@ Successfully processed 1 files`;
   });
 
   describe("summarizeWindowsAcl — SID-based classification", () => {
-    it("classifies SYSTEM SID (S-1-5-18) as trusted", () => {
-      expectTrustedOnly([aclEntry({ principal: "S-1-5-18" })]);
-    });
-
-    it("classifies *S-1-5-18 (icacls /sid prefix form of SYSTEM) as trusted (refs #35834)", () => {
-      // icacls /sid output prefixes SIDs with *, e.g. *S-1-5-18 instead of
-      // S-1-5-18.  Without this fix the asterisk caused SID_RE to not match
-      // and the SYSTEM entry was misclassified as "group" (untrusted).
-      expectTrustedOnly([aclEntry({ principal: "*S-1-5-18" })]);
-    });
-
-    it("classifies *S-1-5-32-544 (icacls /sid Administrators) as trusted", () => {
-      const entries: WindowsAclEntry[] = [aclEntry({ principal: "*S-1-5-32-544" })];
-      const summary = summarizeWindowsAcl(entries);
-      expect(summary.trusted).toHaveLength(1);
-      expect(summary.untrustedGroup).toHaveLength(0);
-    });
-
-    it("classifies BUILTIN\\Administrators SID (S-1-5-32-544) as trusted", () => {
-      const entries: WindowsAclEntry[] = [aclEntry({ principal: "S-1-5-32-544" })];
-      const summary = summarizeWindowsAcl(entries);
-      expect(summary.trusted).toHaveLength(1);
-      expect(summary.untrustedGroup).toHaveLength(0);
-    });
-
-    it("classifies caller SID from USERSID env var as trusted", () => {
-      const callerSid = "S-1-5-21-1824257776-4070701511-781240313-1001";
-      expectTrustedOnly([aclEntry({ principal: callerSid })], {
-        env: { USERSID: callerSid },
-      });
-    });
-
-    it("matches SIDs case-insensitively and trims USERSID", () => {
-      expectTrustedOnly(
-        [aclEntry({ principal: "s-1-5-21-1824257776-4070701511-781240313-1001" })],
-        { env: { USERSID: "  S-1-5-21-1824257776-4070701511-781240313-1001  " } },
-      );
-    });
-
-    it("does not trust *-prefixed Everyone via USERSID", () => {
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: "*S-1-1-0",
-          rights: ["R"],
-          rawRights: "(R)",
-          canRead: true,
-          canWrite: false,
-        },
-      ];
-      const summary = summarizeWindowsAcl(entries, { USERSID: "*S-1-1-0" });
-      expect(summary.untrustedWorld).toHaveLength(1);
-      expect(summary.trusted).toHaveLength(0);
-    });
-
-    it("classifies unknown SID as group (not world)", () => {
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: "S-1-5-21-9999-9999-9999-500",
-          rights: ["R"],
-          rawRights: "(R)",
-          canRead: true,
-          canWrite: false,
-        },
-      ];
-      const summary = summarizeWindowsAcl(entries);
-      expect(summary.untrustedGroup).toHaveLength(1);
-      expect(summary.untrustedWorld).toHaveLength(0);
-      expect(summary.trusted).toHaveLength(0);
-    });
-
-    it("classifies Everyone SID (S-1-1-0) as world, not group", () => {
-      // When icacls is run with /sid, "Everyone" becomes *S-1-1-0.
-      // It must be classified as "world" to preserve security-audit severity.
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: "*S-1-1-0",
-          rights: ["R"],
-          rawRights: "(R)",
-          canRead: true,
-          canWrite: false,
-        },
-      ];
-      const summary = summarizeWindowsAcl(entries);
-      expect(summary.untrustedWorld).toHaveLength(1);
-      expect(summary.untrustedGroup).toHaveLength(0);
-    });
-
-    it("classifies Authenticated Users SID (S-1-5-11) as world, not group", () => {
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: "*S-1-5-11",
-          rights: ["R"],
-          rawRights: "(R)",
-          canRead: true,
-          canWrite: false,
-        },
-      ];
-      const summary = summarizeWindowsAcl(entries);
-      expect(summary.untrustedWorld).toHaveLength(1);
-      expect(summary.untrustedGroup).toHaveLength(0);
-    });
-
-    it("classifies BUILTIN\\Users SID (S-1-5-32-545) as world, not group", () => {
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: "*S-1-5-32-545",
-          rights: ["R"],
-          rawRights: "(R)",
-          canRead: true,
-          canWrite: false,
-        },
-      ];
-      const summary = summarizeWindowsAcl(entries);
-      expect(summary.untrustedWorld).toHaveLength(1);
-      expect(summary.untrustedGroup).toHaveLength(0);
+    it.each([
+      {
+        name: "SYSTEM SID (S-1-5-18) is trusted",
+        entries: [aclEntry({ principal: "S-1-5-18" })],
+        expected: { trusted: 1 },
+      },
+      {
+        name: "*S-1-5-18 (icacls /sid SYSTEM) is trusted",
+        // icacls /sid output prefixes SIDs with *.
+        entries: [aclEntry({ principal: "*S-1-5-18" })],
+        expected: { trusted: 1 },
+      },
+      {
+        name: "*S-1-5-32-544 (icacls /sid Administrators) is trusted",
+        entries: [aclEntry({ principal: "*S-1-5-32-544" })],
+        expected: { trusted: 1 },
+      },
+      {
+        name: "BUILTIN\\\\Administrators SID (S-1-5-32-544) is trusted",
+        entries: [aclEntry({ principal: "S-1-5-32-544" })],
+        expected: { trusted: 1 },
+      },
+      {
+        name: "caller SID from USERSID env var is trusted",
+        entries: [aclEntry({ principal: "S-1-5-21-1824257776-4070701511-781240313-1001" })],
+        env: { USERSID: "S-1-5-21-1824257776-4070701511-781240313-1001" },
+        expected: { trusted: 1 },
+      },
+      {
+        name: "SIDs match case-insensitively and trim USERSID",
+        entries: [aclEntry({ principal: "s-1-5-21-1824257776-4070701511-781240313-1001" })],
+        env: { USERSID: "  S-1-5-21-1824257776-4070701511-781240313-1001  " },
+        expected: { trusted: 1 },
+      },
+      {
+        name: "does not trust *-prefixed Everyone via USERSID",
+        entries: [
+          aclEntry({
+            principal: "*S-1-1-0",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        env: { USERSID: "*S-1-1-0" },
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "unknown SID is group, not world",
+        entries: [
+          aclEntry({
+            principal: "S-1-5-21-9999-9999-9999-500",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedGroup: 1 },
+      },
+      {
+        name: "Everyone SID (S-1-1-0) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-1-0",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Authenticated Users SID (S-1-5-11) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-11",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "BUILTIN\\\\Users SID (S-1-5-32-545) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-32-545",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+    ] as const)("$name", ({ entries, env, expected }) => {
+      expectSummaryCounts(entries, expected, env);
     });
 
     it("full scenario: SYSTEM SID + owner SID only → no findings", () => {

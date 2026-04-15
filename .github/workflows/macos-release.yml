@@ -20,7 +20,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.23.0"
+  PNPM_VERSION: "10.32.1"
 
 jobs:
   validate_macos_release_request:
@@ -58,6 +58,12 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
+      - name: Build
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Validate release tag and package metadata
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -76,11 +82,12 @@ jobs:
           {
             echo "## Public macOS validation only"
             echo
-            echo "This workflow no longer builds, signs, notarizes, or uploads macOS assets."
+            echo "This workflow validates the public release handoff and still builds JS artifacts needed for release checks."
+            echo "It does not sign, notarize, or upload macOS assets."
             echo
             echo "Next step:"
-            echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\`."
-            echo "- Use \`preflight_only=true\` there for the full private mac preflight."
-            echo "- For the real publish path, the private run uploads the packaged \`.zip\`, \`.dmg\`, and \`.dSYM.zip\` files to the existing GitHub release in \`openclaw/openclaw\` automatically."
+            echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml\` with tag \`${RELEASE_TAG}\` and wait for the private mac validation lane to pass."
+            echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\` and \`preflight_only=true\` for the full private mac preflight."
+            echo "- For the real publish path, run the same private mac publish workflow from \`main\` with the successful private preflight \`preflight_run_id\` so it promotes the prepared artifacts instead of rebuilding them."
             echo "- For stable releases, also download \`macos-appcast-${RELEASE_TAG}\` from the successful private run and commit \`appcast.xml\` back to \`main\` in \`openclaw/openclaw\`."
           } >> "$GITHUB_STEP_SUMMARY"

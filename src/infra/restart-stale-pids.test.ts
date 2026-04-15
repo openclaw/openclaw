@@ -1,19 +1,42 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// This entire file tests lsof-based Unix port polling. The feature is a deliberate
-// no-op on Windows (findGatewayPidsOnPortSync returns [] immediately). Running these
-// tests on a Windows CI runner would require lsof which does not exist there, so we
-// skip the suite entirely and rely on the Linux/macOS runners for coverage.
+// This file primarily tests lsof-based Unix port polling. On Windows,
+// findGatewayPidsOnPortSync delegates to findVerifiedGatewayListenerPidsOnPortSync
+// (PowerShell/netstat discovery in gateway-processes.ts) instead of returning [].
+// Running lsof-dependent tests on a Windows CI runner is not possible, so the suite
+// is skipped on Windows; cross-platform tests mock process.platform to win32.
 const isWindows = process.platform === "win32";
 
 const mockSpawnSync = vi.hoisted(() => vi.fn());
 const mockResolveGatewayPort = vi.hoisted(() => vi.fn(() => 18789));
 const mockRestartWarn = vi.hoisted(() => vi.fn());
+const mockReadWindowsListeningPids = vi.hoisted(() =>
+  vi.fn((_port: number, _timeoutMs?: number): number[] => []),
+);
+const mockReadWindowsListeningPidsResult = vi.hoisted(() =>
+  vi.fn<(_port: number, _timeoutMs?: number) => MockWindowsListeningPidsResult>(
+    (_port: number, _timeoutMs?: number) => ({ ok: true, pids: [] }),
+  ),
+);
+const mockReadWindowsProcessArgs = vi.hoisted(() =>
+  vi.fn((_pid: number, _timeoutMs?: number): string[] | null => null),
+);
+const mockReadWindowsProcessArgsResult = vi.hoisted(() =>
+  vi.fn<(_pid: number, _timeoutMs?: number) => MockWindowsProcessArgsResult>(
+    (_pid: number, _timeoutMs?: number) => ({ ok: true, args: null }),
+  ),
+);
 
-vi.mock("node:child_process", () => ({
-  spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
-  execFileSync: vi.fn(),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
+      execFileSync: vi.fn(),
+    },
+  );
+});
 
 vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: () => mockResolveGatewayPort(),
@@ -31,6 +54,19 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
+vi.mock("./gateway-processes.js", () => ({}));
+
+vi.mock("./windows-port-pids.js", () => ({
+  readWindowsListeningPidsOnPortSync: (port: number, timeoutMs?: number) =>
+    mockReadWindowsListeningPids(port, timeoutMs),
+  readWindowsListeningPidsResultSync: (port: number, timeoutMs?: number) =>
+    mockReadWindowsListeningPidsResult(port, timeoutMs),
+  readWindowsProcessArgsSync: (pid: number, timeoutMs?: number) =>
+    mockReadWindowsProcessArgs(pid, timeoutMs),
+  readWindowsProcessArgsResultSync: (pid: number, timeoutMs?: number) =>
+    mockReadWindowsProcessArgsResult(pid, timeoutMs),
+}));
+
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 let __testing: typeof import("./restart-stale-pids.js").__testing;
 let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
@@ -46,6 +82,14 @@ type MockLsofResult = {
   stdout: string;
   stderr: string;
 };
+
+type MockWindowsListeningPidsResult =
+  | { ok: true; pids: number[] }
+  | { ok: false; permanent: boolean };
+
+type MockWindowsProcessArgsResult =
+  | { ok: true; args: string[] | null }
+  | { ok: false; permanent: boolean };
 
 function createLsofResult(overrides: Partial<MockLsofResult> = {}): MockLsofResult {
   return {
@@ -86,17 +130,24 @@ function installInitialBusyPoll(
 }
 
 describe.skipIf(isWindows)("restart-stale-pids", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
       await import("./restart-stale-pids.js"));
+  });
+
+  beforeEach(() => {
     mockSpawnSync.mockReset();
     mockResolveGatewayPort.mockReset();
     mockRestartWarn.mockReset();
+    mockReadWindowsListeningPids.mockReset();
+    mockReadWindowsListeningPidsResult.mockReset();
+    mockReadWindowsProcessArgs.mockReset();
+    mockReadWindowsProcessArgsResult.mockReset();
     mockResolveGatewayPort.mockReturnValue(18789);
+    mockReadWindowsListeningPids.mockReturnValue([]);
+    mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [] });
+    mockReadWindowsProcessArgs.mockReturnValue(null);
+    mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: null });
     __testing.setSleepSyncOverride(() => {});
   });
 
@@ -184,16 +235,33 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(result).toEqual([stalePid]); // deduped — not [pid, pid]
     });
 
-    it("returns [] and skips lsof on win32", () => {
-      // The entire describe block is skipped on Windows (isWindows guard at top),
-      // so this test only runs on Linux/macOS. It mocks platform to win32 for the
-      // single assertion without needing to restore — the suite-level skipIf means
-      // this will never run on an actual Windows runner where the mock could leak.
+    it("delegates to Windows port helpers on win32 and skips lsof", () => {
       const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
+        mockReadWindowsListeningPids.mockReturnValue([]);
         expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+        expect(mockReadWindowsListeningPids).toHaveBeenCalledWith(18789, undefined);
+        // lsof must NOT be invoked — Windows uses PowerShell/netstat
         expect(mockSpawnSync).not.toHaveBeenCalled();
+      } finally {
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("returns verified gateway pids from Windows helpers on win32", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const stalePid = process.pid + 900;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        mockReadWindowsListeningPids.mockReturnValue([stalePid]);
+        // Simulate a verified gateway process (must pass real isGatewayArgv)
+        mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
+        expect(mockReadWindowsListeningPids).toHaveBeenCalledWith(18789, undefined);
+        expect(mockReadWindowsProcessArgs).toHaveBeenCalledWith(stalePid, undefined);
       } finally {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
@@ -591,6 +659,220 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
       expect(cleanStaleGatewayProcessesSync()).toEqual([]);
       expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("treats failed Windows port probes as inconclusive, not free", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const stalePid = process.pid + 910;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        mockReadWindowsListeningPids.mockReturnValue([stalePid]);
+        mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        mockReadWindowsProcessArgsResult.mockReturnValue({
+          ok: true,
+          args: ["openclaw", "gateway"],
+        });
+        mockSpawnSync.mockReturnValue({
+          error: null,
+          status: 0,
+          stdout: "",
+          stderr: "",
+        });
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
+        mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
+          if (timeoutMs === 400) {
+            fakeNow += 2001;
+            return { ok: false, permanent: false };
+          }
+          return { ok: true, pids: [stalePid] };
+        });
+        let aliveChecks = 0;
+        const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+          if (signal === 0 && pid === stalePid) {
+            aliveChecks += 1;
+            if (aliveChecks < 3) {
+              return true;
+            }
+            throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+          }
+          return true;
+        });
+
+        expect(cleanStaleGatewayProcessesSync()).toEqual([stalePid]);
+        expect(mockReadWindowsListeningPidsResult).toHaveBeenCalledWith(18789, 400);
+        expect(mockRestartWarn).toHaveBeenCalledWith(
+          expect.stringContaining("port 18789 still in use after 2000ms"),
+        );
+        expect(killSpy).toHaveBeenCalledWith(stalePid, 0);
+      } finally {
+        __testing.setDateNowOverride(null);
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("waits for port release when the initial Windows stale-pid probe is inconclusive", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
+        mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
+          if (timeoutMs === 400) {
+            fakeNow += 2001;
+          }
+          return { ok: false, permanent: false };
+        });
+        const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(mockReadWindowsListeningPidsResult).toHaveBeenCalledWith(18789, 400);
+        expect(mockRestartWarn).toHaveBeenCalledWith(
+          expect.stringContaining("port 18789 still in use after 2000ms"),
+        );
+        expect(killSpy).not.toHaveBeenCalled();
+      } finally {
+        __testing.setDateNowOverride(null);
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("waits for port release when Windows listener argv inspection is inconclusive", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const stalePid = process.pid + 913;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
+        mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
+          if (timeoutMs === 400) {
+            fakeNow += 2001;
+          }
+          return { ok: true, pids: [stalePid] };
+        });
+        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: false, permanent: false });
+        const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(mockReadWindowsProcessArgsResult).toHaveBeenCalledWith(stalePid, undefined);
+        expect(mockRestartWarn).toHaveBeenCalledWith(
+          expect.stringContaining("port 18789 still in use after 2000ms"),
+        );
+        expect(killSpy).not.toHaveBeenCalled();
+      } finally {
+        __testing.setDateNowOverride(null);
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("does not report Windows pids as killed when taskkill fails", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const stalePid = process.pid + 911;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
+        mockReadWindowsListeningPids.mockReturnValue([stalePid]);
+        mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        mockReadWindowsProcessArgsResult.mockReturnValue({
+          ok: true,
+          args: ["openclaw", "gateway"],
+        });
+        mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
+          if (timeoutMs === 400) {
+            fakeNow += 2001;
+          }
+          return { ok: true, pids: [stalePid] };
+        });
+        mockSpawnSync.mockReturnValue({
+          error: null,
+          status: 1,
+          stdout: "",
+          stderr: "access denied",
+        });
+        vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+          if (signal === 0 && pid === stalePid) {
+            return true;
+          }
+          return true;
+        });
+
+        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(mockSpawnSync).toHaveBeenCalledWith(
+          expect.stringContaining("taskkill.exe"),
+          ["/T", "/PID", String(stalePid)],
+          expect.objectContaining({ timeout: 5000 }),
+        );
+      } finally {
+        __testing.setDateNowOverride(null);
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("treats Windows EPERM liveness checks as alive and still forces taskkill", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const stalePid = process.pid + 912;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
+        mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
+        mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        mockReadWindowsProcessArgsResult.mockReturnValue({
+          ok: true,
+          args: ["openclaw", "gateway"],
+        });
+        mockSpawnSync
+          .mockReturnValueOnce({
+            error: null,
+            status: 1,
+            stdout: "",
+            stderr: "access denied",
+          })
+          .mockReturnValueOnce({
+            error: null,
+            status: 1,
+            stdout: "",
+            stderr: "still denied",
+          });
+        vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+          if (signal === 0 && pid === stalePid) {
+            throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          }
+          return true;
+        });
+        __testing.setSleepSyncOverride((ms) => {
+          fakeNow += ms;
+        });
+
+        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(mockSpawnSync).toHaveBeenNthCalledWith(
+          1,
+          expect.stringContaining("taskkill.exe"),
+          ["/T", "/PID", String(stalePid)],
+          expect.objectContaining({ timeout: 5000 }),
+        );
+        expect(mockSpawnSync).toHaveBeenNthCalledWith(
+          2,
+          expect.stringContaining("taskkill.exe"),
+          ["/F", "/T", "/PID", String(stalePid)],
+          expect.objectContaining({ timeout: 5000 }),
+        );
+      } finally {
+        __testing.setSleepSyncOverride(null);
+        __testing.setDateNowOverride(null);
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
     });
   });
 

@@ -104,12 +104,24 @@ export async function runTavilySearch(
     query: params.query,
     max_results: count,
   };
-  if (params.searchDepth) body.search_depth = params.searchDepth;
-  if (params.topic) body.topic = params.topic;
-  if (params.includeAnswer) body.include_answer = true;
-  if (params.timeRange) body.time_range = params.timeRange;
-  if (params.includeDomains?.length) body.include_domains = params.includeDomains;
-  if (params.excludeDomains?.length) body.exclude_domains = params.excludeDomains;
+  if (params.searchDepth) {
+    body.search_depth = params.searchDepth;
+  }
+  if (params.topic) {
+    body.topic = params.topic;
+  }
+  if (params.includeAnswer) {
+    body.include_answer = true;
+  }
+  if (params.timeRange) {
+    body.time_range = params.timeRange;
+  }
+  if (params.includeDomains?.length) {
+    body.include_domains = params.includeDomains;
+  }
+  if (params.excludeDomains?.length) {
+    body.exclude_domains = params.excludeDomains;
+  }
 
   const start = Date.now();
   const payload = await postTrustedWebToolsJson(
@@ -119,6 +131,7 @@ export async function runTavilySearch(
       apiKey,
       body,
       errorLabel: "Tavily Search",
+      extraHeaders: { "X-Client-Source": "openclaw" },
     },
     async (response) => (await response.json()) as Record<string, unknown>,
   );
@@ -187,10 +200,18 @@ export async function runTavilyExtract(
   }
 
   const body: Record<string, unknown> = { urls: params.urls };
-  if (params.query) body.query = params.query;
-  if (params.extractDepth) body.extract_depth = params.extractDepth;
-  if (params.chunksPerSource) body.chunks_per_source = params.chunksPerSource;
-  if (params.includeImages) body.include_images = true;
+  if (params.query) {
+    body.query = params.query;
+  }
+  if (params.extractDepth) {
+    body.extract_depth = params.extractDepth;
+  }
+  if (params.chunksPerSource) {
+    body.chunks_per_source = params.chunksPerSource;
+  }
+  if (params.includeImages) {
+    body.include_images = true;
+  }
 
   const start = Date.now();
   const payload = await postTrustedWebToolsJson(
@@ -200,6 +221,7 @@ export async function runTavilyExtract(
       apiKey,
       body,
       errorLabel: "Tavily Extract",
+      extraHeaders: { "X-Client-Source": "openclaw" },
     },
     async (response) => (await response.json()) as Record<string, unknown>,
   );
@@ -217,7 +239,7 @@ export async function runTavilyExtract(
     ...(Array.isArray(r.images)
       ? {
           images: (r.images as string[]).map((img) =>
-            wrapExternalContent(String(img), { source: "web_fetch", includeWarning: false }),
+            wrapExternalContent(img, { source: "web_fetch", includeWarning: false }),
           ),
         }
       : {}),

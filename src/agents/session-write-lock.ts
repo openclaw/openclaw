@@ -49,6 +49,7 @@ const MAX_LOCK_HOLD_MS = 2_147_000_000;
 
 type CleanupState = {
   registered: boolean;
+  exitHandler?: () => void;
   cleanupHandlers: Map<CleanupSignal, () => void>;
 };
 
@@ -72,6 +73,7 @@ function resolveCleanupState(): CleanupState {
   if (!proc[CLEANUP_STATE_KEY]) {
     proc[CLEANUP_STATE_KEY] = {
       registered: false,
+      exitHandler: undefined,
       cleanupHandlers: new Map<CleanupSignal, () => void>(),
     };
   }
@@ -198,9 +200,8 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       continue;
     }
 
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`,
+    process.stderr.write(
+      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}\n`,
     );
 
     const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
@@ -255,12 +256,13 @@ function handleTerminationSignal(signal: CleanupSignal): void {
 
 function registerCleanupHandlers(): void {
   const cleanupState = resolveCleanupState();
-  if (!cleanupState.registered) {
-    cleanupState.registered = true;
+  cleanupState.registered = true;
+  if (!cleanupState.exitHandler) {
     // Cleanup on normal exit and process.exit() calls
-    process.on("exit", () => {
+    cleanupState.exitHandler = () => {
       releaseAllLocksSync();
-    });
+    };
+    process.on("exit", cleanupState.exitHandler);
   }
 
   ensureWatchdogStarted(DEFAULT_WATCHDOG_INTERVAL_MS);
@@ -282,6 +284,10 @@ function registerCleanupHandlers(): void {
 
 function unregisterCleanupHandlers(): void {
   const cleanupState = resolveCleanupState();
+  if (cleanupState.exitHandler) {
+    process.off("exit", cleanupState.exitHandler);
+    cleanupState.exitHandler = undefined;
+  }
   for (const [signal, handler] of cleanupState.cleanupHandlers) {
     process.off(signal, handler);
   }

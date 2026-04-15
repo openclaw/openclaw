@@ -1,7 +1,7 @@
 import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
-import type { ActiveWebSendOptions } from "../active-listener.js";
+import { toWhatsappJid } from "../text-runtime.js";
+import type { ActiveWebSendOptions } from "./types.js";
 
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
@@ -13,7 +13,7 @@ function recordWhatsAppOutbound(accountId: string) {
 
 function resolveOutboundMessageId(result: unknown): string {
   return typeof result === "object" && result && "key" in result
-    ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
+    ? ((result as { key?: { id?: string } }).key?.id ?? "unknown")
     : "unknown";
 }
 
@@ -34,6 +34,9 @@ export function createWebSendApi(params: {
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
+      if (mediaBuffer) {
+        mediaType ??= "application/octet-stream";
+      }
       if (mediaBuffer && mediaType) {
         if (mediaType.startsWith("image/")) {
           payload = {
