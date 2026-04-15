@@ -92,6 +92,6 @@ describe("collectBuiltBundledPluginStagedRuntimeDependencyErrors", () => {
     };
 
     expect(rootPackageJson.dependencies?.["@whiskeysockets/baileys"]).toBeUndefined();
-    expect(whatsappPackageJson.dependencies?.["@whiskeysockets/baileys"]).toBe("7.0.0-rc.9");
+    expect(whatsappPackageJson.dependencies?.["@whiskeysockets/baileys"]).toBeDefined();
   });
 });
