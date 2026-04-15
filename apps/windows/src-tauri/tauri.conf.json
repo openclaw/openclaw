@@ -7,7 +7,7 @@
     "allowlist": {
       "all": true,
       "shell": {
-        "all": false,
+        "all": true,
         "sidecar": true,
         "scope": [
           {
