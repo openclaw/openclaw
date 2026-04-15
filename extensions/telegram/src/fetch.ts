@@ -24,6 +24,13 @@ import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
 
 const log = createSubsystemLogger("telegram/network");
 
+// Guarded fetch dispatchers intentionally stay on HTTP/1.1. Undici 8 enables
+// HTTP/2 ALPN by default, but our guarded paths rely on dispatcher overrides
+// that have not been reliable on the HTTP/2 path yet.
+const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
+  allowH2: false as const,
+});
+
 const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 const TELEGRAM_API_HOSTNAME = "api.telegram.org";
 const TELEGRAM_FALLBACK_IPS: readonly string[] = ["149.154.167.220"];
@@ -275,7 +282,12 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       : policy.proxyUrl;
     try {
       return {
-        dispatcher: new ProxyAgent(proxyOptions),
+        dispatcher: new ProxyAgent({
+          ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+          ...(typeof proxyOptions === "string" || proxyOptions instanceof URL
+            ? { uri: proxyOptions.toString() }
+            : proxyOptions ?? {}),
+        }),
         mode: "explicit-proxy",
         effectivePolicy: policy,
       };
@@ -297,7 +309,10 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         : undefined;
     try {
       return {
-        dispatcher: new EnvHttpProxyAgent(proxyOptions),
+        dispatcher: new EnvHttpProxyAgent({
+          ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+          ...proxyOptions,
+        }),
         mode: "env-proxy",
         effectivePolicy: policy,
       };
@@ -310,11 +325,12 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         ...(connectOptions ? { connect: connectOptions } : {}),
       };
       return {
-        dispatcher: new Agent(
-          directPolicy.connect
-            ? ({ connect: directPolicy.connect } satisfies ConstructorParameters<typeof Agent>[0])
-            : undefined,
-        ),
+        dispatcher: new Agent({
+          ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+          ...(directPolicy.connect
+            ? { connect: directPolicy.connect }
+            : {}),
+        }),
         mode: "direct",
         effectivePolicy: directPolicy,
       };
@@ -323,13 +339,10 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
 
   const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
   return {
-    dispatcher: new Agent(
-      connectOptions
-        ? ({
-            connect: connectOptions,
-          } satisfies ConstructorParameters<typeof Agent>[0])
-        : undefined,
-    ),
+    dispatcher: new Agent({
+      ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+      ...(connectOptions ? { connect: connectOptions } : {}),
+    }),
     mode: "direct",
     effectivePolicy: policy,
   };
