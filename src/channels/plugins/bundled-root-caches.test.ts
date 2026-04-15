@@ -15,6 +15,20 @@ function makeBundledRoot(prefix: string): { root: string; pluginsDir: string } {
   return { root, pluginsDir };
 }
 
+function resolveMockRootSuffix(params: {
+  activeRoot: string | undefined;
+  rootAPluginsDir: string;
+  rootBPluginsDir: string;
+}): "A" | "B" | "unknown" {
+  if (params.activeRoot === params.rootAPluginsDir) {
+    return "A";
+  }
+  if (params.activeRoot === params.rootBPluginsDir) {
+    return "B";
+  }
+  return "unknown";
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -84,9 +98,11 @@ describe("bundled root-aware caches", () => {
         config: {},
       }),
       getBundledChannelSetupPlugin: (id: string) => {
-        const activeRoot = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        const suffix =
-          activeRoot === rootA.pluginsDir ? "A" : activeRoot === rootB.pluginsDir ? "B" : "unknown";
+        const suffix = resolveMockRootSuffix({
+          activeRoot: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+          rootAPluginsDir: rootA.pluginsDir,
+          rootBPluginsDir: rootB.pluginsDir,
+        });
         return {
           id,
           meta: { id, label: `setup-${suffix}` },
@@ -98,9 +114,11 @@ describe("bundled root-aware caches", () => {
         secretTargetRegistryEntries: [{ id: `runtime-${id}`, targetType: "channel" }],
       }),
       getBundledChannelSetupSecrets: (id: string) => {
-        const activeRoot = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        const suffix =
-          activeRoot === rootA.pluginsDir ? "A" : activeRoot === rootB.pluginsDir ? "B" : "unknown";
+        const suffix = resolveMockRootSuffix({
+          activeRoot: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+          rootAPluginsDir: rootA.pluginsDir,
+          rootBPluginsDir: rootB.pluginsDir,
+        });
         return {
           secretTargetRegistryEntries: [{ id: `setup-${id}-${suffix}`, targetType: "channel" }],
         };
