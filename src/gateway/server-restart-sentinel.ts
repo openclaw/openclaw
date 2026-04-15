@@ -1,8 +1,8 @@
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import { recordInboundSession } from "../channels/session.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { recordInboundSession } from "../channels/session.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
@@ -25,7 +25,6 @@ import {
   deliveryContextFromSession,
   mergeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -208,10 +207,11 @@ async function dispatchRestartSentinelContinuation(params: {
         AccountId: params.accountId,
         MessageSid: messageId,
         Timestamp: Date.now(),
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
+        Provider: continuationChannel,
+        Surface: continuationChannel,
         ChatType: "direct",
         CommandAuthorized: true,
+        ReplyToId: params.replyToId,
         OriginatingChannel: continuationChannel,
         OriginatingTo: continuationTo,
         ExplicitDeliverRoute: true,
@@ -225,6 +225,10 @@ async function dispatchRestartSentinelContinuation(params: {
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
     deliver: async (payload) => {
+      const outboundPayload =
+        payload.replyToId === messageId && params.replyToId
+          ? { ...payload, replyToId: params.replyToId }
+          : payload;
       const results = await deliverOutboundPayloads({
         cfg: params.cfg,
         channel: continuationChannel,
@@ -232,7 +236,7 @@ async function dispatchRestartSentinelContinuation(params: {
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
-        payloads: [payload],
+        payloads: [outboundPayload],
         session: buildOutboundSessionContext({
           cfg: params.cfg,
           sessionKey: params.sessionKey,
