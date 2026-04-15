@@ -1,6 +1,10 @@
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
+import fs from "node:fs";
+import os from "node:os";
 
 type LoggingConfig = OpenClawConfig["logging"];
 
@@ -16,13 +20,13 @@ export function readLoggingConfig(): LoggingConfig | undefined {
     return undefined;
   }
   try {
-    const loaded = requireConfig?.("../config/config.js") as
-      | {
-          loadConfig?: () => OpenClawConfig;
-        }
-      | undefined;
-    const parsed = loaded?.loadConfig?.();
-    const logging = parsed?.logging;
+    const configPath = resolveConfigPath(process.env, resolveStateDir(process.env, os.homedir));
+    if (!configPath || !fs.existsSync(configPath)) {
+      return undefined;
+    }
+    const raw = fs.readFileSync(configPath, "utf-8");
+    const parsed = JSON5.parse(raw) as OpenClawConfig;
+    const logging = parsed?.logging as unknown;
     if (!logging || typeof logging !== "object" || Array.isArray(logging)) {
       return undefined;
     }
