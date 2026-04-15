@@ -2683,6 +2683,172 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftB.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores stale answer finalization after an abort dispatch supersedes the same session", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(editMessageTelegram).not.toHaveBeenCalledWith(
+      123,
+      1001,
+      "Old reply final",
+      expect.any(Object),
+    );
+    expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
+  });
+
+  it("keeps older answer finalization when abort targets a different session", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s2",
+          CommandTargetSessionKey: "s2",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Old reply final",
+      expect.any(Object),
+    );
+  });
+
   it("swallows post-connect network timeout on preview edit to prevent duplicate messages", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
