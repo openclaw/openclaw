@@ -50,11 +50,17 @@ describe("test-install-sh-docker", () => {
 
   it("can reuse dist from the already-built root Docker smoke image", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
 
     expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
     expect(script).toContain("restore_local_dist_from_image");
     expect(script).toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
+    expect(packageJson.scripts?.["build:docker"]).toContain(
+      "scripts/write-npm-update-compat-sidecars.ts",
+    );
   });
 
   it("prints package size audits for release smoke tarballs", () => {
