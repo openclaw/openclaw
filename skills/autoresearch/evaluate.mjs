@@ -49,12 +49,12 @@ function loadEvalSet() {
   return JSON.parse(readFileSync(join(__dirname, 'eval-set.json'), 'utf8'));
 }
 
-function loadSkillsSnapshot(skillNames = null) {
-  const names = skillNames || listSkills(SKILLS_DIR);
+function loadSkillsSnapshot() {
+  const names = listSkills(SKILLS_DIR);
   return names.map(name => ({
     name,
     description: readSkillDescription(SKILLS_DIR, name),
-  })).filter(s => s.description); // Skip skills without descriptions
+  }));
 }
 
 async function runConcurrent(items, concurrency, worker) {
@@ -72,9 +72,7 @@ async function runConcurrent(items, concurrency, worker) {
 
 export async function runEval({ model = 'haiku', apiKey, useCache = true } = {}) {
   const evalSet = loadEvalSet();
-  // Extract unique skill names from eval set
-  const skillNames = [...new Set(evalSet.map(pair => pair.correct_skill))];
-  const skills = loadSkillsSnapshot(skillNames);
+  const skills = loadSkillsSnapshot();
   const cacheKey = cacheKeyFromSkills(skills) + `-${model}`;
   const cachePath = join(CACHE_DIR, `${cacheKey}.json`);
 
