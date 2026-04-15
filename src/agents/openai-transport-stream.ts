@@ -1106,60 +1106,25 @@ async function processOpenAICompletionsStream(
       });
       continue;
     }
-    // Handle reasoning_details from OpenRouter/Qwen3 and other providers
-    const reasoningDetails = (choice.delta as Record<string, unknown>).reasoning_details;
-    if (reasoningDetails && Array.isArray(reasoningDetails)) {
-      const reasoningText = reasoningDetails
-        .filter((item: unknown) => {
-          const typed = item as { type?: string; text?: string };
-          return (
-            typed.type === "reasoning.text" &&
-            typeof typed.text === "string" &&
-            typed.text.length > 0
-          );
-        })
-        .map((item: unknown) => {
-          const typed = item as { text: string };
-          return typed.text;
-        })
-        .join("");
-      if (reasoningText) {
-        if (!currentBlock || currentBlock.type !== "thinking") {
-          finishCurrentBlock();
-          currentBlock = { type: "thinking", thinking: "", thinkingSignature: "reasoning_details" };
-          output.content.push(currentBlock);
-          stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
-        }
-        currentBlock.thinking += reasoningText;
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: blockIndex(),
-          delta: reasoningText,
-          partial: output,
-        });
-        continue;
-      }
-    }
-    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
-    const reasoningField = reasoningFields.find((field) => {
-      const value = (choice.delta as Record<string, unknown>)[field];
-      return typeof value === "string" && value.length > 0;
-    });
-    if (reasoningField) {
+    const reasoningDelta = getCompletionsReasoningDelta(choice.delta as Record<string, unknown>);
+    if (reasoningDelta) {
       if (!currentBlock || currentBlock.type !== "thinking") {
         finishCurrentBlock();
-        currentBlock = { type: "thinking", thinking: "", thinkingSignature: reasoningField };
+        currentBlock = {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: reasoningDelta.signature,
+        };
         output.content.push(currentBlock);
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       }
-      currentBlock.thinking += String((choice.delta as Record<string, unknown>)[reasoningField]);
+      currentBlock.thinking += reasoningDelta.text;
       stream.push({
         type: "thinking_delta",
         contentIndex: blockIndex(),
-        delta: String((choice.delta as Record<string, unknown>)[reasoningField]),
+        delta: reasoningDelta.text,
         partial: output,
       });
-      continue;
     }
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
@@ -1206,6 +1171,33 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+}
+
+function getCompletionsReasoningDelta(delta: Record<string, unknown>): {
+  signature: string;
+  text: string;
+} | null {
+  const reasoningDetails = delta.reasoning_details;
+  if (Array.isArray(reasoningDetails)) {
+    let text = "";
+    for (const item of reasoningDetails) {
+      const detail = item as { type?: unknown; text?: unknown };
+      if (detail.type === "reasoning.text" && typeof detail.text === "string" && detail.text) {
+        text += detail.text;
+      }
+    }
+    if (text) {
+      return { signature: "reasoning_details", text };
+    }
+  }
+  const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
+  for (const field of reasoningFields) {
+    const value = delta[field];
+    if (typeof value === "string" && value.length > 0) {
+      return { signature: field, text: value };
+    }
+  }
+  return null;
 }
 
 function detectCompat(model: OpenAIModeModel) {

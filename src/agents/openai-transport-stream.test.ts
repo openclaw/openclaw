@@ -1760,12 +1760,9 @@ describe("openai transport stream", () => {
       timestamp: Date.now(),
     };
 
-    const stream = {
-      push: (() => {}) as unknown as { push(event: unknown): void },
-    };
+    const stream: { push(event: unknown): void } = { push() {} };
 
     const mockChunks = [
-      // First chunk with reasoning_details
       {
         id: "chatcmpl-reasoning",
         object: "chat.completion.chunk" as const,
@@ -1783,7 +1780,6 @@ describe("openai transport stream", () => {
           },
         ],
       },
-      // Second chunk with actual content
       {
         id: "chatcmpl-reasoning",
         object: "chat.completion.chunk" as const,
@@ -1798,7 +1794,6 @@ describe("openai transport stream", () => {
           },
         ],
       },
-      // Final chunk
       {
         id: "chatcmpl-reasoning",
         object: "chat.completion.chunk" as const,
@@ -1821,7 +1816,6 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    // Should have 2 content blocks: thinking and text
     expect(output.content.length).toBe(2);
     expect(output.content[0].type).toBe("thinking");
     expect((output.content[0] as { type: string; thinking: string }).thinking).toBe(
@@ -1831,5 +1825,90 @@ describe("openai transport stream", () => {
     expect((output.content[1] as { type: string; text: string }).text).toBe(
       " Hello! How can I help you?",
     );
+  });
+
+  it("keeps tool calls when reasoning_details and tool_calls share a chunk", async () => {
+    const model = {
+      id: "openrouter/qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-toolcall",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "reasoning.text", text: "Need a tool." }],
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: '{"query":"qwen3"}' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-toolcall",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "thinking", thinking: "Need a tool.", thinkingSignature: "reasoning_details" },
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "qwen3" } },
+    ]);
   });
 });
