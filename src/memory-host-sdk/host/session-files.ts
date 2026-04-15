@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isUsageCountedSessionTranscriptFileName } from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hashText } from "./internal.js";
@@ -76,6 +77,59 @@ function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
     sessionKey?: unknown;
   };
   return hasDreamingNarrativeRunId(nested.runId) || hasDreamingNarrativeRunId(nested.sessionKey);
+}
+
+function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const firstSeparator = trimmed.indexOf(":");
+  if (firstSeparator < 0) {
+    return trimmed.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+  }
+  const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
+  const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
+  return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+}
+
+function normalizeComparablePath(pathname: string): string {
+  const resolved = path.resolve(pathname);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function resolveSessionStoreTranscriptPath(
+  sessionsDir: string,
+  entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
+): string | null {
+  if (typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0) {
+    const sessionFile = entry.sessionFile.trim();
+    const resolved = path.isAbsolute(sessionFile)
+      ? sessionFile
+      : path.resolve(sessionsDir, sessionFile);
+    return normalizeComparablePath(resolved);
+  }
+  if (typeof entry?.sessionId === "string" && entry.sessionId.trim().length > 0) {
+    return normalizeComparablePath(path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`));
+  }
+  return null;
+}
+
+function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean {
+  const sessionsDir = path.dirname(absPath);
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const normalizedAbsPath = normalizeComparablePath(absPath);
+  const store = loadSessionStore(storePath);
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (!isDreamingNarrativeSessionStoreKey(sessionKey)) {
+      continue;
+    }
+    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
+    if (transcriptPath === normalizedAbsPath) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -161,7 +215,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
-    let generatedByDreamingNarrative = false;
+    let generatedByDreamingNarrative = isDreamingNarrativeTranscriptFromSessionStore(absPath);
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
