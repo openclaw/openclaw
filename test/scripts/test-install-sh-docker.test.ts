@@ -53,10 +53,27 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain(
       'HEARTBEAT_INTERVAL="${OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL:-60}"',
     );
+    expect(script).toContain(
+      'INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-300}"',
+    );
     expect(script).toContain("run_with_heartbeat");
+    expect(script).toContain("npm_install_global");
+    expect(script).toContain('timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s"');
     expect(script).toContain("==> Still running");
     expect(script).toContain("print_install_audit");
-    expect(script).toContain("quiet_npm install -g --omit=optional");
+    expect(script).toContain('install -g "$@"');
     expect(script).toContain("openclaw update --tag");
+  });
+
+  it("covers plain npm global installs and npm-driven updates", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+    const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+
+    expect(script).toContain('SKIP_NPM_GLOBAL="${OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL:-0}"');
+    expect(script).toContain("==> Run direct npm global smoke");
+    expect(script).toContain("OPENCLAW_INSTALL_SMOKE_MODE=npm-global");
+    expect(runner).toContain("run_npm_global_smoke");
+    expect(runner).toContain("==> Direct npm global install candidate");
+    expect(runner).toContain("==> Direct npm global update candidate");
   });
 });

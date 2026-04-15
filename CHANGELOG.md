@@ -7,9 +7,10 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Docs/showcase: add a scannable hero, complete section jump links, and a responsive video grid for community examples. (#48493) Thanks @jchopard69.
-- Agents/local models: add `agents.defaults.localModelMode: "lean"` to drop heavyweight default tools like `browser`, `cron`, and `message`, reducing prompt size for weaker local-model setups without changing the normal path. Thanks @ImLukeF.
+- Agents/local models: add experimental `agents.defaults.experimental.localModelLean: true` to drop heavyweight default tools like `browser`, `cron`, and `message`, reducing prompt size for weaker local-model setups without changing the normal path. Thanks @ImLukeF.
 - QA/Matrix: split Matrix live QA into a source-linked `qa-matrix` runner and keep repo-private `qa-*` surfaces out of packaged and published builds. (#66723) Thanks @gumadeiras.
 - Control UI/Overview: add a Model Auth status card showing OAuth token health and provider rate-limit pressure at a glance, with attention callouts when OAuth tokens are expiring or expired. Backed by a new `models.authStatus` gateway method that strips credentials and caches for 60s. (#66211) Thanks @omarshahine.
+- GitHub Copilot/memory search: add a GitHub Copilot embedding provider for memory search, and expose a dedicated Copilot embedding host helper so plugins can reuse the transport while honoring remote overrides, token refresh, and safer payload validation. (#61718) Thanks @feiskyer and @vincentkoc.
 
 ### Fixes
 
@@ -35,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Anthropic: ignore non-positive Anthropic Messages token overrides and fail locally when no positive token budget remains, so invalid `max_tokens` values no longer reach the provider API. (#66664) thanks @jalehman
 - Agents/context engines: preserve prompt-only token counts, not full request totals, when deferred maintenance reuses after-turn runtime context so background compaction bookkeeping matches the active prompt window. (#66820) thanks @jalehman.
 - BlueBubbles/inbound: add a persistent file-backed GUID dedupe so MessagePoller webhook replays after BB Server restart or reconnect no longer cause the agent to re-reply to already-handled messages. (#19176, #12053, #66816) Thanks @omarshahine.
+- Gateway/tests: keep the built-in `imsg` agent alias regression on the stubbed iMessage path and harden shared gateway WS request helpers against reply-listener races so the alias contract no longer flakes in CI. Thanks @vincentkoc.
 - Secrets/plugins/status: align SecretRef inspect-vs-strict handling across plugin preload, read-only status/agents surfaces, and runtime auth paths so unresolved refs no longer crash read-only CLI flows while runtime-required non-env refs stay strict. (#66818) Thanks @joshavant.
 - Memory/dreaming: stop ordinary transcripts that merely quote the dream-diary prompt from being classified as internal dreaming runs and silently dropped from session recall ingestion. (#66852) Thanks @gumadeiras.
 - Telegram/documents: sanitize binary reply context and ZIP-like archive extraction so `.epub` and `.mobi` uploads can no longer leak raw binary into prompt context through reply metadata or archive-to-`text/plain` coercion. (#66877) Thanks @martinfrancois.
@@ -45,6 +47,9 @@ Docs: https://docs.openclaw.ai
 - Audio/self-hosted STT: restore `models.providers.*.request.allowPrivateNetwork` for audio transcription so private or LAN speech-to-text endpoints stop tripping SSRF blocks after the v2026.4.14 regression. (#66692) Thanks @jhsmith409.
 - QQBot/cron: guard against undefined `event.content` in `parseFaceTags` and `filterInternalMarkers` so cron-triggered agent turns with no content payload no longer crash with `TypeError: Cannot read properties of undefined (reading 'startsWith')`. (#66302) Thanks @xinmotlanthua.
 - CLI/plugins: stop `--dangerously-force-unsafe-install` plugin installs from falling back to hook-pack installs after security scan failures, while still preserving non-security fallback behavior for real hook packs. (#58909) Thanks @hxy91819.
+- Claude CLI/sessions: classify `No conversation found with session ID` as `session_expired` so expired CLI-backed conversations clear the stale binding and recover on the next turn. (#65028) thanks @Ivan-Fn.
+- Context Engine: gracefully fall back to the legacy engine when a third-party context engine plugin fails at resolution time (unregistered id, factory throw, or contract violation), preventing a full gateway outage on every channel. (#66930) Thanks @openperf.
+- Control UI/chat: keep optimistic user message cards visible during active sends by deferring same-session history reloads until the active run ends, including aborted and errored runs. (#66997) Thanks @scotthuang and @vincentkoc.
 
 ## 2026.4.14
 
@@ -123,6 +128,7 @@ Docs: https://docs.openclaw.ai
 - CLI/approvals: raise the default `openclaw approvals get` gateway timeout and report config-load timeouts explicitly, so slow hosts stop showing a misleading `Config unavailable.` note when the approvals snapshot succeeds but the follow-up config RPC needs more time. (#66239) Thanks @neeravmakwana.
 - Media/store: honor configured agent media limits when saving generated media and persisting outbound reply media, so the store no longer hard-stops those flows at 5 MB before the configured limit applies. (#66229) Thanks @neeravmakwana and @vincentkoc.
 - Plugins/setup-entry: preserve separate setup-entry secrets exports when loading bundled setup-runtime channels, so setup-mode flows keep the channel secret contract for split plugin + secrets entrypoints. (#66261) Thanks @hxy91819.
+- CLI/update: prune stale packaged `dist` chunks after npm upgrades, verify installed package inventory, and keep downgrade/update verification working across older releases. (#66959) Thanks @obviyus.
 
 ## 2026.4.12
 
@@ -205,6 +211,7 @@ Docs: https://docs.openclaw.ai
 - Cron/direct delivery: slim isolated-agent delivery cold paths so direct channel delivery and related cron execution spend less time loading unrelated auth, plugin, and channel runtime. Thanks @vincentkoc.
 - Channels/replay dedupe: standardize replay claims, retryable-failure release, and post-success commit behavior across Telegram, Discord, Slack, Mattermost, WhatsApp, Matrix, LINE, Feishu, Zalo, Nextcloud Talk, TLON, Nostr, Voice Call, and shared plugin interactive callbacks so duplicate deliveries stay reply-once after success but retry cleanly after pre-delivery failures. Thanks @vincentkoc.
 - Agents/OpenAI mini reasoning: remap unsupported `low` and `minimal` reasoning effort to `medium` for affected OpenAI mini models, and add a live regression lane to keep the compatibility fix covered. (#65478) Thanks @vincentkoc.
+- Configure/wizard: replay wizard edits onto the latest config snapshot after a hash conflict so plugin-auth writes no longer get dropped during `openclaw configure`, including nested config under shared sections such as `plugins`. (#64188) Thanks @feiskyer and @vincentkoc.
 
 ## 2026.4.11
 
@@ -240,6 +247,8 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: scope assistant-side fallback classification and surfaced provider errors to the current attempt instead of stale session history, so cross-provider fallback runs stop inheriting the previous provider's failure. (#62907) Thanks @stainlu.
 - MiniMax/OAuth: write `api: "anthropic-messages"` and `authHeader: true` into the `minimax-portal` config patch during `openclaw configure`, so re-authenticated portal setups keep Bearer auth routing working. (#64964) Thanks @ryanlee666.
 - Agents/tools: stop repeated unavailable-tool retries from escaping loop detection when the model changes arguments, and rewrite over-threshold unknown tool calls into plain assistant text before dispatch. (#65922) Thanks @dutifulbob.
+- Cron/announce delivery: tell isolated cron jobs to return the full response exactly instead of a summary, so structured `--announce` deliveries stop dropping fields nondeterministically. (#65638) Thanks @srinivaspavan9 and @vincentkoc.
+- Security/exec approvals: redact bearer tokens, API keys, and similar secrets in exec approval prompt command text before those prompts are posted back to chat channels, regardless of logging redaction settings. (#61077) Thanks @feiskyer and @vincentkoc.
 
 ## 2026.4.10
 

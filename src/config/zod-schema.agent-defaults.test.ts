@@ -32,6 +32,15 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
+  it("accepts experimental.localModelLean", () => {
+    const result = AgentDefaultsSchema.parse({
+      experimental: {
+        localModelLean: true,
+      },
+    })!;
+    expect(result.experimental?.localModelLean).toBe(true);
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");
