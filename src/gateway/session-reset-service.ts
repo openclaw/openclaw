@@ -10,6 +10,7 @@ import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
+import { drainSystemEventEntries } from "../infra/system-events.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
@@ -256,6 +257,12 @@ async function ensureSessionRuntimeCleanup(params: {
     queueKeys.add(params.sessionId);
   }
   clearSessionQueues([...queueKeys]);
+  // Drain stale system events so they don't leak into the fresh session.
+  // The sessionKey is preserved across /new, so any events enqueued before
+  // the reset would otherwise be injected into the first post-reset message.
+  for (const key of queueKeys) {
+    drainSystemEventEntries(key);
+  }
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     clearBootstrapSnapshot(params.target.canonicalKey);
