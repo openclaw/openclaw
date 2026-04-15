@@ -419,9 +419,10 @@ function pruneSlotDeliveries(now: number) {
 }
 
 function recordSlotDelivery(key: string) {
-  const now = Date.now();
-  COMPLETED_SLOT_DELIVERIES.set(key, now);
-  pruneSlotDeliveries(now);
+  // Pruning is intentionally skipped here: every call site is preceded by
+  // wasSlotAlreadyDelivered() in the same delivery cycle, which already
+  // prunes. A second prune would see an already-pruned map.
+  COMPLETED_SLOT_DELIVERIES.set(key, Date.now());
 }
 
 function wasSlotAlreadyDelivered(key: string): boolean {
