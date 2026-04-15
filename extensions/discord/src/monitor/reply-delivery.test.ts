@@ -408,6 +408,94 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("falls back to plain Discord sends for component replies targeting forum-like channels", async () => {
+    sendDiscordComponentMessageMock.mockRejectedValueOnce(
+      new Error("Discord components are not supported in forum-style channels"),
+    );
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "Choose wisely",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve", style: "success" }],
+              },
+            ],
+          },
+        },
+      ],
+      target: "channel:forum-parent",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToId: "reply-1",
+    });
+
+    expect(sendDiscordComponentMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:forum-parent",
+      "Choose wisely",
+      expect.objectContaining({ token: "token", replyTo: "reply-1" }),
+    );
+  });
+
+  it("falls back to plain Discord media sends when forum-like channels reject interactive media replies", async () => {
+    sendDiscordComponentMessageMock.mockRejectedValueOnce(
+      new Error("Discord components are not supported in forum-style channels"),
+    );
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "Media choice",
+          mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve", style: "success" }],
+              },
+            ],
+          },
+        },
+      ],
+      target: "channel:forum-parent",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToId: "reply-1",
+    });
+
+    expect(sendDiscordComponentMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      1,
+      "channel:forum-parent",
+      "Media choice",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "https://example.com/first.png",
+        replyTo: "reply-1",
+      }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      2,
+      "channel:forum-parent",
+      "",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "https://example.com/second.png",
+        replyTo: "reply-1",
+      }),
+    );
+  });
+
   it("forwards cfg to Discord send helpers", async () => {
     await deliverDiscordReply({
       replies: [{ text: "cfg path" }],

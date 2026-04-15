@@ -24,6 +24,13 @@ import { isLikelyDiscordVideoMedia } from "../media-detection.js";
 import { createDiscordRetryRunner } from "../retry.js";
 import { sendDiscordComponentMessage } from "../send.components.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
+
+function isForumStyleComponentError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes("Discord components are not supported in forum-style channels")
+  );
+}
 import { sendDiscordText } from "../send.shared.js";
 import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
 
@@ -464,17 +471,35 @@ export async function deliverDiscordReply(params: {
       : undefined;
     if (!reply.hasMedia) {
       if (componentSpec) {
-        await sendWithRetry(
-          () =>
-            sendDiscordComponentMessage(params.target, componentSpec, {
-              cfg: params.cfg,
-              token: params.token,
-              rest: params.rest,
-              accountId: params.accountId,
-              replyTo: resolvePayloadReplyTo(),
-            }),
-          retryConfig,
-        );
+        const replyTo = resolvePayloadReplyTo();
+        try {
+          await sendWithRetry(
+            () =>
+              sendDiscordComponentMessage(params.target, componentSpec, {
+                cfg: params.cfg,
+                token: params.token,
+                rest: params.rest,
+                accountId: params.accountId,
+                replyTo,
+              }),
+            retryConfig,
+          );
+        } catch (err) {
+          if (!isForumStyleComponentError(err)) {
+            throw err;
+          }
+          await sendWithRetry(
+            () =>
+              sendMessageDiscord(params.target, reply.text, {
+                cfg: params.cfg,
+                token: params.token,
+                rest: params.rest,
+                accountId: params.accountId,
+                replyTo,
+              }),
+            retryConfig,
+          );
+        }
         deliveredAny = true;
         continue;
       }
@@ -512,17 +537,35 @@ export async function deliverDiscordReply(params: {
       reply.mediaUrls.some((mediaUrl) => isLikelyDiscordVideoMedia(mediaUrl));
     if (shouldSplitVideoMediaReply) {
       if (componentSpec) {
-        await sendWithRetry(
-          () =>
-            sendDiscordComponentMessage(params.target, componentSpec, {
-              cfg: params.cfg,
-              token: params.token,
-              rest: params.rest,
-              accountId: params.accountId,
-              replyTo: resolvePayloadReplyTo(),
-            }),
-          retryConfig,
-        );
+        const replyTo = resolvePayloadReplyTo();
+        try {
+          await sendWithRetry(
+            () =>
+              sendDiscordComponentMessage(params.target, componentSpec, {
+                cfg: params.cfg,
+                token: params.token,
+                rest: params.rest,
+                accountId: params.accountId,
+                replyTo,
+              }),
+            retryConfig,
+          );
+        } catch (err) {
+          if (!isForumStyleComponentError(err)) {
+            throw err;
+          }
+          await sendWithRetry(
+            () =>
+              sendMessageDiscord(params.target, reply.text, {
+                cfg: params.cfg,
+                token: params.token,
+                rest: params.rest,
+                accountId: params.accountId,
+                replyTo,
+              }),
+            retryConfig,
+          );
+        }
       } else {
         await sendReplyText();
       }
@@ -539,20 +582,26 @@ export async function deliverDiscordReply(params: {
         const replyTo = resolvePayloadReplyTo();
         if (componentSpec && !sentFirstMedia) {
           sentFirstMedia = true;
-          await sendWithRetry(
-            () =>
-              sendDiscordComponentMessage(params.target, componentSpec, {
-                cfg: params.cfg,
-                token: params.token,
-                rest: params.rest,
-                mediaUrl,
-                accountId: params.accountId,
-                mediaLocalRoots: params.mediaLocalRoots,
-                replyTo,
-              }),
-            retryConfig,
-          );
-          return;
+          try {
+            await sendWithRetry(
+              () =>
+                sendDiscordComponentMessage(params.target, componentSpec, {
+                  cfg: params.cfg,
+                  token: params.token,
+                  rest: params.rest,
+                  mediaUrl,
+                  accountId: params.accountId,
+                  mediaLocalRoots: params.mediaLocalRoots,
+                  replyTo,
+                }),
+              retryConfig,
+            );
+            return;
+          } catch (err) {
+            if (!isForumStyleComponentError(err)) {
+              throw err;
+            }
+          }
         }
         await sendWithRetry(
           () =>
