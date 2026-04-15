@@ -150,3 +150,9 @@ test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
 extensions/qa-lab/web/dist/
+# Rust build artifacts
+target/
+**/target/
+Cargo.lock
+debug/
+release/

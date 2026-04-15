@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::env;
+<<<<<<< HEAD
+=======
+use std::path::PathBuf;
+>>>>>>> 715865dbc3 (gi ignore updt)
 use std::process::{Command, Stdio, Child};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -54,6 +58,10 @@ async fn start_gateway(app: AppHandle, state: State<'_, GatewayState>) -> Result
 
 #[tauri::command]
 async fn stop_gateway(state: State<'_, GatewayState>) -> Result<String, String> {
+<<<<<<< HEAD
+=======
+    // .take() clears the Option and returns the child, ensuring watchdog will see None and exit
+>>>>>>> 715865dbc3 (gi ignore updt)
     if let Some(mut child) = state.process.lock().map_err(|e| e.to_string())?.take() {
         match child.kill() {
             Ok(_) => Ok("Gateway stopped".to_string()),
@@ -67,8 +75,12 @@ async fn stop_gateway(state: State<'_, GatewayState>) -> Result<String, String> 
 fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> {
     let (program, args_base) = get_openclaw_command();
     let mut args = args_base;
+<<<<<<< HEAD
     args.push("gateway".to_string());
     args.push("run".to_string());
+=======
+    args.extend_from_slice(&["gateway", "run"]);
+>>>>>>> 715865dbc3 (gi ignore updt)
     
     let mut cmd = Command::new(&program);
     cmd.args(&args)
@@ -110,7 +122,11 @@ fn watchdog_thread(app: AppHandle, state: GatewayState) {
                     // Process exited unexpectedly
                     drop(process_lock);
                     
+<<<<<<< HEAD
                     let _code = status.code().unwrap_or(-1);
+=======
+                    let code = status.code().unwrap_or(-1);
+>>>>>>> 715865dbc3 (gi ignore updt)
                     let count = state.restart_count.fetch_add(1, Ordering::SeqCst) + 1;
                     
                     if count >= max_restarts {
@@ -122,10 +138,18 @@ fn watchdog_thread(app: AppHandle, state: GatewayState) {
                     // Exponential backoff
                     thread::sleep(Duration::from_secs(5 * (1 << (count - 1))));
                     
+<<<<<<< HEAD
                     if let Err(e) = spawn_gateway(app.clone(), state.clone()) {
                         eprintln!("Restart failed: {}", e);
                     }
                     break; 
+=======
+                    println!("Restarting gateway (attempt {}/{})...", count, max_restarts);
+                    if let Err(e) = spawn_gateway(app.clone(), state.clone()) {
+                        eprintln!("Restart failed: {}", e);
+                    }
+                    break; // Current thread exits as spawn_gateway creates a new one
+>>>>>>> 715865dbc3 (gi ignore updt)
                 }
                 Ok(None) => {} // Still running
                 Err(_) => break,
@@ -146,17 +170,29 @@ fn show_notification(app: &AppHandle, title: &str, body: &str) {
             *last = Some(Instant::now());
             drop(last);
             
+<<<<<<< HEAD
+=======
+            // Using notify(app) for Tauri 1.x as suggested
+>>>>>>> 715865dbc3 (gi ignore updt)
             let identifier = &app.config().tauri.bundle.identifier;
             let _ = Notification::new(identifier)
                 .title(title)
                 .body(body)
+<<<<<<< HEAD
                 .show();
+=======
+                .notify(app);
+>>>>>>> 715865dbc3 (gi ignore updt)
         }
     }
 }
 
 fn handle_uninstall() {
     println!("Cleaning up OpenClaw data from AppData...");
+<<<<<<< HEAD
+=======
+    // dirs crate is essential here for cross-platform paths
+>>>>>>> 715865dbc3 (gi ignore updt)
     if let Some(data_dir) = dirs::data_dir() {
         let app_data = data_dir.join("com.openclaw.gateway");
         if app_data.exists() {
