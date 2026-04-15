@@ -747,6 +747,7 @@ function resolveRadioGroupValueFromRaw(
     return null;
   }
   for (const component of components) {
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- ComponentType is a discriminated-union discriminant here; narrowing is intentional
     if (component.type === ComponentType.Label) {
       const sub = (component as ModalSubmitLabelComponent).component;
       if (sub?.custom_id === fieldId && sub.type === ComponentType.RadioGroup) {
