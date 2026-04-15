@@ -988,6 +988,142 @@ Default: `"once"`.
 }
 ```
 
+### Context budget ownership map
+
+OpenClaw has multiple high-volume prompt/context budgets, and they are
+intentionally split by subsystem instead of all flowing through one generic
+knob.
+
+- `agents.defaults.bootstrapMaxChars` /
+  `agents.defaults.bootstrapTotalMaxChars`:
+  normal workspace bootstrap injection.
+- `agents.defaults.startupContext.*`:
+  one-shot `/new` and `/reset` startup prelude, including recent daily
+  `memory/*.md` files.
+- `skills.limits.*`:
+  the compact skills list injected into the system prompt.
+- `agents.defaults.contextLimits.*`:
+  bounded runtime excerpts and injected runtime-owned blocks.
+- `memory.qmd.limits.*`:
+  indexed memory-search snippet and injection sizing.
+
+Use the matching per-agent override only when one agent needs a different
+budget:
+
+- `agents.list[].skillsLimits.maxSkillsPromptChars`
+- `agents.list[].contextLimits.*`
+
+#### `agents.defaults.startupContext`
+
+Controls the first-turn startup prelude injected on bare `/new` and `/reset`
+runs.
+
+```json5
+{
+  agents: {
+    defaults: {
+      startupContext: {
+        enabled: true,
+        applyOn: ["new", "reset"],
+        dailyMemoryDays: 2,
+        maxFileBytes: 16384,
+        maxFileChars: 1200,
+        maxTotalChars: 2800,
+      },
+    },
+  },
+}
+```
+
+#### `agents.defaults.contextLimits`
+
+Shared defaults for bounded runtime context surfaces.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextLimits: {
+        memoryGetMaxChars: 12000,
+        memoryGetDefaultLines: 120,
+        toolResultMaxChars: 16000,
+        postCompactionMaxChars: 1800,
+      },
+    },
+  },
+}
+```
+
+- `memoryGetMaxChars`: default `memory_get` excerpt cap before truncation
+  metadata and continuation notice are added.
+- `memoryGetDefaultLines`: default `memory_get` line window when `lines` is
+  omitted.
+- `toolResultMaxChars`: live tool-result cap used for persisted results and
+  overflow recovery.
+- `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
+  refresh injection.
+
+#### `agents.list[].contextLimits`
+
+Per-agent override for the shared `contextLimits` knobs. Omitted fields inherit
+from `agents.defaults.contextLimits`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextLimits: {
+        memoryGetMaxChars: 12000,
+        toolResultMaxChars: 16000,
+      },
+    },
+    list: [
+      {
+        id: "tiny-local",
+        contextLimits: {
+          memoryGetMaxChars: 6000,
+          toolResultMaxChars: 8000,
+        },
+      },
+    ],
+  },
+}
+```
+
+#### `skills.limits.maxSkillsPromptChars`
+
+Global cap for the compact skills list injected into the system prompt. This
+does not affect reading `SKILL.md` files on demand.
+
+```json5
+{
+  skills: {
+    limits: {
+      maxSkillsPromptChars: 18000,
+    },
+  },
+}
+```
+
+#### `agents.list[].skillsLimits.maxSkillsPromptChars`
+
+Per-agent override for the skills prompt budget.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "tiny-local",
+        skillsLimits: {
+          maxSkillsPromptChars: 6000,
+        },
+      },
+    ],
+  },
+}
+```
+
 ### `agents.defaults.imageMaxDimensionPx`
 
 Max pixel size for the longest image side in transcript/tool image blocks before provider calls.
