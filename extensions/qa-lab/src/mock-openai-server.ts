@@ -6,6 +6,20 @@ type ResponsesInputItem = Record<string, unknown>;
 
 type StreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
+  | {
+      type: "response.output_text.delta";
+      item_id: string;
+      output_index: number;
+      content_index: number;
+      delta: string;
+    }
+  | {
+      type: "response.output_text.done";
+      item_id: string;
+      output_index: number;
+      content_index: number;
+      text: string;
+    }
   | { type: "response.function_call_arguments.delta"; delta: string }
   | { type: "response.output_item.done"; item: Record<string, unknown> }
   | {
@@ -22,20 +36,122 @@ type StreamEvent =
       };
     };
 
+/**
+ * Provider variant tag for `body.model`. The mock previously ignored
+ * `body.model` for dispatch and only echoed it in the prose output, which
+ * made the parity gate tautological when run against the mock alone
+ * (both providers produced identical scenario plans by construction).
+ * Tagging requests with a normalized variant lets individual scenario
+ * branches opt into provider-specific behavior while the rest of the
+ * dispatcher stays shared, and lets `/debug/requests` consumers verify
+ * which provider lane a given request came from without re-parsing the
+ * raw model string.
+ *
+ * Policy:
+ * - `openai/*`, `gpt-*`, `o1-*`, anything starting with `gpt-` → `"openai"`
+ * - `anthropic/*`, `claude-*` → `"anthropic"`
+ * - Everything else (including empty strings) → `"unknown"`
+ *
+ * The `/v1/messages` route always feeds `body.model` straight through,
+ * so an Anthropic request with an `openai/gpt-5.4` model string is still
+ * classified as `"openai"`. That matches the parity program's convention
+ * where the provider label is the source of truth, not the HTTP route.
+ */
+export type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
+
+export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
+  if (typeof model !== "string") {
+    return "unknown";
+  }
+  const trimmed = model.trim().toLowerCase();
+  if (trimmed.length === 0) {
+    return "unknown";
+  }
+  // Prefer the explicit `provider/model` or `provider:model` prefix when
+  // the caller supplied one — that's the most reliable signal.
+  const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
+  const provider = separatorMatch?.[1] ?? trimmed;
+  if (provider === "openai" || provider === "openai-codex") {
+    return "openai";
+  }
+  if (provider === "anthropic" || provider === "claude-cli") {
+    return "anthropic";
+  }
+  // Fall back to model-name prefix matching for bare model strings like
+  // `gpt-5.4` or `claude-opus-4-6`.
+  if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
+    return "openai";
+  }
+  if (/^(?:claude-|anthropic-)/.test(trimmed)) {
+    return "anthropic";
+  }
+  return "unknown";
+}
+
 type MockOpenAiRequestSnapshot = {
   raw: string;
   body: Record<string, unknown>;
   prompt: string;
   allInputText: string;
+  instructions?: string;
   toolOutput: string;
   model: string;
+  providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
   plannedToolName?: string;
 };
 
+// Anthropic /v1/messages request/response shapes the mock actually needs.
+// This is a subset of the real Anthropic Messages API — just enough so the
+// QA suite can run its parity pack against a "baseline" Anthropic provider
+// without needing real API keys. The scenarios drive their dispatch through
+// the shared mock scenario logic (buildResponsesPayload), so whatever
+// behavior the OpenAI mock exposes is automatically mirrored on this route.
+type AnthropicMessageContentBlock =
+  | { type: "text"; text: string }
+  | {
+      type: "tool_use";
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    }
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | Array<{ type: "text"; text: string }>;
+    }
+  | { type: "image"; source: Record<string, unknown> };
+
+type AnthropicMessage = {
+  role: "user" | "assistant";
+  content: string | AnthropicMessageContentBlock[];
+};
+
+type AnthropicMessagesRequest = {
+  model?: string;
+  max_tokens?: number;
+  system?: string | Array<{ type: "text"; text: string }>;
+  messages?: AnthropicMessage[];
+  tools?: Array<Record<string, unknown>>;
+  stream?: boolean;
+};
+
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
-let subagentFanoutPhase = 0;
+const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
+const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
+const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
+const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
+const QA_QUIET_STREAMING_PROMPT_RE = /(?:matrix\s+)?quiet streaming qa check/i;
+const QA_BLOCK_STREAMING_PROMPT_RE = /(?:matrix\s+)?block streaming qa check/i;
+const QA_REASONING_ONLY_RETRY_NEEDLE =
+  "recorded reasoning but did not produce a user-visible answer";
+const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
+  "The previous attempt did not produce a user-visible answer.";
+
+type MockScenarioState = {
+  subagentFanoutPhase: number;
+};
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -58,6 +174,23 @@ function writeJson(res: ServerResponse, status: number, body: unknown) {
 
 function writeSse(res: ServerResponse, events: StreamEvent[]) {
   const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+    "content-length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+type AnthropicStreamEvent = Record<string, unknown> & {
+  type: string;
+};
+
+function writeAnthropicSse(res: ServerResponse, events: AnthropicStreamEvent[]) {
+  const body = events
+    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-store",
@@ -177,6 +310,23 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
     if (text) {
       texts.push(text);
     }
+  }
+  return texts.join("\n");
+}
+
+function extractInstructionsText(body: Record<string, unknown>) {
+  return typeof body.instructions === "string" ? body.instructions.trim() : "";
+}
+
+function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  const texts: string[] = [];
+  const instructions = extractInstructionsText(body);
+  if (instructions) {
+    texts.push(instructions);
+  }
+  const inputText = extractAllInputTexts(input);
+  if (inputText) {
+    texts.push(inputText);
   }
   return texts.join("\n");
 }
@@ -320,6 +470,33 @@ function extractOrbitCode(text: string) {
   return /\bORBIT-\d+\b/i.exec(text)?.[0]?.toUpperCase() ?? null;
 }
 
+function decodeXmlEntities(text: string) {
+  return text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'");
+}
+
+function extractActiveMemorySummary(text: string) {
+  const match = /<active_memory_plugin>\s*([\s\S]*?)\s*<\/active_memory_plugin>/i.exec(text);
+  return match?.[1] ? decodeXmlEntities(match[1]).trim() : null;
+}
+
+function isActiveMemorySubagentPrompt(text: string) {
+  return text.includes("You are a memory search agent.");
+}
+
+function extractSnackPreference(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const match =
+    /(lemon pepper wings(?:\s+with\s+blue cheese)?|blue cheese(?:\s+with\s+lemon pepper wings)?)/i.exec(
+      normalized,
+    );
+  return match?.[0]?.trim() ?? null;
+}
+
 function extractLastCapture(text: string, pattern: RegExp) {
   let lastMatch: RegExpExecArray | null = null;
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
@@ -331,11 +508,11 @@ function extractLastCapture(text: string, pattern: RegExp) {
 }
 
 function extractExactReplyDirective(text: string) {
-  const colonMatch = extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
-  if (colonMatch) {
-    return colonMatch;
+  const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
   }
-  return extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
+  return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
 }
 
 function extractExactMarkerDirective(text: string) {
@@ -346,16 +523,39 @@ function extractExactMarkerDirective(text: string) {
   return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
-function isHeartbeatPrompt(text: string) {
-  return /Read HEARTBEAT\.md if it exists/i.test(text);
+function extractLabeledMarkerDirective(text: string, label: string) {
+  const escapedLabel = label.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const backtickedMatch = extractLastCapture(
+    text,
+    new RegExp(`${escapedLabel}:\\s*\`([^\\\`]+)\``, "i"),
+  );
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(
+    text,
+    new RegExp(`${escapedLabel}:\\s*([^\\s\\\`.,;:!?]+(?:-[^\\s\\\`.,;:!?]+)*)`, "i"),
+  );
 }
 
-function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
+function isHeartbeatPrompt(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed || /remember this fact/i.test(trimmed)) {
+    return false;
+  }
+  return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
+}
+
+function buildAssistantText(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+  scenarioState: MockScenarioState,
+) {
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
   const toolJson = parseToolOutputJson(toolOutput);
   const userTexts = extractAllUserTexts(input);
-  const allInputText = extractAllInputTexts(input);
+  const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
   const memorySnippet =
@@ -366,9 +566,13 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
         : toolOutput;
   const orbitCode = extractOrbitCode(memorySnippet);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
-  const exactReplyDirective = extractExactReplyDirective(allInputText);
-  const exactMarkerDirective = extractExactMarkerDirective(allInputText);
+  const exactReplyDirective =
+    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const exactMarkerDirective =
+    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
+  const activeMemorySummary = extractActiveMemorySummary(allInputText);
+  const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
@@ -400,8 +604,31 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   if (/memory tools check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
+  if (/silent snack recall check/i.test(prompt) && snackPreference) {
+    return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
+  }
+  if (/silent snack recall check/i.test(prompt)) {
+    return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
+  }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
+  }
+  if (toolOutput && /repo contract followthrough check/i.test(prompt)) {
+    if (
+      /successfully (?:wrote|created|updated|replaced)/i.test(toolOutput) ||
+      /status:\s*complete/i.test(toolOutput)
+    ) {
+      return [
+        "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
+        "Wrote: repo-contract-summary.txt",
+        "Status: complete",
+      ].join("\n");
+    }
+    return [
+      "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
+      "Wrote: repo-contract-summary.txt",
+      "Status: blocked",
+    ].join("\n");
   }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
@@ -436,7 +663,11 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
-  if (/subagent fanout synthesis check/i.test(prompt) && toolOutput && subagentFanoutPhase >= 2) {
+  if (
+    /subagent fanout synthesis check/i.test(prompt) &&
+    toolOutput &&
+    scenarioState.subagentFanoutPhase >= 2
+  ) {
     return "Protocol note: delegated fanout complete. Alpha=ALPHA-OK. Beta=BETA-OK.";
   }
   if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
@@ -491,51 +722,228 @@ function extractPlannedToolName(events: StreamEvent[]) {
   return undefined;
 }
 
-function buildAssistantEvents(text: string): StreamEvent[] {
-  const outputItem = {
+type MockAssistantMessageSpec = {
+  id: string;
+  phase?: "commentary" | "final_answer";
+  streamDeltas?: string[];
+  text: string;
+};
+
+function splitMockStreamingText(text: string, parts = 3) {
+  if (text.length <= 1) {
+    return [text];
+  }
+  const chunkSize = Math.max(1, Math.ceil(text.length / parts));
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += chunkSize) {
+    chunks.push(text.slice(index, index + chunkSize));
+  }
+  return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
+}
+
+function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
+  return {
     type: "message",
-    id: "msg_mock_1",
+    id: spec.id,
     role: "assistant",
     status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
+    ...(spec.phase ? { phase: spec.phase } : {}),
+    content: [{ type: "output_text", text: spec.text, annotations: [] }],
+  } as const;
+}
+
+function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string): StreamEvent[] {
+  const specs =
+    typeof specsOrText === "string"
+      ? [
+          {
+            id: "msg_mock_1",
+            text: specsOrText,
+          },
+        ]
+      : specsOrText;
+  const output = specs.map((spec) => buildAssistantOutputItem(spec));
+  const events: StreamEvent[] = [];
+
+  for (const [outputIndex, spec] of specs.entries()) {
+    events.push({
+      type: "response.output_item.added",
+      item: {
+        type: "message",
+        id: spec.id,
+        role: "assistant",
+        ...(spec.phase ? { phase: spec.phase } : {}),
+        content: [],
+        status: "in_progress",
+      },
+    });
+    for (const delta of spec.streamDeltas ?? []) {
+      events.push({
+        type: "response.output_text.delta",
+        item_id: spec.id,
+        output_index: outputIndex,
+        content_index: 0,
+        delta,
+      });
+    }
+    if ((spec.streamDeltas ?? []).length > 0) {
+      events.push({
+        type: "response.output_text.done",
+        item_id: spec.id,
+        output_index: outputIndex,
+        content_index: 0,
+        text: spec.text,
+      });
+    }
+    events.push({
+      type: "response.output_item.done",
+      item: output[outputIndex],
+    });
+  }
+
+  events.push({
+    type: "response.completed",
+    response: {
+      id: "resp_mock_msg_1",
+      status: "completed",
+      output,
+      usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
+    },
+  });
+  return events;
+}
+
+function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[] {
+  const reasoningItem = {
+    type: "reasoning",
+    id,
+    summary: [{ text: summaryText }],
   } as const;
   return [
     {
       type: "response.output_item.added",
       item: {
-        type: "message",
-        id: "msg_mock_1",
-        role: "assistant",
-        content: [],
-        status: "in_progress",
+        type: "reasoning",
+        id,
+        summary: [],
       },
     },
     {
       type: "response.output_item.done",
-      item: outputItem,
+      item: reasoningItem,
     },
     {
       type: "response.completed",
       response: {
-        id: "resp_mock_msg_1",
+        id: `resp_${id}`,
         status: "completed",
-        output: [outputItem],
-        usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
+        output: [reasoningItem],
+        usage: { input_tokens: 64, output_tokens: 8, total_tokens: 72 },
       },
     },
   ];
 }
 
-async function buildResponsesPayload(body: Record<string, unknown>) {
+async function buildResponsesPayload(
+  body: Record<string, unknown>,
+  scenarioState: MockScenarioState,
+) {
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
   const toolJson = parseToolOutputJson(toolOutput);
-  const allInputText = extractAllInputTexts(input);
+  const allInputText = extractAllRequestTexts(input, body);
+  const exactReplyDirective =
+    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const firstExactMarkerDirective = extractLabeledMarkerDirective(
+    allInputText,
+    "first exact marker",
+  );
+  const secondExactMarkerDirective = extractLabeledMarkerDirective(
+    allInputText,
+    "second exact marker",
+  );
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
+  const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
+  const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
+  if (/remember this fact/i.test(prompt)) {
+    return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+  }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
+  }
+  if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
+    }
+    if (!hasReasoningOnlyRetryInstruction) {
+      return buildReasoningOnlyEvents(
+        "Need visible answer after reading the QA kickoff task.",
+        "rs_mock_reasoning_recovery",
+      );
+    }
+    return buildAssistantEvents("REASONING-RECOVERED-OK");
+  }
+  if (QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "reasoning-only-side-effect.txt",
+        content: "side effects already happened\n",
+      });
+    }
+    if (!hasReasoningOnlyRetryInstruction) {
+      return buildReasoningOnlyEvents(
+        "Need visible answer after the write, but the write already happened.",
+        "rs_mock_reasoning_side_effect",
+      );
+    }
+    return buildAssistantEvents("BUG-SHOULD-NOT-AUTO-RETRY");
+  }
+  if (QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
+    }
+    if (!hasEmptyResponseRetryInstruction) {
+      return buildAssistantEvents("");
+    }
+    return buildAssistantEvents("EMPTY-RECOVERED-OK");
+  }
+  if (QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
+    }
+    return buildAssistantEvents("");
+  }
+  if (QA_QUIET_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_quiet_stream",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(exactReplyDirective),
+        text: exactReplyDirective,
+      },
+    ]);
+  }
+  if (
+    QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&
+    firstExactMarkerDirective &&
+    secondExactMarkerDirective
+  ) {
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_block_1",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(firstExactMarkerDirective),
+        text: firstExactMarkerDirective,
+      },
+      {
+        id: "msg_mock_block_2",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(secondExactMarkerDirective),
+        text: secondExactMarkerDirective,
+      },
+    ]);
   }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
@@ -590,6 +998,48 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
         lines: 4,
       });
     }
+  }
+  if (
+    isActiveMemorySubagentPrompt(allInputText) &&
+    /silent snack recall check/i.test(allInputText)
+  ) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("memory_search", {
+        query: "QA movie night snack lemon pepper wings blue cheese",
+        maxResults: 3,
+      });
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    if (
+      typeof first?.path === "string" &&
+      (typeof first.startLine === "number" || typeof first.endLine === "number")
+    ) {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
+    }
+    const memorySnippet =
+      typeof toolJson?.text === "string"
+        ? toolJson.text
+        : Array.isArray(toolJson?.results)
+          ? JSON.stringify(toolJson.results)
+          : toolOutput;
+    const snackPreference = extractSnackPreference(memorySnippet);
+    if (snackPreference) {
+      return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
+    }
+    return buildAssistantEvents("NONE");
   }
   if (/session memory ranking check/i.test(prompt)) {
     if (!toolOutput) {
@@ -661,16 +1111,16 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
     });
   }
   if (/subagent fanout synthesis check/i.test(prompt)) {
-    if (!toolOutput && subagentFanoutPhase === 0) {
-      subagentFanoutPhase = 1;
+    if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
+      scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
         label: "qa-fanout-alpha",
         thread: false,
       });
     }
-    if (toolOutput && subagentFanoutPhase === 1) {
-      subagentFanoutPhase = 2;
+    if (toolOutput && scenarioState.subagentFanoutPhase === 1) {
+      scenarioState.subagentFanoutPhase = 2;
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: "Fanout worker beta: inspect the QA workspace and finish with exactly BETA-OK.",
         label: "qa-fanout-beta",
@@ -680,6 +1130,30 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   }
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
+  }
+  if (/repo contract followthrough check/i.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "AGENT.md" });
+    }
+    if (toolOutput.includes("# Repo contract")) {
+      return buildToolCallEventsWithArgs("read", { path: "SOUL.md" });
+    }
+    if (toolOutput.includes("# Execution style")) {
+      return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_INPUT.md" });
+    }
+    if (
+      toolOutput.includes("Mission: prove you followed the repo contract.") &&
+      toolOutput.includes("Evidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "repo-contract-summary.txt",
+        content: [
+          "Mission: prove you followed the repo contract.",
+          "Evidence: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md",
+          "Status: complete",
+        ].join("\n"),
+      });
+    }
   }
   if ((/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt)) && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -712,12 +1186,390 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   ) {
     await sleep(60_000);
   }
-  return buildAssistantEvents(buildAssistantText(input, body));
+  return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic /v1/messages adapter
+// ---------------------------------------------------------------------------
+//
+// The QA parity gate needs two comparable scenario runs: one against the
+// "candidate" (openai/gpt-5.4) and one against the "baseline"
+// (anthropic/claude-opus-4-6). The OpenAI mock above already dispatches all
+// the scenario prompt branches we care about. Rather than duplicating that
+// machinery, the /v1/messages route below translates Anthropic request
+// shapes into the shared ResponsesInputItem[] format, calls the same
+// buildResponsesPayload() dispatcher, and then re-serializes the resulting
+// events into an Anthropic response. This gives the parity harness a
+// baseline lane that exercises the same scenario logic without requiring
+// real Anthropic API keys.
+//
+// Scope: handles Anthropic Messages requests with text and tool_result
+// content blocks, supporting both non-streaming JSON responses and the
+// streaming SSE path used by the parity harness.
+
+function normalizeAnthropicSystemToString(
+  system: AnthropicMessagesRequest["system"],
+): string | undefined {
+  if (typeof system === "string") {
+    return system.trim() || undefined;
+  }
+  if (Array.isArray(system)) {
+    const joined = system
+      .map((block) => (block?.type === "text" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    return joined || undefined;
+  }
+  return undefined;
+}
+
+function stringifyToolResultContent(
+  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"],
+): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => (block?.type === "text" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function convertAnthropicMessagesToResponsesInput(params: {
+  system?: AnthropicMessagesRequest["system"];
+  messages: AnthropicMessage[];
+}): ResponsesInputItem[] {
+  const items: ResponsesInputItem[] = [];
+  const systemText = normalizeAnthropicSystemToString(params.system);
+  if (systemText) {
+    items.push({
+      role: "system",
+      content: [{ type: "input_text", text: systemText }],
+    });
+  }
+  for (const message of params.messages) {
+    const content = message.content;
+    if (typeof content === "string") {
+      items.push({
+        role: message.role,
+        content: [
+          message.role === "assistant"
+            ? { type: "output_text", text: content }
+            : { type: "input_text", text: content },
+        ],
+      });
+      continue;
+    }
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    // Buffer each block type so we can push in OpenAI-Responses order instead
+    // of the order they appear in the Anthropic content array. The parent
+    // role message must precede any function_call_output items from the same
+    // turn, otherwise extractToolOutput() (which scans for
+    // function_call_output AFTER the last user-role index) will not see the
+    // output and the downstream scenario dispatcher will behave as if no
+    // tool output was returned. Similarly, assistant tool_use blocks become
+    // function_call items that must follow the assistant text message they
+    // narrate.
+    const textPieces: Array<{ type: "input_text" | "output_text"; text: string }> = [];
+    const imagePieces: Array<{ type: "input_image"; image_url: string }> = [];
+    const toolResultItems: ResponsesInputItem[] = [];
+    const toolUseItems: ResponsesInputItem[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      if (block.type === "text") {
+        textPieces.push({
+          type: message.role === "assistant" ? "output_text" : "input_text",
+          text: block.text ?? "",
+        });
+        continue;
+      }
+      if (block.type === "image") {
+        // Mock only needs to count image inputs; a placeholder URL is fine.
+        imagePieces.push({ type: "input_image", image_url: "anthropic-mock:image" });
+        continue;
+      }
+      if (block.type === "tool_result") {
+        const output = stringifyToolResultContent(block.content);
+        if (output.trim()) {
+          toolResultItems.push({ type: "function_call_output", output });
+        }
+        continue;
+      }
+      if (block.type === "tool_use") {
+        // Mirror OpenAI's function_call output_item shape so downstream
+        // prompt extraction still sees "the assistant just emitted a tool
+        // call". The scenario dispatcher looks for tool_output on the next
+        // user turn, not the assistant's prior tool_use, so a minimal
+        // placeholder is enough.
+        toolUseItems.push({
+          type: "function_call",
+          name: block.name,
+          arguments: JSON.stringify(block.input ?? {}),
+          call_id: block.id,
+        });
+        continue;
+      }
+    }
+    if (textPieces.length > 0 || imagePieces.length > 0) {
+      const combinedContent: Array<Record<string, unknown>> = [...textPieces, ...imagePieces];
+      items.push({ role: message.role, content: combinedContent });
+    }
+    // Emit tool_use (assistant prior calls) and tool_result (user-side
+    // returns) AFTER the parent role message so extractLastUserText and
+    // extractToolOutput walk the array in the order they expect. For a
+    // tool_result-only user turn with no text/image blocks, the parent
+    // message is intentionally omitted — the function_call_output itself
+    // represents the user's "return the tool output" turn.
+    for (const toolUse of toolUseItems) {
+      items.push(toolUse);
+    }
+    for (const toolResult of toolResultItems) {
+      items.push(toolResult);
+    }
+  }
+  return items;
+}
+
+type ExtractedAssistantOutput = {
+  text: string;
+  toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+};
+
+function extractFinalAssistantOutputFromEvents(events: StreamEvent[]): ExtractedAssistantOutput {
+  const toolCalls: ExtractedAssistantOutput["toolCalls"] = [];
+  let text = "";
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as {
+      type?: unknown;
+      name?: unknown;
+      call_id?: unknown;
+      id?: unknown;
+      arguments?: unknown;
+      content?: unknown;
+    };
+    if (item.type === "function_call" && typeof item.name === "string") {
+      let input: Record<string, unknown> = {};
+      if (typeof item.arguments === "string" && item.arguments.trim()) {
+        try {
+          const parsed = JSON.parse(item.arguments) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            input = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // keep empty input on malformed args — mock dispatcher owns arg shape
+        }
+      }
+      toolCalls.push({
+        id: typeof item.call_id === "string" ? item.call_id : `toolu_mock_${toolCalls.length + 1}`,
+        name: item.name,
+        input,
+      });
+      continue;
+    }
+    if (item.type === "message" && Array.isArray(item.content)) {
+      for (const piece of item.content as Array<{ type?: unknown; text?: unknown }>) {
+        if (piece?.type === "output_text" && typeof piece.text === "string") {
+          text = piece.text;
+        }
+      }
+    }
+  }
+  return { text, toolCalls };
+}
+
+function buildAnthropicMessageResponse(params: {
+  model: string;
+  extracted: ExtractedAssistantOutput;
+}): Record<string, unknown> {
+  const content: Array<Record<string, unknown>> = [];
+  if (params.extracted.text) {
+    content.push({ type: "text", text: params.extracted.text });
+  }
+  for (const call of params.extracted.toolCalls) {
+    content.push({
+      type: "tool_use",
+      id: call.id,
+      name: call.name,
+      input: call.input,
+    });
+  }
+  if (content.length === 0) {
+    content.push({ type: "text", text: "" });
+  }
+  const stopReason = params.extracted.toolCalls.length > 0 ? "tool_use" : "end_turn";
+  const approxInputTokens = 64;
+  const approxOutputTokens = Math.max(
+    16,
+    countApproxTokens(params.extracted.text) + params.extracted.toolCalls.length * 16,
+  );
+  return {
+    id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
+    type: "message",
+    role: "assistant",
+    model: params.model || "claude-opus-4-6",
+    content,
+    stop_reason: stopReason,
+    stop_sequence: null,
+    usage: {
+      input_tokens: approxInputTokens,
+      output_tokens: approxOutputTokens,
+    },
+  };
+}
+
+function buildAnthropicMessageStreamEvents(params: {
+  model: string;
+  extracted: ExtractedAssistantOutput;
+}): AnthropicStreamEvent[] {
+  const approxInputTokens = 64;
+  const approxOutputTokens = Math.max(
+    16,
+    countApproxTokens(params.extracted.text) + params.extracted.toolCalls.length * 16,
+  );
+  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
+  const events: AnthropicStreamEvent[] = [
+    {
+      type: "message_start",
+      message: {
+        id: messageId,
+        type: "message",
+        role: "assistant",
+        model: params.model || "claude-opus-4-6",
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: approxInputTokens,
+          output_tokens: 0,
+        },
+      },
+    },
+  ];
+  let index = 0;
+  if (params.extracted.text || params.extracted.toolCalls.length === 0) {
+    events.push({
+      type: "content_block_start",
+      index,
+      content_block: {
+        type: "text",
+        text: "",
+      },
+    });
+    if (params.extracted.text) {
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: {
+          type: "text_delta",
+          text: params.extracted.text,
+        },
+      });
+    }
+    events.push({
+      type: "content_block_stop",
+      index,
+    });
+    index += 1;
+  }
+  for (const call of params.extracted.toolCalls) {
+    events.push({
+      type: "content_block_start",
+      index,
+      content_block: {
+        type: "tool_use",
+        id: call.id,
+        name: call.name,
+        input: {},
+      },
+    });
+    events.push({
+      type: "content_block_delta",
+      index,
+      delta: {
+        type: "input_json_delta",
+        partial_json: JSON.stringify(call.input ?? {}),
+      },
+    });
+    events.push({
+      type: "content_block_stop",
+      index,
+    });
+    index += 1;
+  }
+  events.push({
+    type: "message_delta",
+    delta: {
+      stop_reason: params.extracted.toolCalls.length > 0 ? "tool_use" : "end_turn",
+    },
+    usage: {
+      input_tokens: approxInputTokens,
+      output_tokens: approxOutputTokens,
+    },
+  });
+  events.push({
+    type: "message_stop",
+  });
+  return events;
+}
+
+async function buildMessagesPayload(
+  body: AnthropicMessagesRequest,
+  scenarioState: MockScenarioState,
+): Promise<{
+  events: StreamEvent[];
+  input: ResponsesInputItem[];
+  extracted: ExtractedAssistantOutput;
+  responseBody: Record<string, unknown>;
+  streamEvents: AnthropicStreamEvent[];
+  model: string;
+}> {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const input = convertAnthropicMessagesToResponsesInput({
+    system: body.system,
+    messages,
+  });
+  // Treat empty-string model the same as absent. A bare typeof check lets
+  // `""` leak through to `responseBody.model` and `lastRequest.model`,
+  // which then confuses parity consumers that assume the mock always
+  // echoes the real provider label. Normalize once and reuse everywhere.
+  const normalizedModel =
+    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-6";
+  // Dispatch through the same scenario logic the /v1/responses route uses.
+  // The mock dispatcher only reads `body.input`, `body.model`, and
+  // `body.stream`, so a synthetic shim body is sufficient.
+  const dispatchBody: Record<string, unknown> = {
+    input,
+    model: normalizedModel,
+    stream: false,
+  };
+  const events = await buildResponsesPayload(dispatchBody, scenarioState);
+  const extracted = extractFinalAssistantOutputFromEvents(events);
+  const responseBody = buildAnthropicMessageResponse({
+    model: normalizedModel,
+    extracted,
+  });
+  const streamEvents = buildAnthropicMessageStreamEvents({
+    model: normalizedModel,
+    extracted,
+  });
+  return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
 }
 
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
-  subagentFanoutPhase = 0;
+  const scenarioState: MockScenarioState = { subagentFanoutPhase: 0 };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -734,6 +1586,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           { id: "gpt-5.4-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
+          { id: "claude-opus-4-6", object: "model" },
+          { id: "claude-sonnet-4-6", object: "model" },
         ],
       });
       return;
@@ -793,14 +1647,17 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       const raw = await readBody(req);
       const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-      const events = await buildResponsesPayload(body);
+      const events = await buildResponsesPayload(body, scenarioState);
+      const resolvedModel = typeof body.model === "string" ? body.model : "";
       lastRequest = {
         raw,
         body,
         prompt: extractLastUserText(input),
-        allInputText: extractAllInputTexts(input),
+        allInputText: extractAllRequestTexts(input, body),
+        instructions: extractInstructionsText(body) || undefined,
         toolOutput: extractToolOutput(input),
-        model: typeof body.model === "string" ? body.model : "",
+        model: resolvedModel,
+        providerVariant: resolveProviderVariant(resolvedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
       };
@@ -818,6 +1675,56 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         return;
       }
       writeSse(res, events);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/v1/messages") {
+      const raw = await readBody(req);
+      let body: AnthropicMessagesRequest = {};
+      try {
+        body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
+      } catch {
+        writeJson(res, 400, {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "Malformed JSON body for Anthropic Messages request.",
+          },
+        });
+        return;
+      }
+      const {
+        events,
+        input,
+        responseBody,
+        streamEvents,
+        model: normalizedModel,
+      } = await buildMessagesPayload(body, scenarioState);
+      // Record the adapted request snapshot so /debug/requests gives the QA
+      // suite the same plannedToolName / allInputText / toolOutput signals
+      // on the Anthropic route that the OpenAI route already exposes. This
+      // is what lets a single parity run diff assertions across both lanes.
+      // Reuse the normalized model so an empty-string body.model no longer
+      // leaks through to `lastRequest.model`.
+      lastRequest = {
+        raw,
+        body: body as Record<string, unknown>,
+        prompt: extractLastUserText(input),
+        allInputText: extractAllInputTexts(input),
+        toolOutput: extractToolOutput(input),
+        model: normalizedModel,
+        providerVariant: resolveProviderVariant(normalizedModel),
+        imageInputCount: countImageInputs(input),
+        plannedToolName: extractPlannedToolName(events),
+      };
+      requests.push(lastRequest);
+      if (requests.length > 50) {
+        requests.splice(0, requests.length - 50);
+      }
+      if (body.stream === true) {
+        writeAnthropicSse(res, streamEvents);
+        return;
+      }
+      writeJson(res, 200, responseBody);
       return;
     }
     writeJson(res, 404, { error: "not found" });

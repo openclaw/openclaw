@@ -7,6 +7,7 @@ import {
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
+import type { QaTransportGatewayConfig } from "./qa-transport.js";
 
 export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
@@ -44,6 +45,10 @@ export function normalizeQaThinkingLevel(input: unknown): QaThinkingLevel | unde
   return undefined;
 }
 
+function trimTrailingApiV1(baseUrl: string) {
+  return baseUrl.replace(/\/v1\/?$/i, "");
+}
+
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
@@ -56,8 +61,6 @@ export function buildQaGatewayConfig(params: {
   gatewayPort: number;
   gatewayToken: string;
   providerBaseUrl?: string;
-  qaBusBaseUrl: string;
-  includeQaChannel?: boolean;
   workspaceDir: string;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
@@ -68,16 +71,21 @@ export function buildQaGatewayConfig(params: {
   imageGenerationModel?: string | null;
   enabledProviderIds?: string[];
   enabledPluginIds?: string[];
+  transportPluginIds?: readonly string[];
+  transportConfig?: QaTransportGatewayConfig;
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
-  const includeQaChannel = params.includeQaChannel !== false;
   const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const mockAnthropicBaseUrl = trimTrailingApiV1(mockProviderBaseUrl);
   const mockOpenAiProvider: ModelProviderConfig = {
     baseUrl: mockProviderBaseUrl,
     apiKey: "test",
     api: "openai-responses",
+    request: {
+      allowPrivateNetwork: true,
+    },
     models: [
       {
         id: "gpt-5.4",
@@ -126,6 +134,50 @@ export function buildQaGatewayConfig(params: {
       },
     ],
   };
+  const mockNamedOpenAiProvider: ModelProviderConfig = {
+    ...mockOpenAiProvider,
+    models: mockOpenAiProvider.models.map((model) => ({ ...model })),
+  };
+  const mockAnthropicProvider: ModelProviderConfig = {
+    baseUrl: mockAnthropicBaseUrl,
+    apiKey: "test",
+    api: "anthropic-messages",
+    request: {
+      allowPrivateNetwork: true,
+    },
+    models: [
+      {
+        id: "claude-opus-4-6",
+        name: "claude-opus-4-6",
+        api: "anthropic-messages",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 200_000,
+        maxTokens: 4096,
+      },
+      {
+        id: "claude-sonnet-4-6",
+        name: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 200_000,
+        maxTokens: 4096,
+      },
+    ],
+  };
   const providerMode = normalizeQaProviderMode(params.providerMode ?? "mock-openai");
   const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel =
@@ -162,15 +214,23 @@ export function buildQaGatewayConfig(params: {
               : selectedProviderIds,
           ),
         ]
-      : [];
-  const pluginEntries =
-    providerMode === "live-frontier"
-      ? Object.fromEntries(selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]))
-      : {};
-  const allowedPlugins =
-    providerMode === "live-frontier"
-      ? ["memory-core", ...selectedPluginIds, ...(includeQaChannel ? ["qa-channel"] : [])]
-      : ["memory-core", ...(includeQaChannel ? ["qa-channel"] : [])];
+      : [
+          ...new Set(
+            (params.enabledPluginIds ?? [])
+              .map((pluginId) => pluginId.trim())
+              .filter((pluginId) => pluginId.length > 0),
+          ),
+        ];
+  const transportPluginIds = [...new Set(params.transportPluginIds ?? [])]
+    .map((pluginId) => pluginId.trim())
+    .filter((pluginId) => pluginId.length > 0);
+  const pluginEntries = Object.fromEntries(
+    selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+  );
+  const transportPluginEntries = Object.fromEntries(
+    transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+  );
+  const allowedPlugins = [...new Set(["memory-core", ...selectedPluginIds, ...transportPluginIds])];
   const liveModelParams =
     providerMode === "live-frontier"
       ? (modelRef: string) => ({
@@ -199,7 +259,7 @@ export function buildQaGatewayConfig(params: {
           enabled: true,
         },
         ...pluginEntries,
-        ...(includeQaChannel ? { "qa-channel": { enabled: true } } : {}),
+        ...transportPluginEntries,
       },
     },
     agents: {
@@ -265,6 +325,8 @@ export function buildQaGatewayConfig(params: {
             mode: "replace",
             providers: {
               "mock-openai": mockOpenAiProvider,
+              openai: mockNamedOpenAiProvider,
+              anthropic: mockAnthropicProvider,
             },
           },
         }
@@ -307,24 +369,7 @@ export function buildQaGatewayConfig(params: {
         mode: "off",
       },
     },
-    ...(includeQaChannel
-      ? {
-          channels: {
-            "qa-channel": {
-              enabled: true,
-              baseUrl: params.qaBusBaseUrl,
-              botUserId: "openclaw",
-              botDisplayName: "OpenClaw QA",
-              allowFrom: ["*"],
-              pollTimeoutMs: 250,
-            },
-          },
-        }
-      : {}),
-    messages: {
-      groupChat: {
-        mentionPatterns: ["\\b@?openclaw\\b"],
-      },
-    },
+    ...(params.transportConfig?.channels ? { channels: params.transportConfig.channels } : {}),
+    ...(params.transportConfig?.messages ? { messages: params.transportConfig.messages } : {}),
   } satisfies OpenClawConfig;
 }

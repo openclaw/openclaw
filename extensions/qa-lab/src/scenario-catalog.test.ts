@@ -81,6 +81,12 @@ describe("qa scenario catalog", () => {
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
   });
 
+  it("loads scenario-declared gateway runtime options from markdown", () => {
+    const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
+
+    expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
+  });
+
   it("keeps the character eval scenario natural and task-shaped", () => {
     const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
       | {
@@ -112,11 +118,87 @@ describe("qa scenario catalog", () => {
     );
   });
 
+  it("includes the seeded mock-only broken-turn scenarios in the markdown pack", () => {
+    const scenarioIds = [
+      "reasoning-only-recovery-replay-safe-read",
+      "reasoning-only-no-auto-retry-after-write",
+      "empty-response-recovery-replay-safe-read",
+      "empty-response-retry-budget-exhausted",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | {
+            requiredProvider?: string;
+            prompt?: string;
+          }
+        | undefined;
+
+      expect(scenario.sourcePath).toBe(`qa/scenarios/${scenarioId}.md`);
+      expect(config?.requiredProvider).toBe("mock-openai");
+      expect(config?.prompt).toContain("check");
+      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps mock-only image debug assertions guarded in live-frontier runs", () => {
+    const scenario = readQaScenarioPack().scenarios.find(
+      (candidate) => candidate.id === "image-understanding-attachment",
+    );
+    const imageRequestAction = scenario?.execution.flow?.steps
+      .flatMap((step) => step.actions ?? [])
+      .find(
+        (
+          action,
+        ): action is {
+          set: string;
+          value?: { expr?: string };
+        } =>
+          typeof action === "object" &&
+          action !== null &&
+          "set" in action &&
+          action.set === "imageRequest",
+      );
+    const imageRequestExpr = imageRequestAction?.value?.expr;
+
+    expect(imageRequestExpr).toContain("env.mock ?");
+    expect(imageRequestExpr).toContain("/debug/requests");
+  });
+
+  it("adds a repo-instruction followthrough scenario to the parity pack", () => {
+    const scenario = readQaScenarioById("instruction-followthrough-repo-contract");
+    const config = readQaScenarioExecutionConfig("instruction-followthrough-repo-contract") as
+      | {
+          workspaceFiles?: Record<string, string>;
+          prompt?: string;
+          expectedReplyAll?: string[];
+          expectedArtifactAll?: string[];
+          expectedArtifactAny?: string[];
+        }
+      | undefined;
+
+    expect(config?.workspaceFiles?.["AGENT.md"]).toContain("Step order:");
+    expect(config?.workspaceFiles?.["SOUL.md"]).toContain("action-first");
+    expect(config?.workspaceFiles?.["FOLLOWTHROUGH_INPUT.md"]).toContain(
+      "Mission: prove you followed the repo contract.",
+    );
+    expect(config?.prompt).toContain("Repo contract followthrough check.");
+    expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
+    expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
+    expect(config?.expectedArtifactAny).toContain("evidence path");
+    expect(scenario.title).toBe("Instruction followthrough repo contract");
+  });
+
   it("rejects malformed string matcher lists before running a flow", () => {
     expect(() =>
       validateQaScenarioExecutionConfig({
         gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }],
       }),
     ).toThrow(/gracefulFallbackAny entries must be strings/);
+  });
+
+  it("returns undefined execution config for an unknown scenario id", () => {
+    expect(readQaScenarioExecutionConfig("missing-scenario-id")).toBeUndefined();
   });
 });

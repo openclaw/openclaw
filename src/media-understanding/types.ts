@@ -32,6 +32,7 @@ export type MediaUnderstandingOutput = {
 
 export type MediaUnderstandingDecisionOutcome =
   | "success"
+  | "failed"
   | "skipped"
   | "disabled"
   | "no-attachment"
@@ -44,6 +45,8 @@ export type MediaUnderstandingModelDecision = {
   outcome: "success" | "skipped" | "failed";
   reason?: string;
 };
+
+export type MediaUnderstandingAttemptOutcome = MediaUnderstandingModelDecision["outcome"];
 
 export type MediaUnderstandingAttachmentDecision = {
   attachmentIndex: number;
@@ -80,6 +83,8 @@ export type MediaUnderstandingProviderRequestTransportOverrides = {
   auth?: MediaUnderstandingProviderRequestAuthOverride;
   proxy?: MediaUnderstandingProviderRequestProxyOverride;
   tls?: MediaUnderstandingProviderRequestTlsOverride;
+  /** Runtime-only flag from trusted model-provider config; media config rejects it. */
+  allowPrivateNetwork?: boolean;
 };
 
 export type AudioTranscriptionRequest = {

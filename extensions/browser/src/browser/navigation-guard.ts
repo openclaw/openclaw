@@ -43,7 +43,22 @@ export function withBrowserNavigationPolicy(
 }
 
 export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
-  return !isPrivateNetworkAllowedByPolicy(ssrfPolicy);
+  return ssrfPolicy?.dangerouslyAllowPrivateNetwork === false;
+}
+
+export function requiresInspectableBrowserNavigationRedirectsForUrl(
+  url: string,
+  ssrfPolicy?: SsrFPolicy,
+): boolean {
+  if (!requiresInspectableBrowserNavigationRedirects(ssrfPolicy)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol);
+  } catch {
+    return false;
+  }
 }
 
 function isIpLiteralHostname(hostname: string): boolean {
@@ -107,6 +122,7 @@ export async function assertBrowserNavigationAllowed(
   // the same address that passed policy checks.
   if (
     opts.ssrfPolicy &&
+    opts.ssrfPolicy.dangerouslyAllowPrivateNetwork === false &&
     !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) &&
     !isIpLiteralHostname(parsed.hostname) &&
     !isExplicitlyAllowedBrowserHostname(parsed.hostname, opts.ssrfPolicy)

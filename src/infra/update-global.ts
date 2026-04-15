@@ -5,6 +5,11 @@ import path from "node:path";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./npm-update-compat-sidecars.js";
+import {
+  collectPackageDistInventory,
+  readPackageDistInventoryIfPresent,
+} from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
@@ -89,9 +94,77 @@ export async function collectInstalledGlobalPackageErrors(params: {
       `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
     );
   }
-  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
-    if (!(await pathExists(path.join(params.packageRoot, relativePath)))) {
-      errors.push(`missing bundled runtime sidecar ${relativePath}`);
+  errors.push(...(await collectInstalledPackageDistErrors(params.packageRoot)));
+  return errors;
+}
+
+async function collectInstalledPackageDistErrors(packageRoot: string): Promise<string[]> {
+  const inventoryFiles = await readPackageDistInventoryIfPresent(packageRoot);
+  if (inventoryFiles !== null) {
+    return await collectInstalledPathErrors({
+      packageRoot,
+      expectedFiles: inventoryFiles,
+      actualFiles: await collectPackageDistInventory(packageRoot),
+      missingMessage: (relativePath) => `missing packaged dist file ${relativePath}`,
+      unexpectedMessage: (relativePath) => `unexpected packaged dist file ${relativePath}`,
+    });
+  }
+  return await collectInstalledPathErrors({
+    packageRoot,
+    expectedFiles: await collectLegacyInstalledPackageDistPaths(packageRoot),
+    actualFiles: null,
+    missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
+  });
+}
+
+async function collectLegacyInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
+  const expectedFiles = new Set(NPM_UPDATE_COMPAT_SIDECAR_PATHS);
+  await Promise.all(
+    BUNDLED_RUNTIME_SIDECAR_PATHS.map(async (relativePath) => {
+      const pluginRoot = resolveBundledPluginRoot(relativePath);
+      if (pluginRoot === null) {
+        return;
+      }
+      if (
+        (await pathExists(path.join(packageRoot, pluginRoot, "package.json"))) ||
+        (await pathExists(path.join(packageRoot, pluginRoot, "openclaw.plugin.json")))
+      ) {
+        expectedFiles.add(relativePath);
+      }
+    }),
+  );
+  return [...expectedFiles].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveBundledPluginRoot(relativePath: string): string | null {
+  const match = /^dist\/extensions\/[^/]+/u.exec(relativePath);
+  return match ? match[0] : null;
+}
+
+async function collectInstalledPathErrors(params: {
+  packageRoot: string;
+  expectedFiles: string[];
+  actualFiles: string[] | null;
+  missingMessage: (relativePath: string) => string;
+  unexpectedMessage?: ((relativePath: string) => string) | undefined;
+}): Promise<string[]> {
+  const errors: string[] = [];
+  const actualSet = params.actualFiles ? new Set(params.actualFiles) : null;
+  for (const relativePath of params.expectedFiles) {
+    const exists =
+      actualSet !== null
+        ? actualSet.has(relativePath)
+        : await pathExists(path.join(params.packageRoot, relativePath));
+    if (!exists) {
+      errors.push(params.missingMessage(relativePath));
+    }
+  }
+  if (actualSet !== null && params.unexpectedMessage) {
+    const expectedSet = new Set(params.expectedFiles);
+    for (const relativePath of params.actualFiles ?? []) {
+      if (!expectedSet.has(relativePath)) {
+        errors.push(params.unexpectedMessage(relativePath));
+      }
     }
   }
   return errors;

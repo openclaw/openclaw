@@ -3,10 +3,12 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createNestedNpmInstallEnv,
+  pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
@@ -29,11 +31,29 @@ async function writePluginPackage(
     path.join(pluginDir, "package.json"),
     `${JSON.stringify(packageJson, null, 2)}\n`,
   );
+  const packageRoot =
+    path.basename(path.dirname(extensionsDir)) === "dist"
+      ? path.dirname(path.dirname(extensionsDir))
+      : path.dirname(extensionsDir);
+  try {
+    await writePackageDistInventory(packageRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
 }
 
 describe("bundled plugin postinstall", () => {
   function createNpmInstallArgs(...packages: string[]) {
-    return ["install", "--omit=dev", "--no-save", "--package-lock=false", ...packages];
+    return [
+      "install",
+      "--omit=dev",
+      "--no-save",
+      "--package-lock=false",
+      "--legacy-peer-deps",
+      ...packages,
+    ];
   }
 
   function createBareNpmRunner(packages: string[]) {
@@ -174,6 +194,108 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).resolves.toBeTruthy();
   });
 
+  it("prunes stale dist files from packaged installs", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-");
+    const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");
+    const staleFile = path.join(packageRoot, "dist", "channel-CJUAgRQR.js");
+    await fs.mkdir(path.dirname(currentFile), { recursive: true });
+    await fs.writeFile(currentFile, "export {};\n");
+    await writePackageDistInventory(packageRoot);
+    await fs.writeFile(staleFile, "export {};\n");
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/channel-CJUAgRQR.js"]);
+
+    await expect(fs.stat(currentFile)).resolves.toBeTruthy();
+    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects symlinked dist roots in packaged installs", () => {
+    expect(() =>
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn((filePath) => ({
+          isDirectory: () => filePath === "/pkg/dist",
+          isSymbolicLink: () => filePath === "/pkg/dist",
+        })),
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn(),
+        rmSync: vi.fn(),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow("unsafe dist root: dist must be a real directory");
+  });
+
+  it("rejects symlink entries in packaged dist trees", () => {
+    expect(() =>
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn(() => ({
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        })),
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn((filePath) => {
+          if (filePath === "/pkg/dist") {
+            return [
+              {
+                name: "escape",
+                isDirectory: () => false,
+                isFile: () => false,
+                isSymbolicLink: () => true,
+              },
+            ];
+          }
+          return [];
+        }),
+        rmSync: vi.fn(),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow("unsafe dist entry: dist/escape");
+  });
+
+  it("unlinks stale files instead of recursive pruning them", () => {
+    const unlinkSync = vi.fn();
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn(() => ({
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        })),
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn((filePath, options) => {
+          if (filePath === "/pkg/dist" && options?.withFileTypes) {
+            return [
+              {
+                name: "stale.js",
+                isDirectory: () => false,
+                isFile: () => true,
+                isSymbolicLink: () => false,
+              },
+            ];
+          }
+          return [];
+        }),
+        unlinkSync,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/stale.js"]);
+
+    expect(unlinkSync).toHaveBeenCalledWith("/pkg/dist/stale.js");
+  });
+
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
@@ -222,6 +344,75 @@ describe("bundled plugin postinstall", () => {
       extensionsDir,
       packageRoot,
       spawnSync,
+    });
+
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("reinstalls bundled runtime deps when optional native children are missing", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "discord", {
+      dependencies: {
+        "@snazzah/davey": "0.1.11",
+      },
+    });
+    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
+      JSON.stringify({
+        optionalDependencies: {
+          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
+        },
+      }),
+    );
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    runBundledPluginPostinstall({
+      env: { HOME: "/tmp/home" },
+      extensionsDir,
+      packageRoot,
+      arch: "arm64",
+      npmRunner: createBareNpmRunner(["@snazzah/davey@0.1.11"]),
+      platform: "win32",
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["@snazzah/davey@0.1.11"]);
+  });
+
+  it("does not reinstall when only another platform optional native child is missing", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "discord", {
+      dependencies: {
+        "@snazzah/davey": "0.1.11",
+      },
+    });
+    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
+      JSON.stringify({
+        optionalDependencies: {
+          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
+        },
+      }),
+    );
+    const spawnSync = vi.fn();
+
+    runBundledPluginPostinstall({
+      env: { HOME: "/tmp/home" },
+      extensionsDir,
+      packageRoot,
+      arch: "arm64",
+      platform: "darwin",
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
     });
 
     expect(spawnSync).not.toHaveBeenCalled();

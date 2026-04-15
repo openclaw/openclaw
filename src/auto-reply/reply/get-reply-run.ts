@@ -97,6 +97,7 @@ let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runti
 let sessionStoreRuntimePromise: Promise<
   typeof import("../../config/sessions/store.runtime.js")
 > | null = null;
+const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
 
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
@@ -116,6 +117,18 @@ function loadSessionUpdatesRuntime() {
 function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
   return sessionStoreRuntimePromise;
+}
+
+function stripPromptThinkingDirectives(body: string): string {
+  return body
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/(^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:\s*|\s+)?[A-Za-z-]*/gi, "$1")
+        .replace(/[ \t]{2,}/g, " ")
+        .trimEnd(),
+    )
+    .join("\n");
 }
 
 type RunPreparedReplyParams = {
@@ -314,7 +327,9 @@ export async function runPreparedReply(
           cfg,
         })
       : null;
-  const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
+  const baseBodyFinal = isBareSessionReset
+    ? buildBareSessionResetPrompt(cfg)
+    : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
@@ -335,7 +350,12 @@ export async function runPreparedReply(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
   if (!baseBodyTrimmed && !hasMediaAttachment) {
-    await typing.onReplyStart();
+    // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
+    // otherwise channels that wire onReplyStart to typing indicators leak
+    // visible signals even though outbound delivery is suppressed.
+    if (!suppressTyping) {
+      await typing.onReplyStart();
+    }
     logVerbose("Inbound body empty after normalization; skipping agent run");
     typing.cleanup();
     return {
@@ -378,6 +398,7 @@ export async function runPreparedReply(
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
+  let forceSenderIsOwnerFalseFromSystemEvents = false;
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
@@ -391,6 +412,9 @@ export async function runPreparedReply(
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
+        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
+          forceSenderIsOwnerFalseFromSystemEvents = true;
+        }
       }
     }
     return buildReplyPromptBodies({
@@ -614,7 +638,10 @@ export async function runPreparedReply(
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
-      senderIsOwner: command.senderIsOwner,
+      senderIsOwner: forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner,
+      traceAuthorized:
+        (forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner) ||
+        (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       config: cfg,
