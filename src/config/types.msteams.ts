@@ -95,6 +95,13 @@ export type MSTeamsConfig = {
   /** Azure AD Tenant ID (for single-tenant bots). */
   tenantId?: string;
   /**
+   * Override tenant ID used only for Microsoft Graph API token acquisition.
+   * Useful when the bot app registration lives in a different tenant from the
+   * Microsoft 365 / Teams data tenant. When omitted, `tenantId` is used for
+   * both Bot Framework and Graph API tokens.
+   */
+  graphTenantId?: string;
+  /**
    * Authentication type.
    * - `"secret"` (default): uses `appPassword` (client secret).
    * - `"federated"`: uses workload identity / managed identity / certificate.

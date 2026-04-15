@@ -83,11 +83,7 @@ export async function fetchChannelMessage(
   messageId: string,
 ): Promise<GraphThreadMessage | undefined> {
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}?$select=id,from,body,createdDateTime`;
-  try {
-    return await fetchGraphJson<GraphThreadMessage>({ token, path });
-  } catch {
-    return undefined;
-  }
+  return fetchGraphJson<GraphThreadMessage>({ token, path });
 }
 
 /**

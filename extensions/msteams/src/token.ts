@@ -17,6 +17,8 @@ export type MSTeamsSecretCredentials = {
   appId: string;
   appPassword: string;
   tenantId: string;
+  /** Override tenant used only for Graph API tokens. */
+  graphTenantId?: string;
 };
 
 export type MSTeamsFederatedCredentials = {
@@ -90,6 +92,11 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
     normalizeSecretInputString(cfg?.tenantId) ||
     normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
 
+  const graphTenantId =
+    normalizeSecretInputString(cfg?.graphTenantId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_GRAPH_TENANT_ID) ||
+    undefined;
+
   if (!appId || !tenantId) {
     return undefined;
   }
@@ -134,7 +141,7 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
     return undefined;
   }
 
-  return { type: "secret", appId, appPassword, tenantId };
+  return { type: "secret", appId, appPassword, tenantId, graphTenantId };
 }
 
 // ---------------------------------------------------------------------------

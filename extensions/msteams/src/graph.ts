@@ -210,7 +210,14 @@ export async function resolveGraphToken(
     // Fall through to app-only token
   }
 
-  const { app } = await loadMSTeamsSdkWithAuth(creds);
+  // If graphTenantId is set (and differs from tenantId), use it for Graph token acquisition
+  // so the bot app registration tenant and the M365 data tenant can differ.
+  const graphCreds =
+    creds.type === "secret" && creds.graphTenantId && creds.graphTenantId !== creds.tenantId
+      ? { ...creds, tenantId: creds.graphTenantId }
+      : creds;
+
+  const { app } = await loadMSTeamsSdkWithAuth(graphCreds);
   const tokenProvider = createMSTeamsTokenProvider(app);
   const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(graphTokenValue);

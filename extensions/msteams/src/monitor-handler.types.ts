@@ -13,6 +13,10 @@ export type MSTeamsMessageHandlerDeps = {
   tokenProvider: {
     getAccessToken: (scope: string) => Promise<string>;
   };
+  /** Separate token provider for Graph API calls. Defaults to tokenProvider when not set. */
+  graphTokenProvider?: {
+    getAccessToken: (scope: string) => Promise<string>;
+  };
   textLimit: number;
   mediaMaxBytes: number;
   conversationStore: MSTeamsConversationStore;
