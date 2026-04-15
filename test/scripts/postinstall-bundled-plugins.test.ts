@@ -8,6 +8,7 @@ import {
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
@@ -34,27 +35,13 @@ async function writePluginPackage(
     path.basename(path.dirname(extensionsDir)) === "dist"
       ? path.dirname(path.dirname(extensionsDir))
       : path.dirname(extensionsDir);
-  const distRoot = path.join(packageRoot, "dist");
   try {
-    const distEntries = await fs.readdir(distRoot, { recursive: true });
-    await writeDistInventory(
-      packageRoot,
-      distEntries
-        .filter((entry) => typeof entry === "string")
-        .map((entry) => path.join("dist", entry).replace(/\\/g, "/"))
-        .toSorted((left, right) => left.localeCompare(right)),
-    );
+    await writePackageDistInventory(packageRoot);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
   }
-}
-
-async function writeDistInventory(packageRoot: string, files: string[]) {
-  const inventoryPath = path.join(packageRoot, "dist", "postinstall-inventory.json");
-  await fs.mkdir(path.dirname(inventoryPath), { recursive: true });
-  await fs.writeFile(inventoryPath, `${JSON.stringify(files, null, 2)}\n`);
 }
 
 describe("bundled plugin postinstall", () => {
@@ -213,8 +200,8 @@ describe("bundled plugin postinstall", () => {
     const staleFile = path.join(packageRoot, "dist", "channel-CJUAgRQR.js");
     await fs.mkdir(path.dirname(currentFile), { recursive: true });
     await fs.writeFile(currentFile, "export {};\n");
+    await writePackageDistInventory(packageRoot);
     await fs.writeFile(staleFile, "export {};\n");
-    await writeDistInventory(packageRoot, ["dist/channel-BOa4MfoC.js"]);
 
     expect(
       pruneInstalledPackageDist({
