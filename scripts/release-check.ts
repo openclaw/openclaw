@@ -19,6 +19,10 @@ import {
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
+import {
+  runInstalledWorkspaceBootstrapSmoke,
+  WORKSPACE_TEMPLATE_PACK_PATHS,
+} from "./lib/workspace-bootstrap-smoke.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
@@ -39,8 +43,10 @@ const requiredPathGroups = [
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs(),
+  ...WORKSPACE_TEMPLATE_PACK_PATHS,
   ...listRequiredQaScenarioPackPaths(),
   "scripts/npm-runner.mjs",
+  "scripts/preinstall-package-manager-warning.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
@@ -235,6 +241,8 @@ function runPackedBundledChannelEntrySmoke(): void {
     if (completionFiles.length === 0) {
       throw new Error("release-check: packed completion smoke produced no completion files.");
     }
+
+    runInstalledWorkspaceBootstrapSmoke({ packageRoot });
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -253,13 +261,10 @@ export function collectMissingPackPaths(paths: Iterable<string>): string[] {
 }
 
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
-  const isAllowedBundledPluginNodeModulesPath = (path: string) =>
-    /^dist\/extensions\/[^/]+\/node_modules\//.test(path);
   return [...paths]
     .filter(
       (path) =>
-        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
-        (/node_modules\//.test(path) && !isAllowedBundledPluginNodeModulesPath(path)),
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) || /node_modules\//.test(path),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }

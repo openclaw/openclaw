@@ -3243,6 +3243,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Max total characters across all injected workspace bootstrap files (default: 150000).",
               },
+              experimental: {
+                type: "object",
+                properties: {
+                  localModelLean: {
+                    type: "boolean",
+                    title: "Enable Lean Local Model Mode (Experimental)",
+                    description:
+                      "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Experimental Agent Flags",
+                description:
+                  "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
+              },
               bootstrapPromptTruncationWarning: {
                 anyOf: [
                   {
@@ -24513,6 +24528,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Max total characters across all injected workspace bootstrap files (default: 150000).",
       tags: ["performance"],
     },
+    "agents.defaults.experimental": {
+      label: "Experimental Agent Flags",
+      help: "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
+      tags: ["security", "advanced"],
+    },
+    "agents.defaults.experimental.localModelLean": {
+      label: "Enable Lean Local Model Mode (Experimental)",
+      help: "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
+      tags: ["security", "advanced"],
+    },
     "agents.defaults.bootstrapPromptTruncationWarning": {
       label: "Bootstrap Prompt Truncation Warning",
       help: 'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
@@ -27277,6 +27302,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.14-beta.1",
+  version: "2026.4.15-beta.1",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

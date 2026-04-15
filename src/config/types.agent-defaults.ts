@@ -198,6 +198,14 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
+  /** Experimental agent-default flags. Keep off unless you are intentionally testing a preview surface. */
+  experimental?: {
+    /**
+     * Drop heavyweight non-essential default tools for weaker or smaller local
+     * model backends. Experimental preview only.
+     */
+    localModelLean?: boolean;
+  };
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
