@@ -258,7 +258,7 @@ export function extractThinkingFromMessage(message: unknown): string {
     blockType: "thinking",
     valueKey: "thinking",
   });
-  return parts.join("\n").trim();
+  return parts.join("\n\n").trim();
 }
 
 /**
