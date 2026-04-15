@@ -407,6 +407,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
       payload.sessionKey,
     );
   }
+  const trackedRunIdBeforeEvent = host.chatRunId;
   const sideResultHost = host as GatewayHostWithSideResults;
   const isTrackedSideResultTerminalEvent =
     isTerminalChatState(payload?.state) &&
@@ -418,7 +419,11 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
+  if (
+    state === "final" &&
+    !historyReloaded &&
+    shouldReloadHistoryForFinalEvent(payload, { trackedRunId: trackedRunIdBeforeEvent })
+  ) {
     void loadChatHistory(host as unknown as ChatState);
   }
 }

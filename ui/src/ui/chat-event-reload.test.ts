@@ -23,14 +23,31 @@ describe("shouldReloadHistoryForFinalEvent", () => {
     ).toBe(true);
   });
 
-  it("returns true when final event includes assistant payload", () => {
+  it("returns false when the final event completes the tracked run", () => {
     expect(
-      shouldReloadHistoryForFinalEvent({
-        runId: "run-1",
-        sessionKey: "main",
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
-      }),
+      shouldReloadHistoryForFinalEvent(
+        {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        },
+        { trackedRunId: "run-1" },
+      ),
+    ).toBe(false);
+  });
+
+  it("returns true when final event includes assistant payload for a different run", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent(
+        {
+          runId: "run-2",
+          sessionKey: "main",
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        },
+        { trackedRunId: "run-1" },
+      ),
     ).toBe(true);
   });
 

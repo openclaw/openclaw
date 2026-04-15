@@ -726,6 +726,38 @@ describe("connectGateway", () => {
     expect(host.execApprovalQueue).toHaveLength(0);
   });
 
+  it("does not reload chat history after the tracked run finishes without tool output", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "engine-run-1";
+    host.chatStream = "Done";
+    host.chatStreamStartedAt = 123;
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "engine-run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+          timestamp: 124,
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+        timestamp: 124,
+      },
+    ]);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
   it("reloads chat history once after the final chat event when tool output was used", () => {
     const { client } = connectHostGateway();
     emitToolResultEvent(client);
