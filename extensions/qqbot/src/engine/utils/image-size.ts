@@ -7,7 +7,7 @@
 import { Buffer } from "buffer";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
-import { debugLog } from "./debug-log.js";
+import { debugLog } from "./log.js";
 
 export interface ImageSize {
   width: number;

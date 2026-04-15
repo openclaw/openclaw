@@ -80,6 +80,37 @@ export function readStringField(
   return typeof v === "string" ? v : undefined;
 }
 
+/** Read a number field from a record. */
+export function readNumberField(
+  record: Record<string, unknown> | null | undefined,
+  key: string,
+): number | undefined {
+  const v = record?.[key];
+  return typeof v === "number" ? v : undefined;
+}
+
+/** Read a boolean field from a record. */
+export function readBooleanField(
+  record: Record<string, unknown> | null | undefined,
+  key: string,
+): boolean | undefined {
+  const v = record?.[key];
+  return typeof v === "boolean" ? v : undefined;
+}
+
+/** Coerce a value into a string→string map, filtering out non-string values. */
+export function readStringMap(value: unknown): Record<string, string> {
+  const record = asOptionalObjectRecord(value);
+  if (!record) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(record).flatMap(([key, entryValue]) =>
+      typeof entryValue === "string" ? [[key, entryValue]] : [],
+    ),
+  );
+}
+
 // ---- Filename normalization ----
 
 /**

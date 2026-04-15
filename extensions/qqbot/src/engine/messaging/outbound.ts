@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "path";
-import { formatErrorMessage } from "../utils/error-format.js";
+import { formatErrorMessage } from "../utils/format.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -64,7 +64,6 @@ import {
   sendProactiveGroupMessage,
 } from "../api/facade.js";
 import type { GatewayAccount } from "../gateway/types.js";
-import { debugError, debugLog, debugWarn } from "../utils/debug-log.js";
 import {
   checkFileSize,
   downloadFile,
@@ -72,6 +71,7 @@ import {
   formatFileSize,
   readFileAsync,
 } from "../utils/file-utils.js";
+import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { decodeCronPayload } from "../utils/payload.js";
 import {

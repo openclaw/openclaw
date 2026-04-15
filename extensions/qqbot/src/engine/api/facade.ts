@@ -19,7 +19,7 @@ import type {
   OutboundMeta as CoreOutboundMeta,
   UploadMediaResponse as CoreUploadMediaResponse,
 } from "../types.js";
-import { debugLog, debugError } from "../utils/debug-log.js";
+import { debugLog, debugError } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "../utils/upload-cache.js";
 import { ApiClient } from "./client.js";

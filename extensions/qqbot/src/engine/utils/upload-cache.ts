@@ -4,7 +4,7 @@
  */
 
 import * as crypto from "node:crypto";
-import { debugLog } from "./debug-log.js";
+import { debugLog } from "./log.js";
 
 interface CacheEntry {
   fileInfo: string;

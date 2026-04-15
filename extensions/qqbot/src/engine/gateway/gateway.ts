@@ -14,15 +14,6 @@
 
 import path from "node:path";
 import WebSocket from "ws";
-import {
-  audioFileToSilkBase64,
-  formatDuration,
-  convertSilkToWav,
-  isVoiceAttachment,
-  isAudioFile,
-  shouldTranscodeVoice,
-  waitForFile,
-} from "../../utils/audio-convert.js";
 // ---- core/ api facade (singleton + procedural wrappers) ----
 import {
   clearTokenCache,
@@ -64,6 +55,15 @@ import { formatRefEntryForAgent } from "../ref/format-ref-entry.js";
 import { flushRefIndex, getRefIndex, setRefIndex } from "../ref/store.js";
 // ---- core/ session ----
 import { flushKnownUsers, recordKnownUser } from "../session/known-users.js";
+import {
+  audioFileToSilkBase64,
+  convertSilkToWav,
+  isVoiceAttachment,
+  isAudioFile,
+  shouldTranscodeVoice,
+  waitForFile,
+} from "../utils/audio.js";
+import { formatDuration } from "../utils/format.js";
 import { parseRefIndices, parseFaceTags, buildAttachmentSummaries } from "../utils/text-parsing.js";
 // ---- core/ utils ----
 import { formatVoiceText } from "../utils/voice-text.js";

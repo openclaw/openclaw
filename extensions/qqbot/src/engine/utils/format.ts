@@ -1,17 +1,17 @@
 /**
- * Error formatting helper — self-contained re-implementation of
- * `formatErrorMessage` from `openclaw/plugin-sdk/error-runtime`.
+ * 通用格式化与字符串工具。
  *
- * core/ modules use this instead of importing plugin-sdk.
+ * Pure utility functions with zero external dependencies.
+ * Replaces `openclaw/plugin-sdk/error-runtime` and `text-runtime`
+ * helpers for use inside engine/.
  *
- * NOTE: The framework version also applies `redactSensitiveText()` for
- * token masking. In core/ we intentionally omit that — the framework's
- * log pipeline handles redaction at a higher level. If a caller needs
- * redaction, it should apply it after calling this function.
+ * NOTE: The framework `formatErrorMessage` also applies `redactSensitiveText()`
+ * for token masking. We intentionally omit that here — the framework's log
+ * pipeline handles redaction at a higher level.
  */
 
 /**
- * Format an error value into a human-readable message string.
+ * 将任意错误对象格式化为可读字符串。
  *
  * Traverses the `.cause` chain for nested Error objects to include
  * the full error context (e.g. network errors wrapped inside HTTP errors).
@@ -19,7 +19,6 @@
 export function formatErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     let formatted = err.message || err.name || "Error";
-    // Traverse .cause chain.
     let cause: unknown = err.cause;
     const seen = new Set<unknown>([err]);
     while (cause && !seen.has(cause)) {
@@ -49,4 +48,15 @@ export function formatErrorMessage(err: unknown): string {
   } catch {
     return Object.prototype.toString.call(err);
   }
+}
+
+/** 将毫秒时长格式化为人类可读字符串（如 "5m 30s"）。 */
+export function formatDuration(durationMs: number): string {
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = seconds % 60;
+  return remainSeconds > 0 ? `${minutes}m ${remainSeconds}s` : `${minutes}m`;
 }

@@ -1,86 +1,16 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
 import { getAccessToken } from "../engine/api/facade.js";
-import { debugError, debugLog } from "../engine/utils/debug-log.js";
-import { jsonToolResult as json } from "./result.js";
-
-const API_BASE = "https://api.sgroup.qq.com";
-const DEFAULT_TIMEOUT_MS = 30000;
-
-interface ChannelApiParams {
-  method: string;
-  path: string;
-  body?: Record<string, unknown>;
-  query?: Record<string, string>;
-}
-
-const ChannelApiSchema = {
-  type: "object",
-  properties: {
-    method: {
-      type: "string",
-      description: "HTTP method. Allowed values: GET, POST, PUT, PATCH, DELETE.",
-      enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    },
-    path: {
-      type: "string",
-      description:
-        "API path without the host. Replace placeholders with concrete values. " +
-        "Examples: /users/@me/guilds, /guilds/{guild_id}/channels, /channels/{channel_id}.",
-    },
-    body: {
-      type: "object",
-      description:
-        "JSON request body for POST/PUT/PATCH requests. GET/DELETE usually do not need it.",
-    },
-    query: {
-      type: "object",
-      description:
-        "URL query parameters as key/value pairs appended to the path. " +
-        'For example, { "limit": "100", "after": "0" } becomes ?limit=100&after=0.',
-      additionalProperties: { type: "string" },
-    },
-  },
-  required: ["method", "path"],
-} as const;
-
-function buildUrl(path: string, query?: Record<string, string>): string {
-  let url = `${API_BASE}${path}`;
-  if (query && Object.keys(query).length > 0) {
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(query)) {
-      if (value !== undefined && value !== null && value !== "") {
-        params.set(key, value);
-      }
-    }
-    const qs = params.toString();
-    if (qs) {
-      url += `?${qs}`;
-    }
-  }
-  return url;
-}
-
-function validatePath(path: string): string | null {
-  if (!path.startsWith("/")) {
-    return "path must start with /";
-  }
-  if (path.includes("..") || path.includes("//")) {
-    return "path must not contain .. or //";
-  }
-  if (!/^\/[a-zA-Z0-9\-._~:@!$&'()*+,;=/%]+$/.test(path) && path !== "/") {
-    return "path contains unsupported characters";
-  }
-  return null;
-}
+import { ChannelApiSchema, executeChannelApi } from "../engine/tools/channel-api.js";
+import type { ChannelApiParams } from "../engine/tools/channel-api.js";
+import { debugLog } from "../engine/utils/log.js";
 
 /**
  * Register the QQ channel API proxy tool.
  *
- * The tool acts as an authenticated HTTP proxy for the QQ Open Platform channel APIs.
- * Agents learn endpoint details from the skill docs and send requests through this proxy.
+ * The tool acts as an authenticated HTTP proxy for the QQ Open Platform
+ * channel APIs. Agents learn endpoint details from the skill docs and
+ * send requests through this proxy.
  */
 export function registerChannelTool(api: OpenClawPluginApi): void {
   const cfg = api.config;
@@ -123,132 +53,8 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
         "See the qqbot-channel skill for full endpoint details.",
       parameters: ChannelApiSchema,
       async execute(_toolCallId, params) {
-        const p = params as ChannelApiParams;
-        if (!p.method) {
-          return json({ error: "method is required" });
-        }
-        if (!p.path) {
-          return json({ error: "path is required" });
-        }
-
-        const method = p.method.toUpperCase();
-        if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-          return json({
-            error: `Unsupported HTTP method: ${method}. Allowed values: GET, POST, PUT, PATCH, DELETE`,
-          });
-        }
-
-        const pathError = validatePath(p.path);
-        if (pathError) {
-          return json({ error: pathError });
-        }
-
-        if ((method === "GET" || method === "DELETE") && p.body && Object.keys(p.body).length > 0) {
-          debugLog(`[qqbot-channel-api] ${method} request with body, body will be ignored`);
-        }
-
-        try {
-          const accessToken = await getAccessToken(account.appId, account.clientSecret);
-          const url = buildUrl(p.path, p.query);
-          const headers: Record<string, string> = {
-            Authorization: `QQBot ${accessToken}`,
-            "Content-Type": "application/json",
-          };
-
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-
-          const fetchOptions: RequestInit = {
-            method,
-            headers,
-            signal: controller.signal,
-          };
-
-          if (p.body && ["POST", "PUT", "PATCH"].includes(method)) {
-            fetchOptions.body = JSON.stringify(p.body);
-          }
-
-          debugLog(`[qqbot-channel-api] >>> ${method} ${url} (timeout: ${DEFAULT_TIMEOUT_MS}ms)`);
-
-          let res: Response;
-          let release = async () => {};
-          try {
-            const guarded = await fetchWithSsrFGuard({
-              url,
-              init: fetchOptions,
-              auditContext: `qqbot.channel-api${p.path}`,
-            });
-            res = guarded.response;
-            release = guarded.release;
-          } catch (err) {
-            clearTimeout(timeoutId);
-            if (err instanceof Error && err.name === "AbortError") {
-              debugError(`[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`);
-              return json({
-                error: `Request timed out after ${DEFAULT_TIMEOUT_MS}ms`,
-                path: p.path,
-              });
-            }
-            debugError("[qqbot-channel-api] <<< Network error:", err);
-            return json({
-              error: `Network error: ${formatErrorMessage(err)}`,
-              path: p.path,
-            });
-          } finally {
-            clearTimeout(timeoutId);
-          }
-
-          debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
-
-          try {
-            const rawBody = await res.text();
-            if (!rawBody || rawBody.trim() === "") {
-              if (res.ok) {
-                return json({ success: true, status: res.status, path: p.path });
-              }
-              return json({
-                error: `API returned ${res.status} ${res.statusText}`,
-                status: res.status,
-                path: p.path,
-              });
-            }
-
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(rawBody);
-            } catch {
-              parsed = rawBody;
-            }
-
-            if (!res.ok) {
-              const errMsg =
-                typeof parsed === "object" && parsed && "message" in parsed
-                  ? String((parsed as { message?: unknown }).message)
-                  : `${res.status} ${res.statusText}`;
-              debugError(`[qqbot-channel-api] Error [${method} ${p.path}]: ${errMsg}`);
-              return json({
-                error: errMsg,
-                status: res.status,
-                path: p.path,
-                details: parsed,
-              });
-            }
-
-            return json({
-              success: true,
-              status: res.status,
-              path: p.path,
-              data: parsed,
-            });
-          } finally {
-            await release();
-          }
-        } catch (err) {
-          return json({
-            error: formatErrorMessage(err),
-            path: p.path,
-          });
-        }
+        const accessToken = await getAccessToken(account.appId, account.clientSecret);
+        return executeChannelApi(params as ChannelApiParams, { accessToken });
       },
     },
     { name: "qqbot_channel_api" },

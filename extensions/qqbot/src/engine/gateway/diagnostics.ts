@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { debugLog } from "../utils/debug-log.js";
+import { debugLog } from "../utils/log.js";
 import {
   getHomeDir,
   getTempDir,

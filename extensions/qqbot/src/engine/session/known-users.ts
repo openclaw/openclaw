@@ -2,12 +2,12 @@
  * Known user tracking — JSON file-based store.
  *
  * Migrated from src/known-users.ts. Dependencies are only Node.js
- * built-ins + debug-log + platform (both zero plugin-sdk).
+ * built-ins + log + platform (both zero plugin-sdk).
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import { debugLog, debugError } from "../utils/debug-log.js";
+import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir } from "../utils/platform.js";
 
 /** Persisted record for a user who has interacted with the bot. */

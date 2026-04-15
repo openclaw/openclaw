@@ -21,8 +21,8 @@ import {
   listKnownUsers as listKnownUsersImpl,
   removeKnownUser as removeKnownUserImpl,
 } from "../session/known-users.js";
-import { debugError, debugLog } from "../utils/debug-log.js";
-import { formatErrorMessage } from "../utils/error-format.js";
+import { formatErrorMessage } from "../utils/format.js";
+import { debugError, debugLog } from "../utils/log.js";
 
 // Re-export known-user types and functions.
 export {

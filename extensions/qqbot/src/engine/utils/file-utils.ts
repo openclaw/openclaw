@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
-import { formatErrorMessage } from "./error-format.js";
+import { formatErrorMessage } from "./format.js";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-normalize.js";
 
 /** Maximum file size accepted by the QQ Bot API. */

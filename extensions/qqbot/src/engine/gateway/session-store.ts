@@ -2,12 +2,12 @@
  * Gateway session persistence — JSONL file-based store.
  *
  * Migrated from src/session-store.ts. Dependencies are only Node.js
- * built-ins + debug-log + platform (both zero plugin-sdk).
+ * built-ins + log + platform (both zero plugin-sdk).
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import { debugLog, debugError } from "../utils/debug-log.js";
+import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir } from "../utils/platform.js";
 
 /** Persisted gateway session state. */

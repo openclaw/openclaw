@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { debugLog } from "../utils/debug-log.js";
+import { debugLog } from "../utils/log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "../utils/platform.js";
 import {
   SlashCommandRegistry,
