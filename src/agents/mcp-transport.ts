@@ -100,9 +100,16 @@ export function resolveMcpTransport(
     };
   }
   if (resolved.transportType === "streamable-http") {
+    const streamableHeaders: Record<string, string> = { ...resolved.headers };
+    const hasAccept = Object.keys(streamableHeaders).some(
+      (k) => k.toLowerCase() === "accept",
+    );
+    if (!hasAccept) {
+      streamableHeaders["Accept"] = "application/json, text/event-stream";
+    }
     return {
       transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
-        requestInit: resolved.headers ? { headers: resolved.headers } : undefined,
+        requestInit: { headers: streamableHeaders },
       }),
       description: resolved.description,
       transportType: "streamable-http",
