@@ -60,7 +60,7 @@ describe("runHeartbeatOnce – isolated session outbound mirror routing", () => 
 
       const deliverSpy = vi
         .spyOn(deliverModule, "deliverOutboundPayloads")
-        .mockResolvedValue(undefined);
+        .mockResolvedValue([]);
       const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
       replySpy.mockResolvedValue({ text: "Heartbeat reply" });
 
@@ -98,7 +98,7 @@ describe("runHeartbeatOnce – isolated session outbound mirror routing", () => 
 
       const deliverSpy = vi
         .spyOn(deliverModule, "deliverOutboundPayloads")
-        .mockResolvedValue(undefined);
+        .mockResolvedValue([]);
       const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
       replySpy.mockResolvedValue({ text: "Heartbeat reply" });
 
