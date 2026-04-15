@@ -525,6 +525,7 @@ function createSetupEntryChannelPluginFixture(params: {
   useBundledFullEntryContract?: boolean;
   bundledFullEntryId?: string;
   useBundledSetupEntryContract?: boolean;
+  bundledSetupEntryId?: string;
   splitBundledSetupSecrets?: boolean;
   bundledSetupRuntimeMarker?: string;
   bundledSetupRuntimeError?: string;
@@ -651,12 +652,12 @@ module.exports = {
 module.exports = {
   kind: "bundled-channel-setup-entry",
   loadSetupPlugin: () => ({
-    id: ${JSON.stringify(params.id)},
+    id: ${JSON.stringify(params.bundledSetupEntryId ?? params.id)},
     meta: {
-      id: ${JSON.stringify(params.id)},
+      id: ${JSON.stringify(params.bundledSetupEntryId ?? params.id)},
       label: ${JSON.stringify(params.label)},
       selectionLabel: ${JSON.stringify(params.label)},
-      docsPath: ${JSON.stringify(`/channels/${params.id}`)},
+      docsPath: ${JSON.stringify(`/channels/${params.bundledSetupEntryId ?? params.id}`)},
       blurb: ${JSON.stringify(params.setupBlurb)},
     },
     capabilities: { chatTypes: ["direct"] },
@@ -3622,6 +3623,42 @@ module.exports = {
       registry.plugins.find((entry) => entry.id === "setup-runtime-mismatch-test")?.error,
     ).toContain('runtime entry uses "wrong-runtime-id"');
     expect(registry.channels).toHaveLength(0);
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
+  });
+
+  it("rejects mismatched bundled setup export ids before loading setup-runtime entry code", () => {
+    const runtimeMarker = path.join(makeTempDir(), "setup-runtime-mismatch.txt");
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-export-mismatch-test",
+      bundledSetupEntryId: "wrong-setup-id",
+      label: "Setup Export Mismatch Test",
+      packageName: "@openclaw/setup-export-mismatch-test",
+      fullBlurb: "full runtime plugin",
+      setupBlurb: "setup runtime override",
+      configured: false,
+      useBundledFullEntryContract: true,
+      useBundledSetupEntryContract: true,
+      bundledFullRuntimeMarker: runtimeMarker,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [built.pluginDir] },
+          allow: ["setup-export-mismatch-test"],
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-export-mismatch-test")?.status,
+    ).toBe("error");
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-export-mismatch-test")?.error,
+    ).toContain('setup export uses "wrong-setup-id"');
+    expect(registry.channels).toHaveLength(0);
+    expect(fs.existsSync(built.fullMarker)).toBe(false);
     expect(fs.existsSync(runtimeMarker)).toBe(false);
   });
 

@@ -1802,6 +1802,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           continue;
         }
         if (setupRegistration.plugin) {
+          if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
+            pushPluginLoadError(
+              `plugin id mismatch (config uses "${record.id}", setup export uses "${setupRegistration.plugin.id}")`,
+            );
+            continue;
+          }
           const api = createApi(record, {
             config: cfg,
             pluginConfig: {},
