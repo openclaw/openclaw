@@ -46,7 +46,7 @@ function truncateUntrustedJsonString(value: string): string {
 
 function sanitizeUntrustedJsonValue(value: unknown): unknown {
   if (typeof value === "string") {
-    return neutralizeMarkdownFences(truncateUntrustedJsonString(value));
+    return neutralizeMarkdownFences(truncateUntrustedJsonString(stripNullBytes(value)));
   }
   if (Array.isArray(value)) {
     return value.map((entry) => sanitizeUntrustedJsonValue(entry));
@@ -136,7 +136,7 @@ export function buildInboundMetaSystemPrompt(
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
     response_format:
       options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
-  };
+  });
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
   return [
