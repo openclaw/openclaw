@@ -39,7 +39,9 @@ async function expectOutsideWriteRejected(params: {
   outsidePath: string;
 }) {
   const patch = buildAddFilePatch(params.patchTargetPath);
-  await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(/Path escapes sandbox root/);
+  await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(
+    /permission_denied reason=workspace_boundary/i,
+  );
   await expect(fs.readFile(params.outsidePath, "utf8")).rejects.toBeDefined();
 }
 
@@ -183,7 +185,9 @@ describe("applyPatch", () => {
 +pwned
 *** End Patch`;
 
-      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Symlink escapes sandbox root/);
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /permission_denied reason=path_alias_escape/i,
+      );
       const outsideContents = await fs.readFile(outside, "utf8");
       expect(outsideContents).toBe("initial\n");
       await fs.rm(outside, { force: true });
@@ -208,7 +212,7 @@ describe("applyPatch", () => {
 
       try {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-          /Symlink escapes sandbox root/,
+          /permission_denied reason=path_alias_escape/i,
         );
         await expect(fs.readFile(outsideFile, "utf8")).rejects.toBeDefined();
       } finally {
@@ -243,7 +247,9 @@ describe("applyPatch", () => {
 -initial
 +pwned
 *** End Patch`;
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/hardlink|sandbox/i);
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+          /permission_denied reason=path_alias_escape/i,
+        );
         const outsideContents = await fs.readFile(outside, "utf8");
         expect(outsideContents).toBe("initial\n");
       } finally {
@@ -297,7 +303,7 @@ describe("applyPatch", () => {
 
       try {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-          /Symlink escapes sandbox root/,
+          /permission_denied reason=path_alias_escape/i,
         );
         const stillThere = await fs.readFile(outsideFile, "utf8");
         expect(stillThere).toBe("victim\n");

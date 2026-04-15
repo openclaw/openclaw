@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
+import { createFsPermissionDeniedError } from "../fs-permission-denied.js";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
 import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
@@ -72,9 +73,15 @@ export class SandboxFsPathGuard {
   ): Promise<BoundaryFileOpenResult & { ok: true }> {
     const opened = await this.openBoundaryWithinRequiredMount(target, "read files");
     if (!opened.ok) {
-      throw opened.error instanceof Error
-        ? opened.error
-        : new Error(`Sandbox boundary checks failed; cannot read files: ${target.containerPath}`);
+      const cause =
+        opened.error instanceof Error
+          ? opened.error
+          : new Error(`Sandbox boundary checks failed; cannot read files: ${target.containerPath}`);
+      throw createFsPermissionDeniedError({
+        action: "sandbox_fs_bridge:read files",
+        path: target.containerPath,
+        cause,
+      });
     }
     return opened;
   }
@@ -82,7 +89,11 @@ export class SandboxFsPathGuard {
   private resolveRequiredMount(containerPath: string, action: string): SandboxFsMount {
     const lexicalMount = this.resolveMountByContainerPath(containerPath);
     if (!lexicalMount) {
-      throw new Error(`Sandbox path escapes allowed mounts; cannot ${action}: ${containerPath}`);
+      throw createFsPermissionDeniedError({
+        action: `sandbox_fs_bridge:${action}`,
+        path: containerPath,
+        cause: new Error(`Sandbox path escapes allowed mounts; cannot ${action}: ${containerPath}`),
+      });
     }
     return lexicalMount;
   }
@@ -96,9 +107,13 @@ export class SandboxFsPathGuard {
   }): PinnedSandboxEntry {
     const relativeParentPath = path.posix.relative(params.mount.containerRoot, params.parentPath);
     if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.targetPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: `sandbox_fs_bridge:${params.action}`,
+        path: params.targetPath,
+        cause: new Error(
+          `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.targetPath}`,
+        ),
+      });
     }
     return {
       mountRootPath: params.mount.containerRoot,
@@ -117,11 +132,17 @@ export class SandboxFsPathGuard {
         const canFallbackToDirectoryStat =
           options.allowedType === "directory" && this.pathIsExistingDirectory(target.hostPath);
         if (!canFallbackToDirectoryStat) {
-          throw guarded.error instanceof Error
-            ? guarded.error
-            : new Error(
-                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
-              );
+          const cause =
+            guarded.error instanceof Error
+              ? guarded.error
+              : new Error(
+                  `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+                );
+          throw createFsPermissionDeniedError({
+            action: `sandbox_fs_bridge:${options.action}`,
+            path: target.containerPath,
+            cause,
+          });
         }
       }
     } else {
@@ -134,9 +155,13 @@ export class SandboxFsPathGuard {
     });
     const canonicalMount = this.resolveRequiredMount(canonicalContainerPath, options.action);
     if (options.requireWritable && !canonicalMount.writable) {
-      throw new Error(
-        `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: `sandbox_fs_bridge:${options.action}`,
+        path: target.containerPath,
+        cause: new Error(
+          `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
+        ),
+      });
     }
   }
 
@@ -217,9 +242,13 @@ export class SandboxFsPathGuard {
     const mount = this.resolveRequiredMount(target.containerPath, action);
     const relativePath = path.posix.relative(mount.containerRoot, target.containerPath);
     if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: `sandbox_fs_bridge:${action}`,
+        path: target.containerPath,
+        cause: new Error(
+          `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
+        ),
+      });
     }
     return {
       mountRootPath: mount.containerRoot,
@@ -272,7 +301,11 @@ export class SandboxFsPathGuard {
     });
     const canonical = result.stdout.toString("utf8").trim();
     if (!canonical.startsWith("/")) {
-      throw new Error(`Failed to resolve canonical sandbox path: ${params.containerPath}`);
+      throw createFsPermissionDeniedError({
+        action: "sandbox_fs_bridge:resolve_canonical_path",
+        path: params.containerPath,
+        cause: new Error(`Failed to resolve canonical sandbox path: ${params.containerPath}`),
+      });
     }
     return normalizeContainerPath(canonical);
   }

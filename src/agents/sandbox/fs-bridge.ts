@@ -19,6 +19,7 @@ import {
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
+import { createFsPermissionDeniedError } from "../fs-permission-denied.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
@@ -273,7 +274,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
     if (!allowsWrites(this.sandbox.workspaceAccess) || !target.writable) {
-      throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
+      throw createFsPermissionDeniedError({
+        action: `sandbox_fs_bridge:${action}`,
+        path: target.containerPath,
+        cause: new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`),
+      });
     }
   }
 

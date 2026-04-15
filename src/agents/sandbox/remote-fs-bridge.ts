@@ -8,6 +8,7 @@ import type {
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
+import { createFsPermissionDeniedError } from "../fs-permission-denied.js";
 import {
   isPathInsideContainerRoot,
   normalizeContainerPath as normalizeSandboxContainerPath,
@@ -125,9 +126,13 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     this.ensureWritable(target, "create directories");
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
     if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot create directories: ${target.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: "remote_sandbox_fs_bridge:create directories",
+        path: target.containerPath,
+        cause: new Error(
+          `Sandbox path escapes allowed mounts; cannot create directories: ${target.containerPath}`,
+        ),
+      });
     }
     await this.runMutation({
       args: ["mkdirp", target.mountRootPath, relativePath === "." ? "" : relativePath],
@@ -314,15 +319,23 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       }
     }
 
-    throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${params.filePath}`);
+    throw createFsPermissionDeniedError({
+      action: "remote_sandbox_fs_bridge:access",
+      path: params.filePath,
+      cause: new Error(`Sandbox path escapes allowed mounts; cannot access: ${params.filePath}`),
+    });
   }
 
   private toResolvedPath(params: { mount: MountInfo; containerPath: string }): ResolvedRemotePath {
     const relative = path.posix.relative(params.mount.containerRoot, params.containerPath);
     if (relative.startsWith("..") || path.posix.isAbsolute(relative)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: "remote_sandbox_fs_bridge:access",
+        path: params.containerPath,
+        cause: new Error(
+          `Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`,
+        ),
+      });
     }
     return {
       relativePath:
@@ -355,7 +368,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 
   private ensureWritable(target: ResolvedRemotePath, action: string) {
     if (this.sandbox.workspaceAccess !== "rw" || !target.writable) {
-      throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
+      throw createFsPermissionDeniedError({
+        action: `remote_sandbox_fs_bridge:${action}`,
+        path: target.containerPath,
+        cause: new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`),
+      });
     }
   }
 
@@ -399,9 +416,13 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
     const canonical = normalizeContainerPath(result.stdout.toString("utf8").trim());
     if (!this.resolveMountByContainerPath(this.getMounts(), canonical)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: `remote_sandbox_fs_bridge:${params.action}`,
+        path: params.containerPath,
+        cause: new Error(
+          `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
+        ),
+      });
     }
     return canonical;
   }
@@ -427,9 +448,13 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     }
     const [kind = "", linksRaw = "1"] = output.split("|");
     if (kind === "regular file" && Number(linksRaw) > 1) {
-      throw new Error(
-        `Hardlinked path is not allowed under sandbox mount root: ${params.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: `remote_sandbox_fs_bridge:${params.action}`,
+        path: params.containerPath,
+        cause: new Error(
+          `Hardlinked path is not allowed under sandbox mount root: ${params.containerPath}`,
+        ),
+      });
     }
   }
 
@@ -450,20 +475,32 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
     const mount = this.resolveMountByContainerPath(this.getMounts(), canonicalParent);
     if (!mount) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: `remote_sandbox_fs_bridge:${params.action}`,
+        path: params.containerPath,
+        cause: new Error(
+          `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
+        ),
+      });
     }
     if (params.requireWritable && !mount.writable) {
-      throw new Error(
-        `Sandbox path is read-only; cannot ${params.action}: ${params.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: `remote_sandbox_fs_bridge:${params.action}`,
+        path: params.containerPath,
+        cause: new Error(
+          `Sandbox path is read-only; cannot ${params.action}: ${params.containerPath}`,
+        ),
+      });
     }
     const relativeParentPath = path.posix.relative(mount.containerRoot, canonicalParent);
     if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
-      );
+      throw createFsPermissionDeniedError({
+        action: `remote_sandbox_fs_bridge:${params.action}`,
+        path: params.containerPath,
+        cause: new Error(
+          `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
+        ),
+      });
     }
     return {
       mountRootPath: mount.containerRoot,

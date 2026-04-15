@@ -175,7 +175,7 @@ describe("workspace path resolution", () => {
       const outsideAbsolute = path.resolve(path.parse(workspaceDir).root, "outside-openclaw.txt");
       await expect(
         readTool.execute("ws-read-at-prefix", { path: `@${outsideAbsolute}` }),
-      ).rejects.toThrow(/Path escapes sandbox root/i);
+      ).rejects.toThrow(/permission_denied reason=workspace_boundary|Path escapes sandbox root/i);
     });
   });
 
@@ -203,19 +203,79 @@ describe("workspace path resolution", () => {
           throw err;
         }
         await expect(readTool.execute("ws-read-hardlink", { path: "linked.txt" })).rejects.toThrow(
-          /hardlink|sandbox/i,
+          /permission_denied reason=path_alias_escape|hardlink|sandbox/i,
         );
         await expect(
           writeTool.execute("ws-write-hardlink", {
             path: "linked.txt",
             content: "pwned",
           }),
-        ).rejects.toThrow(/hardlink|sandbox/i);
+        ).rejects.toThrow(/permission_denied reason=path_alias_escape|hardlink|sandbox/i);
         expect(await fs.readFile(outsidePath, "utf8")).toBe("top-secret");
       } finally {
         await fs.rm(hardlinkPath, { force: true });
         await fs.rm(outsidePath, { force: true });
       }
+    });
+  });
+
+  it("returns standardized permission_denied errors for workspace boundary violations", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+      const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+      const { writeTool } = expectReadWriteEditTools(tools);
+      const outsideAbsolute = path.resolve(path.parse(workspaceDir).root, "outside-openclaw.txt");
+      await expect(
+        writeTool.execute("ws-write-at-prefix", {
+          path: `@${outsideAbsolute}`,
+          content: "blocked",
+        }),
+      ).rejects.toThrow(/permission_denied reason=workspace_boundary/i);
+    });
+  });
+
+  it("rejects oversized write payloads before mutation", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const tools = createOpenClawCodingTools({ workspaceDir });
+      const { writeTool } = expectReadWriteEditTools(tools);
+      const oversized = "x".repeat(2 * 1024 * 1024 + 1);
+      await expect(
+        writeTool.execute("ws-write-too-large", {
+          path: "too-large.txt",
+          content: oversized,
+        }),
+      ).rejects.toThrow(/content exceeds max size/i);
+      await expect(fs.stat(path.join(workspaceDir, "too-large.txt"))).rejects.toBeDefined();
+    });
+  });
+
+  it("rejects write payloads containing NUL bytes", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const tools = createOpenClawCodingTools({ workspaceDir });
+      const { writeTool } = expectReadWriteEditTools(tools);
+      await expect(
+        writeTool.execute("ws-write-binary-like", {
+          path: "binary-like.txt",
+          content: "abc\0def",
+        }),
+      ).rejects.toThrow(/NUL bytes/i);
+      await expect(fs.stat(path.join(workspaceDir, "binary-like.txt"))).rejects.toBeDefined();
+    });
+  });
+
+  it("rejects edit payloads containing NUL bytes", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const tools = createOpenClawCodingTools({ workspaceDir });
+      const { editTool } = expectReadWriteEditTools(tools);
+      const target = path.join(workspaceDir, "edit-target.txt");
+      await fs.writeFile(target, "hello world", "utf8");
+      await expect(
+        editTool.execute("ws-edit-binary-like", {
+          path: "edit-target.txt",
+          edits: [{ oldText: "world", newText: "wor\0ld" }],
+        }),
+      ).rejects.toThrow(/NUL bytes/i);
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("hello world");
     });
   });
 });

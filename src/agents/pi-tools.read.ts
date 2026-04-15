@@ -15,6 +15,7 @@ import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { createFsPermissionDeniedError } from "./fs-permission-denied.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
@@ -46,6 +47,8 @@ const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 8;
+const MAX_TOOL_WRITE_CONTENT_BYTES = 2 * 1024 * 1024;
+const MAX_TOOL_EDIT_CONTENT_BYTES = 2 * 1024 * 1024;
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
@@ -88,6 +91,90 @@ function formatBytes(bytes: number): string {
     return `${Math.round(bytes / 1024)}KB`;
   }
   return `${bytes}B`;
+}
+
+function assertSafeMutationTextPayload(params: {
+  toolName: "write" | "edit";
+  field: string;
+  value: string;
+  maxBytes: number;
+}): void {
+  const bytes = Buffer.byteLength(params.value, "utf-8");
+  if (bytes > params.maxBytes) {
+    throw new Error(
+      `${params.toolName}: ${params.field} exceeds max size (${formatBytes(params.maxBytes)}). Got ${formatBytes(bytes)}.`,
+    );
+  }
+  if (params.value.includes("\0")) {
+    throw new Error(
+      `${params.toolName}: ${params.field} contains NUL bytes; binary payloads are not supported.`,
+    );
+  }
+}
+
+function wrapFsMutationPayloadGuard(tool: AnyAgentTool): AnyAgentTool {
+  if (tool.name !== "write" && tool.name !== "edit") {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      if (tool.name === "write") {
+        if (typeof record?.content === "string") {
+          assertSafeMutationTextPayload({
+            toolName: "write",
+            field: "content",
+            value: record.content,
+            maxBytes: MAX_TOOL_WRITE_CONTENT_BYTES,
+          });
+        }
+      } else if (tool.name === "edit") {
+        if (typeof record?.oldText === "string") {
+          assertSafeMutationTextPayload({
+            toolName: "edit",
+            field: "oldText",
+            value: record.oldText,
+            maxBytes: MAX_TOOL_EDIT_CONTENT_BYTES,
+          });
+        }
+        if (typeof record?.newText === "string") {
+          assertSafeMutationTextPayload({
+            toolName: "edit",
+            field: "newText",
+            value: record.newText,
+            maxBytes: MAX_TOOL_EDIT_CONTENT_BYTES,
+          });
+        }
+        if (Array.isArray(record?.edits)) {
+          for (const [index, edit] of record.edits.entries()) {
+            if (!edit || typeof edit !== "object") {
+              continue;
+            }
+            const oldText = (edit as { oldText?: unknown }).oldText;
+            if (typeof oldText === "string") {
+              assertSafeMutationTextPayload({
+                toolName: "edit",
+                field: `edits[${index}].oldText`,
+                value: oldText,
+                maxBytes: MAX_TOOL_EDIT_CONTENT_BYTES,
+              });
+            }
+            const newText = (edit as { newText?: unknown }).newText;
+            if (typeof newText === "string") {
+              assertSafeMutationTextPayload({
+                toolName: "edit",
+                field: `edits[${index}].newText`,
+                value: newText,
+                maxBytes: MAX_TOOL_EDIT_CONTENT_BYTES,
+              });
+            }
+          }
+        }
+      }
+      return tool.execute(toolCallId, args, signal, onUpdate);
+    },
+  };
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
@@ -609,7 +696,16 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        let sandboxResult: { resolved: string; relative: string };
+        try {
+          sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        } catch (error) {
+          throw createFsPermissionDeniedError({
+            action: `${tool.name}:path_guard`,
+            path: filePath,
+            cause: error,
+          });
+        }
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
           normalizedRecord[key] = sandboxResult.resolved;
@@ -641,7 +737,7 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapFsMutationPayloadGuard(wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write));
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
@@ -653,14 +749,16 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
     readFile: async (absolutePath: string) =>
       (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
   });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+  return wrapFsMutationPayloadGuard(
+    wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit),
+  );
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapFsMutationPayloadGuard(wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write));
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -671,7 +769,9 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
     root,
     readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
   });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+  return wrapFsMutationPayloadGuard(
+    wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit),
+  );
 }
 
 export function createOpenClawReadTool(

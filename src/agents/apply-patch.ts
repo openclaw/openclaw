@@ -11,6 +11,7 @@ import {
 } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
+import { createFsPermissionDeniedError } from "./fs-permission-denied.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -319,13 +320,21 @@ async function resolvePatchPath(
       cwd: options.cwd,
     });
     if (options.workspaceOnly !== false && resolved.hostPath) {
-      await assertSandboxPath({
-        filePath: resolved.hostPath,
-        cwd: options.cwd,
-        root: options.cwd,
-        allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
-        allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
-      });
+      try {
+        await assertSandboxPath({
+          filePath: resolved.hostPath,
+          cwd: options.cwd,
+          root: options.cwd,
+          allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+          allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
+        });
+      } catch (error) {
+        throw createFsPermissionDeniedError({
+          action: "apply_patch:path_guard",
+          path: filePath,
+          cause: error,
+        });
+      }
     }
     return {
       resolved: resolved.hostPath ?? resolved.containerPath,
@@ -334,8 +343,10 @@ async function resolvePatchPath(
   }
 
   const workspaceOnly = options.workspaceOnly !== false;
-  const resolved = workspaceOnly
-    ? (
+  let resolved: string;
+  if (workspaceOnly) {
+    try {
+      resolved = (
         await assertSandboxPath({
           filePath,
           cwd: options.cwd,
@@ -343,8 +354,17 @@ async function resolvePatchPath(
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
-      ).resolved
-    : resolvePathFromInput(filePath, options.cwd);
+      ).resolved;
+    } catch (error) {
+      throw createFsPermissionDeniedError({
+        action: "apply_patch:path_guard",
+        path: filePath,
+        cause: error,
+      });
+    }
+  } else {
+    resolved = resolvePathFromInput(filePath, options.cwd);
+  }
   return {
     resolved,
     display: toDisplayPath(resolved, options.cwd),
@@ -359,6 +379,13 @@ function assertBoundaryRead(
     return;
   }
   const reason = opened.reason === "validation" ? "unsafe path" : "path not found";
+  if (opened.reason === "validation") {
+    throw createFsPermissionDeniedError({
+      action: "apply_patch:read_boundary",
+      path: targetPath,
+      cause: new Error(`Failed boundary read for ${targetPath} (${reason})`),
+    });
+  }
   throw new Error(`Failed boundary read for ${targetPath} (${reason})`);
 }
 
