@@ -142,6 +142,15 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   { id: "linux", tokens: ["linux"] },
 ] as const;
 
+const PLATFORM_ALLOWLIST_ID_MAP: Readonly<Record<string, Exclude<PlatformId, "unknown">>> = {
+  ios: "ios",
+  ipados: "ios",
+  android: "android",
+  macos: "macos",
+  windows: "windows",
+  linux: "linux",
+};
+
 function resolvePlatformIdByPrefix(value: string): Exclude<PlatformId, "unknown"> | undefined {
   for (const rule of PLATFORM_PREFIX_RULES) {
     if (rule.prefixes.some((prefix) => value.startsWith(prefix))) {
@@ -173,11 +182,31 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   return byFamily ?? "unknown";
 }
 
+function normalizePlatformAllowlist(
+  input: readonly string[] | undefined,
+): Set<Exclude<PlatformId, "unknown">> | null {
+  if (!Array.isArray(input) || input.length === 0) {
+    return null;
+  }
+  const normalized = new Set<Exclude<PlatformId, "unknown">>();
+  for (const raw of input) {
+    const platformId = PLATFORM_ALLOWLIST_ID_MAP[raw.trim().toLowerCase()];
+    if (platformId) {
+      normalized.add(platformId);
+    }
+  }
+  return normalized.size > 0 ? normalized : null;
+}
+
 export function resolveNodeCommandAllowlist(
   cfg: OpenClawConfig,
   node?: Pick<NodeSession, "platform" | "deviceFamily">,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
+  const platformAllowlist = normalizePlatformAllowlist(cfg.gateway?.nodes?.platformAllowlist);
+  if (platformAllowlist && (platformId === "unknown" || !platformAllowlist.has(platformId))) {
+    return new Set();
+  }
   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);

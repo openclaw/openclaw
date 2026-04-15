@@ -43,6 +43,8 @@ export type UpdateWizardOptions = {
 };
 
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
+const DEFAULT_OPENCLAW_GITHUB_REPO = "openclaw/openclaw";
+const GITHUB_REPO_ENV_NAME = "OPENCLAW_GITHUB_REPO";
 
 export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
   const timeoutMs = timeout ? Number.parseInt(timeout, 10) * 1000 : undefined;
@@ -54,11 +56,40 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
   return timeoutMs;
 }
 
-const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
 const MAX_LOG_CHARS = 8000;
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+
+export type OpenClawGitHubRuntimeObject = {
+  repo: `${string}/${string}`;
+  cloneUrl: string;
+  webUrl: string;
+  bootstrapCommand: string;
+  runCommand: string;
+};
+
+function parseGitHubRepoPath(value: string): `${string}/${string}` | null {
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(trimmed)) {
+    return null;
+  }
+  return trimmed as `${string}/${string}`;
+}
+
+export function resolveOpenClawGitHubRuntimeObject(
+  env: NodeJS.ProcessEnv = process.env,
+): OpenClawGitHubRuntimeObject {
+  const resolvedRepo =
+    parseGitHubRepoPath(env[GITHUB_REPO_ENV_NAME] ?? "") ?? DEFAULT_OPENCLAW_GITHUB_REPO;
+  return {
+    repo: resolvedRepo,
+    cloneUrl: `https://github.com/${resolvedRepo}.git`,
+    webUrl: `https://github.com/${resolvedRepo}`,
+    bootstrapCommand: `git clone https://github.com/${resolvedRepo}.git && cd ${resolvedRepo.split("/")[1]} && corepack pnpm install`,
+    runCommand: "corepack pnpm openclaw gateway run --bind loopback --port 18789 --force",
+  };
+}
 
 export function normalizeTag(value?: string | null): string | null {
   return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
@@ -199,12 +230,13 @@ export async function ensureGitCheckout(params: {
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
 }): Promise<UpdateStepResult | null> {
+  const runtimeObject = resolveOpenClawGitHubRuntimeObject();
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", runtimeObject.cloneUrl, params.dir],
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -221,7 +253,7 @@ export async function ensureGitCheckout(params: {
 
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", runtimeObject.cloneUrl, params.dir],
       cwd: params.dir,
       env: gitEnv,
       timeoutMs: params.timeoutMs,

@@ -873,6 +873,18 @@ export const OpenClawSchema = z
               })
               .strict()
               .optional(),
+            platformAllowlist: z
+              .array(
+                z.union([
+                  z.literal("ios"),
+                  z.literal("ipados"),
+                  z.literal("android"),
+                  z.literal("macos"),
+                  z.literal("windows"),
+                  z.literal("linux"),
+                ]),
+              )
+              .optional(),
             allowCommands: z.array(z.string()).optional(),
             denyCommands: z.array(z.string()).optional(),
           })

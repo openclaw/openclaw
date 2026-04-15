@@ -371,6 +371,11 @@ export type GatewayNodesConfig = {
     /** Pin to a specific node id/name (optional). */
     node?: string;
   };
+  /**
+   * Optional node platform allowlist for node.invoke command routing.
+   * When set, nodes outside this list receive an empty command allowlist.
+   */
+  platformAllowlist?: ("ios" | "ipados" | "android" | "macos" | "windows" | "linux")[];
   /** Additional node.invoke commands to allow on the gateway. */
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
