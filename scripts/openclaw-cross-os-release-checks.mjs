@@ -11,13 +11,14 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -1172,6 +1173,17 @@ export function resolveRepairGlobalInstallArgs(platform = process.platform, gitR
   return ["link"];
 }
 
+export function resolveGlobalInstallBinDir(prefixDir, platform = process.platform) {
+  const pathImpl = platform === "win32" ? win32 : posix;
+  return platform === "win32" ? prefixDir : pathImpl.join(prefixDir, "bin");
+}
+
+export function resolveGlobalOpenClawCliPath(prefixDir, platform = process.platform) {
+  const binDir = resolveGlobalInstallBinDir(prefixDir, platform);
+  const pathImpl = platform === "win32" ? win32 : posix;
+  return pathImpl.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
+}
+
 async function runPosixShellScript(script, options) {
   return runCommand("/bin/bash", ["-lc", script], options);
 }
@@ -1390,6 +1402,30 @@ async function repairLegacyDevUpdateInstall(params) {
     logPath: join(params.logsDir, "dev-update-repair-global-install.log"),
     timeoutMs: updateTimeoutMs(),
   });
+  if (process.platform !== "win32") {
+    await repointPosixGlobalOpenClawCli({
+      env: params.env,
+      gitRoot,
+      logsDir: params.logsDir,
+    });
+  }
+}
+
+async function repointPosixGlobalOpenClawCli(params) {
+  const prefixResult = await runCommand(npmCommand(), ["config", "get", "prefix"], {
+    cwd: params.gitRoot,
+    env: params.env,
+    logPath: join(params.logsDir, "dev-update-repair-global-prefix.log"),
+    timeoutMs: 2 * 60 * 1000,
+  });
+  const prefixDir = prefixResult.stdout.trim();
+  if (!prefixDir) {
+    throw new Error("npm config get prefix did not return a global prefix.");
+  }
+  const cliPath = resolveGlobalOpenClawCliPath(prefixDir, process.platform);
+  mkdirSync(dirname(cliPath), { recursive: true });
+  rmSync(cliPath, { force: true, recursive: true });
+  symlinkSync(join(params.gitRoot, "openclaw.mjs"), cliPath);
 }
 
 async function runOnboardWithInstalledCli(params) {
