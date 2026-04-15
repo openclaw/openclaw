@@ -31,6 +31,7 @@ import {
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import { getLatestSubagentRunByChildSessionKey } from "../subagent-registry-read.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -290,6 +291,8 @@ export function createSessionsSendTool(opts?: {
       const maxPingPongTurns = resolvePingPongTurns(cfg);
       const delivery = { status: "pending", mode: "announce" as const };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+        const subagentEntry = getLatestSubagentRunByChildSessionKey(resolvedKey);
+        if (subagentEntry?.spawnMode === "session") return;
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
