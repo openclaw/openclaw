@@ -301,7 +301,7 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen[
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
-                  messageProvider: run.messageProvider,
+                  messageProvider: queued.originatingChannel ?? run.messageProvider,
                   agentAccountId: run.agentAccountId,
                   senderIsOwner: run.senderIsOwner,
                 });

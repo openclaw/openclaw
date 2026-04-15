@@ -1130,6 +1130,55 @@ describe("createFollowupRunner CLI backend dispatch", () => {
     expect(onBlockReply).toHaveBeenCalled();
   });
 
+  it("uses the originating channel for CLI followup MCP scoping", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "cli reply" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "opus",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "claude-cli/opus",
+    });
+
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      run: {
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "claude-cli": { command: "claude" },
+              },
+            },
+          },
+        },
+        messageProvider: "webchat",
+        provider: "claude-cli",
+        model: "opus",
+      },
+    });
+
+    await runner(queued);
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "discord",
+        agentAccountId: queued.run.agentAccountId,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
   it("reuses the latest CLI session binding from the active session entry", async () => {
     const onBlockReply = vi.fn(async () => {});
     const staleSessionEntry: SessionEntry = {
