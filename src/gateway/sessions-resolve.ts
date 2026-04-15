@@ -100,12 +100,16 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (!legacyKey) {
       return noSessionFoundResult(key);
     }
-    await updateSessionStore(target.storePath, (s) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
-      if (!s[primaryKey] && s[legacyKey]) {
-        s[primaryKey] = s[legacyKey];
-      }
-    });
+    await updateSessionStore(
+      target.storePath,
+      (s) => {
+        const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
+        if (!s[primaryKey] && s[legacyKey]) {
+          s[primaryKey] = s[legacyKey];
+        }
+      },
+      { activeSessionKey: target.canonicalKey ?? key },
+    );
     if (
       !isResolvedSessionKeyVisible({
         cfg,

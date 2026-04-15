@@ -699,14 +699,18 @@ export async function runAgentTurnWithFallback(params: {
 
     try {
       if (params.storePath) {
-        await updateSessionStore(params.storePath, (store) => {
-          const persistedEntry = store[params.sessionKey!];
-          if (!persistedEntry) {
-            return;
-          }
-          applyFallbackSelectionState(persistedEntry, nextState);
-          store[params.sessionKey!] = persistedEntry;
-        });
+        await updateSessionStore(
+          params.storePath,
+          (store) => {
+            const persistedEntry = store[params.sessionKey!];
+            if (!persistedEntry) {
+              return;
+            }
+            applyFallbackSelectionState(persistedEntry, nextState);
+            store[params.sessionKey!] = persistedEntry;
+          },
+          { activeSessionKey: params.sessionKey },
+        );
       }
     } catch (error) {
       rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
@@ -726,15 +730,19 @@ export async function runAgentTurnWithFallback(params: {
       if (!params.storePath) {
         return;
       }
-      await updateSessionStore(params.storePath, (store) => {
-        const persistedEntry = store[params.sessionKey!];
-        if (!persistedEntry) {
-          return;
-        }
-        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
-          store[params.sessionKey!] = persistedEntry;
-        }
-      });
+      await updateSessionStore(
+        params.storePath,
+        (store) => {
+          const persistedEntry = store[params.sessionKey!];
+          if (!persistedEntry) {
+            return;
+          }
+          if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+            store[params.sessionKey!] = persistedEntry;
+          }
+        },
+        { activeSessionKey: params.sessionKey! },
+      );
     };
   };
 
@@ -1440,9 +1448,13 @@ export async function runAgentTurnWithFallback(params: {
           delete params.activeSessionStore[sessionKey];
 
           // Remove session entry from store using a fresh, locked snapshot.
-          await updateSessionStore(params.storePath, (store) => {
-            delete store[sessionKey];
-          });
+          await updateSessionStore(
+            params.storePath,
+            (store) => {
+              delete store[sessionKey];
+            },
+            { activeSessionKey: sessionKey },
+          );
         } catch (cleanupErr) {
           defaultRuntime.error(
             `Failed to reset corrupted session ${params.sessionKey}: ${String(cleanupErr)}`,

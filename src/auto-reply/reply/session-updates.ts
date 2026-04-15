@@ -42,9 +42,13 @@ async function persistSessionEntryUpdate(params: {
   if (!params.storePath) {
     return;
   }
-  await updateSessionStore(params.storePath, (store) => {
-    store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
-  });
+  await updateSessionStore(
+    params.storePath,
+    (store) => {
+      store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
+    },
+    { activeSessionKey: params.sessionKey },
+  );
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
@@ -269,12 +273,16 @@ export async function incrementCompactionCount(params: {
     ...updates,
   };
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
-        ...store[sessionKey],
-        ...updates,
-      };
-    });
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        store[sessionKey] = {
+          ...store[sessionKey],
+          ...updates,
+        };
+      },
+      { activeSessionKey: sessionKey },
+    );
   }
   if (newSessionId && newSessionId !== entry.sessionId && cfg) {
     emitCompactionSessionLifecycleHooks({

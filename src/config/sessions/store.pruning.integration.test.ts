@@ -404,4 +404,129 @@ describe("Integration: saveSessionStore with pruning", () => {
       await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
     }
   });
+
+  it("rotates oversized transcript files during bulk maintenance (no activeSessionKey)", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 100,
+          rotateBytes: 10_485_760,
+          transcriptRotateBytes: 200,
+          transcriptMaxLines: 5,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const sessionId = "oversized-session";
+    const store: Record<string, SessionEntry> = {
+      session: { sessionId, updatedAt: now },
+    };
+
+    // Create an oversized .jsonl transcript file
+    const transcriptPath = path.join(testDir, `${sessionId}.jsonl`);
+    const header = JSON.stringify({
+      type: "session",
+      version: 1,
+      id: sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: "/test",
+    });
+    const lines = [header];
+    for (let i = 0; i < 50; i++) {
+      lines.push(JSON.stringify({ role: "user", content: `message-${i}` }));
+    }
+    await fs.writeFile(transcriptPath, lines.join("\n") + "\n", "utf-8");
+
+    const statBefore = await fs.stat(transcriptPath);
+    expect(statBefore.size).toBeGreaterThan(200);
+
+    // saveSessionStore without activeSessionKey → bulk path → rotateTranscriptFiles
+    await saveSessionStore(storePath, store);
+
+    // The transcript file should have been rotated (smaller replacement)
+    const statAfter = await fs.stat(transcriptPath);
+    expect(statAfter.size).toBeLessThan(statBefore.size);
+
+    // Replacement should have header + at most transcriptMaxLines (5) message lines
+    const content = await fs.readFile(transcriptPath, "utf-8");
+    const kept = content.trim().split("\n").filter(Boolean);
+    expect(kept.length).toBeLessThanOrEqual(6); // 1 header + 5 message lines
+
+    // Archive file should exist
+    const dirEntries = await fs.readdir(testDir);
+    const bakFiles = dirEntries.filter((f) => f.startsWith(`${sessionId}.jsonl.bak.`));
+    expect(bakFiles.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rotates only the active transcript on hot path (with activeSessionKey)", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 100,
+          rotateBytes: 10_485_760,
+          transcriptRotateBytes: 200,
+          transcriptMaxLines: 5,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const activeSessionId = "active-session";
+    const idleSessionId = "idle-session";
+    const store: Record<string, SessionEntry> = {
+      active: { sessionId: activeSessionId, updatedAt: now },
+      idle: { sessionId: idleSessionId, updatedAt: now - DAY_MS },
+    };
+
+    const header = JSON.stringify({
+      type: "session",
+      version: 1,
+      id: "test",
+      timestamp: new Date().toISOString(),
+      cwd: "/test",
+    });
+
+    // Create oversized transcript for both sessions
+    const activeTranscript = path.join(testDir, `${activeSessionId}.jsonl`);
+    const idleTranscript = path.join(testDir, `${idleSessionId}.jsonl`);
+    for (const tp of [activeTranscript, idleTranscript]) {
+      const lines = [header];
+      for (let i = 0; i < 50; i++) {
+        lines.push(JSON.stringify({ role: "user", content: `msg-${i}` }));
+      }
+      await fs.writeFile(tp, lines.join("\n") + "\n", "utf-8");
+    }
+
+    const activeStatBefore = await fs.stat(activeTranscript);
+    const idleStatBefore = await fs.stat(idleTranscript);
+
+    // saveSessionStore with activeSessionKey → hot path → only rotate active transcript
+    await saveSessionStore(storePath, store, {
+      activeSessionKey: "active",
+      maintenanceOverride: {
+        mode: "enforce",
+        pruneAfterMs: 365 * DAY_MS,
+        maxEntries: 100,
+        rotateBytes: 10_485_760,
+        transcriptRotateBytes: 200,
+        transcriptMaxLines: 5,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+    });
+
+    // Active transcript should be rotated
+    const activeStatAfter = await fs.stat(activeTranscript);
+    expect(activeStatAfter.size).toBeLessThan(activeStatBefore.size);
+
+    // Idle transcript should NOT be rotated (hot path only checks active session)
+    const idleStatAfter = await fs.stat(idleTranscript);
+    expect(idleStatAfter.size).toBe(idleStatBefore.size);
+  });
 });

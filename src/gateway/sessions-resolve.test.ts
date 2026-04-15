@@ -100,7 +100,11 @@ describe("resolveSessionKeyFromResolveParams", () => {
       key: canonicalKey,
     });
 
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledWith(storePath, expect.any(Function));
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledWith(
+      storePath,
+      expect.any(Function),
+      expect.objectContaining({ activeSessionKey: expect.any(String) }),
+    );
     expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith({
       cfg: {},
       storePath,

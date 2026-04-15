@@ -200,28 +200,32 @@ async function touchSessionStore(params: {
   if (!storePath) {
     return;
   }
-  await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-      cfg: params.cfg,
-      key: params.sessionKey,
-      store,
-    });
-    store[primaryKey] = {
-      ...store[primaryKey],
-      sessionId: params.sessionId,
-      updatedAt: params.now,
-      thinkingLevel: params.entry?.thinkingLevel,
-      fastMode: params.entry?.fastMode,
-      verboseLevel: params.entry?.verboseLevel,
-      reasoningLevel: params.entry?.reasoningLevel,
-      systemSent: params.entry?.systemSent,
-      sendPolicy: params.entry?.sendPolicy,
-      lastChannel: params.entry?.lastChannel,
-      lastTo: params.entry?.lastTo,
-      lastAccountId: params.entry?.lastAccountId,
-      lastThreadId: params.entry?.lastThreadId,
-    };
-  });
+  await updateSessionStore(
+    storePath,
+    (store) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg: params.cfg,
+        key: params.sessionKey,
+        store,
+      });
+      store[primaryKey] = {
+        ...store[primaryKey],
+        sessionId: params.sessionId,
+        updatedAt: params.now,
+        thinkingLevel: params.entry?.thinkingLevel,
+        fastMode: params.entry?.fastMode,
+        verboseLevel: params.entry?.verboseLevel,
+        reasoningLevel: params.entry?.reasoningLevel,
+        systemSent: params.entry?.systemSent,
+        sendPolicy: params.entry?.sendPolicy,
+        lastChannel: params.entry?.lastChannel,
+        lastTo: params.entry?.lastTo,
+        lastAccountId: params.entry?.lastAccountId,
+        lastThreadId: params.entry?.lastThreadId,
+      };
+    },
+    { activeSessionKey: params.canonicalKey ?? params.sessionKey },
+  );
 }
 
 function queueSessionStoreTouch(params: {

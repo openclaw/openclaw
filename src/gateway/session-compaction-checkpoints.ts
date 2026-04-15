@@ -163,20 +163,24 @@ export async function persistSessionCompactionCheckpoint(params: {
   };
 
   let stored = false;
-  await updateSessionStore(target.storePath, (store) => {
-    const existing = store[target.canonicalKey];
-    if (!existing?.sessionId) {
-      return;
-    }
-    const checkpoints = sessionStoreCheckpoints(existing);
-    checkpoints.push(checkpoint);
-    store[target.canonicalKey] = {
-      ...existing,
-      updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
-      compactionCheckpoints: trimSessionCheckpoints(checkpoints),
-    };
-    stored = true;
-  });
+  await updateSessionStore(
+    target.storePath,
+    (store) => {
+      const existing = store[target.canonicalKey];
+      if (!existing?.sessionId) {
+        return;
+      }
+      const checkpoints = sessionStoreCheckpoints(existing);
+      checkpoints.push(checkpoint);
+      store[target.canonicalKey] = {
+        ...existing,
+        updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
+        compactionCheckpoints: trimSessionCheckpoints(checkpoints),
+      };
+      stored = true;
+    },
+    { activeSessionKey: target.canonicalKey },
+  );
 
   if (!stored) {
     log.warn("skipping compaction checkpoint persist: session not found", {

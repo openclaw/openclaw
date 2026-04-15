@@ -32,17 +32,21 @@ export async function applySessionHints(params: {
       if (params.storePath) {
         const sessionKey = params.sessionKey;
         const { updateSessionStore } = await loadSessionStoreRuntime();
-        await updateSessionStore(params.storePath, (store) => {
-          const entry = store[sessionKey] ?? params.sessionEntry;
-          if (!entry) {
-            return;
-          }
-          store[sessionKey] = {
-            ...entry,
-            abortedLastRun: false,
-            updatedAt: Date.now(),
-          };
-        });
+        await updateSessionStore(
+          params.storePath,
+          (store) => {
+            const entry = store[sessionKey] ?? params.sessionEntry;
+            if (!entry) {
+              return;
+            }
+            store[sessionKey] = {
+              ...entry,
+              abortedLastRun: false,
+              updatedAt: Date.now(),
+            };
+          },
+          { activeSessionKey: sessionKey },
+        );
       }
     } else if (params.abortKey) {
       setAbortMemory(params.abortKey, false);

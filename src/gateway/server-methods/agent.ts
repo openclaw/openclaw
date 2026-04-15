@@ -643,16 +643,20 @@ export const agentHandlers: GatewayRequestHandlers = {
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
-        const persisted = await updateSessionStore(storePath, (store) => {
-          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-            cfg,
-            key: requestedSessionKey,
-            store,
-          });
-          const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
-          store[primaryKey] = merged;
-          return merged;
-        });
+        const persisted = await updateSessionStore(
+          storePath,
+          (store) => {
+            const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+              cfg,
+              key: requestedSessionKey,
+              store,
+            });
+            const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
+            store[primaryKey] = merged;
+            return merged;
+          },
+          { activeSessionKey: canonicalSessionKey },
+        );
         sessionEntry = persisted;
       }
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {

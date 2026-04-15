@@ -821,31 +821,35 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
-    const created = await updateSessionStore(target.storePath, async (store) => {
-      const patched = await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: target.canonicalKey,
-        patch: {
-          key: target.canonicalKey,
-          label: normalizeOptionalString(p.label),
-          model: normalizeOptionalString(p.model),
-        },
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      });
-      if (!patched.ok || !canonicalParentSessionKey) {
-        return patched;
-      }
-      const nextEntry: SessionEntry = {
-        ...patched.entry,
-        parentSessionKey: canonicalParentSessionKey,
-      };
-      store[target.canonicalKey] = nextEntry;
-      return {
-        ...patched,
-        entry: nextEntry,
-      };
-    });
+    const created = await updateSessionStore(
+      target.storePath,
+      async (store) => {
+        const patched = await applySessionsPatchToStore({
+          cfg,
+          store,
+          storeKey: target.canonicalKey,
+          patch: {
+            key: target.canonicalKey,
+            label: normalizeOptionalString(p.label),
+            model: normalizeOptionalString(p.model),
+          },
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        });
+        if (!patched.ok || !canonicalParentSessionKey) {
+          return patched;
+        }
+        const nextEntry: SessionEntry = {
+          ...patched.entry,
+          parentSessionKey: canonicalParentSessionKey,
+        };
+        store[target.canonicalKey] = nextEntry;
+        return {
+          ...patched,
+          entry: nextEntry,
+        };
+      },
+      { activeSessionKey: target.canonicalKey },
+    );
     if (!created.ok) {
       respond(false, undefined, created.error);
       return;
@@ -857,9 +861,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: targetAgentId,
     });
     if (!ensured.ok) {
-      await updateSessionStore(target.storePath, (store) => {
-        delete store[target.canonicalKey];
-      });
+      await updateSessionStore(
+        target.storePath,
+        (store) => {
+          delete store[target.canonicalKey];
+        },
+        { activeSessionKey: target.canonicalKey },
+      );
       respond(
         false,
         undefined,
@@ -876,15 +884,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             sessionFile: ensured.transcriptPath,
           };
     if (createdEntry !== created.entry) {
-      await updateSessionStore(target.storePath, (store) => {
-        const existing = store[target.canonicalKey];
-        if (existing) {
-          store[target.canonicalKey] = {
-            ...existing,
-            sessionFile: ensured.transcriptPath,
-          };
-        }
-      });
+      await updateSessionStore(
+        target.storePath,
+        (store) => {
+          const existing = store[target.canonicalKey];
+          if (existing) {
+            store[target.canonicalKey] = {
+              ...existing,
+              sessionFile: ensured.transcriptPath,
+            };
+          }
+        },
+        { activeSessionKey: target.canonicalKey },
+      );
     }
 
     const initialMessage = resolveOptionalInitialSessionMessage(p);
@@ -1030,9 +1042,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       totalTokens: checkpoint.tokensBefore,
     });
 
-    await updateSessionStore(target.storePath, (store) => {
-      store[nextKey] = nextEntry;
-    });
+    await updateSessionStore(
+      target.storePath,
+      (store) => {
+        store[nextKey] = nextEntry;
+      },
+      { activeSessionKey: canonicalKey },
+    );
 
     respond(
       true,
@@ -1152,9 +1168,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       preserveCompactionCheckpoints: true,
     });
 
-    await updateSessionStore(storePath, (store) => {
-      store[canonicalKey] = nextEntry;
-    });
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        store[canonicalKey] = nextEntry;
+      },
+      { activeSessionKey: canonicalKey },
+    );
 
     respond(
       true,
@@ -1269,16 +1289,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
-    const applied = await updateSessionStore(storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        patch: p,
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      });
-    });
+    const applied = await updateSessionStore(
+      storePath,
+      async (store) => {
+        const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
+        return await applySessionsPatchToStore({
+          cfg,
+          store,
+          storeKey: primaryKey,
+          patch: p,
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        });
+      },
+      { activeSessionKey: target.canonicalKey ?? key },
+    );
     if (!applied.ok) {
       respond(false, undefined, applied.error);
       return;
@@ -1394,14 +1418,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionId = entry?.sessionId;
-    const deleted = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      const hadEntry = Boolean(store[primaryKey]);
-      if (hadEntry) {
-        delete store[primaryKey];
-      }
-      return hadEntry;
-    });
+    const deleted = await updateSessionStore(
+      storePath,
+      (store) => {
+        const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
+        const hadEntry = Boolean(store[primaryKey]);
+        if (hadEntry) {
+          delete store[primaryKey];
+        }
+        return hadEntry;
+      },
+      { activeSessionKey: canonicalKey ?? key },
+    );
 
     const archivedTranscripts =
       deleted && deleteTranscript
@@ -1480,10 +1508,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     // Lock + read in a short critical section; transcript work happens outside.
-    const compactTarget = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      return { entry, primaryKey };
-    });
+    const compactTarget = await updateSessionStore(
+      storePath,
+      (store) => {
+        const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
+        return { entry, primaryKey };
+      },
+      { activeSessionKey: target.canonicalKey ?? key },
+    );
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
@@ -1559,27 +1591,31 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
 
       if (result.ok && result.compacted) {
-        await updateSessionStore(storePath, (store) => {
-          const entryKey = compactTarget.primaryKey;
-          const entryToUpdate = store[entryKey];
-          if (!entryToUpdate) {
-            return;
-          }
-          entryToUpdate.updatedAt = Date.now();
-          entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
-          delete entryToUpdate.inputTokens;
-          delete entryToUpdate.outputTokens;
-          if (
-            typeof result.result?.tokensAfter === "number" &&
-            Number.isFinite(result.result.tokensAfter)
-          ) {
-            entryToUpdate.totalTokens = result.result.tokensAfter;
-            entryToUpdate.totalTokensFresh = true;
-          } else {
-            delete entryToUpdate.totalTokens;
-            delete entryToUpdate.totalTokensFresh;
-          }
-        });
+        await updateSessionStore(
+          storePath,
+          (store) => {
+            const entryKey = compactTarget.primaryKey;
+            const entryToUpdate = store[entryKey];
+            if (!entryToUpdate) {
+              return;
+            }
+            entryToUpdate.updatedAt = Date.now();
+            entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+            delete entryToUpdate.inputTokens;
+            delete entryToUpdate.outputTokens;
+            if (
+              typeof result.result?.tokensAfter === "number" &&
+              Number.isFinite(result.result.tokensAfter)
+            ) {
+              entryToUpdate.totalTokens = result.result.tokensAfter;
+              entryToUpdate.totalTokensFresh = true;
+            } else {
+              delete entryToUpdate.totalTokens;
+              delete entryToUpdate.totalTokensFresh;
+            }
+          },
+          { activeSessionKey: target.canonicalKey ?? key },
+        );
       }
 
       respond(
@@ -1623,18 +1659,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const keptLines = lines.slice(-maxLines);
     fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
 
-    await updateSessionStore(storePath, (store) => {
-      const entryKey = compactTarget.primaryKey;
-      const entryToUpdate = store[entryKey];
-      if (!entryToUpdate) {
-        return;
-      }
-      delete entryToUpdate.inputTokens;
-      delete entryToUpdate.outputTokens;
-      delete entryToUpdate.totalTokens;
-      delete entryToUpdate.totalTokensFresh;
-      entryToUpdate.updatedAt = Date.now();
-    });
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const entryKey = compactTarget.primaryKey;
+        const entryToUpdate = store[entryKey];
+        if (!entryToUpdate) {
+          return;
+        }
+        delete entryToUpdate.inputTokens;
+        delete entryToUpdate.outputTokens;
+        delete entryToUpdate.totalTokens;
+        delete entryToUpdate.totalTokensFresh;
+        entryToUpdate.updatedAt = Date.now();
+      },
+      { activeSessionKey: target.canonicalKey ?? key },
+    );
 
     respond(
       true,

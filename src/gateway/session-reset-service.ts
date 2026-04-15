@@ -545,109 +545,113 @@ export async function performGatewaySessionReset(params: {
   let oldSessionId: string | undefined;
   let oldSessionFile: string | undefined;
   let resetSourceEntry: SessionEntry | undefined;
-  const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-      cfg,
-      key: params.key,
-      store,
-    });
-    const currentEntry = store[primaryKey];
-    resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
-    const parsed = parseAgentSessionKey(primaryKey);
-    const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
-    const resetPreservedSelection = resolveResetPreservedSelection({
-      entry: currentEntry,
-    });
-    const resetEntry = {
-      ...stripRuntimeModelState(currentEntry),
-      providerOverride: undefined,
-      modelOverride: undefined,
-      modelOverrideSource: undefined,
-      authProfileOverride: undefined,
-      authProfileOverrideSource: undefined,
-      authProfileOverrideCompactionCount: undefined,
-      ...resetPreservedSelection,
-    };
-    const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
-    oldSessionId = currentEntry?.sessionId;
-    oldSessionFile = currentEntry?.sessionFile;
-    const now = Date.now();
-    const nextSessionId = randomUUID();
-    const sessionFile = resolveSessionFilePath(
-      nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
-    const nextEntry: SessionEntry = {
-      sessionId: nextSessionId,
-      sessionFile,
-      updatedAt: now,
-      systemSent: false,
-      abortedLastRun: false,
-      thinkingLevel: currentEntry?.thinkingLevel,
-      fastMode: currentEntry?.fastMode,
-      verboseLevel: currentEntry?.verboseLevel,
-      traceLevel: currentEntry?.traceLevel,
-      reasoningLevel: currentEntry?.reasoningLevel,
-      elevatedLevel: currentEntry?.elevatedLevel,
-      ttsAuto: currentEntry?.ttsAuto,
-      execHost: currentEntry?.execHost,
-      execSecurity: currentEntry?.execSecurity,
-      execAsk: currentEntry?.execAsk,
-      execNode: currentEntry?.execNode,
-      responseUsage: currentEntry?.responseUsage,
-      // Resets should keep the user's explicit selection, but clear any
-      // temporary fallback model that was pinned during the previous run.
-      ...resetPreservedSelection,
-      groupActivation: currentEntry?.groupActivation,
-      groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
-      chatType: currentEntry?.chatType,
-      model: resolvedModel.model,
-      modelProvider: resolvedModel.provider,
-      contextTokens: resetEntry?.contextTokens,
-      compactionCount: currentEntry?.compactionCount,
-      compactionCheckpoints: currentEntry?.compactionCheckpoints,
-      sendPolicy: currentEntry?.sendPolicy,
-      queueMode: currentEntry?.queueMode,
-      queueDebounceMs: currentEntry?.queueDebounceMs,
-      queueCap: currentEntry?.queueCap,
-      queueDrop: currentEntry?.queueDrop,
-      spawnedBy: currentEntry?.spawnedBy,
-      spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
-      parentSessionKey: currentEntry?.parentSessionKey,
-      forkedFromParent: currentEntry?.forkedFromParent,
-      spawnDepth: currentEntry?.spawnDepth,
-      subagentRole: currentEntry?.subagentRole,
-      subagentControlScope: currentEntry?.subagentControlScope,
-      label: currentEntry?.label,
-      displayName: currentEntry?.displayName,
-      channel: currentEntry?.channel,
-      groupId: currentEntry?.groupId,
-      subject: currentEntry?.subject,
-      groupChannel: currentEntry?.groupChannel,
-      space: currentEntry?.space,
-      origin: snapshotSessionOrigin(currentEntry),
-      deliveryContext: currentEntry?.deliveryContext,
-      cliSessionBindings: currentEntry?.cliSessionBindings,
-      cliSessionIds: currentEntry?.cliSessionIds,
-      claudeCliSessionId: currentEntry?.claudeCliSessionId,
-      lastChannel: currentEntry?.lastChannel,
-      lastTo: currentEntry?.lastTo,
-      lastAccountId: currentEntry?.lastAccountId,
-      lastThreadId: currentEntry?.lastThreadId,
-      skillsSnapshot: currentEntry?.skillsSnapshot,
-      acp: currentEntry?.acp,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      totalTokensFresh: true,
-    };
-    store[primaryKey] = nextEntry;
-    return nextEntry;
-  });
+  const next = await updateSessionStore(
+    storePath,
+    (store) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key: params.key,
+        store,
+      });
+      const currentEntry = store[primaryKey];
+      resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
+      const parsed = parseAgentSessionKey(primaryKey);
+      const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+      const resetPreservedSelection = resolveResetPreservedSelection({
+        entry: currentEntry,
+      });
+      const resetEntry = {
+        ...stripRuntimeModelState(currentEntry),
+        providerOverride: undefined,
+        modelOverride: undefined,
+        modelOverrideSource: undefined,
+        authProfileOverride: undefined,
+        authProfileOverrideSource: undefined,
+        authProfileOverrideCompactionCount: undefined,
+        ...resetPreservedSelection,
+      };
+      const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
+      oldSessionId = currentEntry?.sessionId;
+      oldSessionFile = currentEntry?.sessionFile;
+      const now = Date.now();
+      const nextSessionId = randomUUID();
+      const sessionFile = resolveSessionFilePath(
+        nextSessionId,
+        currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
+        resolveSessionFilePathOptions({
+          storePath,
+          agentId: sessionAgentId,
+        }),
+      );
+      const nextEntry: SessionEntry = {
+        sessionId: nextSessionId,
+        sessionFile,
+        updatedAt: now,
+        systemSent: false,
+        abortedLastRun: false,
+        thinkingLevel: currentEntry?.thinkingLevel,
+        fastMode: currentEntry?.fastMode,
+        verboseLevel: currentEntry?.verboseLevel,
+        traceLevel: currentEntry?.traceLevel,
+        reasoningLevel: currentEntry?.reasoningLevel,
+        elevatedLevel: currentEntry?.elevatedLevel,
+        ttsAuto: currentEntry?.ttsAuto,
+        execHost: currentEntry?.execHost,
+        execSecurity: currentEntry?.execSecurity,
+        execAsk: currentEntry?.execAsk,
+        execNode: currentEntry?.execNode,
+        responseUsage: currentEntry?.responseUsage,
+        // Resets should keep the user's explicit selection, but clear any
+        // temporary fallback model that was pinned during the previous run.
+        ...resetPreservedSelection,
+        groupActivation: currentEntry?.groupActivation,
+        groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
+        chatType: currentEntry?.chatType,
+        model: resolvedModel.model,
+        modelProvider: resolvedModel.provider,
+        contextTokens: resetEntry?.contextTokens,
+        compactionCount: currentEntry?.compactionCount,
+        compactionCheckpoints: currentEntry?.compactionCheckpoints,
+        sendPolicy: currentEntry?.sendPolicy,
+        queueMode: currentEntry?.queueMode,
+        queueDebounceMs: currentEntry?.queueDebounceMs,
+        queueCap: currentEntry?.queueCap,
+        queueDrop: currentEntry?.queueDrop,
+        spawnedBy: currentEntry?.spawnedBy,
+        spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
+        parentSessionKey: currentEntry?.parentSessionKey,
+        forkedFromParent: currentEntry?.forkedFromParent,
+        spawnDepth: currentEntry?.spawnDepth,
+        subagentRole: currentEntry?.subagentRole,
+        subagentControlScope: currentEntry?.subagentControlScope,
+        label: currentEntry?.label,
+        displayName: currentEntry?.displayName,
+        channel: currentEntry?.channel,
+        groupId: currentEntry?.groupId,
+        subject: currentEntry?.subject,
+        groupChannel: currentEntry?.groupChannel,
+        space: currentEntry?.space,
+        origin: snapshotSessionOrigin(currentEntry),
+        deliveryContext: currentEntry?.deliveryContext,
+        cliSessionBindings: currentEntry?.cliSessionBindings,
+        cliSessionIds: currentEntry?.cliSessionIds,
+        claudeCliSessionId: currentEntry?.claudeCliSessionId,
+        lastChannel: currentEntry?.lastChannel,
+        lastTo: currentEntry?.lastTo,
+        lastAccountId: currentEntry?.lastAccountId,
+        lastThreadId: currentEntry?.lastThreadId,
+        skillsSnapshot: currentEntry?.skillsSnapshot,
+        acp: currentEntry?.acp,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      };
+      store[primaryKey] = nextEntry;
+      return nextEntry;
+    },
+    { activeSessionKey: params.key },
+  );
   emitGatewayBeforeResetPluginHook({
     cfg,
     key: params.key,

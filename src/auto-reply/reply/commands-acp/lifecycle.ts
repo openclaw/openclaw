@@ -469,17 +469,21 @@ async function persistSpawnedSessionLabel(params: {
   if (!params.commandParams.storePath) {
     return;
   }
-  await updateSessionStore(params.commandParams.storePath, (store) => {
-    const existing = store[params.sessionKey];
-    if (!existing) {
-      return;
-    }
-    store[params.sessionKey] = {
-      ...existing,
-      label,
-      updatedAt: now,
-    };
-  });
+  await updateSessionStore(
+    params.commandParams.storePath,
+    (store) => {
+      const existing = store[params.sessionKey];
+      if (!existing) {
+        return;
+      }
+      store[params.sessionKey] = {
+        ...existing,
+        label,
+        updatedAt: now,
+      };
+    },
+    { activeSessionKey: params.sessionKey },
+  );
 }
 
 export async function handleAcpSpawnAction(
