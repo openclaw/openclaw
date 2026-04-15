@@ -97,28 +97,14 @@ function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefin
   }
   const b0 = buffer[0];
   const b1 = buffer[1];
+  // Only trust a BOM — the NUL-heavy heuristic cannot be used as a security gate
+  // because TextDecoder("utf-16le") never throws and all byte pairs produce printable
+  // code points, allowing opaque NUL-padded binaries to pass the text-stats check.
   if (b0 === 0xff && b1 === 0xfe) {
     return "utf-16le";
   }
   if (b0 === 0xfe && b1 === 0xff) {
     return "utf-16be";
-  }
-  const sampleLen = Math.min(buffer.length, 2048);
-  let zeroEven = 0;
-  let zeroOdd = 0;
-  for (let i = 0; i < sampleLen; i += 1) {
-    if (buffer[i] !== 0) {
-      continue;
-    }
-    if (i % 2 === 0) {
-      zeroEven += 1;
-    } else {
-      zeroOdd += 1;
-    }
-  }
-  const zeroCount = zeroEven + zeroOdd;
-  if (sampleLen > 0 && zeroCount / sampleLen > 0.2) {
-    return zeroOdd >= zeroEven ? "utf-16le" : "utf-16be";
   }
   return undefined;
 }

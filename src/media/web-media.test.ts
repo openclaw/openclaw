@@ -333,6 +333,34 @@ describe("loadWebMedia", () => {
   );
 
   it.each([
+    { label: "CSV", fileName: "nul-padded.csv" },
+    { label: "Markdown", fileName: "nul-padded.md" },
+  ])("rejects NUL-padded binary data disguised as %s (UTF-16 heuristic bypass)", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    // Alternating 0x00/0xFF — no BOM, but old NUL-heuristic would classify as UTF-16.
+    // Decoded as UTF-16 every pair becomes a printable code point (e.g. U+FF00),
+    // so getTextStats returns printableRatio=1.0 and the file would have been allowed.
+    // After requiring a BOM for UTF-16, decodeHostReadText falls through to the UTF-8
+    // strict path (throws on 0xFF), then hasSingleByteTextShape rejects due to control
+    // bytes (0x00 < 0x20), so the upload is correctly rejected.
+    const nulPadded = Buffer.alloc(9000);
+    for (let i = 0; i < nulPadded.length; i += 1) {
+      nulPadded[i] = i % 2 === 0 ? 0x00 : 0xff;
+    }
+    await fs.writeFile(fakeTextFile, nulPadded);
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it.each([
     { label: "CSV", fileName: "alternating-high.csv" },
     { label: "Markdown", fileName: "alternating-high.md" },
   ])("rejects alternating ASCII/high-byte data disguised as %s", async ({ fileName }) => {
