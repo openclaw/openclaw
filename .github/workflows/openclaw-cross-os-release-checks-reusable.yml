@@ -289,8 +289,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: source/pnpm-lock.yaml
 
       - name: Download candidate artifact
         uses: actions/download-artifact@v8
