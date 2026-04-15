@@ -61,9 +61,14 @@ export type GroupToolPolicySender = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  /**
+   * The channel/platform that delivered this message (e.g. "discord", "telegram", "slack").
+   * Required for `<channel>:<senderId>` compound key matching.
+   */
+  messageProvider?: string | null;
 };
 
-type SenderKeyType = "id" | "e164" | "username" | "name";
+type SenderKeyType = "id" | "e164" | "username" | "name" | "channel";
 type CompiledSenderPolicy = {
   buckets: SenderPolicyBuckets;
   wildcard?: GroupToolPolicyConfig;
@@ -79,7 +84,7 @@ type ParsedSenderPolicyKey =
   | { kind: "wildcard" }
   | { kind: "typed"; type: SenderKeyType; key: string };
 
-type SenderPolicyBuckets = Record<ToolsBySenderKeyType, Map<string, GroupToolPolicyConfig>>;
+type SenderPolicyBuckets = Record<ToolsBySenderKeyType | "channel", Map<string, GroupToolPolicyConfig>>;
 
 function normalizeSenderKey(
   value: string,
@@ -143,6 +148,22 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
     };
   }
 
+  // Channel-scoped compound key: <channel>:<senderId> (e.g. "discord:123456789012345678").
+  // Any key containing ":" that didn't match a typed prefix is treated as a platform-scoped id.
+  // This allows matching a specific user on a specific platform without cross-platform id collisions.
+  const colonIdx = trimmed.indexOf(":");
+  if (colonIdx > 0) {
+    const channelPart = normalizeSenderKey(trimmed.slice(0, colonIdx));
+    const idPart = normalizeSenderKey(trimmed.slice(colonIdx + 1));
+    if (channelPart && idPart) {
+      return {
+        kind: "typed",
+        type: "channel",
+        key: `${channelPart}:${idPart}`,
+      };
+    }
+  }
+
   // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
   warnLegacyToolsBySenderKey(trimmed);
   const key = normalizeLegacySenderKey(trimmed);
@@ -162,6 +183,7 @@ function createSenderPolicyBuckets(): SenderPolicyBuckets {
     e164: new Map<string, GroupToolPolicyConfig>(),
     username: new Map<string, GroupToolPolicyConfig>(),
     name: new Map<string, GroupToolPolicyConfig>(),
+    channel: new Map<string, GroupToolPolicyConfig>(),
   };
 }
 
@@ -240,6 +262,18 @@ function matchToolsBySenderPolicy(
   compiled: CompiledSenderPolicy,
   params: GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
+  // Channel-scoped compound key: checked first so platform-specific entries win over bare id matches.
+  // Key format stored in bucket: "<channel>:<senderId>" (both lowercased).
+  const channelProvider = normalizeSenderKey(params.messageProvider);
+  if (channelProvider) {
+    for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
+      const compositeKey = `${channelProvider}:${senderIdCandidate}`;
+      const match = compiled.buckets.channel.get(compositeKey);
+      if (match) {
+        return match;
+      }
+    }
+  }
   for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
     const match = compiled.buckets.id.get(senderIdCandidate);
     if (match) {
@@ -429,6 +463,7 @@ export function resolveChannelGroupToolsPolicy(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    messageProvider: params.messageProvider,
   });
   if (groupSenderPolicy) {
     return groupSenderPolicy;
@@ -442,6 +477,7 @@ export function resolveChannelGroupToolsPolicy(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    messageProvider: params.messageProvider,
   });
   if (defaultSenderPolicy) {
     return defaultSenderPolicy;

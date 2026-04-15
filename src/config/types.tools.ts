@@ -310,6 +310,28 @@ export type AgentToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /**
+   * Per-sender tool access overrides for this agent.
+   * Agent-level entries take priority over global tools.toolsBySender.
+   *
+   * Key formats (first match wins: channel-scoped → id → e164 → username → name → *):
+   *   discord:<snowflake>     Platform-scoped — matches only when the message comes from Discord
+   *   telegram:<userId>       Platform-scoped — matches only when the message comes from Telegram
+   *   slack:<userId>          Platform-scoped — matches only when the message comes from Slack
+   *   <channel>:<senderId>    Generic platform-scoped form for any channel provider
+   *   id:<senderId>           Raw sender id (matches across all platforms — use with care)
+   *   e164:<phone>            E.164 phone number (e.g. e164:+15551234567)
+   *   username:<handle>       Platform username (leading @ stripped automatically)
+   *   name:<display-name>     Display name
+   *   *                       Wildcard: matches any sender not matched by an explicit key
+   *
+   * Tip: run /whoami in any channel to see your senderId, username, and channel name.
+   *
+   * Example — strip shell and disk-write tools for a buddy on Discord:
+   *   "discord:123456789012345678": { deny: ["exec", "process", "write", "edit"] }
+   *   "*": { deny: ["exec", "process", "write", "edit"] }
+   */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -483,6 +505,29 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /**
+   * Per-sender tool access overrides applied globally across all agents and channels.
+   * agents.<id>.tools.toolsBySender takes priority over this global list.
+   *
+   * Key formats (first match wins: channel-scoped → id → e164 → username → name → *):
+   *   discord:<snowflake>     Platform-scoped — matches only when the message comes from Discord
+   *   telegram:<userId>       Platform-scoped — matches only when the message comes from Telegram
+   *   slack:<userId>          Platform-scoped — matches only when the message comes from Slack
+   *   <channel>:<senderId>    Generic platform-scoped form for any channel provider
+   *   id:<senderId>           Raw sender id (matches across all platforms — use with care)
+   *   e164:<phone>            E.164 phone number (e.g. e164:+15551234567)
+   *   username:<handle>       Platform username (leading @ stripped automatically)
+   *   name:<display-name>     Display name
+   *   *                       Wildcard: matches any sender not matched by an explicit key
+   *
+   * Tip: run /whoami in any channel to see your senderId, username, and channel name.
+   *
+   * Example — owner keeps full access; everyone else loses shell and disk-write tools:
+   *   "discord:123456789012345678": {}
+   *   "telegram:987654321": {}
+   *   "*": { deny: ["exec", "process", "write", "edit"] }
+   */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   web?: {
     search?: {
       /** Enable managed web_search and optional Codex-native web search. */
