@@ -749,7 +749,7 @@ async function runInstallerFreshSuite(params) {
   const lane = createLaneState("installer-fresh");
   const cleanup = [];
   const usesManagedGateway = shouldUseManagedGatewayService();
-  const useManagedGatewayAfterInstall = usesManagedGateway && process.platform !== "win32";
+  const useManagedGatewayAfterInstall = shouldUseManagedGatewayForInstallerRuntime();
   const manualGateway = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
@@ -791,11 +791,20 @@ async function runInstallerFreshSuite(params) {
       logPath: join(params.logsDir, "installer-fresh-onboard.log"),
     });
 
+    if (shouldExerciseManagedGatewayLifecycleAfterInstall()) {
+      await exerciseManagedGatewayLifecycle({
+        lane,
+        cliPath: freshShell.cliPath,
+        env,
+        logPrefix: join(params.logsDir, "installer-fresh-gateway"),
+      });
+    }
+
     if (!useManagedGatewayAfterInstall) {
       // Keep the Windows installer lane validating Scheduled Task registration during
-      // onboarding, but use a manual gateway for the runtime checks. The packaged
-      // Windows lanes already cover the managed Scheduled Task lifecycle and this
-      // avoids duplicating a flaky surface in the installer-only validation.
+      // onboarding and lifecycle commands, but use a manual gateway for the runtime
+      // checks after that so the installer validation does not depend on the more
+      // failure-prone managed Windows session state for the remainder of the lane.
       if (shouldStopManagedGatewayBeforeManualFallback()) {
         logLanePhase(lane, "gateway-stop-managed");
         await runInstalledCli({
@@ -824,56 +833,6 @@ async function runInstallerFreshSuite(params) {
         cliPath: freshShell.cliPath,
         env,
         logPath: join(params.logsDir, "installer-fresh-gateway-status.log"),
-      });
-    } else {
-      logLanePhase(lane, "gateway-ready");
-      await ensureManagedGatewayReady({
-        lane,
-        cliPath: freshShell.cliPath,
-        env,
-        logPath: join(params.logsDir, "installer-fresh-gateway-ready.log"),
-      });
-
-      logLanePhase(lane, "gateway-restart");
-      await runInstalledCli({
-        cliPath: freshShell.cliPath,
-        args: ["gateway", "restart"],
-        env,
-        cwd: lane.homeDir,
-        logPath: join(params.logsDir, "installer-fresh-gateway-restart.log"),
-        timeoutMs: 2 * 60 * 1000,
-      });
-      await ensureManagedGatewayReady({
-        lane,
-        cliPath: freshShell.cliPath,
-        env,
-        logPath: join(params.logsDir, "installer-fresh-gateway-ready-after-restart.log"),
-      });
-
-      logLanePhase(lane, "gateway-stop");
-      await runInstalledCli({
-        cliPath: freshShell.cliPath,
-        args: ["gateway", "stop"],
-        env,
-        cwd: lane.homeDir,
-        logPath: join(params.logsDir, "installer-fresh-gateway-stop.log"),
-        timeoutMs: 2 * 60 * 1000,
-      });
-
-      logLanePhase(lane, "gateway-start");
-      await runInstalledCli({
-        cliPath: freshShell.cliPath,
-        args: ["gateway", "start"],
-        env,
-        cwd: lane.homeDir,
-        logPath: join(params.logsDir, "installer-fresh-gateway-start.log"),
-        timeoutMs: 2 * 60 * 1000,
-      });
-      await ensureManagedGatewayReady({
-        lane,
-        cliPath: freshShell.cliPath,
-        env,
-        logPath: join(params.logsDir, "installer-fresh-gateway-ready-after-start.log"),
       });
     }
 
@@ -1164,6 +1123,14 @@ export function shouldUseManagedGatewayService(platform = process.platform) {
   return platform === "win32";
 }
 
+export function shouldUseManagedGatewayForInstallerRuntime(platform = process.platform) {
+  return shouldUseManagedGatewayService(platform) && platform !== "win32";
+}
+
+export function shouldExerciseManagedGatewayLifecycleAfterInstall(platform = process.platform) {
+  return shouldUseManagedGatewayService(platform);
+}
+
 export function shouldStopManagedGatewayBeforeManualFallback(platform = process.platform) {
   return shouldUseManagedGatewayService(platform);
 }
@@ -1181,11 +1148,7 @@ function resolveExpectedDevUpdateRef(ref) {
   return trimmed || "main";
 }
 
-export function resolveDevUpdateVerificationRef(ref, sourceSha) {
-  const pinnedSourceSha = normalizeRequestedRef(sourceSha);
-  if (pinnedSourceSha) {
-    return pinnedSourceSha;
-  }
+export function resolveDevUpdateVerificationRef(ref, _sourceSha) {
   return resolveExpectedDevUpdateRef(ref);
 }
 
@@ -1474,37 +1437,38 @@ async function ensureDevUpdateGitInstall(params) {
 }
 
 async function runOnboardWithInstalledCli(params) {
-  params.lane.gatewayPort = await allocatePort();
-  const args = [
-    "onboard",
-    "--non-interactive",
-    "--mode",
-    "local",
-    "--auth-choice",
-    params.providerConfig.authChoice,
-    "--secret-input-mode",
-    "ref",
-    "--gateway-port",
-    String(params.lane.gatewayPort),
-    "--gateway-bind",
-    "loopback",
-    "--skip-skills",
-    "--accept-risk",
-    "--json",
-  ];
-  if (params.installDaemon) {
-    args.push("--install-daemon");
-  }
-  if (!params.installDaemon || shouldSkipInstallerDaemonHealthCheck()) {
-    args.push("--skip-health");
-  }
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args,
-    cwd: params.lane.homeDir,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 10 * 60 * 1000,
+  await withAllocatedGatewayPort(params.lane, async () => {
+    const args = [
+      "onboard",
+      "--non-interactive",
+      "--mode",
+      "local",
+      "--auth-choice",
+      params.providerConfig.authChoice,
+      "--secret-input-mode",
+      "ref",
+      "--gateway-port",
+      String(params.lane.gatewayPort),
+      "--gateway-bind",
+      "loopback",
+      "--skip-skills",
+      "--accept-risk",
+      "--json",
+    ];
+    if (params.installDaemon) {
+      args.push("--install-daemon");
+    }
+    if (!params.installDaemon || shouldSkipInstallerDaemonHealthCheck()) {
+      args.push("--skip-health");
+    }
+    await runInstalledCli({
+      cliPath: params.cliPath,
+      args,
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 10 * 60 * 1000,
+    });
   });
 }
 
@@ -2132,30 +2096,83 @@ function ensureLocalNpmShim(lane) {
 }
 
 async function runOnboard(params) {
-  params.lane.gatewayPort = await allocatePort();
-  await runOpenClaw({
+  await withAllocatedGatewayPort(params.lane, async () => {
+    await runOpenClaw({
+      lane: params.lane,
+      env: params.env,
+      args: [
+        "onboard",
+        "--non-interactive",
+        "--mode",
+        "local",
+        "--auth-choice",
+        params.providerConfig.authChoice,
+        "--secret-input-mode",
+        "ref",
+        "--gateway-port",
+        String(params.lane.gatewayPort),
+        "--gateway-bind",
+        "loopback",
+        "--skip-skills",
+        "--skip-health",
+        "--accept-risk",
+        "--json",
+      ],
+      logPath: params.logPath,
+      timeoutMs: 10 * 60 * 1000,
+    });
+  });
+}
+
+async function exerciseManagedGatewayLifecycle(params) {
+  logLanePhase(params.lane, "gateway-ready");
+  await ensureManagedGatewayReady({
     lane: params.lane,
+    cliPath: params.cliPath,
     env: params.env,
-    args: [
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      params.providerConfig.authChoice,
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      String(params.lane.gatewayPort),
-      "--gateway-bind",
-      "loopback",
-      "--skip-skills",
-      "--skip-health",
-      "--accept-risk",
-      "--json",
-    ],
-    logPath: params.logPath,
-    timeoutMs: 10 * 60 * 1000,
+    logPath: `${params.logPrefix}-ready.log`,
+  });
+
+  logLanePhase(params.lane, "gateway-restart");
+  await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["gateway", "restart"],
+    env: params.env,
+    cwd: params.lane.homeDir,
+    logPath: `${params.logPrefix}-restart.log`,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await ensureManagedGatewayReady({
+    lane: params.lane,
+    cliPath: params.cliPath,
+    env: params.env,
+    logPath: `${params.logPrefix}-ready-after-restart.log`,
+  });
+
+  logLanePhase(params.lane, "gateway-stop");
+  await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["gateway", "stop"],
+    env: params.env,
+    cwd: params.lane.homeDir,
+    logPath: `${params.logPrefix}-stop.log`,
+    timeoutMs: 2 * 60 * 1000,
+  });
+
+  logLanePhase(params.lane, "gateway-start");
+  await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["gateway", "start"],
+    env: params.env,
+    cwd: params.lane.homeDir,
+    logPath: `${params.logPrefix}-start.log`,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await ensureManagedGatewayReady({
+    lane: params.lane,
+    cliPath: params.cliPath,
+    env: params.env,
+    logPath: `${params.logPrefix}-ready-after-start.log`,
   });
 }
 
@@ -2625,11 +2642,15 @@ async function startStaticFileServer(params) {
     response.setHeader("content-length", String(fileBytes.length));
     response.end(fileBytes);
   });
-  const port = Number(await allocatePort());
   await new Promise((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise);
-    server.listen(port, "127.0.0.1", resolvePromise);
+    server.listen(0, "127.0.0.1", resolvePromise);
   });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to bind static file server.");
+  }
+  const port = address.port;
   return {
     url: `http://127.0.0.1:${port}/${fileName}`,
     close: () =>
@@ -2775,18 +2796,54 @@ function sleep(ms) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
-function allocatePort() {
+async function withAllocatedGatewayPort(lane, callback) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const reservation = await reservePort();
+    lane.gatewayPort = reservation.port;
+    await reservation.release();
+    try {
+      return await callback();
+    } catch (error) {
+      lastError = error;
+      if (!isAddressInUseError(error) || attempt === 3) {
+        throw error;
+      }
+      await sleep(250 * attempt);
+    }
+  }
+  throw lastError ?? new Error("Failed to allocate a gateway port.");
+}
+
+function reservePort() {
   return new Promise((resolvePromise, rejectPromise) => {
     const server = createNetServer();
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
-      server.close();
       if (!address || typeof address === "string") {
+        server.close();
         rejectPromise(new Error("Failed to allocate a TCP port."));
         return;
       }
-      resolvePromise(address.port);
+      resolvePromise({
+        port: address.port,
+        release: () =>
+          new Promise((releaseResolve, releaseReject) => {
+            server.close((error) => {
+              if (error) {
+                releaseReject(error);
+                return;
+              }
+              releaseResolve();
+            });
+          }),
+      });
     });
     server.once("error", rejectPromise);
   });
+}
+
+function isAddressInUseError(error) {
+  const message = formatError(error);
+  return message.includes("EADDRINUSE") || /address.+in use/iu.test(message);
 }

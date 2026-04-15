@@ -21,9 +21,11 @@ import {
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
+  shouldExerciseManagedGatewayLifecycleAfterInstall,
   shouldSkipInstallerDaemonHealthCheck,
   shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
+  shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
@@ -162,6 +164,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldUseManagedGatewayService("linux")).toBe(false);
   });
 
+  it("keeps the Windows installer runtime on the manual gateway after managed lifecycle checks", () => {
+    expect(shouldExerciseManagedGatewayLifecycleAfterInstall("win32")).toBe(true);
+    expect(shouldUseManagedGatewayForInstallerRuntime("win32")).toBe(false);
+    expect(shouldExerciseManagedGatewayLifecycleAfterInstall("darwin")).toBe(false);
+    expect(shouldUseManagedGatewayForInstallerRuntime("darwin")).toBe(false);
+  });
+
   it("stops the managed gateway before the manual fallback only on Windows", () => {
     expect(shouldStopManagedGatewayBeforeManualFallback("win32")).toBe(true);
     expect(shouldStopManagedGatewayBeforeManualFallback("darwin")).toBe(false);
@@ -233,11 +242,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldRunMainChannelDevUpdate("v2026.4.14")).toBe(false);
   });
 
-  it("pins dev-update verification to the prepared source sha when provided", () => {
+  it("keeps dev-update verification aligned to the requested branch", () => {
+    expect(resolveDevUpdateVerificationRef("main")).toBe("main");
     expect(
       resolveDevUpdateVerificationRef("main", "08753a1d793c040b101c8a26c43445dbbab14995"),
-    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
-    expect(resolveDevUpdateVerificationRef("refs/heads/main", "")).toBe("main");
+    ).toBe("main");
+    expect(resolveDevUpdateVerificationRef("refs/heads/main")).toBe("main");
   });
 
   it("drops the bundled plugin postinstall disable flag for real updater calls", () => {
