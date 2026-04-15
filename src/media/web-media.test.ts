@@ -228,6 +228,28 @@ describe("loadWebMedia", () => {
     });
   });
 
+  it.each([
+    { label: "CSV", fileName: "opaque.csv" },
+    { label: "Markdown", fileName: "opaque.md" },
+  ])("rejects opaque non-NUL binary data disguised as %s", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    const opaqueBinary = Buffer.alloc(9000);
+    for (let i = 0; i < opaqueBinary.length; i += 1) {
+      opaqueBinary[i] = (i % 255) + 1;
+    }
+    await fs.writeFile(fakeTextFile, opaqueBinary);
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
   it("rejects traversal-style canvas media paths before filesystem access", async () => {
     await expect(
       loadWebMedia(`${CANVAS_HOST_PATH}/documents/../collection.media/tiny.png`),

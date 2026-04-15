@@ -87,24 +87,116 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "text/markdown",
 ]);
 // file-type returns undefined (no magic bytes) for plain-text formats like CSV and
-// Markdown. These MIME types are allowed via extension + null-byte check only.
+// Markdown, so host-read needs an explicit "this really decodes as text" fallback.
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
+const HOST_READ_TEXT_SAMPLE_BYTES = 8192;
 const MB = 1024 * 1024;
+const WORDISH_CHAR = /[\p{L}\p{N}]/u;
 
-// Returns true only if every byte in the buffer is text-safe: no null bytes and no C0
-// control characters other than the standard whitespace group (tab 0x09, LF 0x0A,
-// VT 0x0B, FF 0x0C, CR 0x0D). This is the same heuristic used by `git` and `file` to
-// distinguish text from binary. Bytes ≥ 0x80 are allowed so that UTF-8, Latin-1, and
-// Windows-1252 encoded files all pass.
-function looksLikeText(buffer: Buffer): boolean {
-  for (let i = 0; i < buffer.length; i++) {
-    const b = buffer[i];
-    // Reject null (0x00–0x08) and remaining C0 controls (0x0E–0x1F) and DEL (0x7F).
-    if (b < 0x09 || (b >= 0x0e && b <= 0x1f) || b === 0x7f) {
-      return false;
+function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
+  if (!buffer || buffer.length < 2) {
+    return undefined;
+  }
+  const b0 = buffer[0];
+  const b1 = buffer[1];
+  if (b0 === 0xff && b1 === 0xfe) {
+    return "utf-16le";
+  }
+  if (b0 === 0xfe && b1 === 0xff) {
+    return "utf-16be";
+  }
+  const sampleLen = Math.min(buffer.length, 2048);
+  let zeroEven = 0;
+  let zeroOdd = 0;
+  for (let i = 0; i < sampleLen; i += 1) {
+    if (buffer[i] !== 0) {
+      continue;
+    }
+    if (i % 2 === 0) {
+      zeroEven += 1;
+    } else {
+      zeroOdd += 1;
     }
   }
-  return true;
+  const zeroCount = zeroEven + zeroOdd;
+  if (sampleLen > 0 && zeroCount / sampleLen > 0.2) {
+    return zeroOdd >= zeroEven ? "utf-16le" : "utf-16be";
+  }
+  return undefined;
+}
+
+function getTextStats(text: string): { printableRatio: number; wordishRatio: number } {
+  if (!text) {
+    return { printableRatio: 0, wordishRatio: 0 };
+  }
+  let printable = 0;
+  let control = 0;
+  let wordish = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code === 9 || code === 10 || code === 13 || code === 32) {
+      printable += 1;
+      wordish += 1;
+      continue;
+    }
+    if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
+      control += 1;
+      continue;
+    }
+    printable += 1;
+    if (WORDISH_CHAR.test(char)) {
+      wordish += 1;
+    }
+  }
+  const total = printable + control;
+  if (total === 0) {
+    return { printableRatio: 0, wordishRatio: 0 };
+  }
+  return { printableRatio: printable / total, wordishRatio: wordish / total };
+}
+
+function decodeHostReadTextSample(buffer: Buffer): string | undefined {
+  const sample = buffer.subarray(0, Math.min(buffer.length, HOST_READ_TEXT_SAMPLE_BYTES));
+  if (sample.length === 0) {
+    return "";
+  }
+  const utf16Charset = resolveUtf16Charset(sample);
+  try {
+    if (utf16Charset === "utf-16be") {
+      const evenSample = sample.length % 2 === 0 ? sample : sample.subarray(0, sample.length - 1);
+      if (evenSample.length === 0) {
+        return "";
+      }
+      const swapped = Buffer.alloc(evenSample.length);
+      for (let i = 0; i + 1 < evenSample.length; i += 2) {
+        swapped[i] = evenSample[i + 1];
+        swapped[i + 1] = evenSample[i];
+      }
+      return new TextDecoder("utf-16le").decode(swapped);
+    }
+    if (utf16Charset === "utf-16le") {
+      const evenSample = sample.length % 2 === 0 ? sample : sample.subarray(0, sample.length - 1);
+      return new TextDecoder("utf-16le").decode(evenSample);
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(sample);
+  } catch {
+    return undefined;
+  }
+}
+
+function isValidatedHostReadText(buffer?: Buffer): boolean {
+  if (!buffer) {
+    return false;
+  }
+  if (buffer.length === 0) {
+    return true;
+  }
+  const text = decodeHostReadTextSample(buffer);
+  if (text === undefined) {
+    return false;
+  }
+  const { printableRatio, wordishRatio } = getTextStats(text);
+  return printableRatio > 0.95 && wordishRatio > 0.2;
 }
 
 function formatMb(bytes: number, digits = 2): string {
@@ -159,13 +251,13 @@ function assertHostReadMediaAllowed(params: {
   // plain-text buffers that have no binary magic bytes. Allow these formats when:
   // - sniffedMime is undefined (no binary signature detected by file-type)
   // - The extension-derived MIME is text/csv or text/markdown (operator intent)
-  // - Every byte in the buffer passes the text-safety check (no binary control chars)
+  // - The buffer decodes as actual text instead of opaque binary bytes
   if (
     !sniffedMime &&
     normalizedMime &&
     HOST_READ_TEXT_PLAIN_ALIASES.has(normalizedMime) &&
     params.buffer &&
-    looksLikeText(params.buffer)
+    isValidatedHostReadText(params.buffer)
   ) {
     return;
   }
