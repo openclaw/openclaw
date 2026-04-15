@@ -83,6 +83,7 @@ export type AppViewState = {
   chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
+  modelFallbackSessions: Record<string, true>;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;

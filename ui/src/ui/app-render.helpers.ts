@@ -589,8 +589,9 @@ function renderChatModelSelect(state: AppViewState) {
     currentOverride === ""
       ? defaultLabel
       : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
+  const inFallback = Boolean(state.modelFallbackSessions?.[state.sessionKey]);
   return html`
-    <label class="field chat-controls__session chat-controls__model">
+    <label class=${`field chat-controls__session chat-controls__model${inFallback ? " chat-controls__model--fallback" : ""}`}>
       <select
         data-chat-model-select="true"
         aria-label="Chat model"
@@ -755,6 +756,9 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
       key: targetSessionKey,
       model: nextModel || null,
     });
+    // Clear the fallback indicator — user has intentionally chosen a model
+    const { [targetSessionKey]: _removed, ...rest } = state.modelFallbackSessions ?? {};
+    state.modelFallbackSessions = rest as Record<string, true>;
     void refreshVisibleToolsEffectiveForCurrentSession(state);
     await refreshSessionOptions(state);
   } catch (err) {

@@ -179,6 +179,7 @@ export class OpenClawApp extends LitElement {
   @state() chatSideResult: ChatSideResult | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
+  @state() modelFallbackSessions: Record<string, true> = {};
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};

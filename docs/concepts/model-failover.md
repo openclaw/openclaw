@@ -335,6 +335,25 @@ That cooldown summary is model-aware:
 - if the remaining block is a matching model-scoped rate limit, OpenClaw
   reports the last matching expiry that still blocks that model
 
+## UI fallback indicator
+
+When a model fallback occurs during a run, the OpenClaw Control UI shows two
+indications:
+
+1. **Temporary toast notification** — A banner appears in the chat area for 8
+   seconds showing the active fallback model and the reason (e.g., `Fallback
+   active: openai/gpt-4o — model picker highlighted`).
+
+2. **Persistent model picker highlight** — The model picker in the chat header
+   is highlighted red and continues to pulse until the user manually selects a
+   different model from the picker. This ensures the fallback is still visible
+   after the toast disappears.
+
+The persistent highlight is cleared only when the user explicitly chooses a
+model from the picker. Switching between chat sessions does not clear it —
+if a session's model fell back, its picker remains highlighted until a
+deliberate model change is made for that session.
+
 ## Related config
 
 See [Gateway configuration](/gateway/configuration) for:

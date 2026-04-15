@@ -900,6 +900,19 @@
   max-width: 320px;
 }
 
+/* Fallback model indicator — persists until user manually changes the model */
+.chat-controls__model--fallback select {
+  border-color: var(--danger) !important;
+  color: var(--danger);
+  box-shadow: 0 0 0 2px var(--danger-subtle);
+  animation: fallback-model-pulse 2s ease-in-out infinite;
+}
+
+@keyframes fallback-model-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--danger-subtle); }
+  50% { box-shadow: 0 0 0 3px var(--danger-muted); }
+}
+
 .chat-controls__thinking {
   display: flex;
   align-items: center;

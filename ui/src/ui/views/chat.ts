@@ -440,7 +440,7 @@ function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   const message =
     phase === "cleared"
       ? `Fallback cleared: ${status.selected}`
-      : `Fallback active: ${status.active}`;
+      : `Fallback active: ${status.active} — model picker highlighted`;
   const className =
     phase === "cleared"
       ? "compaction-indicator compaction-indicator--fallback-cleared"

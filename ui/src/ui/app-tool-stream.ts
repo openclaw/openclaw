@@ -270,6 +270,7 @@ type CompactionHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
+  modelFallbackSessions?: Record<string, true>;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -428,6 +429,13 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   if (host.fallbackClearTimer != null) {
     window.clearTimeout(host.fallbackClearTimer);
     host.fallbackClearTimer = null;
+  }
+  if (phase !== "fallback_cleared") {
+    // Persist fallback indicator on picker until user manually changes model
+    const sessionKey = accepted.sessionKey ?? host.sessionKey;
+    if (sessionKey) {
+      host.modelFallbackSessions = { ...(host.modelFallbackSessions ?? {}), [sessionKey]: true };
+    }
   }
   host.fallbackStatus = {
     phase: phase === "fallback_cleared" ? "cleared" : "active",
