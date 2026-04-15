@@ -99,6 +99,7 @@ type GatewayHost = {
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
   pendingSessionMessageReloadSessionKey?: string | null;
+  pendingSessionMessageReloadTimer?: ReturnType<typeof setTimeout> | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -454,8 +455,18 @@ function handleSessionMessageGatewayEvent(
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
     return;
   }
-  deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(host as unknown as ChatState);
+  // Debounce session.message reloads to avoid UI flicker when plugins fire
+  // multiple events per turn (e.g. lossless-claw). Wait 500ms after the last
+  // event before reloading history.
+  if (deferredReloadHost.pendingSessionMessageReloadTimer) {
+    clearTimeout(deferredReloadHost.pendingSessionMessageReloadTimer);
+  }
+  deferredReloadHost.pendingSessionMessageReloadTimer = setTimeout(() => {
+    deferredReloadHost.pendingSessionMessageReloadTimer = null;
+    if (host.sessionKey === sessionKey) {
+      void loadChatHistory(host as unknown as ChatState);
+    }
+  }, 500);
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
