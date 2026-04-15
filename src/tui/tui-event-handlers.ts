@@ -138,7 +138,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
+    // Set status to idle when this was the active run, OR when no session runs
+    // remain active (handles race where lifecycle cleared activeChatRunId before
+    // late chat deltas re-set status to "streaming").
+    if (params.wasActiveRun || sessionRuns.size === 0) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
@@ -153,7 +156,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
+    // Same race-condition guard as finalizeRun.
+    if (params.wasActiveRun || sessionRuns.size === 0) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
