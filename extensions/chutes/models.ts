@@ -8,7 +8,7 @@ import {
 const log = createSubsystemLogger("chutes-models");
 
 export const CHUTES_BASE_URL = "https://llm.chutes.ai/v1";
-export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-4.7-TEE";
+export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-5.1-TEE";
 export const CHUTES_DEFAULT_MODEL_REF = `chutes/${CHUTES_DEFAULT_MODEL_ID}`;
 
 const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -131,6 +131,15 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     contextWindow: 163840,
     maxTokens: 65536,
     cost: { input: 0.45, output: 2.15, cacheRead: 0, cacheWrite: 0 },
+  },
+  {
+    id: "zai-org/GLM-5.1-TEE",
+    name: "zai-org/GLM-5.1-TEE",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 65535,
+    cost: { input: 0.95, output: 3.15, cacheRead: 0, cacheWrite: 0 },
   },
   {
     id: "zai-org/GLM-5-TEE",
