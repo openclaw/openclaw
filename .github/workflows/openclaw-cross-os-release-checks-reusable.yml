@@ -8,6 +8,11 @@ on:
         required: true
         default: main
         type: string
+      workflow_ref:
+        description: Optional openclaw/openclaw ref that provides the reusable workflow harness
+        required: false
+        default: ""
+        type: string
       provider:
         description: Provider lane to use for onboarding and the end-to-end turn
         required: true
@@ -51,6 +56,11 @@ on:
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
+        type: string
+      workflow_ref:
+        description: Optional openclaw/openclaw ref that provides the reusable workflow harness
+        required: false
+        default: ""
         type: string
       provider:
         description: Provider lane to use for onboarding and the end-to-end turn
@@ -116,6 +126,7 @@ jobs:
       candidate_version: ${{ steps.candidate_metadata.outputs.version }}
       matrix: ${{ steps.matrix.outputs.value }}
       source_sha: ${{ steps.candidate_metadata.outputs.source_sha }}
+      workflow_ref: ${{ steps.workflow_ref.outputs.value }}
     steps:
       - name: Validate provider secret availability
         env:
@@ -141,9 +152,28 @@ jobs:
               ;;
           esac
 
+      - name: Resolve workflow ref
+        id: workflow_ref
+        env:
+          INPUT_WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CURRENT_REF_NAME: ${{ github.ref_name }}
+          WORKFLOW_REPOSITORY: ${{ env.OPENCLAW_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${INPUT_WORKFLOW_REF}" ]]; then
+            echo "value=${INPUT_WORKFLOW_REF}" >> "$GITHUB_OUTPUT"
+          elif [[ "${CALLER_REPOSITORY}" == "${WORKFLOW_REPOSITORY}" ]]; then
+            echo "value=${CURRENT_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=main" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout workflow repo
         uses: actions/checkout@v6
         with:
+          repository: ${{ env.OPENCLAW_REPOSITORY }}
+          ref: ${{ steps.workflow_ref.outputs.value }}
           path: workflow
           fetch-depth: 1
           persist-credentials: false
@@ -279,6 +309,8 @@ jobs:
       - name: Checkout workflow repo
         uses: actions/checkout@v6
         with:
+          repository: ${{ env.OPENCLAW_REPOSITORY }}
+          ref: ${{ needs.prepare.outputs.workflow_ref }}
           path: workflow
           fetch-depth: 1
           persist-credentials: false
