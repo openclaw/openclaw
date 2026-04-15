@@ -121,6 +121,14 @@ describe("stripReasoningTagsFromText", () => {
         expected: "You can start with <think and then close with",
       },
       {
+        input: "reasoning prose </think> final answer",
+        expected: "final answer",
+      },
+      {
+        input: "reasoning prose</think>\nfinal answer",
+        expected: "final answer",
+      },
+      {
         input: "A < think >content< /think > B",
         expected: "A  B",
       },

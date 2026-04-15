@@ -64,6 +64,11 @@ export function stripReasoningTagsFromText(
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
+  let sawOpenTag = false;
+  // If we see orphan close tags (</think>) without a matching open tag,
+  // some models may be leaking reasoning into visible output. Keep the
+  // final answer tail after the last orphan close tag when it exists.
+  let lastOrphanCloseEnd = -1;
 
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
@@ -77,6 +82,9 @@ export function stripReasoningTagsFromText(
       result += cleaned.slice(lastIndex, idx);
       if (!isClose) {
         inThinking = true;
+        sawOpenTag = true;
+      } else {
+        lastOrphanCloseEnd = idx + match[0].length;
       }
     } else if (isClose) {
       inThinking = false;
@@ -89,5 +97,17 @@ export function stripReasoningTagsFromText(
     result += cleaned.slice(lastIndex);
   }
 
-  return applyTrim(result, trimMode);
+  const trimmed = applyTrim(result, trimMode);
+  if (
+    mode === "strict" &&
+    !sawOpenTag &&
+    lastOrphanCloseEnd >= 0 &&
+    cleaned.slice(0, lastOrphanCloseEnd).trim().length > 0
+  ) {
+    const tail = cleaned.slice(lastOrphanCloseEnd);
+    if (tail.trim().length > 0) {
+      return applyTrim(tail, trimMode);
+    }
+  }
+  return trimmed;
 }
