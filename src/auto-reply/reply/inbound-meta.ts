@@ -136,7 +136,7 @@ export function buildInboundMetaSystemPrompt(
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
     response_format:
       options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
-  });
+  };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
   return [
