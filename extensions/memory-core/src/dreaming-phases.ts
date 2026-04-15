@@ -954,6 +954,7 @@ async function ingestSessionTranscriptSignals(params: {
     timezone: params.timezone,
     state,
   });
+  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
     await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
@@ -961,7 +962,7 @@ async function ingestSessionTranscriptSignals(params: {
       results: batch.results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: batch.day,
+      dayBucket: ingestionDayBucket,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -1113,6 +1114,7 @@ async function ingestDailyMemorySignals(params: {
     nowMs: params.nowMs,
     state,
   });
+  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
     await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
@@ -1120,7 +1122,7 @@ async function ingestDailyMemorySignals(params: {
       results: batch.results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: batch.day,
+      dayBucket: ingestionDayBucket,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -1222,7 +1224,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
       results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: entry.day,
+      dayBucket: formatMemoryDreamingDay(params.nowMs, params.timezone),
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
