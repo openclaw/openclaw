@@ -80,10 +80,10 @@ export function resolveSessionDisplayDefaults(
   };
 }
 
-export function resolveSessionDisplayModel(
+export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
-): string {
+): { provider: string; model: string } {
   const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
@@ -95,10 +95,17 @@ export function resolveSessionDisplayModel(
     return parseModelRef(
       normalizedOverride.modelOverride,
       normalizedOverride.providerOverride ?? defaultRef.provider,
-    ).model;
+    );
   }
   if (row.model && !row.modelIsFromFallback) {
-    return parseModelRef(row.model, row.modelProvider ?? defaultRef.provider).model;
+    return parseModelRef(row.model, row.modelProvider ?? defaultRef.provider);
   }
-  return defaultRef.model;
+  return defaultRef;
+}
+
+export function resolveSessionDisplayModel(
+  cfg: OpenClawConfig,
+  row: SessionDisplayModelRow,
+): string {
+  return resolveSessionDisplayModelRef(cfg, row).model;
 }
