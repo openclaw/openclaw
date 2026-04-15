@@ -2,6 +2,8 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  /** Session key for plugin hook correlation (e.g. message_sending). */
+  sessionKey?: string;
 };
 
 export type PluginHookInboundClaimContext = PluginHookMessageContext & {

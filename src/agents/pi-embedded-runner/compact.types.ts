@@ -17,6 +17,8 @@ export type CompactEmbeddedPiSessionParams = {
   /** Trusted sender id from inbound context for scoped message-tool discovery. */
   senderId?: string;
   senderName?: string;
+  /** Original message platform for security classification. */
+  sourceProvider?: string;
   senderUsername?: string;
   senderE164?: string;
   authProfileId?: string;

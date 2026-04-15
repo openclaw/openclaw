@@ -978,11 +978,6 @@ export async function runAgentTurnWithFallback(params: {
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
-                groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
-                groupChannel:
-                  normalizeOptionalString(params.sessionCtx.GroupChannel) ??
-                  normalizeOptionalString(params.sessionCtx.GroupSubject),
-                groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
                 // Override live senderContext and runBaseParams with stored run
