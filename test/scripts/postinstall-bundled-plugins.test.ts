@@ -243,6 +243,12 @@ describe("bundled plugin postinstall", () => {
     await expect(
       fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
     ).resolves.toContain("QA Lab is not packaged");
+    await expect(
+      fs.readFile(
+        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+        "utf8",
+      ),
+    ).resolves.toContain("The QA channel implementation is not packaged");
   });
 
   it("creates only an empty QA lab compat sidecar for fresh installs", async () => {
@@ -257,12 +263,20 @@ describe("bundled plugin postinstall", () => {
         removedFiles: ["dist/entry-old.js"],
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).toEqual(["dist/extensions/qa-lab/runtime-api.js"]);
+    ).toEqual(["dist/extensions/qa-lab/runtime-api.js", "dist/extensions/qa-channel/runtime-api.js"]);
 
     await expect(
       fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
     ).resolves.toBe(
       "// Compatibility stub for older OpenClaw updaters. QA Lab is not packaged.\nexport {};\n",
+    );
+    await expect(
+      fs.readFile(
+        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+        "utf8",
+      ),
+    ).resolves.toBe(
+      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
     );
     await expect(
       fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json")),
