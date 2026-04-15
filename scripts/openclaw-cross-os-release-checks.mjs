@@ -751,6 +751,7 @@ async function runInstallerFreshSuite(params) {
   const lane = createLaneState("installer-fresh");
   const cleanup = [];
   const usesManagedGateway = shouldUseManagedGatewayService();
+  const useManagedGatewayAfterInstall = usesManagedGateway && process.platform !== "win32";
   const manualGateway = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
@@ -792,7 +793,11 @@ async function runInstallerFreshSuite(params) {
       logPath: join(params.logsDir, "installer-fresh-onboard.log"),
     });
 
-    if (!usesManagedGateway) {
+    if (!useManagedGatewayAfterInstall) {
+      // Keep the Windows installer lane validating Scheduled Task registration during
+      // onboarding, but use a manual gateway for the runtime checks. The packaged
+      // Windows lanes already cover the managed Scheduled Task lifecycle and this
+      // avoids duplicating a flaky surface in the installer-only validation.
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
         lane,
