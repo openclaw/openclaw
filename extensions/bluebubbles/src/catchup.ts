@@ -21,6 +21,14 @@ const MAX_MAX_AGE_MINUTES = 12 * 60;
 const DEFAULT_PER_RUN_LIMIT = 50;
 const MAX_PER_RUN_LIMIT = 500;
 const DEFAULT_FIRST_RUN_LOOKBACK_MINUTES = 30;
+const DEFAULT_MAX_FAILURE_RETRIES = 10;
+const MAX_MAX_FAILURE_RETRIES = 1_000;
+// Defense-in-depth bound: a runaway retry map (e.g., a storm of unique
+// failing GUIDs) should not balloon the cursor file unboundedly. When the
+// map exceeds this size, we keep only the highest-count entries (the ones
+// closest to being given up) and drop the rest. Realistic backlogs stay
+// well under this; the bound exists to cap pathological growth.
+const MAX_FAILURE_RETRY_MAP_SIZE = 5_000;
 const FETCH_TIMEOUT_MS = 15_000;
 
 export type BlueBubblesCatchupConfig = {
@@ -28,6 +36,13 @@ export type BlueBubblesCatchupConfig = {
   maxAgeMinutes?: number;
   perRunLimit?: number;
   firstRunLookbackMinutes?: number;
+  /**
+   * Per-message retry ceiling. After this many consecutive failed
+   * `processMessage` attempts against the same GUID, catchup logs a WARN
+   * and force-advances the cursor past the wedged message instead of
+   * holding it indefinitely. Defaults to 10. Clamped to [1, 1000].
+   */
+  maxFailureRetries?: number;
 };
 
 export type BlueBubblesCatchupSummary = {
@@ -35,7 +50,21 @@ export type BlueBubblesCatchupSummary = {
   replayed: number;
   skippedFromMe: number;
   skippedPreCursor: number;
+  /**
+   * Messages whose GUID was already recorded as "given up" from a previous
+   * run (count >= `maxFailureRetries`). These are skipped without calling
+   * `processMessage` again. Lets the cursor continue advancing past the
+   * wedged message on the next sweep while avoiding another failed attempt.
+   */
+  skippedGivenUp: number;
   failed: number;
+  /**
+   * Messages that crossed the `maxFailureRetries` ceiling ON THIS RUN.
+   * Each transition triggers a WARN log line. Already-given-up messages
+   * in subsequent runs count under `skippedGivenUp`, not here. Lets
+   * operators distinguish fresh give-up events from steady-state skips.
+   */
+  givenUp: number;
   cursorBefore: number | null;
   cursorAfter: number;
   windowStartMs: number;
@@ -43,7 +72,24 @@ export type BlueBubblesCatchupSummary = {
   fetchedCount: number;
 };
 
-export type BlueBubblesCatchupCursor = { lastSeenMs: number; updatedAt: number };
+export type BlueBubblesCatchupCursor = {
+  lastSeenMs: number;
+  updatedAt: number;
+  /**
+   * Per-GUID failure counter, preserved across runs. Two states:
+   * - `1 <= count < maxFailureRetries`: the GUID is still retrying and
+   *   continues to hold the cursor back.
+   * - `count >= maxFailureRetries`: catchup has "given up" on the GUID.
+   *   The message is skipped on sight (no `processMessage` attempt) and
+   *   the GUID no longer holds the cursor. The entry stays in the map
+   *   until the cursor naturally advances past the message's timestamp
+   *   (at which point the message stops appearing in queries entirely).
+   *
+   * A successful `processMessage` removes the entry. Optional on the
+   * persisted shape so older cursor files without this field load cleanly.
+   */
+  failureRetries?: Record<string, number>;
+};
 
 function resolveStateDirFromEnv(env: NodeJS.ProcessEnv = process.env): string {
   // Explicit OPENCLAW_STATE_DIR overrides take precedence (including
@@ -81,6 +127,26 @@ function resolveCursorFilePath(accountId: string): string {
   );
 }
 
+function sanitizeFailureRetriesInput(raw: unknown): Record<string, number> {
+  // Older cursor files don't carry this field; also guard against
+  // hand-edited JSON or future shape drift. Drop any entry whose count is
+  // not a finite positive integer so downstream arithmetic stays sound.
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  const out: Record<string, number> = {};
+  for (const [guid, count] of Object.entries(raw as Record<string, unknown>)) {
+    if (!guid || typeof guid !== "string") {
+      continue;
+    }
+    if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) {
+      continue;
+    }
+    out[guid] = Math.floor(count);
+  }
+  return out;
+}
+
 export async function loadBlueBubblesCatchupCursor(
   accountId: string,
 ): Promise<BlueBubblesCatchupCursor | null> {
@@ -92,16 +158,64 @@ export async function loadBlueBubblesCatchupCursor(
   if (typeof value.lastSeenMs !== "number" || !Number.isFinite(value.lastSeenMs)) {
     return null;
   }
-  return value;
+  const failureRetries = sanitizeFailureRetriesInput(value.failureRetries);
+  const hasRetries = Object.keys(failureRetries).length > 0;
+  // Keep the shape consistent with what the writer emits: only carry the
+  // `failureRetries` key when there's something to retry. Old cursor files
+  // without the field continue to round-trip to the same shape.
+  return {
+    lastSeenMs: value.lastSeenMs,
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+    ...(hasRetries ? { failureRetries } : {}),
+  };
 }
 
 export async function saveBlueBubblesCatchupCursor(
   accountId: string,
   lastSeenMs: number,
+  failureRetries?: Record<string, number>,
 ): Promise<void> {
   const filePath = resolveCursorFilePath(accountId);
-  const cursor: BlueBubblesCatchupCursor = { lastSeenMs, updatedAt: Date.now() };
+  const sanitized = sanitizeFailureRetriesInput(failureRetries);
+  const hasRetries = Object.keys(sanitized).length > 0;
+  const cursor: BlueBubblesCatchupCursor = {
+    lastSeenMs,
+    updatedAt: Date.now(),
+    // Only emit the field when non-empty so unrelated cursor writes from
+    // the happy path don't bloat the cursor file with `"failureRetries": {}`.
+    ...(hasRetries ? { failureRetries: sanitized } : {}),
+  };
   await writeJsonFileAtomically(filePath, cursor);
+}
+
+/**
+ * Bound the retry map so a pathological storm of unique failing GUIDs
+ * cannot grow the cursor file without limit. Keeps the `maxSize` entries
+ * with the highest counts (closest to give-up) when over the bound.
+ *
+ * The map is already scoped to "currently failing, still-retrying" GUIDs
+ * and prunes on every run (entries not observed in the fetched window are
+ * dropped), so this is a defense-in-depth cap, not the primary pruning
+ * mechanism.
+ */
+function capFailureRetriesMap(
+  map: Record<string, number>,
+  maxSize: number,
+): Record<string, number> {
+  const entries = Object.entries(map);
+  if (entries.length <= maxSize) {
+    return map;
+  }
+  // Sort by count desc; stable tiebreak on guid string so the retained set
+  // is deterministic across runs (important for cursor-file diffing during
+  // debugging).
+  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const capped: Record<string, number> = {};
+  for (let i = 0; i < maxSize; i++) {
+    const [guid, count] = entries[i];
+    capped[guid] = count;
+  }
+  return capped;
 }
 
 type FetchOpts = {
@@ -180,10 +294,15 @@ function clampCatchupConfig(raw?: BlueBubblesCatchupConfig) {
     Math.max(raw?.firstRunLookbackMinutes ?? DEFAULT_FIRST_RUN_LOOKBACK_MINUTES, 1),
     MAX_MAX_AGE_MINUTES,
   );
+  const maxFailureRetries = Math.min(
+    Math.max(Math.floor(raw?.maxFailureRetries ?? DEFAULT_MAX_FAILURE_RETRIES), 1),
+    MAX_MAX_FAILURE_RETRIES,
+  );
   return {
     maxAgeMs: maxAgeMinutes * 60_000,
     perRunLimit,
     firstRunLookbackMs: firstRunLookbackMinutes * 60_000,
+    maxFailureRetries,
   };
 }
 
@@ -247,10 +366,11 @@ async function runBlueBubblesCatchupInner(
   const procFn = deps.processMessageFn ?? processMessage;
   const accountId = target.account.accountId;
 
-  const { maxAgeMs, perRunLimit, firstRunLookbackMs } = clampCatchupConfig(raw);
+  const { maxAgeMs, perRunLimit, firstRunLookbackMs, maxFailureRetries } = clampCatchupConfig(raw);
   const nowMs = now();
   const existing = await loadBlueBubblesCatchupCursor(accountId).catch(() => null);
   const cursorBefore = existing?.lastSeenMs ?? null;
+  const prevRetries = existing?.failureRetries ?? {};
 
   // Catchup runs once per gateway startup (called from monitor.ts after
   // webhook target registration). We deliberately do NOT short-circuit on
@@ -306,7 +426,9 @@ async function runBlueBubblesCatchupInner(
     replayed: 0,
     skippedFromMe: 0,
     skippedPreCursor: 0,
+    skippedGivenUp: 0,
     failed: 0,
+    givenUp: 0,
     cursorBefore,
     cursorAfter: nowMs,
     windowStartMs,
@@ -320,18 +442,31 @@ async function runBlueBubblesCatchupInner(
     return summary;
   }
 
-  // Track the earliest timestamp where `processMessage` threw so we never
-  // advance the cursor past a retryable failure. Normalize failures (the
-  // record didn't yield a usable NormalizedWebhookMessage) are treated as
-  // permanent skips and do NOT block cursor advance — those payloads are
-  // unlikely to ever normalize on retry, and blocking on them would wedge
-  // catchup forever.
+  // Track the earliest timestamp where `processMessage` threw *and* the
+  // failing message has not yet crossed the per-GUID retry ceiling, so we
+  // never advance the cursor past a retryable failure. Normalize failures
+  // (the record didn't yield a usable NormalizedWebhookMessage) are
+  // treated as permanent skips and do NOT block cursor advance — those
+  // payloads are unlikely to ever normalize on retry, and blocking on
+  // them would wedge catchup forever. Given-up messages (count >= max)
+  // also do NOT contribute here; see `skippedGivenUp` below.
   let earliestProcessFailureTs: number | null = null;
   // Track the latest fetched message timestamp regardless of fate, so a
   // truncated query (fetchedCount === perRunLimit) can advance the cursor
   // exactly to the page boundary. Without this, the unfetched tail past
   // the cap is permanently unreachable.
   let latestFetchedTs = windowStartMs;
+  // Next-run retry map. Built from scratch each run so entries for GUIDs
+  // that didn't appear in this fetch are dropped (the cursor has
+  // advanced past them and they will never be queried again). Entries we
+  // do carry forward encode two states via the stored count:
+  // - `1 <= count < maxFailureRetries`: still-retrying, holds cursor.
+  // - `count >= maxFailureRetries`: given-up, skipped on sight without
+  //   another `processMessage` attempt. Preserving the count is what
+  //   keeps the give-up state sticky across runs when an earlier
+  //   still-retrying failure is holding the cursor and the given-up
+  //   message keeps reappearing in the query window.
+  const nextRetries: Record<string, number> = {};
 
   for (const rec of messages) {
     // Defense in depth: the server-side `after:` filter should already
@@ -363,15 +498,62 @@ async function runBlueBubblesCatchupInner(
       continue;
     }
 
+    // Prefer the normalized messageId (what the dedupe cache uses) so the
+    // retry counter and downstream dedupe key agree on identity. Fall
+    // back to the raw BB `guid` only when normalization didn't supply one.
+    const retryKey = normalized.messageId ?? (typeof rec.guid === "string" ? rec.guid : "");
+
+    // Already-given-up GUIDs are skipped without another `processMessage`
+    // attempt. This is what lets catchup make forward progress through an
+    // earlier, still-retrying failure while not burning cycles re-running
+    // a permanently broken message every sweep.
+    const prevCount = retryKey ? (prevRetries[retryKey] ?? 0) : 0;
+    if (retryKey && prevCount >= maxFailureRetries) {
+      summary.skippedGivenUp++;
+      // Preserve the count so give-up stickiness survives this run.
+      nextRetries[retryKey] = prevCount;
+      continue;
+    }
+
     try {
       await procFn(normalized, target);
       summary.replayed++;
+      // Success clears any accumulated retries for this GUID. Since we
+      // build `nextRetries` from scratch rather than mutating
+      // `prevRetries`, simply NOT copying the entry is the clear. (We
+      // still need this branch so readers understand the lifecycle.)
     } catch (err) {
       summary.failed++;
-      if (ts > 0 && (earliestProcessFailureTs === null || ts < earliestProcessFailureTs)) {
-        earliestProcessFailureTs = ts;
+      const nextCount = prevCount + 1;
+      if (retryKey && nextCount >= maxFailureRetries) {
+        // Crossing the ceiling this run: log WARN once and record the
+        // give-up in the persisted map. Don't contribute to
+        // `earliestProcessFailureTs` — we're intentionally letting the
+        // cursor advance past this GUID on the next sweep.
+        summary.givenUp++;
+        nextRetries[retryKey] = nextCount;
+        error?.(
+          `[${accountId}] BlueBubbles catchup: giving up on guid=${retryKey} ` +
+            `after ${nextCount} consecutive failures; future sweeps will skip ` +
+            `this message. timestamp=${ts}: ${String(err)}`,
+        );
+      } else {
+        // Still retrying: count this failure and hold the cursor so the
+        // next sweep retries the same window. (retryKey may be empty in
+        // the unusual case where neither normalizer nor raw payload
+        // carried a GUID — in that case we hold the cursor but cannot
+        // increment a counter, matching pre-retry-cap behavior.)
+        if (retryKey) {
+          nextRetries[retryKey] = nextCount;
+        }
+        if (ts > 0 && (earliestProcessFailureTs === null || ts < earliestProcessFailureTs)) {
+          earliestProcessFailureTs = ts;
+        }
+        error?.(
+          `[${accountId}] BlueBubbles catchup: processMessage failed (retry ` +
+            `${nextCount}/${maxFailureRetries}): ${String(err)}`,
+        );
       }
-      error?.(`[${accountId}] BlueBubbles catchup: processMessage failed: ${String(err)}`);
     }
   }
 
@@ -381,10 +563,17 @@ async function runBlueBubblesCatchupInner(
   //   this sweep finished (avoiding stuck rescans of a message with
   //   `dateCreated > nowMs` from minor clock skew between BB host and
   //   gateway host).
-  // - On retryable failure (any `processMessage` throw): hold the cursor
-  //   just before the earliest failed timestamp so the next run retries
-  //   from there. The inbound-dedupe cache from #66230 keeps successfully
-  //   replayed messages from being re-processed.
+  // - On retryable failure (any still-retrying `processMessage` throw,
+  //   where the GUID has NOT crossed `maxFailureRetries`): hold the
+  //   cursor just before the earliest still-retrying failed timestamp so
+  //   the next run retries from there. The inbound-dedupe cache from
+  //   #66230 keeps successfully replayed messages from being re-processed.
+  // - On give-up (failures that crossed `maxFailureRetries`): the GUID
+  //   is recorded in the persisted retry map with `count >= max` and
+  //   skipped on sight in subsequent runs (without another processMessage
+  //   attempt). Give-up GUIDs intentionally do NOT hold the cursor, so
+  //   the cursor can advance past them naturally — this is what unwedges
+  //   catchup from a permanently malformed message (issue #66870).
   // - On truncation (fetched === perRunLimit): advance only to the latest
   //   fetched timestamp so the next run picks up from the page boundary.
   //   Otherwise the unfetched tail past the cap (which can be substantial
@@ -400,14 +589,18 @@ async function runBlueBubblesCatchupInner(
     nextCursorMs = Math.min(Math.max(latestFetchedTs, cursorBefore ?? windowStartMs), nowMs);
   }
   summary.cursorAfter = nextCursorMs;
-  await saveBlueBubblesCatchupCursor(accountId, nextCursorMs).catch((err) => {
+  // Cap the retry map before writing — defense in depth against a storm
+  // of unique failing GUIDs ballooning the cursor file.
+  const retriesToPersist = capFailureRetriesMap(nextRetries, MAX_FAILURE_RETRY_MAP_SIZE);
+  await saveBlueBubblesCatchupCursor(accountId, nextCursorMs, retriesToPersist).catch((err) => {
     error?.(`[${accountId}] BlueBubbles catchup: cursor save failed: ${String(err)}`);
   });
 
   log?.(
     `[${accountId}] BlueBubbles catchup: replayed=${summary.replayed} ` +
       `skipped_fromMe=${summary.skippedFromMe} skipped_preCursor=${summary.skippedPreCursor} ` +
-      `failed=${summary.failed} fetched=${summary.fetchedCount} ` +
+      `skipped_givenUp=${summary.skippedGivenUp} failed=${summary.failed} ` +
+      `given_up=${summary.givenUp} fetched=${summary.fetchedCount} ` +
       `window_ms=${nowMs - windowStartMs}`,
   );
 
