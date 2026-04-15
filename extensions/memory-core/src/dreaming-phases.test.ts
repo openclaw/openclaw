@@ -27,6 +27,10 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
           dreaming: {
             enabled: true,
             timezone: "UTC",
+            storage: {
+              mode: "inline",
+              separateReports: false,
+            },
             phases: {
               light: {
                 enabled: true,
@@ -305,6 +309,10 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  storage: {
+                    mode: "inline",
+                    separateReports: false,
+                  },
                   phases: {
                     light: {
                       enabled: true,
@@ -371,6 +379,10 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  storage: {
+                    mode: "inline",
+                    separateReports: false,
+                  },
                   phases: {
                     light: {
                       enabled: true,
@@ -979,6 +991,10 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  storage: {
+                    mode: "inline",
+                    separateReports: false,
+                  },
                   phases: {
                     light: {
                       enabled: true,
@@ -1292,6 +1308,10 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  storage: {
+                    mode: "inline",
+                    separateReports: false,
+                  },
                   phases: {
                     light: {
                       enabled: true,
@@ -1352,6 +1372,10 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  storage: {
+                    mode: "inline",
+                    separateReports: false,
+                  },
                   phases: {
                     light: {
                       enabled: true,
@@ -1423,6 +1447,10 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  storage: {
+                    mode: "inline",
+                    separateReports: false,
+                  },
                   phases: {
                     light: {
                       enabled: true,
