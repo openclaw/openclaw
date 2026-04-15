@@ -182,8 +182,15 @@ export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
 type SaveSessionStoreOptions = {
   /** Skip pruning, capping, and rotation (e.g. during one-time migrations). */
   skipMaintenance?: boolean;
-  /** Active session key for warn-only maintenance. */
+  /** Active session key for warn-only maintenance and per-write transcript rotation. */
   activeSessionKey?: string;
+  /**
+   * Allow bulk transcript rotation (full-directory walk) when no activeSessionKey
+   * is provided. Only set this from explicit maintenance entry points (e.g.
+   * sessions-cleanup). Runtime call sites that simply lack an activeSessionKey
+   * should NOT set this — they must skip the expensive scan.
+   */
+  bulkTranscriptRotation?: boolean;
   /**
    * Session keys that are allowed to drop persisted ACP metadata during this update.
    * All other updates preserve existing `entry.acp` blocks when callers replace the
@@ -394,10 +401,14 @@ async function saveSessionStoreUnlocked(
             );
             await rotateTranscriptFile({ transcriptPath, maintenance });
           }
-        } else {
-          // Bulk path (maintenance/cleanup without an active session): scan the
-          // full sessions directory so pre-existing oversized transcripts that
-          // were never rotated on the hot path get cleaned up.
+        } else if (opts?.bulkTranscriptRotation) {
+          // Bulk path (explicit maintenance only): scan the full sessions
+          // directory so pre-existing oversized transcripts that were never
+          // rotated on the hot path get cleaned up.  This is intentionally
+          // NOT the default for runtime call sites that lack an
+          // activeSessionKey (e.g. heartbeat updates), because a full
+          // directory walk under the store lock would add unacceptable
+          // latency in production.
           await rotateTranscriptFiles({ storePath, maintenance });
         }
       }

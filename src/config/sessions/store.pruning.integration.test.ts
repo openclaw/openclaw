@@ -443,8 +443,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     const statBefore = await fs.stat(transcriptPath);
     expect(statBefore.size).toBeGreaterThan(200);
 
-    // saveSessionStore without activeSessionKey → bulk path → rotateTranscriptFiles
-    await saveSessionStore(storePath, store);
+    // saveSessionStore without activeSessionKey but with bulkTranscriptRotation → rotateTranscriptFiles
+    await saveSessionStore(storePath, store, { bulkTranscriptRotation: true });
 
     // The transcript file should have been rotated (smaller replacement)
     const statAfter = await fs.stat(transcriptPath);

@@ -376,6 +376,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       },
       {
         activeSessionKey: opts.activeKey,
+        bulkTranscriptRotation: true,
         maintenanceOverride: {
           mode,
         },
