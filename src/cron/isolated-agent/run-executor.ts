@@ -55,7 +55,7 @@ export function createCronPromptExecutor(params: {
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   messageChannel: string | undefined;
-  resolvedDelivery: { accountId?: string };
+  resolvedDelivery: { ok?: boolean; to?: string; accountId?: string };
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
@@ -214,7 +214,9 @@ export async function executeCronRun(params: {
   workspaceDir: string;
   lane?: string;
   resolvedDelivery: {
+    ok?: boolean;
     channel?: string;
+    to?: string;
     accountId?: string;
   };
   toolPolicy: {

@@ -684,7 +684,9 @@ export async function runCronIsolatedAgentTurn(params: {
       workspaceDir: prepared.context.workspaceDir,
       lane: params.lane,
       resolvedDelivery: {
+        ok: prepared.context.resolvedDelivery.ok,
         channel: prepared.context.resolvedDelivery.channel,
+        to: prepared.context.resolvedDelivery.ok ? prepared.context.resolvedDelivery.to : undefined,
         accountId: prepared.context.resolvedDelivery.accountId,
       },
       toolPolicy: prepared.context.toolPolicy,
