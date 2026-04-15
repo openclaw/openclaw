@@ -29,7 +29,10 @@ import {
   type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
+  buildMemoryReadResult,
+  DEFAULT_MEMORY_READ_LINES,
   isFileMissingError,
+  type MemoryReadResult,
   requireNodeSqlite,
   statRegularFile,
   type MemoryEmbeddingProbeResult,
@@ -43,6 +46,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveAgentContextLimits } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -1180,7 +1184,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     relPath: string;
     from?: number;
     lines?: number;
-  }): Promise<{ text: string; path: string }> {
+  }): Promise<MemoryReadResult> {
     const relPath = params.relPath?.trim();
     if (!relPath) {
       throw new Error("path required");
@@ -1193,18 +1197,20 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (statResult.missing) {
       return { text: "", path: relPath };
     }
-    if (params.from !== undefined || params.lines !== undefined) {
-      const partial = await this.readPartialText(absPath, params.from, params.lines);
-      if (partial.missing) {
-        return { text: "", path: relPath };
-      }
-      return { text: partial.text, path: relPath };
-    }
     const full = await this.readFullText(absPath);
     if (full.missing) {
       return { text: "", path: relPath };
     }
-    return { text: full.text, path: relPath };
+    const contextLimits = resolveAgentContextLimits(this.cfg, this.agentId);
+    return buildMemoryReadResult({
+      content: full.text,
+      relPath,
+      from: params.from,
+      lines: params.lines,
+      defaultLines: contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+      maxChars: contextLimits?.memoryGetMaxChars,
+      suggestReadFallback: isDefaultMemoryPath(relPath),
+    });
   }
 
   status(): MemoryProviderStatus {

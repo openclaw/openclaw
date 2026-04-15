@@ -39,6 +39,9 @@ export function resolveEffectiveAgentSkillsLimits(
   cfg: OpenClawConfig | undefined,
   agentId: string | undefined,
 ): AgentSkillsLimits | undefined {
+  if (!agentId) {
+    return undefined;
+  }
   const agentEntry = resolveAgentEntry(cfg, agentId);
   if (!agentEntry || !Object.hasOwn(agentEntry, "skillsLimits")) {
     return undefined;

@@ -1,14 +1,7 @@
 export const DEFAULT_MEMORY_READ_LINES = 120;
 export const DEFAULT_MEMORY_READ_MAX_CHARS = 12_000;
 
-export type MemoryReadResult = {
-  text: string;
-  path: string;
-  truncated?: boolean;
-  from?: number;
-  lines?: number;
-  nextFrom?: number;
-};
+export type { MemoryReadResult } from "./types.js";
 
 function buildContinuationNotice(params: {
   nextFrom: number | undefined;
