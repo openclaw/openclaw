@@ -25589,7 +25589,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.compaction.memoryFlush.model": {
       label: "Compaction Memory Flush Model",
       help: "Optional provider/model override used only for the pre-compaction memory flush turn. Set this when you want the flush to run on a cheaper or faster model than the session default, and leave it unset to keep using the session model.",
-      tags: ["advanced"],
+      tags: ["models"],
     },
     "agents.defaults.embeddedPi": {
       label: "Embedded Pi",
