@@ -138,6 +138,24 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       // Malformed sticker token but other sendable content is present: fall through.
     }
 
+    // lineData.sticker: direct channelData path (packageId/stickerId already parsed).
+    if (lineData.sticker) {
+      const parsed = parseLineStickerRaw(
+        `${lineData.sticker.packageId}:${lineData.sticker.stickerId}`,
+      );
+      if (parsed) {
+        await sendMessageBatch([createStickerMessage(parsed.packageId, parsed.stickerId)]);
+        return createEmptyChannelResult("line", lastResult ?? { messageId: "sticker", chatId: to });
+      }
+      if (!hasTextContent && mediaUrls.length === 0 && !hasLineRichContent) {
+        await sendMessageBatch([
+          { type: "text", text: "[Sticker send error: invalid sticker format]" },
+        ]);
+        return createEmptyChannelResult("line", { messageId: "sticker-error", chatId: to });
+      }
+      // Malformed lineData.sticker but other sendable content is present: fall through.
+    }
+
     const processed = payload.text
       ? outboundRuntime.processLineMessage(payload.text)
       : { text: "", flexMessages: [] };
