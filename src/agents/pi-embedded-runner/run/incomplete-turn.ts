@@ -240,7 +240,36 @@ export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
+  const assistant = message as AgentMessage;
+  if (assessLastAssistantMessage(assistant) === "incomplete-text") {
+    return true;
+  }
+  if ((assistant as { provider?: unknown }).provider !== "ollama") {
+    return false;
+  }
+  const content = (assistant as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  let hasThinking = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    if ((block as { type?: unknown }).type === "thinking") {
+      hasThinking = true;
+      continue;
+    }
+    if ((block as { type?: unknown }).type !== "text") {
+      return false;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string" && text.trim().length === 0) {
+      continue;
+    }
+    return false;
+  }
+  return hasThinking;
 }
 
 function isEmptyResponseAssistantTurn(params: {

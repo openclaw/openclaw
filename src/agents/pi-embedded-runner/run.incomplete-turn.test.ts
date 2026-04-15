@@ -836,7 +836,6 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
             {
               type: "thinking",
               thinking: "internal reasoning",
-              thinkingSignature: JSON.stringify({ id: "ollama_reasoning_only", type: "reasoning" }),
             },
           ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
