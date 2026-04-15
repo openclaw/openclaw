@@ -11,14 +11,13 @@ import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
+import {
+  getRawSessionAppendMessage,
+  setRawSessionAppendMessage,
+} from "./session-raw-append-message.js";
 import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
-const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
-
-type SessionManagerWithRawAppend = SessionManager & {
-  [RAW_APPEND_MESSAGE]?: SessionManager["appendMessage"];
-};
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -63,15 +62,7 @@ function normalizePersistedToolResultName(
   return toolResult;
 }
 
-/**
- * Return the unguarded appendMessage implementation for a session manager.
- */
-export function getRawSessionAppendMessage(
-  sessionManager: SessionManager,
-): SessionManager["appendMessage"] {
-  const rawAppend = (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE];
-  return rawAppend ?? sessionManager.appendMessage.bind(sessionManager);
-}
+export { getRawSessionAppendMessage };
 
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
@@ -115,7 +106,7 @@ export function installSessionToolResultGuard(
   getPendingIds: () => string[];
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
-  (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE] = originalAppend;
+  setRawSessionAppendMessage(sessionManager, originalAppend);
   const pendingState = createPendingToolCallState();
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;

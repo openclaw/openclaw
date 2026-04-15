@@ -50,6 +50,11 @@ describe("matchesProviderContextOverflow", () => {
     // Cohere
     "total tokens exceeds the model's maximum limit of 4096",
 
+    // llama.cpp HTTP server (slot ctx-size overflow)
+    "400 request (66202 tokens) exceeds the available context size (65536 tokens), try increasing it",
+    "request (130000 tokens) exceeds available context size (131072 tokens)",
+    "prompt (8500 tokens) exceeds the available context size (8192 tokens), try increasing it",
+
     // Generic
     "input is too long for model gpt-5.4",
   ])("matches provider-specific overflow: %s", (msg) => {
@@ -111,6 +116,15 @@ describe("isContextOverflowError with provider patterns", () => {
 
   it("detects Ollama context overflow", () => {
     expect(isContextOverflowError("ollama error: context length exceeded")).toBe(true);
+  });
+
+  it("detects llama.cpp slot ctx-size overflow", () => {
+    // Native llama.cpp HTTP server overflow surfaced through openai-completions providers.
+    expect(
+      isContextOverflowError(
+        "400 request (66202 tokens) exceeds the available context size (65536 tokens), try increasing it",
+      ),
+    ).toBe(true);
   });
 
   it("still detects standard context overflow patterns", () => {

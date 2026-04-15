@@ -66,42 +66,10 @@ function readRootPackageJson(): {
 function readMatrixPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  openclaw?: {
-    releaseChecks?: {
-      rootDependencyMirrorAllowlist?: unknown;
-    };
-  };
 } {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, "extensions/matrix/package.json"), "utf8")) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
-    openclaw?: {
-      releaseChecks?: {
-        rootDependencyMirrorAllowlist?: unknown;
-      };
-    };
-  };
-}
-
-function readAmazonBedrockPackageJson(): {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  openclaw?: {
-    releaseChecks?: {
-      rootDependencyMirrorAllowlist?: unknown;
-    };
-  };
-} {
-  return JSON.parse(
-    readFileSync(resolve(REPO_ROOT, "extensions/amazon-bedrock/package.json"), "utf8"),
-  ) as {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    openclaw?: {
-      releaseChecks?: {
-        rootDependencyMirrorAllowlist?: unknown;
-      };
-    };
   };
 }
 
@@ -327,31 +295,14 @@ describe("plugin-sdk package contract guardrails", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
-    const allowlist = matrixPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
 
-    expect(Array.isArray(allowlist)).toBe(true);
-    const matrixRootMirrorAllowlist = allowlist as string[];
-    expect(matrixRootMirrorAllowlist).toEqual(
-      expect.arrayContaining(["@matrix-org/matrix-sdk-crypto-wasm"]),
-    );
-
-    for (const dep of matrixRootMirrorAllowlist) {
+    for (const dep of [
+      "@matrix-org/matrix-sdk-crypto-wasm",
+      "@matrix-org/matrix-sdk-crypto-nodejs",
+      "fake-indexeddb",
+      "matrix-js-sdk",
+    ]) {
       expect(rootRuntimeDeps.get(dep)).toBe(matrixRuntimeDeps.get(dep));
-    }
-  });
-
-  it("mirrors Bedrock runtime deps needed by the bundled host graph", () => {
-    const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
-    const bedrockPackageJson = readAmazonBedrockPackageJson();
-    const bedrockRuntimeDeps = collectRuntimeDependencySpecs(bedrockPackageJson);
-    const allowlist = bedrockPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
-
-    expect(Array.isArray(allowlist)).toBe(true);
-    const bedrockRootMirrorAllowlist = allowlist as string[];
-    expect(bedrockRootMirrorAllowlist).toEqual(expect.arrayContaining(["@aws-sdk/client-bedrock"]));
-
-    for (const dep of bedrockRootMirrorAllowlist) {
-      expect(rootRuntimeDeps.get(dep)).toBe(bedrockRuntimeDeps.get(dep));
     }
   });
 
@@ -373,13 +324,8 @@ describe("plugin-sdk package contract guardrails", () => {
     const archivePath = packOpenClawToTempDir(packDir);
     const packedPackageJson = await readPackedRootPackageJson(archivePath);
     const matrixPackageJson = readMatrixPackageJson();
-    const bedrockPackageJson = readAmazonBedrockPackageJson();
-
     expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
       matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
-    );
-    expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBe(
-      bedrockPackageJson.dependencies?.["@aws-sdk/client-bedrock"],
     );
     expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
   });

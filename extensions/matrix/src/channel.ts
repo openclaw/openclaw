@@ -496,6 +496,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             initialSyncLimit: account.config.initialSyncLimit,
             replyToMode: account.config.replyToMode,
             accountId: account.accountId,
+            setStatus: ctx.setStatus,
           });
         },
       },

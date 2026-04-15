@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -330,6 +331,10 @@ export async function connectMcpClient(params: {
   gatewayUrl: string;
   gatewayToken: string;
 }): Promise<McpClientHandle> {
+  const tokenDir = "/tmp/openclaw-mcp-client";
+  const tokenFile = `${tokenDir}/gateway.token`;
+  mkdirSync(tokenDir, { recursive: true });
+  writeFileSync(tokenFile, `${params.gatewayToken}\n`, { encoding: "utf8", mode: 0o600 });
   const transport = new StdioClientTransport({
     command: "node",
     args: [
@@ -338,8 +343,8 @@ export async function connectMcpClient(params: {
       "serve",
       "--url",
       params.gatewayUrl,
-      "--token",
-      params.gatewayToken,
+      "--token-file",
+      tokenFile,
       "--claude-channel-mode",
       "on",
     ],

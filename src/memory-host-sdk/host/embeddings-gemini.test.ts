@@ -1,60 +1,20 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../../agents/model-auth.js";
+import {
+  createGeminiBatchFetchMock,
+  createGeminiFetchMock,
+  installFetchMock,
+  mockResolvedProviderKey,
+  parseFetchBody,
+  readFirstFetchRequest,
+  type JsonFetchMock,
+} from "./embeddings-provider.test-support.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
-
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    fetchImpl?: typeof fetch;
-  }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    if (!fetchImpl) {
-      throw new Error("fetch is not available");
-    }
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  },
-}));
 
 vi.mock("../../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../../test-utils/model-auth-mock.js");
   return createModelAuthMockModule();
 });
-
-const createGeminiFetchMock = (embeddingValues = [1, 2, 3]) =>
-  vi.fn(async (_input?: unknown, _init?: unknown) => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ embedding: { values: embeddingValues } }),
-  }));
-
-const createGeminiBatchFetchMock = (count: number, embeddingValues = [1, 2, 3]) =>
-  vi.fn(async (_input?: unknown, _init?: unknown) => ({
-    ok: true,
-    status: 200,
-    json: async () => ({
-      embeddings: Array.from({ length: count }, () => ({ values: embeddingValues })),
-    }),
-  }));
-
-function installFetchMock(fetchMock: typeof globalThis.fetch) {
-  vi.stubGlobal("fetch", fetchMock);
-}
-
-function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
-  const [url, init] = fetchMock.mock.calls[0] ?? [];
-  return { url, init: init as RequestInit | undefined };
-}
-
-function parseFetchBody(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0) {
-  const init = fetchMock.mock.calls[callIndex]?.[1] as RequestInit | undefined;
-  return JSON.parse((init?.body as string) ?? "{}") as Record<string, unknown>;
-}
 
 function magnitude(values: number[]) {
   return Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
@@ -92,25 +52,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mockResolvedProviderKey(apiKey = "test-key") {
-  vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-    apiKey,
-    mode: "api-key",
-    source: "test",
-  });
-}
-
-type GeminiFetchMock =
-  | ReturnType<typeof createGeminiFetchMock>
-  | ReturnType<typeof createGeminiBatchFetchMock>;
-
 async function createProviderWithFetch(
-  fetchMock: GeminiFetchMock,
+  fetchMock: JsonFetchMock,
   options: Partial<Parameters<typeof createGeminiEmbeddingProvider>[0]> & { model: string },
 ) {
   installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
   mockPublicPinnedHostname();
-  mockResolvedProviderKey();
+  mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
   const { provider } = await createGeminiEmbeddingProvider({
     config: {} as never,
     provider: "gemini",
@@ -429,7 +377,7 @@ describe("gemini-embedding-2-preview provider", () => {
   });
 
   it("throws for invalid outputDimensionality", async () => {
-    mockResolvedProviderKey();
+    mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
 
     await expect(
       createGeminiEmbeddingProvider({
@@ -493,7 +441,7 @@ describe("gemini model normalization", () => {
     const fetchMock = createGeminiFetchMock();
     installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
-    mockResolvedProviderKey();
+    mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
 
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,
@@ -512,7 +460,7 @@ describe("gemini model normalization", () => {
     const fetchMock = createGeminiFetchMock();
     installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
-    mockResolvedProviderKey();
+    mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
 
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,
@@ -531,7 +479,7 @@ describe("gemini model normalization", () => {
     const fetchMock = createGeminiFetchMock();
     installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
-    mockResolvedProviderKey();
+    mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
 
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,
@@ -549,7 +497,7 @@ describe("gemini model normalization", () => {
   it("defaults to gemini-embedding-001 when model is empty", async () => {
     const fetchMock = createGeminiFetchMock();
     installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
-    mockResolvedProviderKey();
+    mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
 
     const { provider, client } = await createGeminiEmbeddingProvider({
       config: {} as never,
@@ -563,7 +511,7 @@ describe("gemini model normalization", () => {
   });
 
   it("returns empty array for blank query text", async () => {
-    mockResolvedProviderKey();
+    mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
 
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,
@@ -577,7 +525,7 @@ describe("gemini model normalization", () => {
   });
 
   it("returns empty array for empty batch", async () => {
-    mockResolvedProviderKey();
+    mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
 
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,

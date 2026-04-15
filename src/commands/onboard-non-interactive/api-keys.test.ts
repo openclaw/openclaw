@@ -63,21 +63,33 @@ describe("resolveNonInteractiveApiKey", () => {
   it("rejects flag input in secret-ref mode without broad env discovery", async () => {
     const runtime = createRuntime();
     resolveEnvApiKey.mockReturnValue(null);
+    const previousXaiApiKey = process.env.XAI_API_KEY;
+    delete process.env.XAI_API_KEY;
 
-    const result = await resolveNonInteractiveApiKey({
-      provider: "xai",
-      cfg: {},
-      flagValue: "xai-flag-key",
-      flagName: "--xai-api-key",
-      envVar: "XAI_API_KEY",
-      runtime: runtime as never,
-      secretInputMode: "ref",
-    });
+    try {
+      const result = await resolveNonInteractiveApiKey({
+        provider: "xai",
+        cfg: {},
+        flagValue: "xai-flag-key",
+        flagName: "--xai-api-key",
+        envVar: "XAI_API_KEY",
+        runtime: runtime as never,
+        secretInputMode: "ref",
+      });
 
-    expect(result).toBeNull();
-    expect(resolveEnvApiKey).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--secret-input-mode ref"));
+      expect(result).toBeNull();
+      expect(resolveEnvApiKey).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--secret-input-mode ref"),
+      );
+    } finally {
+      if (previousXaiApiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = previousXaiApiKey;
+      }
+    }
   });
 
   it("falls back to a matching API-key profile after flag and env are absent", async () => {

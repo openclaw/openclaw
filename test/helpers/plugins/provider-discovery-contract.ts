@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ModelDefinitionConfig } from "../../../src/config/types.models.js";
+import {
+  resolveBundledPluginPublicModulePath,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
@@ -10,32 +14,59 @@ const buildVllmProviderMock = vi.hoisted(() => vi.fn());
 const buildSglangProviderMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
-const bundledProviderModules = vi.hoisted(() => ({
-  cloudflareAiGatewayIndexModuleUrl: new URL(
-    "../../../extensions/cloudflare-ai-gateway/index.ts",
-    import.meta.url,
-  ).href,
-  cloudflareAiGatewayIndexModuleId: new URL(
-    "../../../extensions/cloudflare-ai-gateway/index.js",
-    import.meta.url,
-  ).pathname,
-  githubCopilotIndexModuleUrl: new URL(
-    "../../../extensions/github-copilot/index.ts",
-    import.meta.url,
-  ).href,
-  githubCopilotTokenModuleId: new URL(
-    "../../../extensions/github-copilot/token.js",
-    import.meta.url,
-  ).pathname,
-  minimaxIndexModuleUrl: new URL("../../../extensions/minimax/index.ts", import.meta.url).href,
-  qwenIndexModuleUrl: new URL("../../../extensions/qwen/index.ts", import.meta.url).href,
-  ollamaApiModuleId: new URL("../../../extensions/ollama/api.js", import.meta.url).pathname,
-  ollamaIndexModuleUrl: new URL("../../../extensions/ollama/index.ts", import.meta.url).href,
-  sglangApiModuleId: new URL("../../../extensions/sglang/api.js", import.meta.url).pathname,
-  sglangIndexModuleUrl: new URL("../../../extensions/sglang/index.ts", import.meta.url).href,
-  vllmApiModuleId: new URL("../../../extensions/vllm/api.js", import.meta.url).pathname,
-  vllmIndexModuleUrl: new URL("../../../extensions/vllm/index.ts", import.meta.url).href,
-}));
+const bundledProviderModules = {
+  cloudflareAiGatewayIndexModuleUrl: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "cloudflare-ai-gateway",
+    artifactBasename: "index.js",
+  }),
+  githubCopilotIndexModuleUrl: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "github-copilot",
+    artifactBasename: "index.js",
+  }),
+  githubCopilotRegisterRuntimeModuleId: resolveBundledPluginPublicModulePath({
+    pluginId: "github-copilot",
+    artifactBasename: "register.runtime.js",
+  }),
+  minimaxIndexModuleUrl: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "minimax",
+    artifactBasename: "index.js",
+  }),
+  qwenIndexModuleUrl: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "qwen",
+    artifactBasename: "index.js",
+  }),
+  ollamaApiModuleId: resolveBundledPluginPublicModulePath({
+    pluginId: "ollama",
+    artifactBasename: "api.js",
+  }),
+  ollamaIndexModuleUrl: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "ollama",
+    artifactBasename: "index.js",
+  }),
+  sglangApiModuleId: resolveBundledPluginPublicModulePath({
+    pluginId: "sglang",
+    artifactBasename: "api.js",
+  }),
+  sglangIndexModuleUrl: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "sglang",
+    artifactBasename: "index.js",
+  }),
+  vllmApiModuleId: resolveBundledPluginPublicModulePath({
+    pluginId: "vllm",
+    artifactBasename: "api.js",
+  }),
+  vllmIndexModuleUrl: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "vllm",
+    artifactBasename: "index.js",
+  }),
+};
 
 type ProviderHandle = Awaited<ReturnType<typeof requireProvider>>;
 
@@ -186,9 +217,9 @@ function installDiscoveryHooks(
         validateApiKeyInput: () => undefined,
       };
     });
-    vi.doMock(bundledProviderModules.githubCopilotTokenModuleId, async () => {
+    vi.doMock(bundledProviderModules.githubCopilotRegisterRuntimeModuleId, async () => {
       const actual = await vi.importActual<object>(
-        bundledProviderModules.githubCopilotTokenModuleId,
+        bundledProviderModules.githubCopilotRegisterRuntimeModuleId,
       );
       return {
         ...actual,
@@ -694,7 +725,7 @@ export function describeModelStudioProviderDiscoveryContract() {
           apiKey: "modelstudio-key",
           models: expect.arrayContaining([
             expect.objectContaining({ id: "qwen3.5-plus" }),
-            expect.objectContaining({ id: "qwen3.6-plus" }),
+            expect.objectContaining({ id: "qwen3-max-2026-01-23" }),
             expect.objectContaining({ id: "MiniMax-M2.5" }),
           ]),
         },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
 import { bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
+import { isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
 
 describe("isUnitConfigTestFile", () => {
   it("accepts unit-config src tests", () => {

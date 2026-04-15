@@ -23,10 +23,11 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
-- Provider manifests can declare `providerAuthEnvVars` so generic env-based
-  auth probes do not need to load plugin runtime. The remaining core env-var
-  map is now just for non-plugin/core providers and a few generic-precedence
-  cases such as Anthropic API-key-first onboarding.
+- Provider manifests can declare `providerAuthEnvVars` and
+  `providerAuthAliases` so generic env-based auth probes and provider variants
+  do not need to load plugin runtime. The remaining core env-var map is now
+  just for non-plugin/core providers and a few generic-precedence cases such
+  as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
   `normalizeModelId`, `normalizeTransport`, `normalizeConfig`,
   `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
@@ -49,6 +50,13 @@ For model selection rules, see [/concepts/models](/concepts/models).
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
   which describes what a plugin registers (text inference, speech, etc.).
+- The bundled `codex` provider is paired with the bundled Codex agent harness.
+  Use `codex/gpt-*` when you want Codex-owned login, model discovery, native
+  thread resume, and app-server execution. Plain `openai/gpt-*` refs continue
+  to use the OpenAI provider and the normal OpenClaw provider transport.
+  Codex-only deployments can disable automatic PI fallback with
+  `agents.defaults.embeddedHarness.fallback: "none"`; see
+  [Codex Harness](/plugins/codex-harness).
 
 ## Plugin-owned provider behavior
 
@@ -664,6 +672,28 @@ Plugin-owned capability split:
 - Image understanding is plugin-owned `MiniMax-VL-01` on both MiniMax auth paths
 - Web search stays on provider id `minimax`
 
+### LM Studio
+
+LM Studio ships as a bundled provider plugin which uses the native API:
+
+- Provider: `lmstudio`
+- Auth: `LM_API_TOKEN`
+- Default inference base URL: `http://localhost:1234/v1`
+
+Then set a model (replace with one of the IDs returned by `http://localhost:1234/api/v1/models`):
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "lmstudio/openai/gpt-oss-20b" } },
+  },
+}
+```
+
+OpenClaw uses LM Studio's native `/api/v1/models` and `/api/v1/models/load`
+for discovery + auto-load, with `/v1/chat/completions` for inference by default.
+See [/providers/lmstudio](/providers/lmstudio) for setup and troubleshooting.
+
 ### Ollama
 
 Ollama ships as a bundled provider plugin and uses Ollama's native API:
@@ -762,7 +792,7 @@ Example (OpenAI‑compatible):
     providers: {
       lmstudio: {
         baseUrl: "http://localhost:1234/v1",
-        apiKey: "LMSTUDIO_KEY",
+        apiKey: "${LM_API_TOKEN}",
         api: "openai-completions",
         models: [
           {

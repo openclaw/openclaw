@@ -53,26 +53,62 @@ export function createMSTeamsReplyDispatcher(params: {
   );
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
+  /**
+   * Keepalive cadence for the typing indicator while the bot is running
+   * (including long tool chains). Bot Framework 1:1 TurnContext proxies
+   * expire after ~30s of inactivity; sending a typing activity every 8s
+   * keeps the proxy alive so the post-tool reply can still land via the
+   * turn context. Sits in the middle of the 5-10s range recommended in
+   * #59731.
+   */
+  const TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
+
+  /**
+   * TTL ceiling for the typing keepalive loop. The default in
+   * createTypingCallbacks is 60s, which is too short for the Teams long tool
+   * chains described in #59731 (60s+ total runs are common). Give tool
+   * chains up to 10 minutes before auto-stopping the keepalive.
+   */
+  const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
+
+  // Forward reference: sendTypingIndicator is built before the stream
+  // controller exists, but the keepalive tick needs to check stream state so
+  // we don't overlay "..." typing on the visible streaming card. The ref is
+  // wired once the stream controller is constructed below.
+  const streamActiveRef: { current: () => boolean } = { current: () => false };
+
+  const rawSendTypingIndicator = async () => {
+    await withRevokedProxyFallback({
+      run: async () => {
+        await params.context.sendActivity({ type: "typing" });
+      },
+      onRevoked: async () => {
+        const baseRef = buildConversationReference(params.conversationRef);
+        await params.adapter.continueConversation(
+          params.appId,
+          { ...baseRef, activityId: undefined },
+          async (ctx) => {
+            await ctx.sendActivity({ type: "typing" });
+          },
+        );
+      },
+      onRevokedLog: () => {
+        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
+      },
+    });
+  };
+
   const sendTypingIndicator = isTypingSupported
     ? async () => {
-        await withRevokedProxyFallback({
-          run: async () => {
-            await params.context.sendActivity({ type: "typing" });
-          },
-          onRevoked: async () => {
-            const baseRef = buildConversationReference(params.conversationRef);
-            await params.adapter.continueConversation(
-              params.appId,
-              { ...baseRef, activityId: undefined },
-              async (ctx) => {
-                await ctx.sendActivity({ type: "typing" });
-              },
-            );
-          },
-          onRevokedLog: () => {
-            params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-          },
-        });
+        // While the streaming card is actively being updated the user
+        // already sees a live indicator in the stream — don't overlay a
+        // plain "..." typing on top of it. Between segments (tool chain)
+        // the stream is finalized, so typing indicators are appropriate
+        // and they are what keep the TurnContext alive. See #59731.
+        if (streamActiveRef.current()) {
+          return;
+        }
+        await rawSendTypingIndicator();
       }
     : async () => {};
 
@@ -83,6 +119,8 @@ export function createMSTeamsReplyDispatcher(params: {
     accountId: params.accountId,
     typing: {
       start: sendTypingIndicator,
+      keepaliveIntervalMs: TYPING_KEEPALIVE_INTERVAL_MS,
+      maxDurationMs: TYPING_KEEPALIVE_MAX_DURATION_MS,
       onStartError: (err) => {
         logTypingFailure({
           log: (message) => params.log.debug?.(message),
@@ -110,6 +148,8 @@ export function createMSTeamsReplyDispatcher(params: {
     feedbackLoopEnabled,
     log: params.log,
   });
+  // Wire the forward-declared gate used by sendTypingIndicator.
+  streamActiveRef.current = () => streamController.isStreamActive();
 
   const blockStreamingEnabled =
     typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
@@ -215,8 +255,14 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
       await streamController.onReplyStart();
-      // Avoid duplicate typing UX in DMs: stream status already shows progress.
-      if (typingIndicatorEnabled && !streamController.hasStream()) {
+      // Always start the typing keepalive loop when typing is enabled and
+      // supported by this conversation type. The sendTypingIndicator gate
+      // skips actual sends while the stream card is visually active, so
+      // during the first text segment the user only sees the streaming UI.
+      // Once the stream finalizes (between segments / during tool chains),
+      // the loop starts sending typing activities and keeps the Bot Framework
+      // TurnContext alive so the post-tool reply can still land. See #59731.
+      if (typingIndicatorEnabled) {
         await typingCallbacks?.onReplyStart?.();
       }
     },

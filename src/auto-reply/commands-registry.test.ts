@@ -100,6 +100,9 @@ describe("commands registry", () => {
       { skillCommands },
     );
     expect(commands.find((spec) => spec.nativeName === "demo_skill")).toBeTruthy();
+    expect(commands.find((spec) => spec.nativeName === "demo_skill")).toMatchObject({
+      category: "tools",
+    });
 
     const native = listNativeCommandSpecsForConfig(
       { commands: { config: false, plugins: false, debug: false, native: true } },

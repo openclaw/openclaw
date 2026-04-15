@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
@@ -120,11 +118,8 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
         })();
         const code = normalizeOptionalString(parsed?.error?.code) ?? null;
         const msg = normalizeOptionalString(parsed?.error?.message) ?? null;
-        const msgShort = msg
-          ? normalizeLowercaseStringOrEmpty(msg).includes("signing in again")
-            ? "re-auth required"
-            : shorten(msg, 52)
-          : null;
+        const refreshReason = classifyOAuthRefreshFailureReason(msg ?? "");
+        const msgShort = msg ? (refreshReason ? "re-auth required" : shorten(msg, 52)) : null;
         const base = `[${tag}] token refresh ${status}${code ? ` ${code}` : ""}${msgShort ? ` · ${msgShort}` : ""}`;
         addGroup(`token:${tag}:${status}:${code ?? ""}:${msgShort ?? ""}`, base);
         continue;

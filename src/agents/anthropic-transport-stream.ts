@@ -19,6 +19,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
+  coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
@@ -125,6 +126,26 @@ function mapThinkingLevelToEffort(
 
 function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium" | "high" {
   return level === "xhigh" ? "high" : level;
+}
+
+function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const floored = Math.floor(value);
+  return floored > 0 ? floored : undefined;
+}
+
+function resolveAnthropicMessagesMaxTokens(params: {
+  modelMaxTokens: number | undefined;
+  requestedMaxTokens: number | undefined;
+}): number | undefined {
+  const requested = resolvePositiveAnthropicMaxTokens(params.requestedMaxTokens);
+  if (requested !== undefined) {
+    return requested;
+  }
+  const modelMax = resolvePositiveAnthropicMaxTokens(params.modelMaxTokens);
+  return modelMax !== undefined ? Math.min(modelMax, 32_000) : undefined;
 }
 
 function adjustMaxTokensForThinking(params: {
@@ -308,7 +329,7 @@ function convertAnthropicMessages(
             type: "tool_use",
             id: block.id,
             name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
-            input: block.arguments ?? {},
+            input: coerceTransportToolCallArguments(block.arguments),
           });
         }
       }
@@ -478,6 +499,15 @@ function buildAnthropicParams(
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
 ) {
+  const maxTokens = resolveAnthropicMessagesMaxTokens({
+    modelMaxTokens: model.maxTokens,
+    requestedMaxTokens: options?.maxTokens,
+  });
+  if (maxTokens === undefined) {
+    throw new Error(
+      `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
+    );
+  }
   const payloadPolicy = resolveAnthropicPayloadPolicy({
     provider: model.provider,
     api: model.api,
@@ -485,11 +515,10 @@ function buildAnthropicParams(
     cacheRetention: options?.cacheRetention,
     enableCacheControl: true,
   });
-  const defaultMaxTokens = Math.min(model.maxTokens, 32_000);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
-    max_tokens: options?.maxTokens || defaultMaxTokens,
+    max_tokens: maxTokens,
     stream: true,
   };
   if (isOAuthToken) {
@@ -554,7 +583,17 @@ function resolveAnthropicTransportOptions(
   options: AnthropicTransportOptions | undefined,
   apiKey: string,
 ): AnthropicTransportOptions {
-  const baseMaxTokens = options?.maxTokens || Math.min(model.maxTokens, 32_000);
+  const baseMaxTokens = resolveAnthropicMessagesMaxTokens({
+    modelMaxTokens: model.maxTokens,
+    requestedMaxTokens: options?.maxTokens,
+  });
+  if (baseMaxTokens === undefined) {
+    throw new Error(
+      `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
+    );
+  }
+  const reasoningModelMaxTokens =
+    resolvePositiveAnthropicMaxTokens(model.maxTokens) ?? baseMaxTokens;
   const resolved: AnthropicTransportOptions = {
     temperature: options?.temperature,
     maxTokens: baseMaxTokens,
@@ -582,7 +621,7 @@ function resolveAnthropicTransportOptions(
   }
   const adjusted = adjustMaxTokensForThinking({
     baseMaxTokens,
-    modelMaxTokens: model.maxTokens,
+    modelMaxTokens: reasoningModelMaxTokens,
     reasoningLevel: options.reasoning,
     customBudgets: options.thinkingBudgets,
   });
@@ -776,7 +815,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "signature_delta" &&
               typeof delta.signature === "string"
             ) {
-              block.thinkingSignature = `${String(block.thinkingSignature ?? "")}${delta.signature}`;
+              block.thinkingSignature = `${block.thinkingSignature ?? ""}${delta.signature}`;
             }
             continue;
           }

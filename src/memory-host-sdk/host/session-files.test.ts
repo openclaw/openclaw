@@ -150,4 +150,82 @@ describe("buildSessionEntry", () => {
       Date.parse("2026-04-05T10:01:00.000Z"),
     ]);
   });
+
+  it("flags dreaming narrative transcripts from bootstrap metadata", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "custom",
+        customType: "openclaw:bootstrap-context:full",
+        data: {
+          runId: "dreaming-narrative-light-1775894400455",
+          sessionId: "sid-1",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Write a dream diary entry from these memory fragments" },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "dreaming-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.generatedByDreamingNarrative).toBe(true);
+  });
+
+  it("does not flag ordinary transcripts that quote the dream-diary prompt", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            "Write a dream diary entry from these memory fragments:\n- Candidate: durable note",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "A drifting archive breathed in moonlight." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "dreaming-prompt-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.generatedByDreamingNarrative).toBeUndefined();
+    expect(entry?.content).toContain(
+      "User: Write a dream diary entry from these memory fragments:",
+    );
+    expect(entry?.content).toContain("Assistant: A drifting archive breathed in moonlight.");
+    expect(entry?.lineMap).toEqual([1, 2]);
+  });
+
+  it("does not flag transcripts when dreaming markers only appear mid-string", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "custom",
+        customType: "note",
+        data: {
+          runId: "user-context-dreaming-narrative-light-1775894400455",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Keep the archive index updated." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "substring-marker-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.generatedByDreamingNarrative).toBeUndefined();
+    expect(entry?.content).toContain("User: Keep the archive index updated.");
+    expect(entry?.lineMap).toEqual([2]);
+  });
 });

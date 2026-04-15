@@ -15,6 +15,12 @@ const resolveMemorySearchConfig = vi.hoisted(() =>
   })),
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
+const dedupeDreamDiaryEntries = vi.hoisted(() => vi.fn());
+const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
+const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
+const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
+const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   loadConfig,
@@ -31,6 +37,15 @@ vi.mock("../../agents/memory-search.js", () => ({
 
 vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager: getMemorySearchManager,
+}));
+
+vi.mock("./doctor.memory-core-runtime.js", () => ({
+  dedupeDreamDiaryEntries,
+  previewGroundedRemMarkdown,
+  writeBackfillDiaryEntries,
+  removeBackfillDiaryEntries,
+  removeGroundedShortTermCandidates,
+  repairDreamingArtifacts,
 }));
 
 import { doctorHandlers } from "./doctor.js";
@@ -69,6 +84,61 @@ const invokeDoctorMemoryDreamDiary = async (respond: ReturnType<typeof vi.fn>) =
   });
 };
 
+const invokeDoctorMemoryBackfillDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.backfillDreamDiary"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
+const invokeDoctorMemoryResetDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.resetDreamDiary"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
+const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.resetGroundedShortTerm"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
+const invokeDoctorMemoryRepairDreamingArtifacts = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.repairDreamingArtifacts"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
+const invokeDoctorMemoryDedupeDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.dedupeDreamDiary"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -90,6 +160,12 @@ describe("doctor.memory.status", () => {
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     resolveMemorySearchConfig.mockReset().mockReturnValue({ enabled: true });
     getMemorySearchManager.mockReset();
+    previewGroundedRemMarkdown.mockReset();
+    dedupeDreamDiaryEntries.mockReset();
+    writeBackfillDiaryEntries.mockReset();
+    removeBackfillDiaryEntries.mockReset();
+    removeGroundedShortTermCandidates.mockReset();
+    repairDreamingArtifacts.mockReset();
   });
 
   it("returns gateway embedding probe status for the default agent", async () => {
@@ -123,6 +199,9 @@ describe("doctor.memory.status", () => {
           phaseSignalCount: 0,
           promotedTotal: 0,
           promotedToday: 0,
+          shortTermEntries: [],
+          signalEntries: [],
+          promotedEntries: [],
           phases: expect.objectContaining({
             deep: expect.objectContaining({
               managedCronPresent: false,
@@ -208,13 +287,20 @@ describe("doctor.memory.status", () => {
           entries: {
             "memory:memory/2026-04-03.md:1:2": {
               path: "memory/2026-04-03.md",
+              startLine: 1,
+              endLine: 2,
+              snippet: "Emma prefers shorter, lower-pressure check-ins.",
               source: "memory",
               recallCount: 2,
               dailyCount: 1,
+              lastRecalledAt: recentIso,
               promotedAt: undefined,
             },
             "memory:memory/2026-04-02.md:1:2": {
               path: "memory/2026-04-02.md",
+              startLine: 1,
+              endLine: 2,
+              snippet: "Use the Happy Together calendar for flights.",
               source: "memory",
               recallCount: 9,
               dailyCount: 5,
@@ -236,6 +322,9 @@ describe("doctor.memory.status", () => {
           entries: {
             "memory:memory/2026-04-01.md:1:2": {
               path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 2,
+              snippet: "Bunji lives in London.",
               source: "memory",
               recallCount: 7,
               dailyCount: 4,
@@ -243,6 +332,9 @@ describe("doctor.memory.status", () => {
             },
             "memory:memory/2026-04-04.md:1:2": {
               path: "memory/2026-04-04.md",
+              startLine: 1,
+              endLine: 2,
+              snippet: "Always book the covered valet option at Park & Greet BCN.",
               source: "memory",
               recallCount: 8,
               dailyCount: 3,
@@ -378,6 +470,36 @@ describe("doctor.memory.status", () => {
             remPhaseHitCount: 3,
             promotedTotal: 3,
             promotedToday: 2,
+            shortTermEntries: [
+              expect.objectContaining({
+                path: "memory/2026-04-03.md",
+                snippet: "Emma prefers shorter, lower-pressure check-ins.",
+                totalSignalCount: 3,
+                lightHits: 2,
+                remHits: 3,
+                phaseHitCount: 5,
+              }),
+            ],
+            signalEntries: [
+              expect.objectContaining({
+                path: "memory/2026-04-03.md",
+                totalSignalCount: 3,
+              }),
+            ],
+            promotedEntries: expect.arrayContaining([
+              expect.objectContaining({
+                path: "memory/2026-04-04.md",
+                promotedAt: recentIso,
+              }),
+              expect.objectContaining({
+                path: "memory/2026-04-02.md",
+                promotedAt: recentIso,
+              }),
+              expect.objectContaining({
+                path: "memory/2026-04-01.md",
+                promotedAt: olderIso,
+              }),
+            ]),
             phases: expect.objectContaining({
               deep: expect.objectContaining({
                 cron: "0 */4 * * *",
@@ -624,11 +746,103 @@ describe("doctor.memory.status", () => {
   });
 });
 
+describe("doctor.memory dream actions", () => {
+  it("clears grounded-only staged short-term entries without touching the diary", async () => {
+    resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
+    removeGroundedShortTermCandidates.mockResolvedValue({
+      removed: 3,
+      storePath: "/tmp/openclaw/memory/.dreams/short-term-recall.json",
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryResetGroundedShortTerm(respond);
+
+    expect(removeGroundedShortTermCandidates).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        action: "resetGroundedShortTerm",
+        removedShortTermEntries: 3,
+      },
+      undefined,
+    );
+  });
+
+  it("repairs contaminated dreaming artifacts for control-ui callers", async () => {
+    resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
+    repairDreamingArtifacts.mockResolvedValue({
+      changed: true,
+      archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-00-00-000Z",
+      archivedDreamsDiary: false,
+      archivedSessionCorpus: true,
+      archivedSessionIngestion: true,
+      archivedPaths: [],
+      warnings: [],
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryRepairDreamingArtifacts(respond);
+
+    expect(repairDreamingArtifacts).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        action: "repairDreamingArtifacts",
+        changed: true,
+        archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-00-00-000Z",
+        archivedDreamsDiary: false,
+        archivedSessionCorpus: true,
+        archivedSessionIngestion: true,
+        warnings: [],
+      },
+      undefined,
+    );
+  });
+
+  it("dedupes exact dream diary duplicates for control-ui callers", async () => {
+    resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
+    dedupeDreamDiaryEntries.mockResolvedValue({
+      dreamsPath: "/tmp/openclaw/DREAMS.md",
+      removed: 2,
+      kept: 7,
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryDedupeDreamDiary(respond);
+
+    expect(dedupeDreamDiaryEntries).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        action: "dedupeDreamDiary",
+        path: "DREAMS.md",
+        found: false,
+        removedEntries: 2,
+        dedupedEntries: 2,
+        keptEntries: 7,
+      },
+      undefined,
+    );
+  });
+});
+
 describe("doctor.memory.dreamDiary", () => {
   beforeEach(() => {
     loadConfig.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
+    previewGroundedRemMarkdown.mockReset();
+    writeBackfillDiaryEntries.mockReset();
+    removeBackfillDiaryEntries.mockReset();
   });
 
   it("reads DREAMS.md when present", async () => {
@@ -694,6 +908,111 @@ describe("doctor.memory.dreamDiary", () => {
           agentId: "main",
           found: false,
           path: "DREAMS.md",
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("backfills the dream diary from workspace memory files", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-backfill-"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-02-19.md"), "source\n", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    previewGroundedRemMarkdown.mockResolvedValue({
+      scannedFiles: 1,
+      files: [
+        {
+          path: path.join(workspaceDir, "memory", "2026-02-19.md"),
+          renderedMarkdown: "What Happened\n1. Bunji — partner\n",
+        },
+      ],
+    });
+    writeBackfillDiaryEntries.mockResolvedValue({
+      dreamsPath: path.join(workspaceDir, "DREAMS.md"),
+      written: 1,
+      replaced: 1,
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryBackfillDreamDiary(respond);
+      expect(previewGroundedRemMarkdown).toHaveBeenCalledWith({
+        workspaceDir,
+        inputPaths: [path.join(workspaceDir, "memory", "2026-02-19.md")],
+      });
+      expect(writeBackfillDiaryEntries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entries: [
+            expect.objectContaining({
+              bodyLines: expect.arrayContaining(["What Happened", "1. Bunji — partner"]),
+            }),
+          ],
+        }),
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          action: "backfill",
+          scannedFiles: 1,
+          written: 1,
+          replaced: 1,
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("no-ops backfill when the workspace has no daily memory files", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-empty-"));
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryBackfillDreamDiary(respond);
+      expect(previewGroundedRemMarkdown).not.toHaveBeenCalled();
+      expect(writeBackfillDiaryEntries).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          action: "backfill",
+          scannedFiles: 0,
+          written: 0,
+          replaced: 0,
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resets only backfilled dream diary entries", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-reset-"));
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    removeBackfillDiaryEntries.mockResolvedValue({
+      dreamsPath: path.join(workspaceDir, "DREAMS.md"),
+      removed: 3,
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryResetDreamDiary(respond);
+      expect(removeBackfillDiaryEntries).toHaveBeenCalledWith({ workspaceDir });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          action: "reset",
+          removedEntries: 3,
         }),
         undefined,
       );

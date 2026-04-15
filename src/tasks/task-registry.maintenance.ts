@@ -15,7 +15,11 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
-import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
+import {
+  configureTaskAuditTaskProvider,
+  listTaskAuditFindings,
+  summarizeTaskAuditFindings,
+} from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
@@ -229,6 +233,8 @@ export function reconcileInspectableTasks(): TaskRecord[] {
     .map((task) => reconcileTaskRecordForOperatorInspection(task));
 }
 
+configureTaskAuditTaskProvider(reconcileInspectableTasks);
+
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());
 }
@@ -280,9 +286,10 @@ function startScheduledSweep() {
     return;
   }
   sweepInProgress = true;
-  void sweepTaskRegistry().finally(() => {
+  const clearSweepInProgress = () => {
     sweepInProgress = false;
-  });
+  };
+  sweepTaskRegistry().then(clearSweepInProgress, clearSweepInProgress);
 }
 
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {

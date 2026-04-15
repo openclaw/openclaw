@@ -124,6 +124,9 @@ The provider id becomes the left side of your model ref:
           sessionMode: "existing",
           sessionIdFields: ["session_id", "conversation_id"],
           systemPromptArg: "--system",
+          // Codex-style CLIs can point at a prompt file instead:
+          // systemPromptFileConfigArg: "-c",
+          // systemPromptFileConfigKey: "model_instructions_file",
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",
@@ -149,6 +152,20 @@ told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
 `claude -p` usage as sanctioned for this integration unless Anthropic publishes
 a new policy.
 </Note>
+
+The bundled OpenAI `codex-cli` backend passes OpenClaw's system prompt through
+Codex's `model_instructions_file` config override (`-c
+model_instructions_file="..."`). Codex does not expose a Claude-style
+`--append-system-prompt` flag, so OpenClaw writes the assembled prompt to a
+temporary file for each fresh Codex CLI session.
+
+The bundled Anthropic `claude-cli` backend receives the OpenClaw skills snapshot
+two ways: the compact OpenClaw skills catalog in the appended system prompt, and
+a temporary Claude Code plugin passed with `--plugin-dir`. The plugin contains
+only the eligible skills for that agent/session, so Claude Code's native skill
+resolver sees the same filtered set that OpenClaw would otherwise advertise in
+the prompt. Skill env/API key overrides are still applied by OpenClaw to the
+child process environment for the run.
 
 ## Sessions
 
@@ -245,6 +262,31 @@ CLI backend defaults are now part of the plugin surface:
 - User config in `agents.defaults.cliBackends.<id>` still overrides the plugin default.
 - Backend-specific config cleanup stays plugin-owned through the optional
   `normalizeConfig` hook.
+
+Plugins that need tiny prompt/message compatibility shims can declare
+bidirectional text transforms without replacing a provider or CLI backend:
+
+```typescript
+api.registerTextTransforms({
+  input: [
+    { from: /red basket/g, to: "blue basket" },
+    { from: /paper ticket/g, to: "digital ticket" },
+    { from: /left shelf/g, to: "right shelf" },
+  ],
+  output: [
+    { from: /blue basket/g, to: "red basket" },
+    { from: /digital ticket/g, to: "paper ticket" },
+    { from: /right shelf/g, to: "left shelf" },
+  ],
+});
+```
+
+`input` rewrites the system prompt and user prompt passed to the CLI. `output`
+rewrites streamed assistant deltas and parsed final text before OpenClaw handles
+its own control markers and channel delivery.
+
+For CLIs that emit Claude Code stream-json compatible JSONL, set
+`jsonlDialect: "claude-stream-json"` on that backend's config.
 
 ## Bundle MCP overlays
 

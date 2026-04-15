@@ -59,6 +59,7 @@ describe("resolvePluginConfigContractsById", () => {
           modelSupport: undefined,
           cliBackends: [],
           channelEnvVars: undefined,
+          providerAuthAliases: undefined,
           providerAuthChoices: undefined,
           skills: [],
           settingsFiles: undefined,
@@ -74,6 +75,16 @@ describe("resolvePluginConfigContractsById", () => {
     expect(
       resolvePluginConfigContractsById({
         pluginIds: ["brave"],
+      }),
+    ).toEqual(new Map());
+    expect(mocks.findBundledPluginMetadataById).not.toHaveBeenCalled();
+  });
+
+  it("can skip bundled metadata fallback for registry-scoped callers", () => {
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["missing"],
+        fallbackToBundledMetadata: false,
       }),
     ).toEqual(new Map());
     expect(mocks.findBundledPluginMetadataById).not.toHaveBeenCalled();
