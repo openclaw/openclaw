@@ -1,8 +1,6 @@
 import type { Bot } from "grammy";
 import {
-  logAckFailure,
   logTypingFailure,
-  removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
@@ -184,7 +182,7 @@ export const dispatchTelegramMessage = async ({
     sendRecordVoice,
     ackReactionPromise,
     reactionApi,
-    removeAckAfterReply,
+    // removeAckAfterReply is no longer used — completion reactions replace ACK removal
     statusReactionController,
   } = context;
 
@@ -921,6 +919,21 @@ export const dispatchTelegramMessage = async ({
     });
   }
 
+  // Completion reaction: when an ACK reaction was sent (👀) but the full
+  // status-reaction controller is not active, replace the eyes with a
+  // thumbs-down on failure.  The success path (below) replaces with 👍.
+  if (!statusReactionController && !hasFinalResponse && ackReactionPromise && reactionApi && msg.message_id) {
+    const COMPLETION_REACTION_FAILURE = "\ud83d\udc4e"; // 👎
+    void ackReactionPromise.then((didAck) => {
+      if (!didAck) { return; }
+      reactionApi?.(chatId, msg.message_id ?? 0, [
+        { type: "emoji", emoji: COMPLETION_REACTION_FAILURE },
+      ]).catch((err: unknown) => {
+        logVerbose(`telegram: completion reaction (failure) failed: ${String(err)}`);
+      });
+    });
+  }
+
   if (!hasFinalResponse) {
     clearGroupHistory();
     return;
@@ -971,23 +984,18 @@ export const dispatchTelegramMessage = async ({
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });
   } else {
-    removeAckReactionAfterReply({
-      removeAfterReply: removeAckAfterReply,
-      ackReactionPromise,
-      ackReactionValue: ackReactionPromise ? "ack" : null,
-      remove: () =>
-        (reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve()).then(() => {}),
-      onError: (err) => {
-        if (!msg.message_id) {
-          return;
-        }
-        logAckFailure({
-          log: logVerbose,
-          channel: "telegram",
-          target: `${chatId}/${msg.message_id}`,
-          error: err,
-        });
-      },
+    // Completion reaction: replace 👀 ACK with 👍 on success
+    const COMPLETION_REACTION_SUCCESS = "\ud83d\udc4d"; // 👍
+    void (ackReactionPromise ?? Promise.resolve()).then((didAck) => {
+      if (!ackReactionPromise || !didAck) {
+        // No ACK was sent, or ACK failed – nothing to replace
+        return;
+      }
+      reactionApi?.(chatId, msg.message_id ?? 0, [
+        { type: "emoji", emoji: COMPLETION_REACTION_SUCCESS },
+      ]).catch((err: unknown) => {
+        logVerbose(`telegram: completion reaction (success) failed: ${String(err)}`);
+      });
     });
   }
   clearGroupHistory();
