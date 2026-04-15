@@ -105,9 +105,13 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
     parsed = JSON.parse(raw) as Partial<
       Record<typeof MANIFEST_KEY, { extensions?: unknown }>
     > | null;
-  } catch {
-    // Malformed package.json — treat as no extensions rather than crashing
-    return [];
+  } catch (err) {
+    // Re-throw so callers can surface a security finding for malformed manifests.
+    // A malicious plugin could use a malformed package.json to hide declared
+    // extension entrypoints from deep scan — callers must not silently drop them.
+    throw new Error(`Failed to parse plugin manifest at ${manifestPath}: ${String(err)}`, {
+      cause: err,
+    });
   }
   const extensions = parsed?.[MANIFEST_KEY]?.extensions;
   if (!Array.isArray(extensions)) {
@@ -942,6 +946,15 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
 
       const skillRealPath = await realpathWithTimeout(canonicalSkillPath);
       if (!skillRealPath) {
+        // realpath timed out or failed — cannot verify the symlink target.
+        // Treat as a potential escape rather than silently bypassing the check.
+        // An attacker on a slow/network FS could otherwise hang realpath to
+        // prevent escape detection.
+        escapedSkillFiles.push({
+          workspaceDir: workspacePath,
+          skillFilePath: canonicalSkillPath,
+          skillRealPath: "(realpath timed out \u2014 symlink target unverifiable)",
+        });
         continue;
       }
       if (isPathInside(workspaceRealPath, skillRealPath)) {
@@ -1251,7 +1264,25 @@ export async function collectPluginsCodeSafetyFindings(params: {
 
   for (const pluginName of pluginDirs) {
     const pluginPath = path.join(extensionsDir, pluginName);
-    const extensionEntries = await readPluginManifestExtensions(pluginPath).catch(() => []);
+    let extensionEntries: string[] = [];
+    try {
+      extensionEntries = await readPluginManifestExtensions(pluginPath);
+    } catch (manifestErr) {
+      // Malformed package.json — surface a warning so the user investigates.
+      // A plugin could deliberately corrupt its manifest to hide declared
+      // extension entrypoints from the deep code scanner.
+      findings.push({
+        checkId: "plugins.code_safety.manifest_parse_error",
+        severity: "warn",
+        title: `Plugin "${pluginName}" has a malformed package.json`,
+        detail:
+          `Could not parse plugin manifest: ${String(manifestErr)}.\n` +
+          "The extension entrypoint list is unavailable. Deep scan will cover the plugin directory but may miss entries declared via `openclaw.extensions`.",
+        remediation:
+          "Inspect the plugin package.json for syntax errors. If the plugin is untrusted, remove it from your OpenClaw extensions state directory.",
+      });
+      // Continue — getCodeSafetySummary below still scans the plugin directory
+    }
     const forcedScanEntries: string[] = [];
     const escapedEntries: string[] = [];
 
