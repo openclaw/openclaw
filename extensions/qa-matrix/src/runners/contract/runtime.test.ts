@@ -325,6 +325,26 @@ describe("matrix live qa runtime", () => {
     });
   });
 
+  it("batches Matrix scenarios by config key while preserving stable in-group order", () => {
+    const scenarios = liveTesting.findMatrixQaScenarios([
+      "matrix-top-level-reply-shape",
+      "matrix-room-thread-reply-override",
+      "matrix-thread-follow-up",
+      "matrix-room-quiet-streaming-preview",
+      "matrix-reaction-notification",
+    ]);
+
+    expect(
+      liveTesting.scheduleMatrixQaScenariosByConfig(scenarios).map(({ scenario }) => scenario.id),
+    ).toEqual([
+      "matrix-thread-follow-up",
+      "matrix-top-level-reply-shape",
+      "matrix-reaction-notification",
+      "matrix-room-thread-reply-override",
+      "matrix-room-quiet-streaming-preview",
+    ]);
+  });
+
   it("treats only connected, healthy Matrix accounts as ready", () => {
     expect(liveTesting.isMatrixAccountReady({ running: true, connected: true })).toBe(true);
     expect(liveTesting.isMatrixAccountReady({ running: true, connected: false })).toBe(false);

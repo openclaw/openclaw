@@ -61,6 +61,11 @@ type MatrixQaScenarioResult = {
   title: string;
 };
 
+type MatrixQaScheduledScenario = {
+  originalIndex: number;
+  scenario: (typeof MATRIX_QA_SCENARIOS)[number];
+};
+
 type MatrixQaScenarioConfigEntry = MatrixQaSummary["config"]["scenarios"][number];
 
 type MatrixQaSummary = {
@@ -176,6 +181,25 @@ function buildMatrixQaScenarioResult(params: {
       configSummary: params.configSummary,
     }),
   };
+}
+
+function scheduleMatrixQaScenariosByConfig(
+  scenarios: readonly (typeof MATRIX_QA_SCENARIOS)[number][],
+): MatrixQaScheduledScenario[] {
+  const grouped = new Map<string, MatrixQaScheduledScenario[]>();
+
+  scenarios.forEach((scenario, originalIndex) => {
+    const configKey = buildMatrixQaGatewayConfigKey(scenario.configOverrides);
+    const existing = grouped.get(configKey);
+    const scheduled = { originalIndex, scenario };
+    if (existing) {
+      existing.push(scheduled);
+      return;
+    }
+    grouped.set(configKey, [scheduled]);
+  });
+
+  return [...grouped.values()].flat();
 }
 
 export type MatrixQaRunResult = {
@@ -368,7 +392,9 @@ export async function runMatrixQaLive(params: {
       ].join("\n"),
     },
   ];
-  const scenarioResults: MatrixQaScenarioResult[] = [];
+  const scenarioResults: Array<MatrixQaScenarioResult | undefined> = Array.from({
+    length: scenarios.length,
+  });
   const cleanupErrors: string[] = [];
   let canaryArtifact: MatrixQaCanaryArtifact | undefined;
   let gatewayHarness: MatrixQaLiveLaneGatewayHarness | null = null;
@@ -387,6 +413,8 @@ export async function runMatrixQaLive(params: {
   };
   const defaultConfigSnapshot = buildMatrixQaConfigSnapshot(gatewayConfigParams);
   const scenarioConfigSnapshots: MatrixQaScenarioConfigEntry[] = [];
+
+  const scheduledScenarios = scheduleMatrixQaScenariosByConfig(scenarios);
 
   try {
     const ensureGatewayHarness = async (overrides?: MatrixQaConfigOverrides) => {
@@ -460,13 +488,13 @@ export async function runMatrixQaLive(params: {
     }
 
     if (!canaryFailed) {
-      for (const scenario of scenarios) {
+      for (const { scenario, originalIndex } of scheduledScenarios) {
         const { entry: scenarioConfigEntry, summary: scenarioConfigSummary } =
           buildMatrixQaScenarioConfigEntry({
             gatewayConfigParams,
             scenario,
           });
-        scenarioConfigSnapshots.push(scenarioConfigEntry);
+        scenarioConfigSnapshots[originalIndex] = scenarioConfigEntry;
         try {
           const scenarioGateway = await ensureGatewayHarness(scenario.configOverrides);
           const result = await runMatrixQaScenario(scenario, {
@@ -497,24 +525,20 @@ export async function runMatrixQaLive(params: {
             timeoutMs: scenario.timeoutMs,
             topology: provisioning.topology,
           });
-          scenarioResults.push(
-            buildMatrixQaScenarioResult({
-              artifacts: result.artifacts,
-              configSummary: scenarioConfigSummary,
-              details: result.details,
-              scenario,
-              status: "pass",
-            }),
-          );
+          scenarioResults[originalIndex] = buildMatrixQaScenarioResult({
+            artifacts: result.artifacts,
+            configSummary: scenarioConfigSummary,
+            details: result.details,
+            scenario,
+            status: "pass",
+          });
         } catch (error) {
-          scenarioResults.push(
-            buildMatrixQaScenarioResult({
-              configSummary: scenarioConfigSummary,
-              details: formatErrorMessage(error),
-              scenario,
-              status: "fail",
-            }),
-          );
+          scenarioResults[originalIndex] = buildMatrixQaScenarioResult({
+            configSummary: scenarioConfigSummary,
+            details: formatErrorMessage(error),
+            scenario,
+            status: "fail",
+          });
         }
       }
     }
@@ -532,6 +556,9 @@ export async function runMatrixQaLive(params: {
       appendLiveLaneIssue(cleanupErrors, "Matrix harness cleanup", error);
     }
   }
+  const completedScenarioResults = scenarioResults.filter(
+    (scenario): scenario is MatrixQaScenarioResult => scenario !== undefined,
+  );
   if (cleanupErrors.length > 0) {
     checks.push({
       name: "Matrix cleanup",
@@ -555,7 +582,7 @@ export async function runMatrixQaLive(params: {
     startedAt: startedAtDate,
     finishedAt: finishedAtDate,
     checks,
-    scenarios: scenarioResults.map((scenario) => ({
+    scenarios: completedScenarioResults.map((scenario) => ({
       details: scenario.details,
       name: scenario.title,
       status: scenario.status,
@@ -592,7 +619,7 @@ export async function runMatrixQaLive(params: {
       serverName: harness.serverName,
     },
     observedEventCount: observedEvents.length,
-    scenarios: scenarioResults,
+    scenarios: completedScenarioResults,
     startedAt,
     sutAccountId,
     userIds: {
@@ -623,7 +650,7 @@ export async function runMatrixQaLive(params: {
   const failedChecks = checks.filter(
     (check) => check.status === "fail" && check.name !== "Matrix cleanup",
   );
-  const failedScenarios = scenarioResults.filter((scenario) => scenario.status === "fail");
+  const failedScenarios = completedScenarioResults.filter((scenario) => scenario.status === "fail");
   if (failedChecks.length > 0 || failedScenarios.length > 0) {
     throw new Error(
       buildLiveLaneArtifactsError({
@@ -651,16 +678,18 @@ export async function runMatrixQaLive(params: {
     observedEventsPath,
     outputDir,
     reportPath,
-    scenarios: scenarioResults,
+    scenarios: completedScenarioResults,
     summaryPath,
   };
 }
 
 export const __testing = {
   buildMatrixQaSummary,
+  scheduleMatrixQaScenariosByConfig,
   MATRIX_QA_SCENARIOS,
   buildMatrixQaConfig,
   buildMatrixQaConfigSnapshot,
+  findMatrixQaScenarios,
   isMatrixAccountReady,
   resolveMatrixQaModels,
   summarizeMatrixQaConfigSnapshot,
