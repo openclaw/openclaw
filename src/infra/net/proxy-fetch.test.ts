@@ -331,6 +331,20 @@ describe("makeProxyFetch — Request object normalization", () => {
     expect(init.signal).toBeUndefined();
   });
 
+  it("preserves inherited Request signals when init.signal is undefined", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+    const controller = new AbortController();
+    const req = new Request("https://api.example.com/data", {
+      signal: controller.signal,
+    });
+
+    await proxyFetch(req, { signal: undefined });
+
+    const [, init] = undiciFetch.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(controller.signal);
+  });
+
   it("strips hop-by-hop headers when merging Request headers", async () => {
     undiciFetch.mockResolvedValue({ ok: true });
     const proxyFetch = makeProxyFetch("http://proxy.test:8080");

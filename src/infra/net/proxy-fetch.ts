@@ -119,10 +119,14 @@ function toRequestLikeInit(
   }
 
   if (init && Object.hasOwn(init, "signal")) {
-    if (init.signal == null) {
+    if (init.signal === null) {
       delete merged.signal;
-    } else {
+    } else if (init.signal !== undefined) {
       merged.signal = init.signal;
+    } else if (input.signal !== undefined) {
+      merged.signal = input.signal;
+    } else {
+      delete merged.signal;
     }
   } else if (input.signal !== undefined) {
     merged.signal = input.signal;
