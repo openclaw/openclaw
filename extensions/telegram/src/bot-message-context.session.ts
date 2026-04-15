@@ -249,7 +249,6 @@ export async function buildTelegramInboundContextPayload(params: {
     : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
-  const senderLabel = buildSenderLabel(msg, senderId || chatId);
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
