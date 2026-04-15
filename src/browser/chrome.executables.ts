@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 
 export type BrowserExecutable = {
@@ -601,10 +602,17 @@ export function resolveBrowserExecutableForPlatform(
   platform: NodeJS.Platform,
 ): BrowserExecutable | null {
   if (resolved.executablePath) {
-    if (!exists(resolved.executablePath)) {
-      throw new Error(`browser.executablePath not found: ${resolved.executablePath}`);
+    const expandedPath = resolved.executablePath.startsWith("~")
+      ? expandHomePrefix(resolved.executablePath, {
+          home: os.homedir(),
+          env: process.env,
+          homedir: os.homedir,
+        })
+      : resolved.executablePath;
+    if (!exists(expandedPath)) {
+      throw new Error(`browser.executablePath not found: ${expandedPath}`);
     }
-    return { kind: "custom", path: resolved.executablePath };
+    return { kind: "custom", path: expandedPath };
   }
 
   const detected = detectDefaultChromiumExecutable(platform);
