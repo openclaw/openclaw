@@ -11,13 +11,14 @@ export async function loginWeb(
   waitForConnection?: typeof waitForWaConnection,
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
+  createSocket?: (verbose: boolean, v: boolean, opts: { authDir: string }) => Promise<unknown>,
 ) {
   const { createWaSocket: _create, waitForWaConnection: _wait } = await import("./session.js");
-  const createSocket = _create;
+  const _createSocket = createSocket ?? _create;
   const waitForConn = waitForConnection ?? _wait;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
-  let sock = await createSocket(true, verbose, {
+  let sock = await _createSocket(true, verbose, {
     authDir: account.authDir,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
@@ -29,6 +30,7 @@ export async function loginWeb(
       verbose,
       runtime,
       waitForConnection: waitForConn,
+      createSocket: _createSocket,
       onSocketReplaced: (replacementSock) => {
         sock = replacementSock;
       },
