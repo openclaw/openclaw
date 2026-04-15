@@ -1,5 +1,6 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
 import { clearFeishuCommentConversationDelivery } from "./comment-delivery-guard.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 import {
@@ -7,7 +8,12 @@ import {
   type ClawdbotConfig,
   type RuntimeEnv,
 } from "./comment-handler-runtime-api.js";
-import { resolveFeishuCommentAccess } from "./comment-policy.js";
+import {
+  hasFeishuCommentDirectDocumentRule,
+  hasFeishuCommentWikiDocumentRule,
+  resolveFeishuCommentAccess,
+  resolveFeishuCommentWikiDocumentKey,
+} from "./comment-policy.js";
 import { buildFeishuCommentTarget } from "./comment-target.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import {
@@ -79,11 +85,67 @@ export async function handleFeishuCommentEvent(
     fileToken: turn.fileToken,
     commentId: turn.commentId,
   });
-  const commentAccess = resolveFeishuCommentAccess({
+  let commentAccess = resolveFeishuCommentAccess({
     comments: feishuCfg?.comments,
     fileType: turn.fileType,
     fileToken: turn.fileToken,
   });
+  if (
+    !hasFeishuCommentDirectDocumentRule({
+      comments: feishuCfg?.comments,
+      fileType: turn.fileType,
+      fileToken: turn.fileToken,
+    }) &&
+    hasFeishuCommentWikiDocumentRule(feishuCfg?.comments)
+  ) {
+    const client = createFeishuClient(account) as {
+      request(params: {
+        method: "GET";
+        url: string;
+        data: unknown;
+        timeout: number;
+      }): Promise<unknown>;
+    };
+    const wikiDocument = await resolveFeishuCommentWikiDocumentKey({
+      client,
+      comments: feishuCfg?.comments,
+      fileType: turn.fileType,
+      fileToken: turn.fileToken,
+      accountId: account.accountId,
+      logger: log,
+    });
+    if (wikiDocument) {
+      commentAccess = resolveFeishuCommentAccess({
+        comments: feishuCfg?.comments,
+        fileType: turn.fileType,
+        fileToken: turn.fileToken,
+        matchedDocumentKey: wikiDocument.documentKey,
+        wikiNodeToken: wikiDocument.wikiNodeToken,
+        wikiObjectType: wikiDocument.objectType,
+        wikiObjectToken: wikiDocument.objectToken,
+      });
+    }
+  }
+  if (commentAccess.matchedRuleSource === "document") {
+    log(
+      `feishu[${account.accountId}]: matched comment document rule ` +
+        `document=${commentAccess.matchedDocumentType}:${commentAccess.matchedDocumentToken} ` +
+        `comment=${turn.commentId}`,
+    );
+  } else if (commentAccess.matchedRuleSource === "wiki") {
+    log(
+      `feishu[${account.accountId}]: matched comment document rule ` +
+        `document=${commentAccess.matchedDocumentType}:${commentAccess.matchedDocumentToken} ` +
+        `wiki=${commentAccess.wikiDocumentKey ?? "unknown"} ` +
+        `object=${commentAccess.wikiObjectType ?? "unknown"}:${commentAccess.wikiObjectToken ?? "unknown"} ` +
+        `comment=${turn.commentId}`,
+    );
+  } else if (commentAccess.matchedRuleSource === "wildcard") {
+    log(
+      `feishu[${account.accountId}]: matched comment document rule ` +
+        `document=${turn.fileType}:${turn.fileToken} rule=* comment=${turn.commentId}`,
+    );
+  }
   if (!commentAccess.enabled) {
     log(
       `feishu[${account.accountId}]: comment handling disabled ` +

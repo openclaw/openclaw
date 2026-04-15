@@ -273,6 +273,91 @@ describe("registerFeishuDriveTools", () => {
     );
   });
 
+  it("escapes angle brackets in add_comment and reply_comment content", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({ agentAccountId: undefined });
+
+    requestMock.mockResolvedValueOnce({
+      code: 0,
+      data: { comment_id: "c-escaped" },
+    });
+    await tool.execute("call-add-escaped", {
+      action: "add_comment",
+      file_token: "doc_1",
+      file_type: "docx",
+      content: "before <tag> after",
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/new_comments",
+        data: {
+          file_type: "docx",
+          reply_elements: [{ type: "text", text: "before &lt;tag&gt; after" }],
+        },
+      }),
+    );
+
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: false }],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { reply_id: "r-escaped" },
+      });
+    await tool.execute("call-reply-escaped", {
+      action: "reply_comment",
+      file_token: "doc_1",
+      file_type: "docx",
+      comment_id: "c1",
+      content: "before <tag> after",
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+        params: { file_type: "docx" },
+        data: {
+          content: {
+            elements: [
+              {
+                type: "text_run",
+                text_run: {
+                  text: "before &lt;tag&gt; after",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+  });
+
   it("defaults add_comment file_type to docx when omitted", async () => {
     const registerTool = vi.fn();
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -890,6 +975,13 @@ describe("registerFeishuDriveTools", () => {
         delivery_mode: "add_comment",
       }),
     );
+    expect(
+      hasFeishuCommentConversationDelivery({
+        accountId: "default",
+        to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
+      }),
+    ).toBe(true);
   });
 
   it("does not inherit non-doc ambient file types for add_comment", async () => {

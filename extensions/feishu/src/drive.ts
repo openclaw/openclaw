@@ -118,7 +118,12 @@ function getDriveInternalClient(client: Lark.Client): FeishuDriveInternalClient 
 }
 
 function buildReplyElements(content: string) {
-  return [{ type: "text", text: content }];
+  return [{ type: "text", text: escapeFeishuCommentText(content) }];
+}
+
+function escapeFeishuCommentText(text: string): string {
+  // Feishu Drive comment write APIs reject raw angle brackets in text payloads.
+  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 async function requestDriveApi<T>(params: {
@@ -673,7 +678,7 @@ export async function replyComment(
             {
               type: "text_run",
               text_run: {
-                text: params.content,
+                text: escapeFeishuCommentText(params.content),
               },
             },
           ],
@@ -879,6 +884,9 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                         content: resolved.content,
                       })
                     : await addComment(client, resolved);
+                  // add_comment may create a new whole-document comment instead of replying to
+                  // the ambient comment id directly. Any visible delivery in the current ambient
+                  // comment flow should still suppress the later automatic final reply.
                   maybeRecordCurrentCommentConversationDelivery({
                     context: ctx,
                     fileToken: resolved.file_token,
