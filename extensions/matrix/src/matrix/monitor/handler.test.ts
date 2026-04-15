@@ -446,10 +446,11 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("blocks room control commands from DM-only paired senders", async () => {
+    const readAllowFromStore = vi.fn(async () => ["@user:example.org"]);
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({
         isDirectMessage: false,
-        readAllowFromStore: vi.fn(async () => ["@user:example.org"]),
+        readAllowFromStore,
         roomsConfig: {
           "!room:example.org": { requireMention: false },
         },
@@ -473,6 +474,7 @@ describe("matrix monitor handler pairing account scope", () => {
 
     expect(recordInboundSession).not.toHaveBeenCalled();
     expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
   it("processes room messages mentioned via displayName in formatted_body", async () => {
