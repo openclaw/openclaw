@@ -293,6 +293,44 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain(path.join(bundledSkillDir, "SKILL.md"));
   });
 
+  it("applies per-agent skillsLimits.maxSkillsPromptChars", async () => {
+    const workspaceDir = await makeWorkspace();
+    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: "D".repeat(240),
+      });
+    }
+
+    const prompt = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        config: {
+          skills: {
+            limits: {
+              maxSkillsPromptChars: 4_000,
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "writer",
+                workspace: workspaceDir,
+                skillsLimits: {
+                  maxSkillsPromptChars: 220,
+                },
+              },
+            ],
+          },
+        },
+        agentId: "writer",
+      }),
+    );
+
+    expect(prompt).toContain("Skills truncated: included 0 of 3");
+  });
+
   it("loads extra skill folders from config (lowest precedence)", async () => {
     const workspaceDir = await makeWorkspace();
     const extraDir = path.join(workspaceDir, ".extra");

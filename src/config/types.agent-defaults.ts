@@ -65,6 +65,17 @@ export type AgentStartupContextConfig = {
   maxTotalChars?: number;
 };
 
+export type AgentContextLimitsConfig = {
+  /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
+  memoryGetMaxChars?: number;
+  /** Default line window for memory_get when lines is omitted (default: 120). */
+  memoryGetDefaultLines?: number;
+  /** Max chars kept for a single live tool result before truncation (default: 16000). */
+  toolResultMaxChars?: number;
+  /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
+  postCompactionMaxChars?: number;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -217,6 +228,8 @@ export type AgentDefaultsConfig = {
   userTimezone?: string;
   /** Runtime-owned first-turn startup context for bare /new and /reset. */
   startupContext?: AgentStartupContextConfig;
+  /** Focused context-budget overrides for high-volume injected/read surfaces. */
+  contextLimits?: AgentContextLimitsConfig;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
   timeFormat?: "auto" | "12" | "24";
   /**
