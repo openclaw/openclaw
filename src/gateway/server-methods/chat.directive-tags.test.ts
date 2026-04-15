@@ -543,8 +543,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
+    let assistantUpdate: (typeof mockState.emittedTranscriptUpdates)[number] | undefined;
     await waitForAssertion(() => {
-      const assistantUpdate = mockState.emittedTranscriptUpdates.find(
+      assistantUpdate = mockState.emittedTranscriptUpdates.find(
         (update) =>
           typeof update.message === "object" &&
           update.message !== null &&
@@ -555,22 +556,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           ) ??
             false),
       );
-      expect(assistantUpdate).toMatchObject({
-        message: {
-          role: "assistant",
-          idempotencyKey: "idem-agent-audio:assistant-media",
-          content: [
-            { type: "text", text: "Audio reply" },
-            {
-              type: "audio",
-              source: {
-                type: "base64",
-                media_type: "audio/mpeg",
-              },
+      expect(assistantUpdate).toBeDefined();
+    });
+    expect(assistantUpdate).toMatchObject({
+      message: {
+        role: "assistant",
+        idempotencyKey: "idem-agent-audio:assistant-media",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mpeg",
             },
           ],
         },
-      });
+      },
     });
   });
 
