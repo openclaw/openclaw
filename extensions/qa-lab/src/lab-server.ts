@@ -608,7 +608,9 @@ function createConnectTokenRewriteTransform(params: {
   bootstrapToken: string | null;
   gatewayToken: string | null;
 }) {
-  if (!params.bootstrapToken || !params.gatewayToken) {
+  const bootstrapToken = params.bootstrapToken;
+  const gatewayToken = params.gatewayToken;
+  if (!bootstrapToken || !gatewayToken) {
     return new Transform({
       transform(chunk, _encoding, callback) {
         this.push(chunk);
@@ -628,7 +630,7 @@ function createConnectTokenRewriteTransform(params: {
       }
 
       pending = Buffer.concat([pending, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
-      let decoded: { frames: ParsedWebSocketFrame[]; remainder: Buffer };
+      let decoded: ReturnType<typeof decodeWebSocketFrames>;
       try {
         decoded = decodeWebSocketFrames(pending);
       } catch {
@@ -639,12 +641,12 @@ function createConnectTokenRewriteTransform(params: {
         return;
       }
 
-      pending = decoded.remainder;
+      pending = Buffer.from(decoded.remainder);
       for (const frame of decoded.frames) {
         const rewritten = rewriteConnectFrameToken({
           frame,
-          bootstrapToken: params.bootstrapToken,
-          gatewayToken: params.gatewayToken,
+          bootstrapToken,
+          gatewayToken,
         });
         this.push(rewritten.raw);
       }
@@ -672,11 +674,16 @@ async function proxyHttpRequest(params: {
     ...params.req.headers,
     host: params.target.host,
   };
-  upstreamHeaders.authorization = rewriteProxyAuthorizationHeader({
+  const rewrittenAuthorization = rewriteProxyAuthorizationHeader({
     value: params.req.headers.authorization,
     bootstrapToken: params.bootstrapToken,
     gatewayToken: params.gatewayToken,
   });
+  if (typeof rewrittenAuthorization === "undefined") {
+    delete upstreamHeaders.authorization;
+  } else {
+    upstreamHeaders.authorization = rewrittenAuthorization;
+  }
 
   const client = params.target.protocol === "https:" ? httpsRequest : httpRequest;
   const upstreamReq = client(
