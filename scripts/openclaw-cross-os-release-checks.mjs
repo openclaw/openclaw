@@ -104,10 +104,24 @@ export function parseArgs(argv) {
 }
 
 export function looksLikeReleaseVersionRef(ref) {
-  const trimmed = ref.trim();
+  const trimmed = normalizeRequestedRef(ref);
   return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:beta|rc)[-.]?[0-9]+)?$/iu.test(
     trimmed,
   );
+}
+
+export function normalizeRequestedRef(ref) {
+  const trimmed = ref?.trim() || "";
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.startsWith("refs/heads/")) {
+    return trimmed.slice("refs/heads/".length);
+  }
+  if (trimmed.startsWith("refs/tags/")) {
+    return trimmed.slice("refs/tags/".length);
+  }
+  return trimmed;
 }
 
 export function resolveRequestedSuites(mode, ref) {
@@ -1140,7 +1154,7 @@ function looksLikeCommitSha(ref) {
 }
 
 function resolveExpectedDevUpdateRef(ref) {
-  const trimmed = ref?.trim() || "main";
+  const trimmed = normalizeRequestedRef(ref) || "main";
   return trimmed || "main";
 }
 

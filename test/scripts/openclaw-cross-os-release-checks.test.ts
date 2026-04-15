@@ -3,6 +3,7 @@ import {
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
   looksLikeReleaseVersionRef,
+  normalizeRequestedRef,
   normalizeWindowsInstalledCliPath,
   parseArgs,
   readRunnerOverrideEnv,
@@ -25,10 +26,22 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it("detects release refs and keeps branch refs out of release-only logic", () => {
     expect(looksLikeReleaseVersionRef("2026.4.5")).toBe(true);
+    expect(looksLikeReleaseVersionRef("refs/tags/v2026.4.5-beta.1")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.5-beta.1")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.7-1")).toBe(true);
     expect(looksLikeReleaseVersionRef("main")).toBe(false);
     expect(looksLikeReleaseVersionRef("codex/cross-os-release-checks")).toBe(false);
+  });
+
+  it("normalizes full Git refs before suite and update decisions", () => {
+    expect(normalizeRequestedRef(" refs/heads/main ")).toBe("main");
+    expect(normalizeRequestedRef("refs/tags/v2026.4.14")).toBe("v2026.4.14");
+    expect(resolveRequestedSuites("both", "refs/tags/v2026.4.14")).toEqual([
+      "packaged-fresh",
+      "installer-fresh",
+      "packaged-upgrade",
+    ]);
+    expect(shouldRunMainChannelDevUpdate("refs/heads/main")).toBe(true);
   });
 
   it("skips the dev-update suite for immutable release refs", () => {

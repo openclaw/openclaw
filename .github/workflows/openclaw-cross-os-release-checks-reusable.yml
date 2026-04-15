@@ -241,6 +241,7 @@ jobs:
             --output-dir "${OUTPUT_DIR}"
 
       - name: Resolve baseline package spec
+        if: ${{ inputs.mode != 'fresh' }}
         id: baseline
         env:
           INPUT_PREVIOUS_VERSION: ${{ inputs.previous_version }}
