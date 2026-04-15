@@ -693,7 +693,7 @@ EOF
 }
 
 verify_bad_plugin_diagnostic() {
-  guest_exec grep -F "failed to load setup entry" /tmp/openclaw-parallels-linux-gateway.log
+  guest_exec bash -lc "grep -F 'failed to load setup entry' /tmp/openclaw-parallels-linux-gateway.log"
 }
 
 start_gateway_background() {
