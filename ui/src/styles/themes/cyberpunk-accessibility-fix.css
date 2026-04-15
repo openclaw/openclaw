@@ -1,0 +1,26 @@
+/* Accessibility tweaks for Cyberpunk theme (PR #66387)
+   - avoid forcing monospace globally
+   - lower overlay z-index to avoid covering modals
+*/
+:root[data-theme="cyberpunk"] body {
+  font-family: var(--font-body, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial);
+}
+:root[data-theme="cyberpunk"]::before {
+  z-index: 1000 !important;
+  opacity: 0.35;
+}
+:root[data-theme="cyberpunk"] .mono,
+:root[data-theme="cyberpunk"] code,
+:root[data-theme="cyberpunk"] pre,
+:root[data-theme="cyberpunk"] .terminal {
+  font-family: var(--mono, "JetBrains Mono", "Fira Code", "Courier New", ui-monospace, SFMono-Regular, monospace);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="cyberpunk"] .card,
+  :root[data-theme="cyberpunk"] .text-strong,
+  :root[data-theme="cyberpunk"] h1,
+  :root[data-theme="cyberpunk"] h2,
+  :root[data-theme="cyberpunk"] h3 {
+    animation: none !important;
+  }
+}

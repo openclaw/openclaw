@@ -1263,3 +1263,4 @@ select {
   outline: none;
   box-shadow: var(--focus-ring);
 }
+\n/* Accessibility fixes imported for theme PR #66387 */\n@import './themes/matrix-accessibility-fix.css';\n@import './themes/cyberpunk-accessibility-fix.css';

@@ -1,0 +1,34 @@
+/* Accessibility fixes for Matrix theme (PR #66387)
+   - increase foreground contrast for legibility
+   - avoid forcing monospace globally
+   - lower overlay z-index to avoid covering modals
+*/
+:root[data-theme="matrix"] {
+  --text: #e6ffe6; /* higher-contrast light green for body text */
+  --text-strong: #ffffff;
+  --chat-text: #e6ffe6;
+}
+:root[data-theme="matrix"] body {
+  /* Avoid forcing monospace for entire app; inherit primary font */
+  font-family: var(--font-body, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial);
+}
+:root[data-theme="matrix"]::before {
+  z-index: 1000 !important;
+  opacity: 0.25; /* slightly reduce intensity by default */
+}
+/* Scope monospace to terminals / code */
+:root[data-theme="matrix"] .mono,
+:root[data-theme="matrix"] code,
+:root[data-theme="matrix"] pre,
+:root[data-theme="matrix"] .terminal {
+  font-family: var(--mono, "JetBrains Mono", "Fira Code", "Courier New", ui-monospace, SFMono-Regular, monospace);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="matrix"] .card,
+  :root[data-theme="matrix"] .text-strong,
+  :root[data-theme="matrix"] h1,
+  :root[data-theme="matrix"] h2,
+  :root[data-theme="matrix"] h3 {
+    animation: none !important;
+  }
+}
