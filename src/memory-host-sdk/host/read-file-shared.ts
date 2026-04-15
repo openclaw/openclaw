@@ -1,3 +1,5 @@
+import type { MemoryReadResult } from "./types.js";
+
 export const DEFAULT_MEMORY_READ_LINES = 120;
 export const DEFAULT_MEMORY_READ_MAX_CHARS = 12_000;
 
