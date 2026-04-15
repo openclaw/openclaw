@@ -1,6 +1,6 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --import tsx
 
-// Executed directly via Node.js in the release workflow.
+// Executed directly via Node.js + tsx in the release workflow.
 
 import { spawn } from "node:child_process";
 import {

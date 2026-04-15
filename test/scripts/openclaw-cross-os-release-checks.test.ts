@@ -23,7 +23,7 @@ import {
   shouldRunMainChannelDevUpdate,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
-} from "../../scripts/openclaw-cross-os-release-checks.mjs";
+} from "../../scripts/openclaw-cross-os-release-checks.ts";
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
   it("treats explicit empty-string args as values instead of boolean flags", () => {
