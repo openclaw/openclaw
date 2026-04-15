@@ -97,6 +97,30 @@ function isOptionArray(x: unknown): x is Array<{ value: string; label: string }>
   );
 }
 
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_STRING_ARRAY_LEN &&
+    value.every((entry) => typeof entry === "string")
+  );
+}
+
+function isOptionalStringArray(value: unknown): boolean {
+  return value === undefined || isStringArray(value);
+}
+
 function isModalFieldRecord(entry: unknown): boolean {
   if (typeof entry !== "object" || entry === null) {
     return false;
@@ -115,6 +139,27 @@ function isModalFieldRecord(entry: unknown): boolean {
     return false;
   }
   if (e.options !== undefined && !isOptionArray(e.options)) {
+    return false;
+  }
+  if (!isOptionalString(e.description) || !isOptionalString(e.placeholder)) {
+    return false;
+  }
+  if (!isOptionalBoolean(e.required)) {
+    return false;
+  }
+  if (
+    !isOptionalFiniteNumber(e.minValues) ||
+    !isOptionalFiniteNumber(e.maxValues) ||
+    !isOptionalFiniteNumber(e.minLength) ||
+    !isOptionalFiniteNumber(e.maxLength)
+  ) {
+    return false;
+  }
+  if (
+    e.style !== undefined &&
+    e.style !== "short" &&
+    e.style !== "paragraph"
+  ) {
     return false;
   }
   return true;
@@ -137,6 +182,24 @@ function isComponentEntryRecord(entry: unknown): entry is DiscordComponentEntry 
   if (e.options !== undefined && !isOptionArray(e.options)) {
     return false;
   }
+  if (
+    !isOptionalString(e.callbackData) ||
+    !isOptionalString(e.modalId) ||
+    !isOptionalString(e.sessionKey) ||
+    !isOptionalString(e.agentId) ||
+    !isOptionalString(e.accountId) ||
+    !isOptionalString(e.messageId)
+  ) {
+    return false;
+  }
+  if (
+    !isOptionalBoolean(e.reusable) ||
+    !isOptionalStringArray(e.allowedUsers) ||
+    !isOptionalFiniteNumber(e.createdAt) ||
+    !isOptionalFiniteNumber(e.expiresAt)
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -155,6 +218,23 @@ function isModalEntryRecord(entry: unknown): entry is DiscordModalEntry {
     return false;
   }
   if (!e.fields.every(isModalFieldRecord)) {
+    return false;
+  }
+  if (
+    !isOptionalString(e.callbackData) ||
+    !isOptionalString(e.sessionKey) ||
+    !isOptionalString(e.agentId) ||
+    !isOptionalString(e.accountId) ||
+    !isOptionalString(e.messageId)
+  ) {
+    return false;
+  }
+  if (
+    !isOptionalBoolean(e.reusable) ||
+    !isOptionalStringArray(e.allowedUsers) ||
+    !isOptionalFiniteNumber(e.createdAt) ||
+    !isOptionalFiniteNumber(e.expiresAt)
+  ) {
     return false;
   }
   return true;

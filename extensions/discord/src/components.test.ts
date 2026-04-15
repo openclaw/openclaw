@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
@@ -240,6 +240,75 @@ describe("discord component registry", () => {
     });
     expect(reloadedModal?.expiresAt).toBeDefined();
     expect(existsSync(registryFile)).toBe(true);
+  });
+
+  it("drops persisted entries with invalid runtime field types while keeping valid ones", async () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "openclaw-registry-home-"));
+    registryDirCleanup.add(tempHome);
+    process.env.HOME = tempHome;
+    const registryDir = join(tempHome, ".openclaw", "cache");
+    const registryFile = join(registryDir, "discord-component-registry.json");
+    process.env.OPENCLAW_DISCORD_COMPONENT_REGISTRY_FILE = registryFile;
+    mkdirSync(registryDir, { recursive: true });
+    writeFileSync(
+      registryFile,
+      `${JSON.stringify({
+        version: 1,
+        components: [
+          {
+            id: "btn_valid",
+            kind: "button",
+            label: "Valid",
+            callbackData: "codex:ok",
+            allowedUsers: ["discord:user-1"],
+            messageId: "msg_valid",
+          },
+          {
+            id: "btn_invalid",
+            kind: "button",
+            label: "Invalid",
+            callbackData: 123,
+            allowedUsers: {},
+          },
+        ],
+        modals: [
+          {
+            id: "mdl_valid",
+            title: "Valid modal",
+            callbackData: "codex:modal",
+            allowedUsers: ["discord:user-1"],
+            fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+          },
+          {
+            id: "mdl_invalid",
+            title: "Invalid modal",
+            callbackData: 123,
+            allowedUsers: {},
+            fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+          },
+        ],
+      })}\n`,
+    );
+
+    const registry = (await import(
+      `${componentsRegistryModuleUrl}?t=invalid-runtime-fields-${Date.now()}`
+    )) as typeof import("./components-registry.js");
+
+    expect(registry.resolveDiscordComponentEntry({ id: "btn_valid", consume: false })).toMatchObject(
+      {
+        id: "btn_valid",
+        callbackData: "codex:ok",
+        allowedUsers: ["discord:user-1"],
+        messageId: "msg_valid",
+      },
+    );
+    expect(registry.resolveDiscordComponentEntry({ id: "btn_invalid", consume: false })).toBeNull();
+    expect(registry.resolveDiscordModalEntry({ id: "mdl_valid", consume: false })).toMatchObject({
+      id: "mdl_valid",
+      callbackData: "codex:modal",
+      allowedUsers: ["discord:user-1"],
+    });
+    expect(registry.resolveDiscordModalEntry({ id: "mdl_invalid", consume: false })).toBeNull();
   });
 
   it("treats invalid registry paths as best-effort instead of throwing", async () => {
