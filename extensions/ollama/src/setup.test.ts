@@ -2,6 +2,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-helpers/http.js";
+import { resetOllamaModelShowInfoCacheForTest } from "./provider-models.js";
 import {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
@@ -93,6 +94,7 @@ describe("ollama setup", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     upsertAuthProfileWithLock.mockClear();
+    resetOllamaModelShowInfoCacheForTest();
   });
 
   it("puts suggested local model first in local mode", async () => {
@@ -122,6 +124,7 @@ describe("ollama setup", () => {
 
     expect(modelIds?.[0]).toBe("kimi-k2.5:cloud");
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe("https://ollama.com");
+    expect(result.config.models?.providers?.ollama?.apiKey).toBe("test-ollama-key");
     expect(result.credential).toBe("test-ollama-key");
   });
 

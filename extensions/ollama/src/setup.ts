@@ -377,6 +377,7 @@ function applyOllamaProviderConfig(
   baseUrl: string,
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
+  apiKey: SecretInput = "OLLAMA_API_KEY",
 ): OpenClawConfig {
   return {
     ...cfg,
@@ -388,8 +389,7 @@ function applyOllamaProviderConfig(
         ollama: {
           baseUrl,
           api: "ollama",
-          // pragma: allowlist secret
-          apiKey: "OLLAMA_API_KEY",
+          apiKey,
           models: buildOllamaModelsConfig(modelNames, discoveredModelsByName),
         },
       },
@@ -531,6 +531,8 @@ export async function promptAndConfigureOllama(params: {
         params.cfg,
         OLLAMA_CLOUD_BASE_URL,
         OLLAMA_SUGGESTED_MODELS_CLOUD,
+        undefined,
+        credential,
       ),
     };
   }
