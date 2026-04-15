@@ -32,6 +32,32 @@ describe("plugin-sdk qa-runner-runtime", () => {
     expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
+  it("loads the qa-lab runtime public surface through the public runner seam", async () => {
+    const runtimeSurface = {
+      defaultQaRuntimeModelForMode: vi.fn(),
+      startQaLiveLaneGateway: vi.fn(),
+    };
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(runtimeSurface);
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(module.loadQaRuntimeModule()).toBe(runtimeSurface);
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "qa-lab",
+      artifactBasename: "runtime-api.js",
+    });
+  });
+
+  it("reports the qa runtime as unavailable when the qa-lab surface is missing", async () => {
+    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
+      throw new Error("Unable to resolve bundled plugin public surface qa-lab/runtime-api.js");
+    });
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(module.isQaRuntimeAvailable()).toBe(false);
+  });
+
   it("returns activated runner registrations declared in plugin manifests", async () => {
     const register = vi.fn((qa: Command) => qa);
     loadPluginManifestRegistry.mockReturnValue({
