@@ -1484,7 +1484,8 @@
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1",
       "rolldown": "1.0.0-rc.10",
-      "@discordjs/voice": "0.19.2"
+      "@discordjs/voice": "0.19.2",
+      "follow-redirects": "1.16.0"
     },
     "onlyBuiltDependencies": [
       "@discordjs/opus",

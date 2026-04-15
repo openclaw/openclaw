@@ -28,6 +28,7 @@ minimumReleaseAgeExclude:
   - "@oxlint/*"
   - "@oxfmt/*"
   - "axios@1.15.0"
+  - "follow-redirects"
   - "discord-api-types"
   - "rolldown"
   - "sqlite-vec"
