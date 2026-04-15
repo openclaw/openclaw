@@ -238,6 +238,17 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("preserves literal JSON tool-call examples at sentence end", () => {
+      expectVisibleText(
+        'Use <tool_call>{"name":"exec"}</tool_call>',
+        'Use <tool_call>{"name":"exec"}</tool_call>',
+      );
+      expectVisibleText(
+        'Type <tool_call>{"name":"exec"}</tool_call>.',
+        'Type <tool_call>{"name":"exec"}</tool_call>.',
+      );
+    });
+
     it("strips broad prose that wraps JSON tool-call payloads", () => {
       expectVisibleText('show <tool_call>{"name":"exec"}</tool_call> xml', "show  xml");
     });
@@ -400,6 +411,15 @@ describe("stripAssistantInternalScaffolding", () => {
         "```",
         "",
         "Visible text",
+      ].join("\n");
+      expectVisibleText(input, input);
+    });
+
+    it("preserves tool-call tags inside indented code blocks", () => {
+      const input = [
+        "Code:",
+        '    <tool_call>{"name":"find","arguments":{"query":"x"}}</tool_call>',
+        "After",
       ].join("\n");
       expectVisibleText(input, input);
     });

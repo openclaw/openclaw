@@ -395,10 +395,24 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("preserves literal JSON tool-call examples at sentence end", () => {
+    const text = 'Use <tool_call>{"name":"exec"}</tool_call>';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("strips broad prose that wraps JSON tool-call payloads", () => {
     expect(sanitizeUserFacingText('show <tool_call>{"name":"exec"}</tool_call> xml')).toBe(
       "show xml",
     );
+  });
+
+  it("preserves tool-call tags inside indented code blocks", () => {
+    const text = [
+      "Code:",
+      '    <tool_call>{"name":"find","arguments":{"query":"x"}}</tool_call>',
+      "After",
+    ].join("\n");
+    expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
   it("does not collapse unrelated formatting when no tool tags are stripped", () => {

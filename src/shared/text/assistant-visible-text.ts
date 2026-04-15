@@ -210,6 +210,9 @@ const LITERAL_TOOL_TAG_AFTER_RE =
   /^[^.!?\n]*\b(?:close|closing|docs?|documentation|example|literal(?:ly)?|syntax|tag)\b/i;
 const LITERAL_TOOL_PAYLOAD_AFTER_RE =
   /^[^.!?\n]*\b(?:docs?|documentation|example|literal(?:ly)?|syntax)\b/i;
+const LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE =
+  /(?:^|[\n.!?]\s*)(?:use|type|write|include|document)\b[^.!?\n]*$/i;
+const LITERAL_TOOL_PAYLOAD_SENTENCE_END_AFTER_RE = /^[\s)"'`.,:;!?]*(?:$|\n)/;
 
 function looksLikeLiteralToolTagContext(text: string, start: number, end: number): boolean {
   const before = text.slice(Math.max(0, start - 80), start);
@@ -220,7 +223,16 @@ function looksLikeLiteralToolTagContext(text: string, start: number, end: number
 function looksLikeLiteralToolPayloadContext(text: string, start: number, end: number): boolean {
   const before = text.slice(Math.max(0, start - 80), start);
   const after = text.slice(end, Math.min(text.length, end + 80));
-  return LITERAL_TOOL_TAG_BEFORE_RE.test(before) && LITERAL_TOOL_PAYLOAD_AFTER_RE.test(after);
+  return (
+    (LITERAL_TOOL_TAG_BEFORE_RE.test(before) && LITERAL_TOOL_PAYLOAD_AFTER_RE.test(after)) ||
+    (LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE.test(before) &&
+      LITERAL_TOOL_PAYLOAD_SENTENCE_END_AFTER_RE.test(after))
+  );
+}
+
+function isOnIndentedMarkdownCodeLine(text: string, index: number): boolean {
+  const lineStart = text.lastIndexOf("\n", Math.max(0, index - 1)) + 1;
+  return text.startsWith("    ", lineStart) || text.startsWith("\t", lineStart);
 }
 
 function findLiteralToolBlockEnd(
@@ -280,7 +292,10 @@ export function stripToolCallXmlTags(text: string, options?: StripToolCallXmlTag
     if (text[idx] !== "<") {
       continue;
     }
-    if (!inToolCallBlock && isInsideCode(idx, codeRegions)) {
+    if (
+      !inToolCallBlock &&
+      (isInsideCode(idx, codeRegions) || isOnIndentedMarkdownCodeLine(text, idx))
+    ) {
       continue;
     }
 
