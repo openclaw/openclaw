@@ -11,7 +11,6 @@ import {
   resolveAgentExplicitModelPrimary,
   resolveAgentSkillsFilter,
   resolveAgentIncludedWorkDirs,
-  resolveAgentSkillsFilter,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,

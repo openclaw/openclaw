@@ -94,8 +94,7 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
     const error = await tool
       .execute("recovery-outside", {
         path: outsideFile,
-        oldText: "missing",
-        newText: "updated",
+        edits: [{ oldText: "missing", newText: "updated" }],
       })
       .catch((err: unknown) => err);
 

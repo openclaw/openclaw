@@ -3196,7 +3196,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 items: {
                   type: "string",
                 },
-                title: "Skills",
+                title: "Default Agent Skill Filter",
                 description:
                   "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
               },
@@ -5584,6 +5584,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   items: {
                     type: "string",
                   },
+                  title: "Agent Included Work Dirs",
+                  description:
+                    "Optional list of additional work directories accessible to this agent.",
                 },
                 agentDir: {
                   type: "string",
@@ -24668,11 +24671,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
       tags: ["performance", "automation"],
     },
-    "agents.defaults.skills": {
-      label: "Skills",
-      help: "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
-      tags: ["advanced"],
-    },
     "agents.defaults.workspace": {
       label: "Workspace",
       help: "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
@@ -26863,6 +26861,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].skills": {
       label: "Agent Skill Filter",
       help: "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.skills": {
+      label: "Default Agent Skill Filter",
+      help: "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
       tags: ["advanced"],
     },
     "agents.list[].identity.avatar": {
