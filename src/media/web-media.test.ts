@@ -274,6 +274,35 @@ describe("loadWebMedia", () => {
     },
   );
 
+  it.each([
+    {
+      label: "CSV",
+      fileName: "punctuation.csv",
+      contentType: "text/csv",
+      body: ",,,,,,,,,,\n",
+    },
+    {
+      label: "Markdown",
+      fileName: "punctuation.md",
+      contentType: "text/markdown",
+      body: "---\n***\n> > >\n",
+    },
+  ])(
+    "loads valid punctuation-heavy %s files when host-read capability is enabled",
+    async ({ fileName, contentType, body }) => {
+      const textFile = path.join(fixtureRoot, fileName);
+      await fs.writeFile(textFile, Buffer.from(body, "utf8"));
+      const result = await loadWebMedia(textFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      });
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe(contentType);
+    },
+  );
+
   it("rejects traversal-style canvas media paths before filesystem access", async () => {
     await expect(
       loadWebMedia(`${CANVAS_HOST_PATH}/documents/../collection.media/tiny.png`),

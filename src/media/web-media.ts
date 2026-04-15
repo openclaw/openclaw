@@ -90,7 +90,6 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
 // Markdown, so host-read needs an explicit "this really decodes as text" fallback.
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
 const MB = 1024 * 1024;
-const WORDISH_CHAR = /[\p{L}\p{N}]/u;
 
 function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
   if (!buffer || buffer.length < 2) {
@@ -124,18 +123,16 @@ function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefin
   return undefined;
 }
 
-function getTextStats(text: string): { printableRatio: number; wordishRatio: number } {
+function getTextStats(text: string): { printableRatio: number } {
   if (!text) {
-    return { printableRatio: 0, wordishRatio: 0 };
+    return { printableRatio: 0 };
   }
   let printable = 0;
   let control = 0;
-  let wordish = 0;
   for (const char of text) {
     const code = char.codePointAt(0) ?? 0;
     if (code === 9 || code === 10 || code === 13 || code === 32) {
       printable += 1;
-      wordish += 1;
       continue;
     }
     if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
@@ -143,15 +140,12 @@ function getTextStats(text: string): { printableRatio: number; wordishRatio: num
       continue;
     }
     printable += 1;
-    if (WORDISH_CHAR.test(char)) {
-      wordish += 1;
-    }
   }
   const total = printable + control;
   if (total === 0) {
-    return { printableRatio: 0, wordishRatio: 0 };
+    return { printableRatio: 0 };
   }
-  return { printableRatio: printable / total, wordishRatio: wordish / total };
+  return { printableRatio: printable / total };
 }
 
 function decodeHostReadText(buffer: Buffer): string | undefined {
@@ -193,8 +187,8 @@ function isValidatedHostReadText(buffer?: Buffer): boolean {
   if (text === undefined) {
     return false;
   }
-  const { printableRatio, wordishRatio } = getTextStats(text);
-  return printableRatio > 0.95 && wordishRatio > 0.2;
+  const { printableRatio } = getTextStats(text);
+  return printableRatio > 0.95;
 }
 
 function formatMb(bytes: number, digits = 2): string {
