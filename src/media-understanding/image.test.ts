@@ -18,6 +18,8 @@ const hoisted = vi.hoisted(() => ({
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
+  prepareProviderDynamicModelMock: vi.fn(async () => {}),
+  resolveModelWithRegistryMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -29,6 +31,8 @@ const {
   discoverModelsMock,
   fetchMock,
   registerProviderStreamForModelMock,
+  prepareProviderDynamicModelMock,
+  resolveModelWithRegistryMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -63,6 +67,17 @@ vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
+vi.mock("../plugins/provider-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  )),
+  prepareProviderDynamicModel: prepareProviderDynamicModelMock,
+}));
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModelWithRegistry: resolveModelWithRegistryMock,
+}));
+
 const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
@@ -93,6 +108,12 @@ describe("describeImageWithModel", () => {
         baseUrl: "https://api.minimax.io/anthropic",
       })),
     });
+    resolveModelWithRegistryMock.mockImplementation(
+      // Delegate to modelRegistry.find so tests that override discoverModelsMock
+      // automatically get the right model through resolveModelWithRegistry.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ({ modelRegistry, provider, modelId }: any) => modelRegistry.find(provider, modelId),
+    );
   });
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
@@ -148,6 +169,12 @@ describe("describeImageWithModel", () => {
         baseUrl: "https://api.minimax.io/anthropic",
       })),
     });
+    resolveModelWithRegistryMock.mockImplementation(({ modelId }: { modelId: string }) => ({
+      provider: "minimax-portal",
+      id: modelId,
+      input: ["text", "image"],
+      baseUrl: "https://api.minimax.io/anthropic",
+    }));
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "anthropic-messages",
@@ -197,6 +224,12 @@ describe("describeImageWithModel", () => {
         baseUrl: "https://chatgpt.com/backend-api",
       })),
     });
+    resolveModelWithRegistryMock.mockImplementation(({ modelId }: { modelId: string }) => ({
+      provider: "openai-codex",
+      id: modelId,
+      input: ["text", "image"],
+      baseUrl: "https://chatgpt.com/backend-api",
+    }));
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "openai-codex-responses",
@@ -425,6 +458,12 @@ describe("describeImageWithModel", () => {
       };
     });
     discoverModelsMock.mockReturnValue({ find: findMock });
+    resolveModelWithRegistryMock.mockImplementation(
+      ({ modelRegistry }: { modelRegistry: { find: Function } }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (modelRegistry.find as any)("google", "gemini-3-flash-preview");
+      },
+    );
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "google-generative-ai",
@@ -473,6 +512,12 @@ describe("describeImageWithModel", () => {
       };
     });
     discoverModelsMock.mockReturnValue({ find: findMock });
+    resolveModelWithRegistryMock.mockImplementation(
+      ({ modelRegistry }: { modelRegistry: { find: Function } }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (modelRegistry.find as any)("google", "gemini-3.1-flash-lite-preview");
+      },
+    );
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "google-generative-ai",
@@ -507,5 +552,80 @@ describe("describeImageWithModel", () => {
       }),
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
+  });
+
+  it("calls prepareProviderDynamicModel before model registry lookup", async () => {
+    const findMock = vi.fn(() => ({
+      provider: "lmstudio",
+      id: "google/gemma-4-e2b",
+      input: ["text", "image"],
+      baseUrl: "http://127.0.0.1:1234",
+    }));
+    discoverModelsMock.mockReturnValue({ find: findMock });
+    resolveModelWithRegistryMock.mockImplementation(
+      ({ modelRegistry }: { modelRegistry: { find: Function } }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (modelRegistry.find as any)("lmstudio", "google/gemma-4-e2b");
+      },
+    );
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "lmstudio",
+      model: "google/gemma-4-e2b",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "vision ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://127.0.0.1:1234",
+              api: "anthropic-messages",
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      provider: "lmstudio",
+      model: "google/gemma-4-e2b",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "vision ok",
+      model: "google/gemma-4-e2b",
+    });
+    expect(prepareProviderDynamicModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "lmstudio",
+        config: expect.objectContaining({
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://127.0.0.1:1234",
+                api: "anthropic-messages",
+              },
+            },
+          },
+        }),
+        context: expect.objectContaining({
+          provider: "lmstudio",
+          modelId: "google/gemma-4-e2b",
+          providerConfig: {
+            baseUrl: "http://127.0.0.1:1234",
+            api: "anthropic-messages",
+          },
+        }),
+      }),
+    );
+    expect(findMock).toHaveBeenCalledAfter(prepareProviderDynamicModelMock);
   });
 });
