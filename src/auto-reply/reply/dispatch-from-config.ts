@@ -352,7 +352,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     sessionKey: acpDispatchSessionKey,
     workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
-    messageProvider: ctx.Provider ?? ctx.Surface,
+    messageProvider: ttsChannel,
     accountId: ctx.AccountId,
     groupId,
     groupChannel: ctx.GroupChannel,
