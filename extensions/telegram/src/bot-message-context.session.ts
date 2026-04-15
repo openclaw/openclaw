@@ -442,7 +442,7 @@ export async function buildTelegramInboundContextPayload(params: {
   });
 
   if (visibleReplyTarget && shouldLogVerbose()) {
-    const preview = visibleReplyTarget.body.replace(/\s+/g, " ").slice(0, 120);
+    const preview = (visibleReplyTarget.body ?? "").replace(/\s+/g, " ").slice(0, 120);
     logVerbose(
       `telegram reply-context: replyToId=${visibleReplyTarget.id} replyToSender=${visibleReplyTarget.sender} replyToBody="${preview}"`,
     );
