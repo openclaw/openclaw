@@ -687,6 +687,7 @@ export async function runAgentTurnWithFallback(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
+  const primaryModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
@@ -1329,7 +1330,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: `⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.${buildContextOverflowHint({ primaryModel: params.followupRun.run.model ?? "unknown", currentModel: fallbackModel ?? params.followupRun.run.model ?? "unknown", provider: params.followupRun.run.provider, cfg: runtimeConfig })}`,
+            text: `⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.${buildContextOverflowHint({ primaryModel: primaryModel ?? "unknown", currentModel: fallbackModel ?? primaryModel ?? "unknown", provider: fallbackProvider ?? params.followupRun.run.provider, cfg: runtimeConfig })}`,
           },
         };
       }
@@ -1443,7 +1444,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: `⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.${buildContextOverflowHint({ primaryModel: params.followupRun.run.model ?? "unknown", currentModel: fallbackModel ?? params.followupRun.run.model ?? "unknown", provider: params.followupRun.run.provider, cfg: runtimeConfig })}`,
+            text: `⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.${buildContextOverflowHint({ primaryModel: primaryModel ?? "unknown", currentModel: fallbackModel ?? primaryModel ?? "unknown", provider: fallbackProvider ?? params.followupRun.run.provider, cfg: runtimeConfig })}`,
           },
         };
       }
