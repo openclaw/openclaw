@@ -114,6 +114,15 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResultTerminalRuns?: Set<string>;
 };
 
+function isActiveChatFlow(host: GatewayHost & Partial<ChatState>): boolean {
+  return (
+    host.chatLoading === true ||
+    host.chatSending === true ||
+    Boolean(host.chatRunId) ||
+    (host.chatStream !== null && host.chatStream !== undefined)
+  );
+}
+
 function isTerminalChatState(
   state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
 ): state is "final" | "aborted" | "error" {
@@ -420,6 +429,9 @@ function handleSessionMessageGatewayEvent(
 ) {
   const sessionKey = payload?.sessionKey?.trim();
   if (!sessionKey || sessionKey !== host.sessionKey) {
+    return;
+  }
+  if (isActiveChatFlow(host as GatewayHost & Partial<ChatState>)) {
     return;
   }
   void loadChatHistory(host as unknown as ChatState);
