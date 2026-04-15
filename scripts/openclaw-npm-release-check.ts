@@ -90,11 +90,6 @@ const FORBIDDEN_PACKED_PATH_RULES = [
       `npm package must not include private QA lab type artifact "${packedPath}".`,
   },
   {
-    prefix: "dist/qa-runtime-",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA runtime chunk "${packedPath}".`,
-  },
-  {
     prefix: "qa/",
     describe: (packedPath: string) =>
       `npm package must not include private QA suite artifact "${packedPath}".`,

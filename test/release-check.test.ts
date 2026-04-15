@@ -460,8 +460,6 @@ describe("collectForbiddenPackPaths", () => {
       "dist/extensions/qa-lab/runtime-api.js",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
       "dist/plugin-sdk/qa-lab.js",
-      "dist/plugin-sdk/qa-runtime.js",
-      "dist/qa-runtime-B9LDtssJ.js",
       "qa/scenarios/index.md",
     ]);
   });

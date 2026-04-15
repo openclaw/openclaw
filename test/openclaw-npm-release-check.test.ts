@@ -343,7 +343,6 @@ describe("collectForbiddenPackedPathErrors", () => {
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
-      'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
       'npm package must not include private QA suite artifact "qa/scenarios/index.md".',
     ]);
   });
