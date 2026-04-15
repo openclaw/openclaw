@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+import { detectCronDenialToken, resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
 
 describe("resolveCronPayloadOutcome", () => {
   it("uses the last non-empty non-error payload as summary and output", () => {
@@ -133,5 +133,79 @@ describe("resolveCronPayloadOutcome", () => {
       { text: "Working on it..." },
       { text: "Final weather summary" },
     ]);
+  });
+
+  it("classifies runs as fatal when the summary narrates SYSTEM_RUN_DENIED without an isError payload (#67172)", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "I attempted to run the script but got: SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command.",
+        },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    // Both the exact host token and the case-insensitive phrase match; the
+    // exact-case scan runs first so SYSTEM_RUN_DENIED is what gets surfaced.
+    expect(result.embeddedRunError).toContain("SYSTEM_RUN_DENIED");
+  });
+
+  it("classifies runs as fatal when a later payload narrates INVALID_REQUEST without an isError flag", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "starting step 1" },
+        { text: "INVALID_REQUEST: command refused at gateway" },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("INVALID_REQUEST");
+  });
+
+  it("classifies runs as fatal when the summary says 'approval cannot safely bind' (case-insensitive)", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "Approval cannot safely bind this interpreter/runtime command.",
+        },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("approval cannot safely bind");
+  });
+
+  it("leaves benign runs untouched even when they mention the word 'denied' in other contexts", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Requested access to the public library catalog." }],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+  });
+});
+
+describe("detectCronDenialToken", () => {
+  it("returns the exact host-emitted token when present", () => {
+    expect(detectCronDenialToken("x SYSTEM_RUN_DENIED y")).toBe("SYSTEM_RUN_DENIED");
+    expect(detectCronDenialToken("INVALID_REQUEST: nope")).toBe("INVALID_REQUEST");
+  });
+
+  it("does not match host tokens in different case (case-sensitive by design)", () => {
+    expect(detectCronDenialToken("system_run_denied")).toBeUndefined();
+  });
+
+  it("matches human phrases case-insensitively", () => {
+    expect(detectCronDenialToken("Approval cannot safely bind command.")).toBe(
+      "approval cannot safely bind",
+    );
+    expect(detectCronDenialToken("the runtime denied this call")).toBe("runtime denied");
+    expect(detectCronDenialToken("the script Was Denied by the gateway")).toBe("was denied");
+  });
+
+  it("returns undefined for empty / benign text", () => {
+    expect(detectCronDenialToken(undefined)).toBeUndefined();
+    expect(detectCronDenialToken("")).toBeUndefined();
+    expect(detectCronDenialToken("all good")).toBeUndefined();
   });
 });

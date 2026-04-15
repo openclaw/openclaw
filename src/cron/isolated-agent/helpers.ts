@@ -21,6 +21,40 @@ export type CronPayloadOutcome = {
   embeddedRunError?: string;
 };
 
+/**
+ * Narrative denial tokens that indicate a cron run was refused at the
+ * approval-binding or runtime layer, even when no payload has `isError: true`.
+ * Case-sensitive tokens (emitted by the host / gateway) are checked first; the
+ * rest are matched case-insensitively because they are human phrasing.
+ *
+ * The matched token is returned so callers can surface it as
+ * `lastErrorReason` without having to re-scan the text.
+ */
+const CRON_DENIAL_TOKENS_EXACT = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
+const CRON_DENIAL_TOKENS_CASE_INSENSITIVE = [
+  "approval cannot safely bind",
+  "runtime denied",
+  "was denied",
+] as const;
+
+export function detectCronDenialToken(text: string | undefined): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  for (const token of CRON_DENIAL_TOKENS_EXACT) {
+    if (text.includes(token)) {
+      return token;
+    }
+  }
+  const lower = text.toLowerCase();
+  for (const token of CRON_DENIAL_TOKENS_CASE_INSENSITIVE) {
+    if (lower.includes(token)) {
+      return token;
+    }
+  }
+  return undefined;
+}
+
 export function pickSummaryFromOutput(text: string | undefined) {
   const clean = (text ?? "").trim();
   if (!clean) {
@@ -157,7 +191,17 @@ export function resolveCronPayloadOutcome(params: {
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  const hasFatalErrorPayloadByFlag = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  // Also treat runs as errored when the final summary / output narrates a
+  // denial that never propagated to a payload `isError` flag. Covers the
+  // `SYSTEM_RUN_DENIED` / `INVALID_REQUEST` / "approval cannot safely bind"
+  // path that `runIsolatedAgentJob` surfaces without marking any payload.
+  const firstPayloadText = params.payloads[0]?.text ?? "";
+  const summaryDenialToken =
+    detectCronDenialToken(fallbackSummary) ??
+    detectCronDenialToken(fallbackOutputText) ??
+    detectCronDenialToken(firstPayloadText);
+  const hasFatalErrorPayload = hasFatalErrorPayloadByFlag || Boolean(summaryDenialToken);
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
@@ -189,6 +233,12 @@ export function resolveCronPayloadOutcome(params: {
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
+  const embeddedRunError = hasFatalErrorPayload
+    ? (lastErrorPayloadText ??
+      (summaryDenialToken
+        ? `cron isolated run denied (detected \"${summaryDenialToken}\" in summary)`
+        : "cron isolated run returned an error payload"))
+    : undefined;
   return {
     summary,
     outputText,
@@ -197,8 +247,6 @@ export function resolveCronPayloadOutcome(params: {
     deliveryPayloads: resolvedDeliveryPayloads,
     deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
-    embeddedRunError: hasFatalErrorPayload
-      ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
-      : undefined,
+    embeddedRunError,
   };
 }
