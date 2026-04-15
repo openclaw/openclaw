@@ -119,7 +119,7 @@ function walkJavaScriptFiles(rootDir) {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (fullPath.split(path.sep).includes("extensions")) {
+        if (entry.name === "node_modules") {
           continue;
         }
         queue.push(fullPath);
