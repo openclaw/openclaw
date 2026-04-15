@@ -36,6 +36,7 @@ function renderCompose(params: {
   bindUiDist: boolean;
   gatewayPort: number;
   qaLabPort: number;
+  gatewayToken: string;
   includeQaLabUi: boolean;
 }) {
   const imageBlock = renderImageBlock(params);
@@ -88,6 +89,7 @@ ${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
       OPENCLAW_SKIP_CANVAS_HOST: "1"
       OPENCLAW_PROFILE: ""
+      OPENCLAW_QA_CONTROL_UI_TOKEN: "${params.gatewayToken}"
     command:
       - node
       - dist/index.js
@@ -285,6 +287,7 @@ export async function writeQaDockerHarnessFiles(params: {
         bindUiDist,
         gatewayPort,
         qaLabPort,
+        gatewayToken,
         includeQaLabUi,
       }),
       "utf8",

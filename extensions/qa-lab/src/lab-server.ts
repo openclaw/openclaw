@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer,
@@ -386,13 +386,64 @@ function rewriteEmbeddedControlUiHeaders(
   return rewritten;
 }
 
+function rewriteProxyAuthorizationValue(params: {
+  value: string;
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
+}): string {
+  if (!params.bootstrapToken || !params.gatewayToken) {
+    return params.value;
+  }
+  const match = /^\s*Bearer\s+(.+)\s*$/i.exec(params.value);
+  if (!match) {
+    return params.value;
+  }
+  return match[1] === params.bootstrapToken ? `Bearer ${params.gatewayToken}` : params.value;
+}
+
+function rewriteProxyAuthorizationHeader(params: {
+  value: string | string[] | undefined;
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
+}): string | string[] | undefined {
+  if (!params.value) {
+    return params.value;
+  }
+  if (Array.isArray(params.value)) {
+    return params.value.map((value) =>
+      rewriteProxyAuthorizationValue({
+        value,
+        bootstrapToken: params.bootstrapToken,
+        gatewayToken: params.gatewayToken,
+      }),
+    );
+  }
+  return rewriteProxyAuthorizationValue({
+    value: params.value,
+    bootstrapToken: params.bootstrapToken,
+    gatewayToken: params.gatewayToken,
+  });
+}
+
 async function proxyHttpRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   target: URL;
   pathname: string;
   search: string;
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
 }) {
+  const upstreamHeaders: Record<string, string | string[] | number | undefined> = {
+    ...params.req.headers,
+    host: params.target.host,
+  };
+  upstreamHeaders.authorization = rewriteProxyAuthorizationHeader({
+    value: params.req.headers.authorization,
+    bootstrapToken: params.bootstrapToken,
+    gatewayToken: params.gatewayToken,
+  });
+
   const client = params.target.protocol === "https:" ? httpsRequest : httpRequest;
   const upstreamReq = client(
     {
@@ -401,10 +452,7 @@ async function proxyHttpRequest(params: {
       port: params.target.port || (params.target.protocol === "https:" ? 443 : 80),
       method: params.req.method,
       path: rewriteControlUiProxyPath(params.pathname, params.search),
-      headers: {
-        ...params.req.headers,
-        host: params.target.host,
-      },
+      headers: upstreamHeaders,
     },
     (upstreamRes) => {
       params.res.writeHead(
@@ -435,6 +483,8 @@ function proxyUpgradeRequest(params: {
   socket: Duplex;
   head: Buffer;
   target: URL;
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
 }) {
   const requestUrl = new URL(params.req.url ?? "/", "http://127.0.0.1");
   const port = Number(params.target.port || (params.target.protocol === "https:" ? 443 : 80));
@@ -454,7 +504,18 @@ function proxyUpgradeRequest(params: {
   for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
     const name = params.req.rawHeaders[index];
     const value = params.req.rawHeaders[index + 1] ?? "";
-    if (normalizeLowercaseStringOrEmpty(name) === "host") {
+    const normalized = normalizeLowercaseStringOrEmpty(name);
+    if (normalized === "host") {
+      continue;
+    }
+    if (normalized === "authorization") {
+      headerLines.push(
+        `${name}: ${rewriteProxyAuthorizationValue({
+          value,
+          bootstrapToken: params.bootstrapToken,
+          gatewayToken: params.gatewayToken,
+        })}`,
+      );
       continue;
     }
     headerLines.push(`${name}: ${value}`);
@@ -580,6 +641,11 @@ export async function startQaLabServer(
     ? new URL(params.controlUiProxyTarget)
     : null;
   let controlUiUrl = params?.controlUiUrl?.trim() || null;
+  let controlUiProxyAuthToken =
+    params?.controlUiProxyAuthToken?.trim() ||
+    process.env.OPENCLAW_QA_CONTROL_UI_TOKEN?.trim() ||
+    null;
+  let controlUiEmbeddedToken = controlUiProxyAuthToken ? randomUUID() : null;
   let gateway:
     | {
         cfg: OpenClawConfig;
@@ -673,6 +739,8 @@ export async function startQaLabServer(
           target: controlUiProxyTarget,
           pathname: url.pathname,
           search: url.search,
+          bootstrapToken: controlUiEmbeddedToken,
+          gatewayToken: controlUiProxyAuthToken,
         });
         return;
       }
@@ -683,11 +751,15 @@ export async function startQaLabServer(
           ? `${publicBaseUrl}/control-ui/`
           : controlUiUrl;
         const publicControlUiUrl = stripUrlFragment(resolvedControlUiUrl);
+        const controlUiEmbeddedUrl =
+          publicControlUiUrl && controlUiProxyTarget && controlUiEmbeddedToken
+            ? `${publicControlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(controlUiEmbeddedToken)}`
+            : publicControlUiUrl;
         writeJson(res, 200, {
           baseUrl: publicBaseUrl,
           latestReport,
           controlUiUrl: publicControlUiUrl,
-          controlUiEmbeddedUrl: publicControlUiUrl,
+          controlUiEmbeddedUrl,
           kickoffTask: scenarioCatalog.kickoffTask,
           scenarios: scenarioCatalog.scenarios,
           defaults: bootstrapDefaults,
@@ -1003,6 +1075,8 @@ export async function startQaLabServer(
       socket,
       head,
       target: controlUiProxyTarget,
+      bootstrapToken: controlUiEmbeddedToken,
+      gatewayToken: controlUiProxyAuthToken,
     });
   });
 
@@ -1010,11 +1084,17 @@ export async function startQaLabServer(
     baseUrl: publicBaseUrl,
     listenUrl,
     state,
-    setControlUi(next: { controlUiUrl?: string | null; controlUiProxyTarget?: string | null }) {
+    setControlUi(next: {
+      controlUiUrl?: string | null;
+      controlUiProxyTarget?: string | null;
+      controlUiProxyAuthToken?: string | null;
+    }) {
       controlUiUrl = next.controlUiUrl?.trim() || null;
       controlUiProxyTarget = next.controlUiProxyTarget?.trim()
         ? new URL(next.controlUiProxyTarget)
         : null;
+      controlUiProxyAuthToken = next.controlUiProxyAuthToken?.trim() || null;
+      controlUiEmbeddedToken = controlUiProxyAuthToken ? randomUUID() : null;
     },
     setScenarioRun(next: Omit<QaLabScenarioRun, "counts"> | null) {
       latestScenarioRun = next ? withQaLabRunCounts(next) : null;

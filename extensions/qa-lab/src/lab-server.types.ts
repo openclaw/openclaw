@@ -50,6 +50,7 @@ export type QaLabServerStartParams = {
   advertisePort?: number;
   controlUiUrl?: string;
   controlUiProxyTarget?: string;
+  controlUiProxyAuthToken?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
   embeddedGateway?: string;
@@ -63,6 +64,7 @@ export type QaLabServerHandle = {
   setControlUi: (next: {
     controlUiUrl?: string | null;
     controlUiProxyTarget?: string | null;
+    controlUiProxyAuthToken?: string | null;
   }) => void;
   setScenarioRun: (next: Omit<QaLabScenarioRun, "counts"> | null) => void;
   setLatestReport: (next: QaLabLatestReport | null) => void;

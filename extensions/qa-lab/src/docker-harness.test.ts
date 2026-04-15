@@ -68,6 +68,7 @@ describe("qa docker harness", () => {
     expect(compose).toContain("OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json");
     expect(compose).toContain("OPENCLAW_STATE_DIR: /tmp/openclaw/state");
     expect(compose).toContain('OPENCLAW_NO_RESPAWN: "1"');
+    expect(compose).toContain('OPENCLAW_QA_CONTROL_UI_TOKEN: "qa-token"');
 
     const envExample = await readFile(path.join(outputDir, ".env.example"), "utf8");
     expect(envExample).toContain("OPENCLAW_GATEWAY_TOKEN=qa-token");

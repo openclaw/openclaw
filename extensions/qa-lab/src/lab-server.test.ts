@@ -276,6 +276,87 @@ describe("qa-lab server", () => {
     expect(await rootResponse.text()).toContain("Control UI");
   });
 
+  it("mints proxy-scoped bootstrap auth and rewrites it to gateway bearer auth", async () => {
+    const gatewayToken = "gateway-token";
+    const upstream = createServer(async (req, res) => {
+      if ((req.url ?? "/") === "/healthz") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, status: "live" }));
+        return;
+      }
+      if ((req.url ?? "/") === "/tools/invoke") {
+        if (req.headers.authorization !== `Bearer ${gatewayToken}`) {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "Unauthorized" }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end("control-ui");
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => resolve());
+    });
+    cleanups.push(
+      async () =>
+        await new Promise<void>((resolve, reject) =>
+          upstream.close((error) => (error ? reject(error) : resolve())),
+        ),
+    );
+
+    const address = upstream.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected upstream address");
+    }
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      advertiseHost: "127.0.0.1",
+      advertisePort: 43124,
+      controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
+      controlUiProxyAuthToken: gatewayToken,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const bootstrap = (await (await fetchWithRetry(`${lab.listenUrl}/api/bootstrap`)).json()) as {
+      controlUiEmbeddedUrl: string | null;
+    };
+    expect(bootstrap.controlUiEmbeddedUrl).toBeTruthy();
+    expect(bootstrap.controlUiEmbeddedUrl).toContain("#token=");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain(gatewayToken);
+
+    const embeddedToken = decodeURIComponent(
+      new URL(String(bootstrap.controlUiEmbeddedUrl)).hash.match(/token=([^&]+)/)?.[1] ?? "",
+    );
+    expect(embeddedToken).toBeTruthy();
+    expect(embeddedToken).not.toBe(gatewayToken);
+
+    const noAuth = await fetch(`${lab.listenUrl}/control-ui/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(noAuth.status).toBe(401);
+
+    const withBootstrapToken = await fetch(`${lab.listenUrl}/control-ui/tools/invoke`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${embeddedToken}`,
+      },
+      body: "{}",
+    });
+    expect(withBootstrapToken.status).toBe(200);
+    expect(await withBootstrapToken.json()).toEqual({ ok: true });
+  });
+
   it("reports startup reachability for proxy and gateway", async () => {
     const proxy = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
