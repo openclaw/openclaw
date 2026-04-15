@@ -38,7 +38,6 @@ Docs: https://docs.openclaw.ai
 - BlueBubbles/inbound: add a persistent file-backed GUID dedupe so MessagePoller webhook replays after BB Server restart or reconnect no longer cause the agent to re-reply to already-handled messages. (#19176, #12053, #66816) Thanks @omarshahine.
 - Secrets/plugins/status: align SecretRef inspect-vs-strict handling across plugin preload, read-only status/agents surfaces, and runtime auth paths so unresolved refs no longer crash read-only CLI flows while runtime-required non-env refs stay strict. (#66818) Thanks @joshavant.
 - Memory/dreaming: stop ordinary transcripts that merely quote the dream-diary prompt from being classified as internal dreaming runs and silently dropped from session recall ingestion. (#66852) Thanks @gumadeiras.
-- Control UI/chat: keep optimistic user message cards visible during active sends by deferring same-session history reloads until the active run ends, including aborted and errored runs. (#66997) Thanks @scotthuang and @vincentkoc.
 - Telegram/documents: sanitize binary reply context and ZIP-like archive extraction so `.epub` and `.mobi` uploads can no longer leak raw binary into prompt context through reply metadata or archive-to-`text/plain` coercion. (#66877) Thanks @martinfrancois.
 - Telegram/native commands: restore plugin-registry-backed auto defaults for native commands and native skills so Telegram slash commands keep registering when `commands.native` and `commands.nativeSkills` stay on `auto`. (#66843) Thanks @kashevk0.
 - OpenRouter/Qwen3: parse `reasoning_details` stream deltas as thinking content without skipping same-chunk tool calls, so Qwen3 replies no longer fail empty on OpenRouter and mixed reasoning/tool-call chunks still execute normally. (#66905) Thanks @bladin.
@@ -49,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - CLI/plugins: stop `--dangerously-force-unsafe-install` plugin installs from falling back to hook-pack installs after security scan failures, while still preserving non-security fallback behavior for real hook packs. (#58909) Thanks @hxy91819.
 - Claude CLI/sessions: classify `No conversation found with session ID` as `session_expired` so expired CLI-backed conversations clear the stale binding and recover on the next turn. (#65028) thanks @Ivan-Fn.
 - Context Engine: gracefully fall back to the legacy engine when a third-party context engine plugin fails at resolution time (unregistered id, factory throw, or contract violation), preventing a full gateway outage on every channel. (#66930) Thanks @openperf.
+- Control UI/chat: keep optimistic user message cards visible during active sends by deferring same-session history reloads until the active run ends, including aborted and errored runs. (#66997) Thanks @scotthuang and @vincentkoc.
 
 ## 2026.4.14
 
