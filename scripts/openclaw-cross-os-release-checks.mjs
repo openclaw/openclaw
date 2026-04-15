@@ -729,6 +729,7 @@ async function runInstallerFreshSuite(params) {
   const lane = createLaneState("installer-fresh");
   const cleanup = [];
   const installVersion = resolveBaselineVersion(params.baselineSpec);
+  const usesManagedGateway = shouldUseManagedGatewayService();
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
     const installerServer = await startStaticFileServer({
@@ -760,11 +761,11 @@ async function runInstallerFreshSuite(params) {
       cliPath: freshShell.cliPath,
       env,
       providerConfig: params.providerConfig,
-      installDaemon: process.platform !== "linux",
+      installDaemon: usesManagedGateway,
       logPath: join(params.logsDir, "installer-fresh-onboard.log"),
     });
 
-    if (process.platform === "linux") {
+    if (!usesManagedGateway) {
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
         lane,
@@ -885,6 +886,7 @@ async function runDevUpdateSuite(params) {
   const lane = createLaneState("dev-update");
   const cleanup = [];
   const installVersion = resolveBaselineVersion(params.baselineSpec);
+  const usesManagedGateway = shouldUseManagedGatewayService();
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
     const installerServer = await startStaticFileServer({
@@ -929,15 +931,12 @@ async function runDevUpdateSuite(params) {
     });
 
     logLanePhase(lane, "update-status");
-    const updateStatus = await runInstalledCli({
-      cliPath: updatedShell.cliPath,
-      args: ["update", "status", "--json"],
+    const verifiedShell = await ensureDevUpdateGitInstall({
+      lane,
       env,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "dev-update-status.log"),
-      timeoutMs: 2 * 60 * 1000,
+      cliPath: updatedShell.cliPath,
+      logsDir: params.logsDir,
     });
-    verifyDevUpdateStatus(updateStatus.stdout);
 
     if (process.platform === "win32") {
       logLanePhase(lane, "windows-toolchain");
@@ -951,18 +950,18 @@ async function runDevUpdateSuite(params) {
     logLanePhase(lane, "onboard");
     await runOnboardWithInstalledCli({
       lane,
-      cliPath: updatedShell.cliPath,
+      cliPath: verifiedShell.cliPath,
       env,
       providerConfig: params.providerConfig,
-      installDaemon: process.platform !== "linux",
+      installDaemon: usesManagedGateway,
       logPath: join(params.logsDir, "dev-update-onboard.log"),
     });
 
-    if (process.platform === "linux") {
+    if (!usesManagedGateway) {
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
         lane,
-        cliPath: updatedShell.cliPath,
+        cliPath: verifiedShell.cliPath,
         env,
         logPath: join(params.logsDir, "dev-update-gateway.log"),
       });
@@ -970,7 +969,7 @@ async function runDevUpdateSuite(params) {
       logLanePhase(lane, "gateway-status");
       await waitForInstalledGateway({
         lane,
-        cliPath: updatedShell.cliPath,
+        cliPath: verifiedShell.cliPath,
         env,
         logPath: join(params.logsDir, "dev-update-gateway-status.log"),
       });
@@ -978,7 +977,7 @@ async function runDevUpdateSuite(params) {
       logLanePhase(lane, "gateway-ready");
       await ensureManagedGatewayReady({
         lane,
-        cliPath: updatedShell.cliPath,
+        cliPath: verifiedShell.cliPath,
         env,
         logPath: join(params.logsDir, "dev-update-gateway-ready.log"),
       });
@@ -992,7 +991,7 @@ async function runDevUpdateSuite(params) {
 
     logLanePhase(lane, "models-set");
     await runInstalledModelsSet({
-      cliPath: updatedShell.cliPath,
+      cliPath: verifiedShell.cliPath,
       env,
       providerConfig: params.providerConfig,
       cwd: lane.homeDir,
@@ -1001,7 +1000,7 @@ async function runDevUpdateSuite(params) {
 
     logLanePhase(lane, "agent-turn");
     const agent = await runInstalledAgentTurn({
-      cliPath: updatedShell.cliPath,
+      cliPath: verifiedShell.cliPath,
       env,
       cwd: lane.homeDir,
       label: "dev-update",
@@ -1013,7 +1012,7 @@ async function runDevUpdateSuite(params) {
       logLanePhase(lane, "discord-roundtrip");
       discordStatus = await maybeRunDiscordRoundtrip({
         lane,
-        cliPath: updatedShell.cliPath,
+        cliPath: verifiedShell.cliPath,
         env,
         logPath: join(params.logsDir, "dev-update-discord.log"),
       });
@@ -1096,6 +1095,10 @@ function buildInstallerEnv(lane, providerMeta, providerSecretValue) {
     NODE_OPTIONS: "--max-old-space-size=6144",
     [providerMeta.secretEnv]: providerSecretValue,
   };
+}
+
+export function shouldUseManagedGatewayService(platform = process.platform) {
+  return platform === "win32";
 }
 
 function shouldRestoreBundledPluginRuntimeDeps() {
@@ -1244,6 +1247,105 @@ async function runInstalledCli(params) {
     logPath: params.logPath,
     timeoutMs: params.timeoutMs,
     check: params.check ?? true,
+  });
+}
+
+async function readInstalledUpdateStatus(params) {
+  return runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["update", "status", "--json"],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+}
+
+async function ensureDevUpdateGitInstall(params) {
+  try {
+    const updateStatus = await readInstalledUpdateStatus({
+      cliPath: params.cliPath,
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: join(params.logsDir, "dev-update-status.log"),
+    });
+    verifyDevUpdateStatus(updateStatus.stdout);
+    return { cliPath: params.cliPath };
+  } catch (initialError) {
+    await repairLegacyDevUpdateInstall({
+      lane: params.lane,
+      env: params.env,
+      logsDir: params.logsDir,
+    });
+    const repairedShell = await verifyFreshShellCommand({
+      lane: params.lane,
+      env: params.env,
+      expectedNeedle: "OpenClaw",
+      logPath: join(params.logsDir, "dev-update-repair-shell.log"),
+    });
+    try {
+      const repairedStatus = await readInstalledUpdateStatus({
+        cliPath: repairedShell.cliPath,
+        cwd: params.lane.homeDir,
+        env: params.env,
+        logPath: join(params.logsDir, "dev-update-status-after-repair.log"),
+      });
+      verifyDevUpdateStatus(repairedStatus.stdout);
+      return repairedShell;
+    } catch (repairError) {
+      throw new Error(
+        `Dev update repair did not produce a git install. Initial failure: ${formatError(initialError)}. Repair failure: ${formatError(repairError)}`,
+        { cause: repairError },
+      );
+    }
+  }
+}
+
+async function repairLegacyDevUpdateInstall(params) {
+  const gitRoot = join(params.lane.homeDir, "openclaw");
+  rmSync(gitRoot, { recursive: true, force: true });
+
+  await runCommand(
+    gitCommand(),
+    [
+      "clone",
+      "--depth",
+      "1",
+      "--branch",
+      "main",
+      "https://github.com/openclaw/openclaw.git",
+      gitRoot,
+    ],
+    {
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: join(params.logsDir, "dev-update-repair-git-clone.log"),
+      timeoutMs: updateTimeoutMs(),
+    },
+  );
+  await runCommand(pnpmCommand(), ["install"], {
+    cwd: gitRoot,
+    env: params.env,
+    logPath: join(params.logsDir, "dev-update-repair-deps.log"),
+    timeoutMs: updateTimeoutMs(),
+  });
+  await runCommand(pnpmCommand(), ["build"], {
+    cwd: gitRoot,
+    env: params.env,
+    logPath: join(params.logsDir, "dev-update-repair-build.log"),
+    timeoutMs: updateTimeoutMs(),
+  });
+  await runCommand(pnpmCommand(), ["ui:build"], {
+    cwd: gitRoot,
+    env: params.env,
+    logPath: join(params.logsDir, "dev-update-repair-ui-build.log"),
+    timeoutMs: updateTimeoutMs(),
+  });
+  await runCommand(npmCommand(), ["install", "-g", gitRoot, "--no-fund", "--no-audit"], {
+    cwd: gitRoot,
+    env: params.env,
+    logPath: join(params.logsDir, "dev-update-repair-global-install.log"),
+    timeoutMs: updateTimeoutMs(),
   });
 }
 

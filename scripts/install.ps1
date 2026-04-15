@@ -29,7 +29,7 @@ function Write-Host {
         "error" { "$ERROR✗$NC $Message" }
         default { "$MUTED·$NC $Message" }
     }
-    Microsoft.PowerShell.Host\Write-Host $msg
+    Microsoft.PowerShell.Utility\Write-Host $msg
 }
 
 function Write-Banner {

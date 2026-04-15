@@ -6,6 +6,7 @@ import {
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
+  shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
 } from "../../scripts/openclaw-cross-os-release-checks.mjs";
 
@@ -92,6 +93,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveStaticFileContentType("scripts/install.sh")).toBe("text/plain; charset=utf-8");
     expect(resolveStaticFileContentType("scripts/install.ps1")).toBe("text/plain; charset=utf-8");
     expect(resolveStaticFileContentType("openclaw-2026.4.14.tgz")).toBe("application/octet-stream");
+  });
+
+  it("uses managed gateway services only on native Windows runners", () => {
+    expect(shouldUseManagedGatewayService("win32")).toBe(true);
+    expect(shouldUseManagedGatewayService("darwin")).toBe(false);
+    expect(shouldUseManagedGatewayService("linux")).toBe(false);
   });
 
   it("accepts a git main dev-channel update status payload", () => {
