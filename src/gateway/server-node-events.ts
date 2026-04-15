@@ -578,11 +578,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      if (!sessionKeyRaw) {
-        return;
-      }
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      // Always route exec events to the node's system session to prevent feedback loops.
+      // The sessionKey in the payload points to the session that initiated the exec,
+      // but exec completion from system-level operations should go to the node's
+      // system session, not back to the originating session.
+      const { canonicalKey: sessionKey } = loadSessionEntry(`node-${nodeId}`);
 
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.
