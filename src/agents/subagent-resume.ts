@@ -800,7 +800,7 @@ export async function redispatchSubagentRunAfterRestart(
         childSessionKey,
         redispatchIdem,
       });
-      const response = await callGateway<{ runId?: string }>({
+      const response = await callGateway({
         method: "agent",
         params: {
           message: childTaskMessage,
@@ -831,12 +831,7 @@ export async function redispatchSubagentRunAfterRestart(
     // Wait for the new dispatch to complete.
     try {
       const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-      const wait = await callGateway<{
-        status?: string;
-        startedAt?: number;
-        endedAt?: number;
-        error?: string;
-      }>({
+      const wait = await callGateway({
         method: "agent.wait",
         params: { runId: newRunId, timeoutMs },
         timeoutMs: timeoutMs + 10_000,
