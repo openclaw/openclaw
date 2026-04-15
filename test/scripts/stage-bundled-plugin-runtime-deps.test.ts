@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  collectRuntimeDependencyInstallManifest,
   collectRuntimeDependencyInstallSpecs,
   stageBundledPluginRuntimeDeps,
 } from "../../scripts/stage-bundled-plugin-runtime-deps.mjs";
@@ -76,6 +77,38 @@ describe("stageBundledPluginRuntimeDeps", () => {
         { rootNodeModulesDir: "/tmp/node_modules" },
       ),
     ).toThrow(/disallowed runtime dependency spec for direct: file:\/etc\/passwd/u);
+  });
+
+  it("writes required and optional fallback deps into one manifest", () => {
+    const rootNodeModulesDir = createTempDir("openclaw-runtime-deps-manifest-");
+    fs.mkdirSync(path.join(rootNodeModulesDir, "direct"), { recursive: true });
+    fs.mkdirSync(path.join(rootNodeModulesDir, "optional"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootNodeModulesDir, "direct", "package.json"),
+      '{ "name": "direct", "version": "1.2.3" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(rootNodeModulesDir, "optional", "package.json"),
+      '{ "name": "optional", "version": "2.0.4" }\n',
+      "utf8",
+    );
+
+    expect(
+      collectRuntimeDependencyInstallManifest(
+        {
+          dependencies: { direct: "^1.0.0" },
+          optionalDependencies: { optional: "~2.0.0" },
+        },
+        { pluginId: "fixture-plugin", rootNodeModulesDir },
+      ),
+    ).toEqual({
+      name: "openclaw-runtime-deps-fixture-plugin",
+      private: true,
+      version: "0.0.0",
+      dependencies: { direct: "1.2.3" },
+      optionalDependencies: { optional: "2.0.4" },
+    });
   });
 
   it("skips restaging when runtime deps stamp matches the sanitized manifest", () => {

@@ -644,9 +644,8 @@ function collectRuntimeDependencyGroups(packageJson) {
   };
 }
 
-export function collectRuntimeDependencyInstallSpecs(packageJson, params = {}) {
-  const runtimeGroups = collectRuntimeDependencyGroups(packageJson);
-  const buildSpecs = (group) =>
+function resolvePinnedRuntimeDependencyGroup(group, params = {}) {
+  return Object.fromEntries(
     Object.entries(group).map(([name, version]) => {
       const pinnedVersion = resolvePinnedRuntimeDependencyVersion({
         depName: name,
@@ -654,20 +653,50 @@ export function collectRuntimeDependencyInstallSpecs(packageJson, params = {}) {
         rootNodeModulesDir: params.rootNodeModulesDir ?? path.join(process.cwd(), "node_modules"),
         spec: version,
       });
-      return `${name}@${pinnedVersion}`;
-    });
+      return [name, pinnedVersion];
+    }),
+  );
+}
+
+function resolvePinnedRuntimeDependencyGroups(packageJson, params = {}) {
+  const runtimeGroups = collectRuntimeDependencyGroups(packageJson);
   return {
-    dependencies: buildSpecs(runtimeGroups.dependencies),
-    optionalDependencies: buildSpecs(runtimeGroups.optionalDependencies),
+    dependencies: resolvePinnedRuntimeDependencyGroup(runtimeGroups.dependencies, params),
+    optionalDependencies: resolvePinnedRuntimeDependencyGroup(
+      runtimeGroups.optionalDependencies,
+      params,
+    ),
   };
 }
 
-function createRuntimeInstallManifest(pluginId) {
+export function collectRuntimeDependencyInstallManifest(packageJson, params = {}) {
+  const pinnedGroups = resolvePinnedRuntimeDependencyGroups(packageJson, params);
+  return createRuntimeInstallManifest(params.pluginId ?? "runtime-deps", pinnedGroups);
+}
+
+export function collectRuntimeDependencyInstallSpecs(packageJson, params = {}) {
+  const manifest = collectRuntimeDependencyInstallManifest(packageJson, params);
+  const buildSpecs = (group) =>
+    Object.entries(group ?? {}).map(([name, version]) => `${name}@${String(version)}`);
   return {
+    dependencies: buildSpecs(manifest.dependencies),
+    optionalDependencies: buildSpecs(manifest.optionalDependencies),
+  };
+}
+
+function createRuntimeInstallManifest(pluginId, pinnedGroups) {
+  const manifest = {
     name: `openclaw-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}`,
     private: true,
     version: "0.0.0",
   };
+  if (Object.keys(pinnedGroups.dependencies).length > 0) {
+    manifest.dependencies = pinnedGroups.dependencies;
+  }
+  if (Object.keys(pinnedGroups.optionalDependencies).length > 0) {
+    manifest.optionalDependencies = pinnedGroups.optionalDependencies;
+  }
+  return manifest;
 }
 
 function runNpmInstall(params) {
@@ -865,13 +894,17 @@ function installPluginRuntimeDeps(params) {
     os.tmpdir(),
     `openclaw-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}-`,
   );
-  const installSpecs = collectRuntimeDependencyInstallSpecs(packageJson, {
+  const pinnedGroups = resolvePinnedRuntimeDependencyGroups(packageJson, {
     directDependencyPackageRoot,
     rootNodeModulesDir: path.join(repoRoot, "node_modules"),
   });
+  const requiredDependencyCount = Object.keys(pinnedGroups.dependencies).length;
   try {
-    writeJson(path.join(tempInstallDir, "package.json"), createRuntimeInstallManifest(pluginId));
-    if (installSpecs.dependencies.length > 0) {
+    writeJson(
+      path.join(tempInstallDir, "package.json"),
+      createRuntimeInstallManifest(pluginId, pinnedGroups),
+    );
+    if (requiredDependencyCount > 0 || Object.keys(pinnedGroups.optionalDependencies).length > 0) {
       runNpmInstall({
         cwd: tempInstallDir,
         npmRunner: resolveNpmRunner({
@@ -880,43 +913,24 @@ function installPluginRuntimeDeps(params) {
             "--omit=dev",
             "--ignore-scripts",
             "--legacy-peer-deps",
-            "--no-save",
             "--package-lock=false",
             "--silent",
-            ...installSpecs.dependencies,
           ],
         }),
       });
     }
-    if (installSpecs.optionalDependencies.length > 0) {
-      try {
-        runNpmInstall({
-          cwd: tempInstallDir,
-          npmRunner: resolveNpmRunner({
-            npmArgs: [
-              "install",
-              "--omit=dev",
-              "--ignore-scripts",
-              "--legacy-peer-deps",
-              "--no-save",
-              "--package-lock=false",
-              "--silent",
-              ...installSpecs.optionalDependencies,
-            ],
-          }),
-        });
-      } catch {
-        // Optional runtime deps should not block package staging on unsupported platforms.
-      }
-    }
     const stagedNodeModulesDir = path.join(tempInstallDir, "node_modules");
-    if (!fs.existsSync(stagedNodeModulesDir)) {
+    if (requiredDependencyCount > 0 && !fs.existsSync(stagedNodeModulesDir)) {
       throw new Error(
-        `failed to stage bundled runtime deps for ${pluginId}: explicit install produced no node_modules directory`,
+        `failed to stage bundled runtime deps for ${pluginId}: explicit npm install produced no node_modules directory`,
       );
     }
-    pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
-    replaceDir(nodeModulesDir, stagedNodeModulesDir);
+    if (fs.existsSync(stagedNodeModulesDir)) {
+      pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
+      replaceDir(nodeModulesDir, stagedNodeModulesDir);
+    } else {
+      removePathIfExists(nodeModulesDir);
+    }
     writeJson(stampPath, {
       fingerprint,
       generatedAt: new Date().toISOString(),
