@@ -27,7 +27,8 @@ export function getActivePluginChannelRegistryFromState(): ActivePluginChannelRe
   if (countChannels(activeRegistry) > 0) {
     return activeRegistry;
   }
-  return pinnedRegistry ?? activeRegistry;
+  // If neither registry has channels, return null instead of an empty registry
+  return null;
 }
 
 export function getActivePluginChannelRegistryVersionFromState(): number {
