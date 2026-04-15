@@ -37,7 +37,7 @@ const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
-vi.mock("../../plugin-sdk/qa-lab.js", () => ({ registerQaLabCli }));
+vi.mock("openclaw/plugin-sdk/qa-lab", () => ({ registerQaLabCli }));
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;

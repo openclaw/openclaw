@@ -1,4 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Command } from "commander";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -71,12 +74,41 @@ export function isQaRuntimeAvailable(): boolean {
   }
 }
 
+function resolvePrivateQaRunnerManifestEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv | undefined {
+  if (env.OPENCLAW_ENABLE_PRIVATE_QA_CLI !== "1") {
+    return undefined;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
+  if (!packageRoot) {
+    return undefined;
+  }
+  const sourceExtensionsDir = path.join(packageRoot, "extensions");
+  if (
+    !fs.existsSync(path.join(packageRoot, ".git")) ||
+    !fs.existsSync(path.join(packageRoot, "src")) ||
+    !fs.existsSync(sourceExtensionsDir)
+  ) {
+    return undefined;
+  }
+  return {
+    ...env,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: sourceExtensionsDir,
+  };
+}
+
 function listDeclaredQaRunnerPlugins(): Array<
   PluginManifestRecord & {
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }
 > {
-  return loadPluginManifestRegistry({ cache: true })
+  const env = resolvePrivateQaRunnerManifestEnv();
+  return loadPluginManifestRegistry({ cache: true, ...(env ? { env } : {}) })
     .plugins.filter(
       (
         plugin,

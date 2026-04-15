@@ -397,7 +397,7 @@ export async function runNodeMain(params = {}) {
     path: path.join(deps.cwd, sourceRoot),
   }));
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
-  deps.privateQaDistEntry = path.join(deps.distRoot, "extensions", "qa-lab", "cli.js");
+  deps.privateQaDistEntry = path.join(deps.distRoot, "plugin-sdk", "qa-lab.js");
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, buildQaRuntimeEnv, resolveQaControlUiRoot } from "./gateway-child.js";
 
@@ -624,7 +625,7 @@ describe("resolveQaControlUiRoot", () => {
 });
 
 describe("qa bundled plugin dir", () => {
-  it("prefers the built bundled plugin tree when present", async () => {
+  it("prefers a built bundled plugin when present", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-root-"));
     cleanups.push(async () => {
       await rm(repoRoot, { recursive: true, force: true });
@@ -646,9 +647,33 @@ describe("qa bundled plugin dir", () => {
       "utf8",
     );
     await mkdir(path.join(repoRoot, "extensions", "qa-channel"), { recursive: true });
+    await writeFile(path.join(repoRoot, "extensions", "qa-channel", "package.json"), "{}", "utf8");
 
-    expect(__testing.resolveQaBundledPluginsSourceRoot(repoRoot)).toBe(
-      path.join(repoRoot, "dist", "extensions"),
+    expect(
+      __testing.resolveQaBundledPluginSourceDir({
+        repoRoot,
+        pluginId: "qa-channel",
+      }),
+    ).toBe(
+      path.join(repoRoot, "dist", "extensions", "qa-channel"),
+    );
+  });
+
+  it("falls back to the source bundled plugin when no built copy exists", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-source-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "extensions", "qa-channel"), { recursive: true });
+    await writeFile(path.join(repoRoot, "extensions", "qa-channel", "package.json"), "{}", "utf8");
+
+    expect(
+      __testing.resolveQaBundledPluginSourceDir({
+        repoRoot,
+        pluginId: "qa-channel",
+      }),
+    ).toBe(
+      path.join(repoRoot, "extensions", "qa-channel"),
     );
   });
 
@@ -657,10 +682,47 @@ describe("qa bundled plugin dir", () => {
     cleanups.push(async () => {
       await rm(repoRoot, { recursive: true, force: true });
     });
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "openclaw",
+          type: "module",
+          exports: {
+            "./plugin-sdk/account-id": {
+              default: "./dist/plugin-sdk/account-id.js",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
     await mkdir(path.join(repoRoot, "dist", "extensions", "qa-channel"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "extensions", "speech-core"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "extensions", "unused-plugin"), { recursive: true });
+    await mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "plugin-sdk", "account-id.js"),
+      "export const normalizeAccountId = (value) => value.toLowerCase();\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "qa-channel", "package.json"),
+      JSON.stringify({ name: "@openclaw/qa-channel", type: "module" }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "qa-channel", "index.js"),
+      [
+        'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";',
+        'export const accountId = normalizeAccountId("QA");',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
     await writeFile(path.join(repoRoot, "dist", "shared-chunk-abc123.js"), "export {};\n", "utf8");
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-target-"));
     cleanups.push(async () => {
@@ -691,6 +753,20 @@ describe("qa bundled plugin dir", () => {
     expect(stagedRoot).toBe(
       path.join(repoRoot, ".artifacts", "qa-runtime", path.basename(tempRoot)),
     );
+    expect(stagedRoot).not.toBeNull();
+    if (!stagedRoot) {
+      throw new Error("expected staged runtime root");
+    }
+    await expect(readFile(path.join(stagedRoot, "package.json"), "utf8")).resolves.toContain(
+      '"name": "openclaw"',
+    );
+    await expect(
+      import(
+        `${pathToFileURL(path.join(bundledPluginsDir, "qa-channel", "index.js")).href}?t=${Date.now()}`
+      ),
+    ).resolves.toMatchObject({
+      accountId: "qa",
+    });
     expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "speech-core"))).isDirectory()).toBe(true);
@@ -706,6 +782,94 @@ describe("qa bundled plugin dir", () => {
         ),
       ),
     ).resolves.toBeTruthy();
+  });
+
+  it("stages source-only bundled plugins into a repo-like runtime root with node_modules", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-source-stage-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "openclaw",
+          type: "module",
+          exports: {
+            "./plugin-sdk/account-id": {
+              default: "./dist/plugin-sdk/account-id.js",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "plugin-sdk", "account-id.js"),
+      "export const normalizeAccountId = (value) => value.toLowerCase();\n",
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "extensions", "qa-channel"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "extensions", "qa-channel", "package.json"),
+      JSON.stringify({ name: "@openclaw/qa-channel", type: "module" }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "extensions", "qa-channel", "index.ts"),
+      [
+        'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";',
+        'import { marker } from "fake-dep";',
+        'export const accountId = `${normalizeAccountId("QA")}:${marker}`;',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "node_modules", "fake-dep"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "node_modules", "fake-dep", "package.json"),
+      JSON.stringify({ name: "fake-dep", type: "module" }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "node_modules", "fake-dep", "index.js"),
+      'export const marker = "ok";\n',
+      "utf8",
+    );
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-source-target-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+
+    const { bundledPluginsDir, stagedRoot } = await __testing.createQaBundledPluginsDir({
+      repoRoot,
+      tempRoot,
+      allowedPluginIds: ["qa-channel"],
+    });
+
+    expect(bundledPluginsDir).toBe(
+      path.join(
+        repoRoot,
+        ".artifacts",
+        "qa-runtime",
+        path.basename(tempRoot),
+        "dist",
+        "extensions",
+      ),
+    );
+    if (!stagedRoot) {
+      throw new Error("expected staged runtime root");
+    }
+    await expect(
+      import(
+        `${pathToFileURL(path.join(bundledPluginsDir, "qa-channel", "index.ts")).href}?t=${Date.now()}`
+      ),
+    ).resolves.toMatchObject({
+      accountId: "qa:ok",
+    });
   });
 
   it("maps cli backend provider ids to their owning bundled plugin ids", async () => {
@@ -855,7 +1019,6 @@ describe("qa bundled plugin dir", () => {
     await expect(
       __testing.resolveQaRuntimeHostVersion({
         repoRoot,
-        bundledPluginsSourceRoot: bundledRoot,
         allowedPluginIds: ["memory-core", "qa-channel"],
       }),
     ).resolves.toBe("2026.4.8");
@@ -888,7 +1051,6 @@ describe("qa bundled plugin dir", () => {
     await expect(
       __testing.resolveQaRuntimeHostVersion({
         repoRoot,
-        bundledPluginsSourceRoot: bundledRoot,
         allowedPluginIds: ["qa-channel"],
       }),
     ).resolves.toBe("2026.4.9");
