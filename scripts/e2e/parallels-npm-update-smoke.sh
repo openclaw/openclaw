@@ -67,6 +67,7 @@ die() {
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
+    wait "$SERVER_PID" 2>/dev/null || true
   fi
   rm -rf "$MAIN_TGZ_DIR"
 }
@@ -662,7 +663,7 @@ start_timeout_guard() {
       sleep 2
       kill -9 "$pid" >/dev/null 2>&1 || true
     fi
-  ) &
+  ) >&2 &
   printf '%s\n' "$!"
 }
 
@@ -670,6 +671,7 @@ stop_timeout_guard() {
   local pid="${1:-}"
   [[ -n "$pid" ]] || return 0
   kill "$pid" >/dev/null 2>&1 || true
+  wait "$pid" 2>/dev/null || true
 }
 
 extract_log_progress() {
