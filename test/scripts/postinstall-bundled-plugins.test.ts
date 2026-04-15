@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createNestedNpmInstallEnv,
+  pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
@@ -29,6 +30,31 @@ async function writePluginPackage(
     path.join(pluginDir, "package.json"),
     `${JSON.stringify(packageJson, null, 2)}\n`,
   );
+  const packageRoot =
+    path.basename(path.dirname(extensionsDir)) === "dist"
+      ? path.dirname(path.dirname(extensionsDir))
+      : path.dirname(extensionsDir);
+  const distRoot = path.join(packageRoot, "dist");
+  try {
+    const distEntries = await fs.readdir(distRoot, { recursive: true });
+    await writeDistInventory(
+      packageRoot,
+      distEntries
+        .filter((entry) => typeof entry === "string")
+        .map((entry) => path.join("dist", entry).replace(/\\/g, "/"))
+        .toSorted((left, right) => left.localeCompare(right)),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+async function writeDistInventory(packageRoot: string, files: string[]) {
+  const inventoryPath = path.join(packageRoot, "dist", "postinstall-inventory.json");
+  await fs.mkdir(path.dirname(inventoryPath), { recursive: true });
+  await fs.writeFile(inventoryPath, `${JSON.stringify(files, null, 2)}\n`);
 }
 
 describe("bundled plugin postinstall", () => {
@@ -179,6 +205,26 @@ describe("bundled plugin postinstall", () => {
     });
 
     await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).resolves.toBeTruthy();
+  });
+
+  it("prunes stale dist files from packaged installs", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-");
+    const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");
+    const staleFile = path.join(packageRoot, "dist", "channel-CJUAgRQR.js");
+    await fs.mkdir(path.dirname(currentFile), { recursive: true });
+    await fs.writeFile(currentFile, "export {};\n");
+    await fs.writeFile(staleFile, "export {};\n");
+    await writeDistInventory(packageRoot, ["dist/channel-BOa4MfoC.js"]);
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/channel-CJUAgRQR.js"]);
+
+    await expect(fs.stat(currentFile)).resolves.toBeTruthy();
+    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
