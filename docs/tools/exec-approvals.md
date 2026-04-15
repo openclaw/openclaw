@@ -163,6 +163,16 @@ It is intentionally local-only. If you need to change gateway-host or node-host 
 remotely, continue using `openclaw approvals set --gateway` or
 `openclaw approvals set --node <id|name|ip>`.
 
+Safer no-prompt setup:
+
+```bash
+openclaw exec-policy preset hands-free
+```
+
+This keeps `security=allowlist` while setting `ask=off` and `askFallback=deny`.
+Allowlisted commands run without prompts, and non-allowlisted commands fail closed.
+Use this when you want known-safe automation to keep moving without opening broad host access.
+
 For a node host, apply the same approvals file on that node instead:
 
 ```bash

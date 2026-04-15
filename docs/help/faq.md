@@ -1553,7 +1553,7 @@ for usage/billing and raise limits as needed.
 
     - `off`: hides tagline text but keeps the banner title/version line.
     - `default`: uses `All your chats, one OpenClaw.` every time.
-    - `random`: rotating funny/seasonal taglines (default behavior).
+    - `random`: rotating neutral/seasonal taglines (default behavior).
     - If you want no banner at all, set env `OPENCLAW_HIDE_BANNER=1`.
 
   </Accordion>

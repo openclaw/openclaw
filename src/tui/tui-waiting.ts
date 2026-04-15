@@ -5,16 +5,12 @@ type MinimalTheme = {
 };
 
 export const defaultWaitingPhrases = [
-  "flibbertigibbeting",
-  "kerfuffling",
-  "dillydallying",
-  "twiddling thumbs",
-  "noodling",
-  "bamboozling",
-  "moseying",
-  "hobnobbing",
-  "pondering",
-  "conjuring",
+  "waiting for the model",
+  "checking for tool output",
+  "stream still open",
+  "watching gateway events",
+  "working on the request",
+  "waiting for next update",
 ];
 
 export function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases) {
@@ -46,6 +42,6 @@ export function buildWaitingStatusMessage(params: {
   phrases?: string[];
 }) {
   const phrase = pickWaitingPhrase(params.tick, params.phrases);
-  const cute = shimmerText(params.theme, `${phrase}…`, params.tick);
-  return `${cute} • ${params.elapsed} | ${params.connectionStatus}`;
+  const activity = shimmerText(params.theme, `${phrase}...`, params.tick);
+  return `${activity} • working ${params.elapsed} | ${params.connectionStatus}`;
 }

@@ -319,6 +319,25 @@ describe("exec-policy CLI", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
   });
 
+  it("applies the hands-free preset without broadening beyond the allowlist", async () => {
+    await runExecPolicyCommand(["exec-policy", "preset", "hands-free", "--json"]);
+
+    expect(mocks.getConfig().tools?.exec).toEqual({
+      host: "gateway",
+      security: "allowlist",
+      ask: "off",
+    });
+    expect(mocks.getApprovals().defaults).toEqual({
+      security: "allowlist",
+      ask: "off",
+      askFallback: "deny",
+    });
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ preset: "hands-free" }),
+      0,
+    );
+  });
+
   it("sets explicit values without requiring a preset", async () => {
     await runExecPolicyCommand([
       "exec-policy",

@@ -26,7 +26,7 @@ Related:
 Use it when you want to:
 
 - inspect the local requested policy, host approvals file, and effective merge
-- apply a local preset such as YOLO or deny-all
+- apply a local preset such as YOLO, hands-free, or deny-all
 - synchronize local `tools.exec.*` and local `~/.openclaw/exec-approvals.json`
 
 Examples:
@@ -36,6 +36,7 @@ openclaw exec-policy show
 openclaw exec-policy show --json
 
 openclaw exec-policy preset yolo
+openclaw exec-policy preset hands-free
 openclaw exec-policy preset cautious --json
 
 openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full
@@ -148,6 +149,16 @@ openclaw exec-policy preset yolo
 That local shortcut updates both the requested local `tools.exec.*` config and the
 local approvals defaults together. It is equivalent in intent to the manual two-step
 setup above, but only for the local machine.
+
+Safer no-prompt shortcut:
+
+```bash
+openclaw exec-policy preset hands-free
+```
+
+This sets gateway exec to `security=allowlist`, `ask=off`, and `askFallback=deny`.
+Allowlisted commands run without approval prompts. Non-allowlisted commands are denied
+instead of prompting or falling back to full access.
 
 ## Allowlist helpers
 
