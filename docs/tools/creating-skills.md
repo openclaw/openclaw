@@ -87,7 +87,7 @@ The YAML frontmatter supports these fields:
 
 | Field                               | Required | Description                                 |
 | ----------------------------------- | -------- | ------------------------------------------- |
-| `name`                              | Yes      | Unique identifier (snake_case)              |
+| `name`                              | Yes      | Unique identifier (kebab-case)              |
 | `description`                       | Yes      | One-line description shown to the agent     |
 | `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.) |
 | `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                   |
