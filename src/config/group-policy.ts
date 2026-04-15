@@ -68,7 +68,6 @@ export type GroupToolPolicySender = {
   messageProvider?: string | null;
 };
 
-type SenderKeyType = "id" | "e164" | "username" | "name" | "channel";
 type CompiledSenderPolicy = {
   buckets: SenderPolicyBuckets;
   wildcard?: GroupToolPolicyConfig;
@@ -82,9 +81,9 @@ const compiledToolsBySenderCache = new WeakMap<
 
 type ParsedSenderPolicyKey =
   | { kind: "wildcard" }
-  | { kind: "typed"; type: SenderKeyType; key: string };
+  | { kind: "typed"; type: ToolsBySenderKeyType; key: string };
 
-type SenderPolicyBuckets = Record<ToolsBySenderKeyType | "channel", Map<string, GroupToolPolicyConfig>>;
+type SenderPolicyBuckets = Record<ToolsBySenderKeyType, Map<string, GroupToolPolicyConfig>>;
 
 function normalizeSenderKey(
   value: string,
@@ -100,7 +99,7 @@ function normalizeSenderKey(
   return normalizeLowercaseStringOrEmpty(withoutAt);
 }
 
-function normalizeTypedSenderKey(value: string, type: SenderKeyType): string {
+function normalizeTypedSenderKey(value: string, type: ToolsBySenderKeyType): string {
   return normalizeSenderKey(value, {
     stripLeadingAt: type === "username",
   });
@@ -119,7 +118,7 @@ function warnLegacyToolsBySenderKey(rawKey: string) {
   }
   warnedLegacyToolsBySenderKeys.add(trimmed);
   process.emitWarning(
-    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
+    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (id:, e164:, username:, name:, channel:<channelName>:<senderId>). Legacy unprefixed keys are matched as id only.`,
     {
       type: "DeprecationWarning",
       code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
@@ -148,26 +147,7 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
     };
   }
 
-  // Channel-scoped compound key: <channel>:<senderId> (e.g. "discord:123456789012345678").
-  // Only keys whose left side looks like a valid channel identifier (lowercase letters, digits,
-  // hyphens; no "@", ".", or other special chars) are treated as platform-scoped.
-  // This preserves backward compatibility with untyped sender IDs that happen to contain colons,
-  // such as Matrix-style IDs (@alice:example.org), which fall through to the legacy id path.
-  const colonIdx = trimmed.indexOf(":");
-  if (colonIdx > 0) {
-    const rawChannelPart = trimmed.slice(0, colonIdx);
-    const channelPart = normalizeSenderKey(rawChannelPart);
-    const idPart = normalizeSenderKey(trimmed.slice(colonIdx + 1));
-    if (channelPart && idPart && /^[a-z][a-z0-9-]*$/.test(channelPart)) {
-      return {
-        kind: "typed",
-        type: "channel",
-        key: `${channelPart}:${idPart}`,
-      };
-    }
-  }
-
-  // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
+  // Backward-compatible fallback: untyped keys map to immutable sender IDs only.
   warnLegacyToolsBySenderKey(trimmed);
   const key = normalizeLegacySenderKey(trimmed);
   if (!key) {
@@ -237,7 +217,7 @@ function resolveCompiledToolsBySenderPolicy(
   return compiled;
 }
 
-function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
+function normalizeCandidate(value: string | null | undefined, type: ToolsBySenderKeyType): string {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return "";

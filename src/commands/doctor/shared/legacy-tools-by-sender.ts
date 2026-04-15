@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isChannelScopedSenderKey, parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
+import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { formatConfigPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
 import { asObjectRecord } from "./object.js";
@@ -33,7 +33,7 @@ function collectLegacyToolsBySenderKeyHits(
     const pathLabel = formatConfigPath(path);
     for (const rawKey of Object.keys(toolsBySender)) {
       const trimmed = rawKey.trim();
-      if (!trimmed || trimmed === "*" || parseToolsBySenderTypedKey(trimmed) || isChannelScopedSenderKey(trimmed)) {
+      if (!trimmed || trimmed === "*" || parseToolsBySenderTypedKey(trimmed)) {
         continue;
       }
       hits.push({
