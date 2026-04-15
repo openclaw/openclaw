@@ -41,10 +41,12 @@ export function buildMediaUnderstandingRegistry(
     mergeProviderIntoRegistry(registry, provider);
   }
   const active = getActivePluginRegistry();
+  // Use the active registry if it exists (even with 0 media providers), so we don't trigger
+  // a fresh loadOpenClawPlugins() with a different cacheKey that would wipe the plugin command
+  // registry (clearPluginCommands). Only fall back to a snapshot load when there is no active
+  // registry at all (e.g., during CLI one-shot invocations outside the gateway).
   const pluginRegistry =
-    (active?.mediaUnderstandingProviders?.length ?? 0) > 0
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
+    active ?? loadOpenClawPlugins({ config: cfg, cache: false, activate: false });
   for (const entry of pluginRegistry?.mediaUnderstandingProviders ?? []) {
     mergeProviderIntoRegistry(registry, entry.provider);
   }
