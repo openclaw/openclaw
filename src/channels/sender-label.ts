@@ -8,6 +8,10 @@ export type SenderLabelParams = {
   id?: string;
 };
 
+// Gateway internal client IDs that should not be exposed as sender labels.
+// These represent the client/UI used, not the actual user identity.
+const GATEWAY_INTERNAL_CLIENT_IDS = new Set(["webchat-ui", "openclaw-control-ui", "openclaw-tui"]);
+
 function normalizeSenderLabelParams(params: SenderLabelParams) {
   return {
     name: normalizeOptionalString(params.name),
@@ -23,6 +27,14 @@ export function resolveSenderLabel(params: SenderLabelParams): string | null {
 
   const display = name ?? username ?? tag ?? "";
   const idPart = e164 ?? id ?? "";
+
+  // Don't expose raw gateway internal client IDs as labels when no display name is available.
+  // These IDs (e.g. "openclaw-control-ui", "webchat-ui", "openclaw-tui") are implementation
+  // details and should not be shown to users in the untrusted metadata.
+  if (idPart && GATEWAY_INTERNAL_CLIENT_IDS.has(idPart) && !display) {
+    return null;
+  }
+
   if (display && idPart && display !== idPart) {
     return `${display} (${idPart})`;
   }

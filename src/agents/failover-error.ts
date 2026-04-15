@@ -197,6 +197,11 @@ function hasTimeoutHint(err: unknown): boolean {
   if (readErrorName(err) === "TimeoutError") {
     return true;
   }
+  // AbortError is a distinct error type (cancellation), not a timeout.
+  // Don't classify AbortErrors as timeouts based on message patterns alone.
+  if (readErrorName(err) === "AbortError") {
+    return false;
+  }
   const message = getErrorMessage(err);
   return Boolean(message && isTimeoutErrorMessage(message));
 }
