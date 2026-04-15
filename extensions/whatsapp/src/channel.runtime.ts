@@ -24,7 +24,6 @@ type LogWebSelfId = typeof import("./auth-store.js").logWebSelfId;
 type LogoutWeb = typeof import("./auth-store.js").logoutWeb;
 type ReadWebSelfId = typeof import("./auth-store.js").readWebSelfId;
 type WebAuthExists = typeof import("./auth-store.js").webAuthExists;
-type LoginWeb = typeof import("./login.js").loginWeb;
 type StartWebLoginWithQr = typeof import("../login-qr-runtime.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("../login-qr-runtime.js").waitForWebLogin;
 type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
