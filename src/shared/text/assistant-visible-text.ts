@@ -205,14 +205,22 @@ interface LiteralToolBlockEnd {
 }
 
 const LITERAL_TOOL_TAG_BEFORE_RE =
-  /\b(?:use|type|write|include|show|document|example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
+  /\b(?:use|type|write|include|document|example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
 const LITERAL_TOOL_TAG_AFTER_RE =
-  /^[^.!?\n]*\b(?:close|closing|docs?|documentation|example|literal(?:ly)?|syntax|tag|xml)\b/i;
+  /^[^.!?\n]*\b(?:close|closing|docs?|documentation|example|literal(?:ly)?|syntax|tag)\b/i;
+const LITERAL_TOOL_PAYLOAD_AFTER_RE =
+  /^[^.!?\n]*\b(?:docs?|documentation|example|literal(?:ly)?|syntax)\b/i;
 
 function looksLikeLiteralToolTagContext(text: string, start: number, end: number): boolean {
   const before = text.slice(Math.max(0, start - 80), start);
   const after = text.slice(end, Math.min(text.length, end + 80));
   return LITERAL_TOOL_TAG_BEFORE_RE.test(before) && LITERAL_TOOL_TAG_AFTER_RE.test(after);
+}
+
+function looksLikeLiteralToolPayloadContext(text: string, start: number, end: number): boolean {
+  const before = text.slice(Math.max(0, start - 80), start);
+  const after = text.slice(end, Math.min(text.length, end + 80));
+  return LITERAL_TOOL_TAG_BEFORE_RE.test(before) && LITERAL_TOOL_PAYLOAD_AFTER_RE.test(after);
 }
 
 function findLiteralToolBlockEnd(
@@ -322,7 +330,7 @@ export function stripToolCallXmlTags(text: string, options?: StripToolCallXmlTag
           : null;
       if (
         literalToolBlockEnd &&
-        looksLikeLiteralToolTagContext(text, idx, literalToolBlockEnd.closeTagEnd)
+        looksLikeLiteralToolPayloadContext(text, idx, literalToolBlockEnd.closeTagEnd)
       ) {
         result = appendVisibleToolText(
           result,

@@ -395,6 +395,12 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("strips broad prose that wraps JSON tool-call payloads", () => {
+    expect(sanitizeUserFacingText('show <tool_call>{"name":"exec"}</tool_call> xml')).toBe(
+      "show xml",
+    );
+  });
+
   it("does not collapse unrelated formatting when no tool tags are stripped", () => {
     const text = "Code:\n    indented\nA  B\t\tC";
     expect(sanitizeUserFacingText(text)).toBe(text);

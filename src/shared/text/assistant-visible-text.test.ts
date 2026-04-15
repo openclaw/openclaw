@@ -238,6 +238,10 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("strips broad prose that wraps JSON tool-call payloads", () => {
+      expectVisibleText('show <tool_call>{"name":"exec"}</tool_call> xml', "show  xml");
+    });
+
     it("strips self-closing <tool_call/> tags", () => {
       expectVisibleText("prefix <tool_call/> suffix", "prefix  suffix");
     });
