@@ -1,3 +1,4 @@
+export { FailoverError, describeFailoverError } from "../../agents/failover-error.js";
 export { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";

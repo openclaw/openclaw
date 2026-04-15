@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
+  FailoverError,
+  describeFailoverError,
   getCliSessionId,
   isCliProvider,
   LiveSessionModelSwitchError,
@@ -137,6 +139,17 @@ export function createCronPromptExecutor(params: {
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
+          if (result.meta?.error) {
+            const described = describeFailoverError(result.meta.error);
+            throw new FailoverError(described.message ?? `Run error: ${result.meta.error.kind}`, {
+              reason: described.reason ?? "unknown",
+              provider: providerOverride,
+              model: modelOverride,
+              status: described.status,
+              code: described.code,
+              cause: result.meta.error,
+            });
+          }
           return result;
         }
         const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
@@ -187,6 +200,17 @@ export function createCronPromptExecutor(params: {
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
+        if (result.meta?.error) {
+          const described = describeFailoverError(result.meta.error);
+          throw new FailoverError(described.message ?? `Run error: ${result.meta.error.kind}`, {
+            reason: described.reason ?? "unknown",
+            provider: providerOverride,
+            model: modelOverride,
+            status: described.status,
+            code: described.code,
+            cause: result.meta.error,
+          });
+        }
         return result;
       },
     });
