@@ -814,9 +814,11 @@ describe("createOllamaStreamFn", () => {
 
         const requestBody = JSON.parse(requestInit.body) as {
           options: { num_ctx?: number; num_predict?: number };
+          keep_alive?: unknown;
         };
         expect(requestBody.options.num_ctx).toBe(131072);
         expect(requestBody.options.num_predict).toBe(123);
+        expect(requestBody.keep_alive).toBeUndefined();
       },
     );
   });

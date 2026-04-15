@@ -643,10 +643,6 @@ export function createOllamaStreamFn(
           stream: true,
           tools: ollamaTools,
           options: ollamaOptions,
-          // Keep the model loaded across adjacent turns. This reduces the
-          // pathological cold-start penalty reported for gemma4-class local
-          // models on the first heavy OpenClaw turn.
-          keep_alive: "15m",
         });
         options?.onPayload?.(body, model);
         const headers: Record<string, string> = {
