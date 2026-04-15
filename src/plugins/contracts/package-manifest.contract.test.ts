@@ -6,19 +6,16 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
-    mirroredRootRuntimeDeps: [
-      "@buape/carbon",
-      "@discordjs/opus",
-      "https-proxy-agent",
-      "opusscript",
-    ],
+    pluginLocalRuntimeDeps: ["@buape/carbon", "@discordjs/opus", "discord-api-types", "opusscript"],
+    mirroredRootRuntimeDeps: ["https-proxy-agent"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
     pluginId: "feishu",
-    mirroredRootRuntimeDeps: ["@larksuiteoapi/node-sdk"],
+    pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
     minHostVersionBaseline: "2026.3.22",
   },
+  { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
   {
     pluginId: "googlechat",
     mirroredRootRuntimeDeps: ["google-auth-library"],
@@ -26,6 +23,11 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "amazon-bedrock", pluginLocalRuntimeDeps: ["@aws-sdk/client-bedrock"] },
+  {
+    pluginId: "amazon-bedrock-mantle",
+    pluginLocalRuntimeDeps: ["@aws/bedrock-token-generator"],
+  },
   { pluginId: "matrix", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
@@ -36,9 +38,11 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "msteams", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "nostr", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
   {
     pluginId: "slack",
-    mirroredRootRuntimeDeps: ["@slack/bolt", "@slack/web-api", "https-proxy-agent"],
+    pluginLocalRuntimeDeps: ["@slack/bolt", "@slack/web-api"],
+    mirroredRootRuntimeDeps: ["https-proxy-agent"],
   },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
   {
