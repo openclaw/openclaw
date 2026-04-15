@@ -31,7 +31,7 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
     ```markdown
     ---
-    name: hello_world
+    name: hello-world
     description: A simple skill that says hello.
     ---
 
