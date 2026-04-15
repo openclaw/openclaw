@@ -20,6 +20,7 @@ struct GatewayState {
     process: Arc<Mutex<Option<Child>>>,
     restart_count: Arc<AtomicU32>,
     last_notification: Arc<Mutex<Option<Instant>>>,
+    watchdog_session: Arc<AtomicU32>,
 }
 
 impl GatewayState {
@@ -28,6 +29,7 @@ impl GatewayState {
             process: Arc::new(Mutex::new(None)),
             restart_count: Arc::new(AtomicU32::new(0)),
             last_notification: Arc::new(Mutex::new(None)),
+            watchdog_session: Arc::new(AtomicU32::new(0)),
         }
     }
 }
@@ -93,6 +95,7 @@ async fn start_gateway(app: AppHandle, state: State<'_, GatewayState>) -> Result
 
 #[tauri::command]
 async fn stop_gateway(state: State<'_, GatewayState>) -> Result<String, String> {
+    state.watchdog_session.fetch_add(1, Ordering::SeqCst);
     if let Some(mut child) = state.process.lock().map_err(|e| e.to_string())?.take() {
         match child.kill() {
             Ok(_) => Ok("Gateway stopped".to_string()),
@@ -139,23 +142,28 @@ fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> 
     }
     
     *state.process.lock().map_err(|e| e.to_string())? = Some(child);
+    let session_id = state.watchdog_session.fetch_add(1, Ordering::SeqCst) + 1;
     
     let state_clone = state.clone();
     let app_clone = app.clone();
     
     thread::spawn(move || {
-        watchdog_thread(app_clone, state_clone);
+        watchdog_thread(app_clone, state_clone, session_id);
     });
     
     Ok("Gateway started with Watchdog protection".into())
 }
 
-fn watchdog_thread(app: AppHandle, state: GatewayState) {
+fn watchdog_thread(app: AppHandle, state: GatewayState, session_id: u32) {
     let max_restarts = 3;
     let mut last_start = Instant::now();
     
     loop {
         thread::sleep(Duration::from_secs(5));
+        
+        if state.watchdog_session.load(Ordering::SeqCst) != session_id {
+            break; // Retiring: A new session has taken over or the process was legally stopped
+        }
         
         // Stability reset: if running for more than 120 seconds, reset the budget
         if last_start.elapsed() > Duration::from_secs(120) {
