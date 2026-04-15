@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 export type BackoffPolicy = {
   initialMs: number;
   maxMs: number;
@@ -15,45 +17,17 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
   if (ms <= 0) {
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (abortSignal) {
-        abortSignal.removeEventListener("abort", onAbort);
-      }
-      reject(new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") }));
-    };
-
-    if (abortSignal) {
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-      if (abortSignal.aborted) {
-        onAbort();
-        return;
-      }
+  try {
+    await delay(ms, undefined, { signal: abortSignal });
+  } catch (error: unknown) {
+    if (
+      error != null &&
+      typeof error === "object" &&
+      (("name" in error && (error as { name?: unknown }).name === "AbortError") ||
+        ("code" in error && (error as { code?: unknown }).code === "ABORT_ERR"))
+    ) {
+      throw new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") });
     }
-
-    timer = setTimeout(() => {
-      settled = true;
-      if (abortSignal) {
-        abortSignal.removeEventListener("abort", onAbort);
-      }
-      timer = null;
-      resolve();
-    }, ms);
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        onAbort();
-      }
-    }
-  });
+    throw error;
+  }
 }
