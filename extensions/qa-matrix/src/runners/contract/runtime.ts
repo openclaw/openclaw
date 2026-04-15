@@ -12,15 +12,15 @@ import {
   appendLiveLaneIssue,
   buildLiveLaneArtifactsError,
 } from "../../shared/live-lane-helpers.js";
-import {
-  provisionMatrixQaRoom,
-  type MatrixQaObservedEvent,
-  type MatrixQaProvisionResult,
-} from "../../substrate/client.js";
+import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
+import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
+import { buildMatrixQaConfig, type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
 import { resolveMatrixQaModels } from "./model-selection.js";
 import {
   MATRIX_QA_SCENARIOS,
+  buildMatrixQaTopologyForScenarios,
   buildMatrixReplyDetails,
   findMatrixQaScenarios,
   runMatrixQaCanary,
@@ -43,6 +43,10 @@ type MatrixQaLiveLaneGatewayHarness = {
   stop(): Promise<void>;
 };
 
+function buildMatrixQaGatewayConfigKey(overrides?: MatrixQaConfigOverrides) {
+  return JSON.stringify(overrides ?? null);
+}
+
 type MatrixQaScenarioResult = {
   artifacts?: MatrixQaScenarioArtifacts;
   details: string;
@@ -62,8 +66,10 @@ type MatrixQaSummary = {
   harness: {
     baseUrl: string;
     composeFile: string;
+    dmRoomIds: string[];
     image: string;
     roomId: string;
+    roomIds: string[];
     serverName: string;
   };
   canary?: MatrixQaCanaryArtifact;
@@ -130,86 +136,6 @@ function buildMatrixQaSummary(params: {
     sutAccountId: params.sutAccountId,
     userIds: params.userIds,
   };
-}
-
-function buildMatrixQaConfig(
-  baseCfg: OpenClawConfig,
-  params: {
-    driverUserId: string;
-    homeserver: string;
-    roomId: string;
-    sutAccessToken: string;
-    sutAccountId: string;
-    sutDeviceId?: string;
-    sutUserId: string;
-  },
-): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "matrix"])];
-  return {
-    ...baseCfg,
-    plugins: {
-      ...baseCfg.plugins,
-      allow: pluginAllow,
-      entries: {
-        ...baseCfg.plugins?.entries,
-        matrix: { enabled: true },
-      },
-    },
-    channels: {
-      ...baseCfg.channels,
-      matrix: {
-        enabled: true,
-        defaultAccount: params.sutAccountId,
-        accounts: {
-          [params.sutAccountId]: {
-            accessToken: params.sutAccessToken,
-            ...(params.sutDeviceId ? { deviceId: params.sutDeviceId } : {}),
-            dm: { enabled: false },
-            enabled: true,
-            encryption: false,
-            groupAllowFrom: [params.driverUserId],
-            groupPolicy: "allowlist",
-            groups: {
-              [params.roomId]: {
-                enabled: true,
-                requireMention: true,
-              },
-            },
-            homeserver: params.homeserver,
-            network: {
-              dangerouslyAllowPrivateNetwork: true,
-            },
-            replyToMode: "off",
-            threadReplies: "inbound",
-            userId: params.sutUserId,
-          },
-        },
-      },
-    },
-  };
-}
-
-function buildObservedEventsArtifact(params: {
-  includeContent: boolean;
-  observedEvents: MatrixQaObservedEvent[];
-}) {
-  return params.observedEvents.map((event) =>
-    params.includeContent
-      ? event
-      : {
-          roomId: event.roomId,
-          eventId: event.eventId,
-          sender: event.sender,
-          stateKey: event.stateKey,
-          type: event.type,
-          originServerTs: event.originServerTs,
-          msgtype: event.msgtype,
-          membership: event.membership,
-          relatesTo: event.relatesTo,
-          mentions: event.mentions,
-          reaction: event.reaction,
-        },
-  );
 }
 
 function isMatrixAccountReady(entry?: {
@@ -312,11 +238,15 @@ export async function runMatrixQaLive(params: {
   });
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findMatrixQaScenarios(params.scenarioIds);
+  const runSuffix = randomUUID().slice(0, 8);
+  const topology = buildMatrixQaTopologyForScenarios({
+    defaultRoomName: `OpenClaw Matrix QA ${runSuffix}`,
+    scenarios,
+  });
   const observedEvents: MatrixQaObservedEvent[] = [];
   const includeObservedEventContent = process.env.OPENCLAW_QA_MATRIX_CAPTURE_CONTENT === "1";
   const startedAtDate = new Date();
   const startedAt = startedAtDate.toISOString();
-  const runSuffix = randomUUID().slice(0, 8);
 
   const harness = await startMatrixQaHarness({
     outputDir: path.join(outputDir, "matrix-harness"),
@@ -331,6 +261,7 @@ export async function runMatrixQaLive(params: {
         registrationToken: harness.registrationToken,
         roomName: `OpenClaw Matrix QA ${runSuffix}`,
         sutLocalpart: `qa-sut-${runSuffix}`,
+        topology,
       });
     } catch (error) {
       await harness.stop().catch(() => {});
@@ -347,6 +278,7 @@ export async function runMatrixQaLive(params: {
         `baseUrl: ${harness.baseUrl}`,
         `serverName: ${harness.serverName}`,
         `roomId: ${provisioning.roomId}`,
+        `roomCount: ${provisioning.topology.rooms.length}`,
       ].join("\n"),
     },
   ];
@@ -354,34 +286,55 @@ export async function runMatrixQaLive(params: {
   const cleanupErrors: string[] = [];
   let canaryArtifact: MatrixQaCanaryArtifact | undefined;
   let gatewayHarness: MatrixQaLiveLaneGatewayHarness | null = null;
+  let gatewayHarnessKey: string | null = null;
   let canaryFailed = false;
   const syncState: { driver?: string; observer?: string } = {};
+  const gatewayConfigParams = {
+    driverUserId: provisioning.driver.userId,
+    homeserver: harness.baseUrl,
+    sutAccessToken: provisioning.sut.accessToken,
+    sutAccountId,
+    sutDeviceId: provisioning.sut.deviceId,
+    sutUserId: provisioning.sut.userId,
+    topology: provisioning.topology,
+  };
 
   try {
-    gatewayHarness = await startMatrixQaLiveLaneGateway({
-      repoRoot,
-      transport: {
-        requiredPluginIds: [],
-        createGatewayConfig: () => ({}),
-      },
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode,
-      primaryModel,
-      alternateModel,
-      fastMode: params.fastMode,
-      controlUiEnabled: false,
-      mutateConfig: (cfg) =>
-        buildMatrixQaConfig(cfg, {
-          driverUserId: provisioning.driver.userId,
-          homeserver: harness.baseUrl,
-          roomId: provisioning.roomId,
-          sutAccessToken: provisioning.sut.accessToken,
-          sutAccountId,
-          sutDeviceId: provisioning.sut.deviceId,
-          sutUserId: provisioning.sut.userId,
-        }),
-    });
-    await waitForMatrixChannelReady(gatewayHarness.gateway, sutAccountId);
+    const ensureGatewayHarness = async (overrides?: MatrixQaConfigOverrides) => {
+      const nextKey = buildMatrixQaGatewayConfigKey(overrides);
+      if (gatewayHarness && gatewayHarnessKey === nextKey) {
+        return gatewayHarness;
+      }
+      if (gatewayHarness) {
+        await gatewayHarness.stop();
+        gatewayHarness = null;
+        gatewayHarnessKey = null;
+      }
+      const started = await startMatrixQaLiveLaneGateway({
+        repoRoot,
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+        providerMode,
+        primaryModel,
+        alternateModel,
+        fastMode: params.fastMode,
+        controlUiEnabled: false,
+        mutateConfig: (cfg) =>
+          buildMatrixQaConfig(cfg, {
+            ...gatewayConfigParams,
+            overrides,
+          }),
+      });
+      await waitForMatrixChannelReady(started.gateway, sutAccountId);
+      gatewayHarness = started;
+      gatewayHarnessKey = nextKey;
+      return started;
+    };
+
+    gatewayHarness = await ensureGatewayHarness();
     checks.push({
       name: "Matrix channel ready",
       status: "pass",
@@ -420,11 +373,18 @@ export async function runMatrixQaLive(params: {
     if (!canaryFailed) {
       for (const scenario of scenarios) {
         try {
+          const scenarioGateway = await ensureGatewayHarness(scenario.configOverrides);
           const result = await runMatrixQaScenario(scenario, {
             baseUrl: harness.baseUrl,
             canary: canaryArtifact,
             driverAccessToken: provisioning.driver.accessToken,
             driverUserId: provisioning.driver.userId,
+            interruptTransport: async () => {
+              await harness.restartService();
+              await waitForMatrixChannelReady(scenarioGateway.gateway, sutAccountId, {
+                timeoutMs: 90_000,
+              });
+            },
             observedEvents,
             observerAccessToken: provisioning.observer.accessToken,
             observerUserId: provisioning.observer.userId,
@@ -432,13 +392,15 @@ export async function runMatrixQaLive(params: {
               if (!gatewayHarness) {
                 throw new Error("Matrix restart scenario requires a live gateway");
               }
-              await gatewayHarness.gateway.restart();
-              await waitForMatrixChannelReady(gatewayHarness.gateway, sutAccountId);
+              await scenarioGateway.gateway.restart();
+              await waitForMatrixChannelReady(scenarioGateway.gateway, sutAccountId);
             },
             roomId: provisioning.roomId,
+            sutAccessToken: provisioning.sut.accessToken,
             syncState,
             sutUserId: provisioning.sut.userId,
             timeoutMs: scenario.timeoutMs,
+            topology: provisioning.topology,
           });
           scenarioResults.push({
             artifacts: result.artifacts,
@@ -501,6 +463,7 @@ export async function runMatrixQaLive(params: {
     })),
     notes: [
       `roomId: ${provisioning.roomId}`,
+      `roomIds: ${provisioning.topology.rooms.map((room) => room.roomId).join(", ")}`,
       `driver: ${provisioning.driver.userId}`,
       `observer: ${provisioning.observer.userId}`,
       `sut: ${provisioning.sut.userId}`,
@@ -516,8 +479,12 @@ export async function runMatrixQaLive(params: {
     harness: {
       baseUrl: harness.baseUrl,
       composeFile: harness.composeFile,
+      dmRoomIds: provisioning.topology.rooms
+        .filter((room) => room.kind === "dm")
+        .map((room) => room.roomId),
       image: harness.image,
       roomId: provisioning.roomId,
+      roomIds: provisioning.topology.rooms.map((room) => room.roomId),
       serverName: harness.serverName,
     },
     observedEventCount: observedEvents.length,
@@ -539,7 +506,7 @@ export async function runMatrixQaLive(params: {
   await fs.writeFile(
     observedEventsPath,
     `${JSON.stringify(
-      buildObservedEventsArtifact({
+      buildMatrixQaObservedEventsArtifact({
         includeContent: includeObservedEventContent,
         observedEvents,
       }),
@@ -589,7 +556,6 @@ export const __testing = {
   buildMatrixQaSummary,
   MATRIX_QA_SCENARIOS,
   buildMatrixQaConfig,
-  buildObservedEventsArtifact,
   isMatrixAccountReady,
   resolveMatrixQaModels,
   waitForMatrixChannelReady,

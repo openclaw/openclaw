@@ -1,14 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { MatrixQaObservedEvent } from "./events.js";
+import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
+import {
+  primeMatrixQaRoom,
+  waitForMatrixQaRoomEvent,
+  waitForOptionalMatrixQaRoomEvent,
+  type MatrixQaRoomEventWaitResult,
+} from "./sync.js";
+import {
+  findMatrixQaProvisionedRoom,
+  type MatrixQaParticipantRole,
+  type MatrixQaProvisionedTopology,
+  type MatrixQaTopologyRoomSpec,
+  type MatrixQaTopologySpec,
+} from "./topology.js";
 
-type FetchLike = typeof fetch;
+export type { MatrixQaObservedEvent } from "./events.js";
+export type { MatrixQaRoomEventWaitResult } from "./sync.js";
 
 type MatrixQaAuthStage = "m.login.dummy" | "m.login.registration_token";
-
-type MatrixQaRequestResult<T> = {
-  status: number;
-  body: T;
-};
 
 type MatrixQaRegisterResponse = {
   access_token?: string;
@@ -46,60 +57,10 @@ type MatrixQaSendReactionContent = {
   };
 };
 
-type MatrixQaSyncResponse = {
-  next_batch?: string;
-  rooms?: {
-    join?: Record<
-      string,
-      {
-        timeline?: {
-          events?: MatrixQaRoomEvent[];
-        };
-      }
-    >;
-  };
-};
-
 type MatrixQaUiaaResponse = {
   completed?: string[];
   flows?: Array<{ stages?: string[] }>;
   session?: string;
-};
-
-type MatrixQaRoomEvent = {
-  content?: Record<string, unknown>;
-  event_id?: string;
-  origin_server_ts?: number;
-  sender?: string;
-  state_key?: string;
-  type?: string;
-};
-
-export type MatrixQaObservedEvent = {
-  roomId: string;
-  eventId: string;
-  sender?: string;
-  stateKey?: string;
-  type: string;
-  originServerTs?: number;
-  body?: string;
-  formattedBody?: string;
-  msgtype?: string;
-  membership?: string;
-  relatesTo?: {
-    eventId?: string;
-    inReplyToId?: string;
-    isFallingBack?: boolean;
-    relType?: string;
-  };
-  mentions?: {
-    room?: boolean;
-    userIds?: string[];
-  };
-  reaction?: {
-    eventId?: string;
-    key?: string;
-  };
 };
 
 export type MatrixQaRegisteredAccount = {
@@ -115,18 +76,8 @@ export type MatrixQaProvisionResult = {
   observer: MatrixQaRegisteredAccount;
   roomId: string;
   sut: MatrixQaRegisteredAccount;
+  topology: MatrixQaProvisionedTopology;
 };
-
-export type MatrixQaRoomEventWaitResult =
-  | {
-      event: MatrixQaObservedEvent;
-      matched: true;
-      since?: string;
-    }
-  | {
-      matched: false;
-      since?: string;
-    };
 
 function buildMatrixThreadRelation(threadRootEventId: string, replyToEventId?: string) {
   return {
@@ -235,89 +186,6 @@ function buildMatrixQaMessageContent(params: {
   };
 }
 
-function normalizeMentionUserIds(value: unknown) {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    : undefined;
-}
-
-export function normalizeMatrixQaObservedEvent(
-  roomId: string,
-  event: MatrixQaRoomEvent,
-): MatrixQaObservedEvent | null {
-  const eventId = event.event_id?.trim();
-  const type = event.type?.trim();
-  if (!eventId || !type) {
-    return null;
-  }
-  const content = event.content ?? {};
-  const relatesToRaw = content["m.relates_to"];
-  const relatesTo =
-    typeof relatesToRaw === "object" && relatesToRaw !== null
-      ? (relatesToRaw as Record<string, unknown>)
-      : null;
-  const inReplyToRaw = relatesTo?.["m.in_reply_to"];
-  const inReplyTo =
-    typeof inReplyToRaw === "object" && inReplyToRaw !== null
-      ? (inReplyToRaw as Record<string, unknown>)
-      : null;
-  const mentionsRaw = content["m.mentions"];
-  const mentions =
-    typeof mentionsRaw === "object" && mentionsRaw !== null
-      ? (mentionsRaw as Record<string, unknown>)
-      : null;
-  const mentionUserIds = normalizeMentionUserIds(mentions?.user_ids);
-  const reactionKey =
-    type === "m.reaction" && typeof relatesTo?.key === "string" ? relatesTo.key : undefined;
-  const reactionEventId =
-    type === "m.reaction" && typeof relatesTo?.event_id === "string"
-      ? relatesTo.event_id
-      : undefined;
-
-  return {
-    roomId,
-    eventId,
-    sender: typeof event.sender === "string" ? event.sender : undefined,
-    stateKey: typeof event.state_key === "string" ? event.state_key : undefined,
-    type,
-    originServerTs:
-      typeof event.origin_server_ts === "number" ? Math.floor(event.origin_server_ts) : undefined,
-    body: typeof content.body === "string" ? content.body : undefined,
-    formattedBody: typeof content.formatted_body === "string" ? content.formatted_body : undefined,
-    msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
-    membership: typeof content.membership === "string" ? content.membership : undefined,
-    ...(relatesTo
-      ? {
-          relatesTo: {
-            eventId: typeof relatesTo.event_id === "string" ? relatesTo.event_id : undefined,
-            inReplyToId: typeof inReplyTo?.event_id === "string" ? inReplyTo.event_id : undefined,
-            isFallingBack:
-              typeof relatesTo.is_falling_back === "boolean"
-                ? relatesTo.is_falling_back
-                : undefined,
-            relType: typeof relatesTo.rel_type === "string" ? relatesTo.rel_type : undefined,
-          },
-        }
-      : {}),
-    ...(mentions
-      ? {
-          mentions: {
-            ...(mentions.room === true ? { room: true } : {}),
-            ...(mentionUserIds ? { userIds: mentionUserIds } : {}),
-          },
-        }
-      : {}),
-    ...(reactionEventId || reactionKey
-      ? {
-          reaction: {
-            ...(reactionEventId ? { eventId: reactionEventId } : {}),
-            ...(reactionKey ? { key: reactionKey } : {}),
-          },
-        }
-      : {}),
-  };
-}
-
 export function resolveNextRegistrationAuth(params: {
   registrationToken: string;
   response: MatrixQaUiaaResponse;
@@ -369,55 +237,6 @@ export function resolveNextRegistrationAuth(params: {
   );
 }
 
-async function requestMatrixJson<T>(params: {
-  accessToken?: string;
-  baseUrl: string;
-  body?: unknown;
-  endpoint: string;
-  fetchImpl: FetchLike;
-  method: "GET" | "POST" | "PUT";
-  okStatuses?: number[];
-  query?: Record<string, string | number | undefined>;
-  timeoutMs?: number;
-}) {
-  const url = new URL(params.endpoint, params.baseUrl);
-  for (const [key, value] of Object.entries(params.query ?? {})) {
-    if (value !== undefined) {
-      url.searchParams.set(key, String(value));
-    }
-  }
-  const response = await params.fetchImpl(url, {
-    method: params.method,
-    headers: {
-      accept: "application/json",
-      ...(params.body !== undefined ? { "content-type": "application/json" } : {}),
-      ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
-    },
-    ...(params.body !== undefined ? { body: JSON.stringify(params.body) } : {}),
-    signal: AbortSignal.timeout(params.timeoutMs ?? 20_000),
-  });
-  let body: unknown = {};
-  try {
-    body = (await response.json()) as unknown;
-  } catch {
-    body = {};
-  }
-  const okStatuses = params.okStatuses ?? [200];
-  if (!okStatuses.includes(response.status)) {
-    const details =
-      typeof body === "object" &&
-      body !== null &&
-      typeof (body as { error?: unknown }).error === "string"
-        ? (body as { error: string }).error
-        : `${params.method} ${params.endpoint} failed with status ${response.status}`;
-    throw new Error(details);
-  }
-  return {
-    status: response.status,
-    body: body as T,
-  } satisfies MatrixQaRequestResult<T>;
-}
-
 function buildRegisteredAccount(params: {
   localpart: string;
   password: string;
@@ -440,55 +259,12 @@ function buildRegisteredAccount(params: {
 export function createMatrixQaClient(params: {
   accessToken?: string;
   baseUrl: string;
-  fetchImpl?: FetchLike;
+  fetchImpl?: MatrixQaFetchLike;
 }) {
   const fetchImpl = params.fetchImpl ?? fetch;
 
-  async function waitForOptionalRoomEvent(opts: {
-    observedEvents: MatrixQaObservedEvent[];
-    predicate: (event: MatrixQaObservedEvent) => boolean;
-    roomId: string;
-    since?: string;
-    timeoutMs: number;
-  }): Promise<MatrixQaRoomEventWaitResult> {
-    const startedAt = Date.now();
-    let since = opts.since;
-    while (Date.now() - startedAt < opts.timeoutMs) {
-      const remainingMs = Math.max(1_000, opts.timeoutMs - (Date.now() - startedAt));
-      const response = await requestMatrixJson<MatrixQaSyncResponse>({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
-        endpoint: "/_matrix/client/v3/sync",
-        fetchImpl,
-        method: "GET",
-        query: {
-          ...(since ? { since } : {}),
-          timeout: Math.min(10_000, remainingMs),
-        },
-        timeoutMs: Math.min(15_000, remainingMs + 5_000),
-      });
-      since = response.body.next_batch?.trim() || since;
-      const roomEvents = response.body.rooms?.join?.[opts.roomId]?.timeline?.events ?? [];
-      let matchedEvent: MatrixQaObservedEvent | null = null;
-      for (const event of roomEvents) {
-        const normalized = normalizeMatrixQaObservedEvent(opts.roomId, event);
-        if (!normalized) {
-          continue;
-        }
-        opts.observedEvents.push(normalized);
-        if (matchedEvent === null && opts.predicate(normalized)) {
-          matchedEvent = normalized;
-        }
-      }
-      if (matchedEvent) {
-        return { event: matchedEvent, matched: true, since };
-      }
-    }
-    return { matched: false, since };
-  }
-
   return {
-    async createPrivateRoom(opts: { inviteUserIds: string[]; name: string }) {
+    async createPrivateRoom(opts: { inviteUserIds: string[]; isDirect?: boolean; name: string }) {
       const result = await requestMatrixJson<MatrixQaRoomCreateResponse>({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
@@ -502,7 +278,7 @@ export function createMatrixQaClient(params: {
             },
           ],
           invite: opts.inviteUserIds,
-          is_direct: false,
+          is_direct: opts.isDirect === true,
           name: opts.name,
           preset: "private_chat",
         },
@@ -517,15 +293,11 @@ export function createMatrixQaClient(params: {
       return roomId;
     },
     async primeRoom() {
-      const response = await requestMatrixJson<MatrixQaSyncResponse>({
+      return await primeMatrixQaRoom({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
-        endpoint: "/_matrix/client/v3/sync",
         fetchImpl,
-        method: "GET",
-        query: { timeout: 0 },
       });
-      return response.body.next_batch?.trim() || undefined;
     },
     async registerWithToken(opts: {
       deviceName: string;
@@ -618,7 +390,55 @@ export function createMatrixQaClient(params: {
       });
       return result.body.room_id?.trim() || roomId;
     },
-    waitForOptionalRoomEvent,
+    async inviteUserToRoom(opts: { roomId: string; userId: string }) {
+      await requestMatrixJson<Record<string, never>>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {
+          user_id: opts.userId,
+        },
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/invite`,
+        fetchImpl,
+        method: "POST",
+      });
+    },
+    async kickUserFromRoom(opts: { reason?: string; roomId: string; userId: string }) {
+      await requestMatrixJson<Record<string, never>>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {
+          user_id: opts.userId,
+          ...(opts.reason?.trim() ? { reason: opts.reason.trim() } : {}),
+        },
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/kick`,
+        fetchImpl,
+        method: "POST",
+      });
+    },
+    async leaveRoom(roomId: string) {
+      await requestMatrixJson<Record<string, never>>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {},
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/leave`,
+        fetchImpl,
+        method: "POST",
+      });
+    },
+    waitForOptionalRoomEvent(opts: {
+      observedEvents: MatrixQaObservedEvent[];
+      predicate: (event: MatrixQaObservedEvent) => boolean;
+      roomId: string;
+      since?: string;
+      timeoutMs: number;
+    }) {
+      return waitForOptionalMatrixQaRoomEvent({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        fetchImpl,
+        ...opts,
+      });
+    },
     async waitForRoomEvent(opts: {
       observedEvents: MatrixQaObservedEvent[];
       predicate: (event: MatrixQaObservedEvent) => boolean;
@@ -626,11 +446,12 @@ export function createMatrixQaClient(params: {
       since?: string;
       timeoutMs: number;
     }) {
-      const result = await waitForOptionalRoomEvent(opts);
-      if (result.matched) {
-        return { event: result.event, since: result.since };
-      }
-      throw new Error(`timed out after ${opts.timeoutMs}ms waiting for Matrix room event`);
+      return await waitForMatrixQaRoomEvent({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        fetchImpl,
+        ...opts,
+      });
     },
   };
 }
@@ -638,7 +459,7 @@ export function createMatrixQaClient(params: {
 async function joinRoomWithRetry(params: {
   accessToken: string;
   baseUrl: string;
-  fetchImpl?: FetchLike;
+  fetchImpl?: MatrixQaFetchLike;
   roomId: string;
 }) {
   const client = createMatrixQaClient({
@@ -659,9 +480,85 @@ async function joinRoomWithRetry(params: {
   throw new Error(`Matrix join retry failed: ${formatErrorMessage(lastError)}`);
 }
 
+function resolveProvisionedRoomRequireMention(room: MatrixQaTopologyRoomSpec) {
+  return room.kind === "group" ? room.requireMention !== false : false;
+}
+
+function resolveTopologyMemberAccounts(
+  accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>,
+  memberRoles: MatrixQaParticipantRole[],
+) {
+  const uniqueRoles = [...new Set(memberRoles)];
+  if (uniqueRoles.length === 0) {
+    throw new Error("Matrix QA room provisioning requires at least one member");
+  }
+  return uniqueRoles.map((role) => ({
+    role,
+    account: accounts[role],
+  }));
+}
+
+async function provisionMatrixQaTopology(params: {
+  accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>;
+  baseUrl: string;
+  fetchImpl?: MatrixQaFetchLike;
+  spec: MatrixQaTopologySpec;
+}): Promise<MatrixQaProvisionedTopology> {
+  const rooms = [];
+
+  for (const room of params.spec.rooms) {
+    const members = resolveTopologyMemberAccounts(params.accounts, room.members);
+    const creator = members[0];
+    const invitees = members.slice(1);
+    const creatorClient = createMatrixQaClient({
+      accessToken: creator.account.accessToken,
+      baseUrl: params.baseUrl,
+      fetchImpl: params.fetchImpl,
+    });
+    const roomId = await creatorClient.createPrivateRoom({
+      inviteUserIds: invitees.map((entry) => entry.account.userId),
+      isDirect: room.kind === "dm",
+      name: room.name,
+    });
+    for (const invitee of invitees) {
+      await joinRoomWithRetry({
+        accessToken: invitee.account.accessToken,
+        baseUrl: params.baseUrl,
+        fetchImpl: params.fetchImpl,
+        roomId,
+      });
+    }
+    rooms.push({
+      key: room.key,
+      kind: room.kind,
+      memberRoles: members.map((entry) => entry.role),
+      memberUserIds: members.map((entry) => entry.account.userId),
+      name: room.name,
+      requireMention: resolveProvisionedRoomRequireMention(room),
+      roomId,
+    });
+  }
+
+  const defaultRoom = findMatrixQaProvisionedRoom(
+    {
+      defaultRoomId: "",
+      defaultRoomKey: params.spec.defaultRoomKey,
+      rooms,
+    },
+    params.spec.defaultRoomKey,
+  );
+
+  return {
+    defaultRoomId: defaultRoom.roomId,
+    defaultRoomKey: params.spec.defaultRoomKey,
+    rooms,
+  };
+}
+
 export async function provisionMatrixQaRoom(params: {
   baseUrl: string;
-  fetchImpl?: FetchLike;
+  fetchImpl?: MatrixQaFetchLike;
+  topology?: MatrixQaTopologySpec;
   roomName: string;
   driverLocalpart: string;
   observerLocalpart: string;
@@ -690,32 +587,35 @@ export async function provisionMatrixQaRoom(params: {
     password: `observer-${randomUUID()}`,
     registrationToken: params.registrationToken,
   });
-  const driverClient = createMatrixQaClient({
-    accessToken: driver.accessToken,
+  const topology = await provisionMatrixQaTopology({
+    accounts: {
+      driver,
+      observer,
+      sut,
+    },
     baseUrl: params.baseUrl,
     fetchImpl: params.fetchImpl,
-  });
-  const roomId = await driverClient.createPrivateRoom({
-    inviteUserIds: [sut.userId, observer.userId],
-    name: params.roomName,
-  });
-  await joinRoomWithRetry({
-    accessToken: sut.accessToken,
-    baseUrl: params.baseUrl,
-    fetchImpl: params.fetchImpl,
-    roomId,
-  });
-  await joinRoomWithRetry({
-    accessToken: observer.accessToken,
-    baseUrl: params.baseUrl,
-    fetchImpl: params.fetchImpl,
-    roomId,
+    spec:
+      params.topology ??
+      ({
+        defaultRoomKey: "main",
+        rooms: [
+          {
+            key: "main",
+            kind: "group",
+            members: ["driver", "observer", "sut"],
+            name: params.roomName,
+            requireMention: true,
+          },
+        ],
+      } satisfies MatrixQaTopologySpec),
   });
   return {
     driver,
     observer,
-    roomId,
+    roomId: topology.defaultRoomId,
     sut,
+    topology,
   } satisfies MatrixQaProvisionResult;
 }
 
@@ -723,6 +623,5 @@ export const __testing = {
   buildMatrixQaMessageContent,
   buildMatrixReactionRelation,
   buildMatrixThreadRelation,
-  normalizeMatrixQaObservedEvent,
   resolveNextRegistrationAuth,
 };
