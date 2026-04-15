@@ -645,6 +645,64 @@ type SandboxToolParams = {
   imageSanitization?: ImageSanitizationLimits;
 };
 
+type EditReplacement = {
+  oldText: string;
+  newText: string;
+};
+
+function readEditReplacements(params: unknown): { path?: string; edits: EditReplacement[] } {
+  const record = getToolParamsRecord(params);
+  const pathParam = typeof record?.path === "string" ? record.path : undefined;
+  const edits = Array.isArray(record?.edits)
+    ? record.edits.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return [];
+        }
+        const replacement = entry as Record<string, unknown>;
+        if (
+          typeof replacement.oldText !== "string" ||
+          replacement.oldText.trim().length === 0 ||
+          typeof replacement.newText !== "string"
+        ) {
+          return [];
+        }
+        return [{ oldText: replacement.oldText, newText: replacement.newText }];
+      })
+    : [];
+  return { path: pathParam, edits };
+}
+
+function wrapLegacySingleEditExecution(base: AnyAgentTool): AnyAgentTool {
+  return {
+    ...base,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const { path: pathParam, edits } = readEditReplacements(params);
+      if (!pathParam || edits.length === 0) {
+        return base.execute(toolCallId, params, signal, onUpdate);
+      }
+
+      let result;
+      for (const edit of edits) {
+        result = await base.execute(
+          toolCallId,
+          {
+            path: pathParam,
+            oldText: edit.oldText,
+            newText: edit.newText,
+          },
+          signal,
+          onUpdate,
+        );
+      }
+
+      if (!result) {
+        throw new Error("Missing edit operations.");
+      }
+      return result;
+    },
+  };
+}
+
 export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = createReadTool(params.root, {
     operations: createSandboxReadOperations(params),
@@ -663,9 +721,11 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
-  const base = createEditTool(params.root, {
-    operations: createSandboxEditOperations(params),
-  }) as unknown as AnyAgentTool;
+  const base = wrapLegacySingleEditExecution(
+    createEditTool(params.root, {
+      operations: createSandboxEditOperations(params),
+    }) as unknown as AnyAgentTool,
+  );
   const withRecovery = wrapEditToolWithRecovery(base, {
     root: params.root,
     readFile: async (absolutePath: string) =>
@@ -688,9 +748,11 @@ export function createHostWorkspaceEditTool(
   root: string,
   options?: { workspaceOnly?: boolean; allowedRoots?: readonly string[] },
 ) {
-  const base = createEditTool(root, {
-    operations: createHostEditOperations(root, options),
-  }) as unknown as AnyAgentTool;
+  const base = wrapLegacySingleEditExecution(
+    createEditTool(root, {
+      operations: createHostEditOperations(root, options),
+    }) as unknown as AnyAgentTool,
+  );
   const withRecovery = wrapEditToolWithRecovery(base, {
     root,
     readFile: (absolutePath: string) => readHostEditRecoveryFile(root, absolutePath, options),

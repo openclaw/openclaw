@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSandboxInputPathMock = vi.hoisted(() => vi.fn());
@@ -35,6 +36,26 @@ describe("toRelativeWorkspacePath (windows semantics)", () => {
       const root = "C:\\Users\\User\\OpenClaw";
       const candidate = "C:\\Users\\User\\Other\\log.txt";
       expect(() => toRelativeWorkspacePath(root, candidate)).toThrow("Path escapes workspace root");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("uses sandbox input normalization for win32 candidate resolution", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      resolveSandboxInputPathMock.mockImplementation(
+        (filePath: string, cwd: string) =>
+          filePath === "~/file.txt" ? "C:\\Users\\User\\OpenClaw\\file.txt" : path.win32.resolve(cwd, filePath),
+      );
+      const match = resolvePathWithinRoots(["C:\\Users\\User\\OpenClaw"], "~/file.txt", {
+        cwd: "C:\\Users\\User\\OpenClaw",
+      });
+      expect(match).toEqual({
+        root: "C:\\Users\\User\\OpenClaw",
+        resolved: "C:\\Users\\User\\OpenClaw\\file.txt",
+        relative: "file.txt",
+      });
     } finally {
       platformSpy.mockRestore();
     }

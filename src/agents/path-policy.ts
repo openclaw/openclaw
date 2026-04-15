@@ -201,9 +201,8 @@ export function resolvePathWithinRoots(
       options?.boundaryLabel ?? (normalizedRoots.length > 1 ? "allowed work roots" : undefined),
   };
   if (process.platform === "win32") {
-    const resolvedCandidate = path.win32.isAbsolute(candidate)
-      ? path.win32.resolve(candidate)
-      : path.win32.resolve(options?.cwd ?? normalizedRoots[0], candidate);
+    const resolvedInput = resolveSandboxInputPath(candidate, options?.cwd ?? normalizedRoots[0]);
+    const resolvedCandidate = path.win32.resolve(resolvedInput);
     let bestMatch: BoundaryPathMatch | null = null;
     for (const root of normalizedRoots) {
       const compareRoot = normalizeWindowsPathForComparison(root);

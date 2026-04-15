@@ -253,8 +253,7 @@ describe("workspace path resolution", () => {
 
         await editTool.execute("included-edit", {
           path: target,
-          oldText: "openclaw",
-          newText: "workflow",
+          edits: [{ oldText: "openclaw", newText: "workflow" }],
         });
         expect(await fs.readFile(target, "utf8")).toBe("hello workflow");
       });
@@ -326,8 +325,7 @@ describe("workspace path resolution", () => {
                 await expect(
                   editTool.execute("included-edit-race", {
                     path: target,
-                    oldText: "safe",
-                    newText: "mutated",
+                    edits: [{ oldText: "safe", newText: "mutated" }],
                   }),
                 ).rejects.toThrow(
                   /allowed work roots|workspace root|outside|under root|sandbox|path alias escape blocked/i,

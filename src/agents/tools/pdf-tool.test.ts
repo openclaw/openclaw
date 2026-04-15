@@ -183,13 +183,13 @@ describe("createPdfTool", () => {
   });
 
   it("allows includedWorkDirs for non-sandbox pdf paths when workspaceOnly is enabled", async () => {
-    await withTempAgentDir(async (agentDir) => {
+    await withTempPdfAgentDir(async (agentDir) => {
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
       const includedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-extra-"));
       try {
         const { loadSpy } = await stubPdfToolInfra(agentDir, { modelFound: false });
-        const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
+        const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
         const tool = requirePdfTool(
           createPdfTool({
             config: cfg,
