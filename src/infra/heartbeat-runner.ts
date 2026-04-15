@@ -966,10 +966,17 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
+  // Use runSessionKey so that when isolatedSession is enabled, outbound delivery
+  // mirrors the assistant transcript to the isolated `:heartbeat` session's
+  // sessionFile rather than the base session's. Without this, the heartbeat
+  // run's assistant message is appended to the base session transcript file —
+  // the isolated session entry is created in sessions.json but its sessionFile
+  // is never written to disk, breaking transcript history for the heartbeat.
+  // Fixes: #56941, #57577
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId,
-    sessionKey,
+    sessionKey: runSessionKey,
   });
   const canAttemptHeartbeatOk = Boolean(
     visibility.showOk && delivery.channel !== "none" && delivery.to,
