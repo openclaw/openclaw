@@ -40,6 +40,17 @@ describe("channel registry helpers", () => {
     expect(line).toContain("https://openclaw.ai");
   });
 
+  it("falls back to /channels/{id} when meta.docsPath is missing", () => {
+    const partialMeta = {
+      id: "test-channel" as never,
+      label: "Test Channel",
+      blurb: "A test channel",
+      // docsPath intentionally omitted
+    };
+    const line = formatChannelSelectionLine(partialMeta, (path) => path);
+    expect(line).toContain("/channels/test-channel");
+  });
+
   it("prefers the pinned channel registry when resolving registered plugin channels", () => {
     const startupRegistry = createEmptyPluginRegistry();
     startupRegistry.channels = [
